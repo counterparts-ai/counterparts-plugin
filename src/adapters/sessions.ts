@@ -2121,14 +2121,14 @@ export interface WriteUpClaim {
   readonly by: string;
   /** When it was taken or last renewed, epoch ms. */
   readonly at: number;
-  /** The last part this claim may be served — the nightly run's allowance for
-   *  this subject (`NIGHT_WRITE_UP_BYTES`). Absent: no bound. */
+  /** The last part this claim may be served — a catch-up batch's allowance for
+   *  this subject (`NIGHT_WRITE_UP_BYTES`, `NIGHT_WRITE_UP_BATCH_PARTS`). Absent: no bound. */
   readonly upTo?: number;
 }
 
 /**
  * **CAL.** How long a claim holds (2026-10-01). Past the nightly catch-up's
- * watchdog (`TUNABLES.NIGHT_WRITE_UP_MS`) and any plausible gap between a
+ * child's watchdog (`TUNABLES.NIGHT_WRITE_UP_MS`; each batch claims afresh) and any plausible gap between a
  * fetch and its answer; short enough that a writer that died holds nothing
  * past the morning.
  */

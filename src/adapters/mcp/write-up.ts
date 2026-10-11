@@ -252,7 +252,7 @@ export async function writeUpDoor(input: WriteUpDoorInput): Promise<WriteUpOutco
     record.sessionId.startsWith(NIGHT_RUNNER_PREFIX) &&
     (record.endedAt !== null || input.now - record.lastBoundaryAt >= WRITE_UP_CLAIM_MS)
   ) {
-    return refused("grant-expired", { writeUp: ended, detail: "This runner's grant has run out. A later night writes that session up." });
+    return refused("grant-expired", { writeUp: ended, detail: "This runner's grant has run out. A later catch-up writes that session up." });
   }
   if (record?.mayWriteUp?.includes(ended) === true) {
     // "ENDED" IS THE LEDGER'S WORD (2026-10-01, #289's evidence), not the
@@ -304,7 +304,7 @@ export async function writeUpDoor(input: WriteUpDoorInput): Promise<WriteUpOutco
     return refused("claimed", {
       writeUp: ended,
       detail: held.by.startsWith(NIGHT_RUNNER_PREFIX)
-        ? "The nightly run is writing that session up now. Nothing to do here."
+        ? "The nightly run or counterparts catch-up is writing that session up now. Nothing to do here."
         : "Another session is writing that session up now. Nothing to do here.",
     });
   }
@@ -369,7 +369,7 @@ async function handOver(
       writeUp: ended,
       part,
       of: parts.length,
-      detail: "Tonight's allowance for that session is spent. The rest stays owed, for a later night or a session in its directory.",
+      detail: "This batch's allowance for that session is spent. The rest stays owed, for the next batch or a later catch-up.",
     });
   }
   const next: WriteUpProgress & { readonly claim: WriteUpClaim } = {

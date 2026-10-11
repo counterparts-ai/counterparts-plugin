@@ -42,7 +42,7 @@ import { Associate } from "../associate/index.js";
 import { FIT_TUNABLES, clipWire, fidelityOf, fit, lineOf, offeredOf, packParts, readIndex, wireChars, writeIndex } from "../fit/index.js";
 import type { Fidelity, FitCandidate, Placed } from "../fit/index.js";
 import { emotionalIntensity, sal, strength } from "../physics/index.js";
-import { isHandoff, isSelfPage } from "../recall/index.js";
+import { earlierMark, headOf, isHandoff, isSelfPage } from "../recall/index.js";
 import { namesOwner, ownerNames } from "../sleep/index.js";
 import {
   CARRIED_BY_MAX_CHARS,
@@ -130,6 +130,8 @@ export type DreamRole = "new" | "neighbour" | "mixing" | "lookback" | "on-mind";
  */
 export interface DreamItem {
   readonly id: string;
+  /** `earlier (now mem_…)` when a later memory settled over it (`recall/standing.ts#headOf`, 2026-10-11). */
+  readonly standing?: string;
   readonly kind: Kind;
   readonly why: DreamRole;
   readonly fidelity: Exclude<Fidelity, "id">;
@@ -416,7 +418,9 @@ export interface NightRun {
   /**
    * Why it ended the way it did, as a short code: `no-claude`, `spawn-failed`,
    * `quick-exit`, `nothing-ran`, `unfinished`, `exit`, `watchdog`, `refused`,
-   * `runner` (the host's own background process could not start) — or null.
+   * `runner` (the host's own background process could not start), `unread`
+   * (the store would not open once the child ended; `detail` says why) — or
+   * null.
    */
   readonly reason: string | null;
   /** A little more, when there is more: an error code, a refusal's name. Never prose from the run. */
@@ -538,6 +542,10 @@ export function nightRunWords(run: Pick<NightRun, "state" | "reason" | "detail" 
       return "claude ran but used none of the dream tools (the counterparts MCP server was not there, or refused the session)";
     case "unfinished":
       return "it began but did not finish";
+    case "unread":
+      return run.detail === "SCHEMA_AHEAD"
+        ? "it ran, but a newer build took the store while it ran, so what it did could not be read (an update mid-run)"
+        : `it ran, but the store could not be read afterwards${run.detail === null ? "" : ` (${run.detail})`}`;
     case "watchdog":
       return (run.dream ?? null) === null && (run.reflection ?? null) === null ? "it ran too long and was stopped before it finished anything" : "it ran too long and was stopped";
     case "lost":
@@ -1821,6 +1829,14 @@ export class Dreams {
         const facts = gistFacts(change);
         const cap = PHYSICS.DREAMED_CLAIM_CEILING;
         const title = (change.title ?? "").trim().slice(0, DREAM_TUNABLES.MAX_TITLE_CHARS);
+        // WHAT IT IS ABOUT, from its sources (D6 closed by Mike, 2026-10-11,
+        // lightly held; `store/index.ts#inheritFrom`, first named as best): a
+        // personal mark among the sources wins, so a pattern drawn from the
+        // owner's memories is the owner's, not unmarked (which the work lane
+        // counts as a project's work). It reaches the core only the ordinary
+        // way, by awake recurrence. Its claim is its own (the cap), so no era
+        // standing.
+        const { about } = inheritFrom(sourceRows as MemoryRow[]);
         const id = this.store.put({
           type: "memory",
           kind,
@@ -1839,6 +1855,7 @@ export class Dreams {
           meta: { dream: dream.id, dreamed: true, sources, ...confidentialityOf(sourceRows as MemoryRow[]) },
           origin: { ...(dream.session === null ? {} : { session: dream.session }), ...(dream.scope === null ? {} : { scope: dream.scope }), ref: `dream:${dream.id}` },
           ...(dream.model === null ? {} : { model: dream.model }),
+          ...(about === null ? {} : { about: about.about, ...(about.aboutBy === null ? {} : { aboutBy: about.aboutBy }) }),
           ...facts.put,
         });
         // The gist's ties to its sources, through the edge module, in the
@@ -2617,8 +2634,12 @@ export class Dreams {
     } catch {
       feeling = null;
     }
+    // SETTLED OVER (2026-10-11): marked, not left out — the dream may still
+    // link or feel it, and the mark keeps it from gisting the old rule as now.
+    const head = headOf(this.store, row.id);
     return {
       id: row.id,
+      ...(head === null ? {} : { standing: earlierMark(head) }),
       kind: row.kind,
       why,
       fidelity: placed.fidelity === "id" ? "line" : placed.fidelity,

@@ -222,6 +222,8 @@ import { NO_PAGE_LINES, bodyFrom, pageLines, versionLines, writeLines } from "./
 import { coreListLines, dreamListLines, dreamShowLines, dreamingSettingWords } from "./dream-core.js";
 import { settleListLines } from "./settle.js";
 import { coverageLines } from "./coverage.js";
+import { catchUpCommand } from "./catch-up.js";
+import type { ChildPlan, ChildResult } from "../claude-code/child.js";
 import { DREAMING_SETTINGS, NIGHT_RUN_FINISHES } from "../../core/dream/index.js";
 import { REFLECTED_FEELING_KEY } from "../../core/sleep/index.js";
 // The console's shared manners (2026-09-21): is there a person here, ask them,
@@ -254,6 +256,7 @@ import { look, realProcessLister, realSpawner, sessionsNote, tilde, unwire, wire
 import { connectDesktop, desktopUnavailable, readDesktop, repairDesktop } from "./desktop.js";
 import type { DesktopRepair } from "./desktop.js";
 import { BINARY, bundledModelDir, packagePath, runtimeLabel } from "../runtime.js";
+import { installRoute } from "../plugin.js";
 import type { Binary } from "../runtime.js";
 import { DESKTOP_ALWAYS_ALLOW, DESKTOP_HOST, upgradeWords } from "../hosts.js";
 import { hostsSeen, installedVersion } from "../sessions.js";
@@ -359,6 +362,9 @@ export const COMMANDS = [
   // What is written up and what is not yet, for one date (2026-09-30,
   // `core/coverage/`). Read-only.
   "coverage",
+  // Write up every ended session never written up, now (2026-10-11): the
+  // nightly run's catch-up on demand, through the same launcher and child.
+  "catch-up",
   // The owner's window, started on the store the CONFIGURATION names — no
   // `--dir` to get wrong, and the browser opened for you (2026-09-22, item 4).
   // `counterparts-dashboard serve` is still there and still refuses an unnamed
@@ -421,6 +427,8 @@ export const OWNER_OPS: readonly Command[] = [
   // never gets a plan from a console that could not have carried it out.
   "repair-merged-beliefs",
   "rebrief",
+  // It writes memories (through a child it starts) and the write-up marks.
+  "catch-up",
   // `doctor` stays off this list beside `status` and `recall`: it is a read.
   // `self-page` is NOT here either, and for a reason of its own: the command
   // both READS and writes, and reading the page must work from an instrument —
@@ -540,6 +548,12 @@ export interface RunOptions {
    * binary's refusals from source.
    */
   binary?: Binary | null;
+  /**
+   * THE CATCH-UP CHILD, for `catch-up` — the same kind of seam as `spawner`:
+   * a test that let the real one run would start `claude -p` on the machine
+   * running the suite. Real runs never pass it.
+   */
+  catchUpStart?: (plan: ChildPlan) => Promise<ChildResult>;
 }
 
 /**
@@ -803,6 +817,9 @@ export const COMMAND_FLAGS: Record<Command, readonly string[]> = {
   settle: ["list", "pair", "holds", "against", "how", "why", "undo"],
   about: ["why"],
   coverage: ["date"],
+  // `--config` because the store it opens is the one the configuration names,
+  // and the child's memory server reads the same file.
+  "catch-up": ["config"],
   // `--config` because the store it opens is the one the CONFIGURATION names —
   // that is the whole point of the command over `counterparts-dashboard serve`,
   // which refuses until you name a store. `--dir` still parses (it is common)
@@ -880,7 +897,9 @@ export const COMMAND_BLURB: Record<Command, string> = {
   about:
     "What a memory is about — me (who I am), us (the two of us), owner (you, as a person), work (the craft) or world (anything else). With an id alone, its mark and who set it; with an id and a mark, it changes the mark as you, keeps --why with it, and records it the way a nightly reflection's re-mark is recorded. Unmarked, a fact written in a project (or a skill) counts as that project's work and is shown only there; me, us and owner are shown everywhere and can become part of who I am. An archived memory can be marked too (the mark counts if it comes back); an earlier version's id marks the current one. Reading works under observer; the change refuses there.",
   coverage:
-    "What is written up, and what is not yet, for one date (default today): each session that captured something that day, how much of it is written up, and what is not yet written up — how many pieces, over how long, since when — and whether that is owed (the next session in its project is asked to write it up), lapsed (let go unwritten after fourteen days of use — lost to memory; nothing is deleted), under the floor, or still at work. Read-only.",
+    "What is written up, and what is not yet, for one date (default today): each session that captured something that day, how much of it is written up, and what is not yet written up — how many pieces, over how long, since when — and whether that is owed (the nightly run catches it up, or counterparts catch-up does now), lapsed (let go unwritten after fourteen days of use — lost to memory; nothing is deleted), under the floor, or still at work. Read-only.",
+  "catch-up":
+    "Write up, now, every session that ended before it was written up — what the nightly run does each morning, on demand. Oldest first, in batches, each a windowless claude -p of its own allowed one tool (session_end); it prints each batch, then what it caught up and what is left. Sessions may be open meanwhile: one still at work is left for later, one being written up elsewhere is passed over. It uses your Claude subscription like any session. At most 400 parts and an hour a run; what is left stays owed. Refuses under observer.",
   dashboard:
     "Open the dashboard in your browser: the web view of the store your configuration names, served on 127.0.0.1 and nowhere else. Ctrl-C stops it. Looking is read-only — it strengthens nothing and deposits nothing. What you do there on purpose (write a note, remove a memory, back up, …) runs through these same commands, and a removal asks you to type the id back.",
   version: "The version of Counterparts you have. It opens nothing.",
@@ -1694,6 +1713,9 @@ export async function run(argv: readonly string[], opts: RunOptions): Promise<nu
     // `dashboard` reads one for the same reason `doctor` does: the store worth
     // looking at is the one the hooks and the memory tools open.
     command === "dashboard" ||
+    // `catch-up` reads one for the store the hooks open, and hands the same
+    // file to its child's memory server.
+    command === "catch-up" ||
     // `start-fresh` READS one to learn which store the hooks open, and then
     // hands the same choice to `install` so the blank store lands where the
     // file already points.
@@ -1928,6 +1950,24 @@ export async function run(argv: readonly string[], opts: RunOptions): Promise<nu
       return await rollbackCommand(parsed, io, env, opts, named, now);
     } catch (err) {
       io.err(`rollback failed: ${describeDirRefusal(err)}`);
+      return EXIT.failed;
+    }
+  }
+
+  // `catch-up` resolves its store as `dashboard` does: `--dir` names one, and
+  // without it the configuration's `dataDir` — the store the hooks open, whose
+  // owed sessions are the ones to write up. The explicit-dir guard applies.
+  if (command === "catch-up") {
+    const named_ = typeof parsed.flags["dir"] === "string" ? undefined : named;
+    const implicit = named_ === undefined ? null : implicitConfigRefusal(named_, env);
+    if (implicit !== null) {
+      io.err(implicit);
+      return EXIT.refused;
+    }
+    try {
+      return await catchUpEntry(parsed, io, env, opts, named, now);
+    } catch (err) {
+      io.err(`catch-up failed: ${describeDirRefusal(err)}`);
       return EXIT.failed;
     }
   }
@@ -4768,6 +4808,58 @@ export const DASHBOARD_DEFAULT_PORT = 4747;
 /** The ONE line the owner asked for (2026-09-22, item 4). */
 export function dashboardLine(url: string): string {
   return `Dashboard: ${url}  (Ctrl-C stops it)`;
+}
+
+/** `catch-up`: which store and which configuration, then the run (`catch-up.ts`). */
+async function catchUpEntry(
+  parsed: Parsed,
+  io: Io,
+  env: Record<string, string | undefined>,
+  opts: RunOptions,
+  named: ConfigChoice | undefined,
+  now: () => number,
+): Promise<number> {
+  const home_ = opts.home ?? homedir();
+  const configPath = named === undefined ? defaultConfigPath(home_) : resolve(named.path);
+  let config: AdapterConfig;
+  let fromFile: string | undefined;
+  if (typeof parsed.flags["dir"] === "string") {
+    // `--dir` IS A NAME: the store alone, no configuration read beside it.
+    config = { dataDir: resolve(parsed.flags["dir"]) };
+  } else {
+    if (!existsSync(configPath)) {
+      io.err(
+        `refused: there is no configuration at ${configPath}, so there is no store here to catch up. ` +
+          `Run '${BIN.cli} install' first, name the configuration with ${CONFIG_FLAG} <absolute path>, or name a store with --dir <path>.`,
+      );
+      return EXIT.refused;
+    }
+    const host = hostConfigFor(configPath);
+    if (host.reason === "unreadable") {
+      io.err(`refused: ${configPath} is there and will not be understood, so this will not guess which store to write into. --dir <path> names one directly.`);
+      return EXIT.refused;
+    }
+    config = { ...host.config, dataDir: host.config.dataDir ?? join(dirname(configPath), DEFAULT_STORE_DIR) };
+    fromFile = configPath;
+  }
+  const dataDir = config.dataDir ?? "";
+  if (dataDir.length === 0 || !storeExists(dataDir)) {
+    io.err(`no store at ${dataDir}. Run '${BIN.cli} install' first, or name another store with --dir.`);
+    return EXIT.failed;
+  }
+  if (config.observer === true) {
+    io.err("refused: this configuration is an observer's, and a catch-up writes memories.");
+    return EXIT.refused;
+  }
+  return await catchUpCommand({
+    config: { ...config, dataDir },
+    ...(fromFile === undefined ? {} : { configPath: fromFile }),
+    env,
+    out: (l) => io.out(l),
+    err: (l) => io.err(l),
+    now,
+    ...(opts.catchUpStart === undefined ? {} : { start: opts.catchUpStart }),
+  });
 }
 
 async function dashboardCommand(
@@ -9693,6 +9785,9 @@ function doctorCommand(
       // CLAUDE DESKTOP'S ENTRY (2026-09-30): two small reads of the host's
       // files, like `host` above. Quiet in the report when there is none.
       desktop: readDesktop(home ?? homedir(), env),
+      // HOW THIS COPY CAME (2026-10-11): the plugin's /counterparts:doctor
+      // runs through `plugin-run.sh cli`, which says so in the environment.
+      install: installRoute(env),
       ...(open === undefined ? {} : { open }),
     });
     if (parsed.flags["json"] === true) {

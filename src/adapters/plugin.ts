@@ -108,6 +108,25 @@ export function runningAsPlugin(
   return realOrResolved(named) === realOrResolved(packageRoot);
 }
 
+/**
+ * How this copy came, for a fix line that installs or updates something
+ * (doctor's, 2026-10-11): `plugin` when `runningAsPlugin` says this process is
+ * the plugin's (it has no `bun`/`npm` of its own, possibly only the single
+ * binary: its fix is Claude Code's `/plugin`); `npm` when no
+ * `CLAUDE_PLUGIN_ROOT` is set at all; `either` when one is set but names
+ * another copy, which this cannot tell apart — the line then names both.
+ */
+export type InstallRoute = "npm" | "plugin" | "either";
+
+export function installRoute(
+  env: Record<string, string | undefined>,
+  packageRoot: string = PACKAGE_ROOT,
+  binary: Binary | null = BINARY,
+): InstallRoute {
+  if (runningAsPlugin(env, packageRoot, binary)) return "plugin";
+  return (env[PLUGIN_ROOT_ENV] ?? "").trim().length > 0 ? "either" : "npm";
+}
+
 /** `~/…` for a path under the home directory, for a line a person reads. */
 function tildeOf(path: string, home: string): string {
   const h = resolve(home);

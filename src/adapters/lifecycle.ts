@@ -241,6 +241,12 @@ export interface LifecycleOptions {
  * already sees; the write-up is in the model's voice. (It is the only route:
  * the opt-in Anthropic API sweep was removed with the key, 2026-09-24.)
  *
+ * **Retired under dreaming `auto` (2026-10-11).** There the nightly run writes
+ * up everything owed in any directory, and `counterparts catch-up` does it on
+ * demand, so a new session no longer spends its start on another session's
+ * words (`writeUpPointerRetired`). Under `ask` or `off` no night runs, and this
+ * pointer is still the way a session in a quiet folder gets written up.
+ *
  * **Why a pointer (owner's choice, 2026-09-23, option (b) of claude-code
  * INTERFACE-GAPS §15).** Claude Code caps a hook's whole output at 10,000
  * characters and turns anything longer into a preview — of the WAKE, which
@@ -404,6 +410,9 @@ export interface HostLifecycle {
     spent: number,
     opts?: { limit?: number; cost?: (text: string) => number; beside?: string; label?: string },
   ): string;
+  /** Whether that pointer is retired: dreaming `auto`, where the nightly run
+   *  catches up on everything owed (2026-10-11). A read. */
+  writeUpPointerRetired(): boolean;
 
   /** The detached worker, planned, started and counted. */
   spawnWorker(input?: SessionInput): SpawnOutcome;
@@ -769,6 +778,19 @@ export class Lifecycle implements HostLifecycle {
   }
 
   /**
+   * IS THE POINTER RETIRED? True under dreaming `auto`, where the nightly run
+   * catches up on everything owed (2026-10-11). A setting that will not read
+   * keeps the pointer: the safe direction is a session that may be asked.
+   */
+  writeUpPointerRetired(): boolean {
+    try {
+      return this.counterpart.dreams.setting() === "auto";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * THE NEXT-SESSION WRITE-UP'S POINTER (C2) — find the session in this project
    * that ended owing a write-up and was pointed at least recently (oldest first
    * among equals), and point this session at it. Returns the block, or the empty
@@ -794,6 +816,16 @@ export class Lifecycle implements HostLifecycle {
       // it may not write, and has no registry mark to remember that it did.
       if (this.observer) return "";
       if (input.sessionId.length === 0 || input.nightRun === true) return "";
+      // RETIRED WHERE THE NIGHT CATCHES UP (2026-10-11): under dreaming `auto`
+      // the nightly run writes up everything owed, in any directory, and
+      // `counterparts catch-up` does it on demand — so a new session no longer
+      // spends its start on another session's words, out of order. Under `ask`
+      // or `off` no night runs, and the pointer is still the way an ended
+      // session in a quiet folder gets written up.
+      if (this.writeUpPointerRetired()) {
+        this.emit("adapter.writeup.skipped", { reason: "night-catches-up" });
+        return "";
+      }
       const store = this.counterpart.store;
       const dir = store.dir;
       // ONE PER SESSION. A compaction re-fires SessionStart, and the record

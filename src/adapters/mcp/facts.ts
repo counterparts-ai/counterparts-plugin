@@ -34,7 +34,8 @@
  *
  * REBUILT HERE, not inherited from the ambient path: a chapter and its own
  * copy are one result (the chapter); a near-duplicate of a result already
- * kept is left out (`NEAR_DUPLICATE`, token overlap); the self page and the
+ * kept is left out (`NEAR_DUPLICATE`, token overlap; line overlap when one
+ * holds a list or a table, `alike`); the self page and the
  * handoffs are never results; a chapter is labeled journal; a confidential
  * memory is left out of a non-owner's list, silently (counted on the durable
  * row only).
@@ -78,6 +79,7 @@
  *   1. Gym moved to 6am · mem_… · words, subject
  *      you said · done · happened 09-28
  *      learned 09-28 in ~/counterparts · session a1b2c3d4 · CURRENT
+ *        (with another result on the same day: `learned 09-28 14:05 …`)
  *      earlier: "gym at 7" (learned 09-12), changed 09-28 · mem_…
  *      corrected (was wrong): "gym on Tuesdays" (learned 09-10), corrected 09-11 · mem_…
  *      <the body whole when short, else a 300-character excerpt>
@@ -110,7 +112,7 @@ import type { DayWindow, FeelingWhose, SemanticSource, TimeAsk } from "../../cor
 import { STOPWORDS } from "../../core/recall/reference.js";
 import { tokenize } from "../../core/store/index.js";
 import type { ContradictionRow, RecallRow } from "../../core/store/index.js";
-import { addDays, localDate, parseCalendarDate } from "../../core/time.js";
+import { addDays, localDate, localTime, parseCalendarDate } from "../../core/time.js";
 import { UNBOUND_SESSION } from "../../core/types.js";
 import {
   RECALL_EXCERPT_CHARS,
@@ -144,7 +146,7 @@ export const FACTS_EARLIER_SHOWN = 2;
  * question (2026-10-09).
  */
 export const FACTS_CORRECTED_SHOWN = 3;
-/** Token overlap at or above which two results are near-duplicates (the gate's `NEAR_DUPLICATE`). */
+/** Overlap at or above which two results are near-duplicates (the gate's `NEAR_DUPLICATE`; `alike`). */
 export const FACTS_NEAR_DUPLICATE = 0.85;
 /** How far an event anchor's window reaches each side of its date. */
 export const FACTS_ANCHOR_DAYS = 2;
@@ -237,6 +239,8 @@ export interface FactItem {
   readonly body: string;
   readonly bodyChars: number;
   readonly whole: boolean;
+  /** The words hold a list or a table (`blockOf`): said on a cut excerpt, so a reader knows to read it whole. */
+  readonly block?: string;
   readonly saidBy: string | null;
   readonly status: string | null;
   readonly occurredOn: string | null;
@@ -244,6 +248,13 @@ export interface FactItem {
   readonly learned: string | null;
   /** A chapter's latest write, when later than `learned`. */
   readonly lastWritten?: string | null;
+  /**
+   * The time of day it was learned, `HH:MM` in the store's zone (its
+   * `created_at`). Absent for a journal entry and for an old row with no
+   * `created_at`. Shown only beside another result of the same day
+   * (`sameDayTimes`).
+   */
+  readonly learnedAt?: string;
   readonly where: string | null;
   readonly who: string | null;
   /** True unless it is an earlier version shown on its own (its current one not shown). */
@@ -411,6 +422,28 @@ function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
   let inter = 0;
   for (const t of a) if (b.has(t)) inter += 1;
   return inter / (a.size + b.size - inter);
+}
+
+/** What two results are compared on for near-duplicates: their words, and their lines when one holds a list or a table. */
+interface Likeness {
+  readonly words: ReadonlySet<string>;
+  readonly lines: ReadonlySet<string>;
+  readonly block: boolean;
+}
+
+function likeness(doc: { title: string | null; body: string }): Likeness {
+  const lines = new Set(doc.body.split("\n").map((l) => tokenize(l).join(" ")).filter((l) => l.length > 0));
+  return { words: new Set(tokenize(`${doc.title ?? ""}\n${doc.body}`)), lines, block: blockOf(doc.body) !== null };
+}
+
+/**
+ * Token overlap, or LINE overlap when either holds a list or a table (review
+ * of #409): a long list's token set is mostly its shape, so three different
+ * 100-item inventories read 0.99 alike by words and two were hidden behind
+ * the first. By lines, a list pasted twice (or retitled) still folds.
+ */
+function alike(a: Likeness, b: Likeness): number {
+  return a.block || b.block ? jaccard(a.lines, b.lines) : jaccard(a.words, b.words);
 }
 
 /**
@@ -713,7 +746,7 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
     }
   };
   const kept: Candidate[] = [];
-  const keptTokens: Set<string>[] = [];
+  const keptLikeness: Likeness[] = [];
   let duplicates = 0;
   let unreadable = 0;
   const need = page * FACTS_PAGE_SIZE;
@@ -726,13 +759,13 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
       unreadable += 1;
       continue;
     }
-    const toks = new Set(tokenize(`${doc.title ?? ""}\n${doc.body}`));
-    if (keptTokens.some((k) => jaccard(k, toks) >= FACTS_NEAR_DUPLICATE)) {
+    const toks = likeness(doc);
+    if (keptLikeness.some((k) => alike(k, toks) >= FACTS_NEAR_DUPLICATE)) {
       duplicates += 1;
       continue;
     }
     kept.push(c);
-    keptTokens.push(toks);
+    keptLikeness.push(toks);
   }
   const matched = kept.length + (main.length - walked);
   if (unreadable > 0) blocked("unreadable");
@@ -837,6 +870,7 @@ function factItem(
   const parts = provenanceParts(store, c.id, ctx.sessionId, ctx.counterpart.spans);
   const learned = learnedOf(row, zone);
   const lastWritten = journal && row.updated_at !== null ? localDate(row.updated_at, zone) : null;
+  const learnedAt = !journal && row.created_at !== null && row.created_at > 0 ? localTime(row.created_at, zone).slice(0, 5) : "";
 
   // Earlier: in-place versions whose words differ, then `changed` pairs it holds.
   const earlier: EarlierVersion[] = [];
@@ -901,6 +935,7 @@ function factItem(
   wrong.sort((a, b) => b.reached - a.reached || (b.corrected ?? "").localeCompare(a.corrected ?? "") || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const correctedShown = wrong.slice(0, FACTS_CORRECTED_SHOWN).map(({ text, learned, corrected: on, id }) => ({ text, learned, corrected: on, id }));
   const title = row.title ?? doc.title;
+  const block = blockOf(text);
   return {
     id: c.id,
     faded,
@@ -912,11 +947,13 @@ function factItem(
     body,
     bodyChars: doc.body.length,
     whole: body.length === flat.length && chapter === undefined,
+    ...(block === null ? {} : { block }),
     saidBy: row.said_by,
     status: row.status,
     occurredOn: row.occurred_on,
     learned,
     ...(lastWritten !== null && lastWritten !== learned ? { lastWritten } : {}),
+    ...(learnedAt.length === 5 ? { learnedAt } : {}),
     where: parts?.where ?? null,
     who: parts?.who ?? null,
     current: now === undefined,
@@ -1031,7 +1068,7 @@ function channelWords(semantic: SemanticSource): string | null {
 }
 
 /** The labeled lines of one result. */
-function itemLines(m: FactItem, i: number, today: string, excerptChars: number): string[] {
+function itemLines(m: FactItem, i: number, today: string, excerptChars: number, time: string | undefined): string[] {
   const out: string[] = [];
   const mark = m.journal ? "[journal] " : "";
   const ch = m.chapter === undefined ? "" : ` (chapter ${String(m.chapter.n)} of ${String(m.chapter.of)})`;
@@ -1051,7 +1088,8 @@ function itemLines(m: FactItem, i: number, today: string, excerptChars: number):
     const standing = m.current ? "CURRENT" : `earlier — now ${m.now ?? "?"}`;
     const extra = m.standing.length === 0 ? "" : ` · ${m.standing.join(" · ")}`;
     const by = m.timeBy === "learned" && m.occurredOn === null ? " (in the window by this date)" : "";
-    out.push(`   learned ${m.learned === null ? "date unknown" : shortDate(m.learned, today)}${by}${where}${who} · ${standing}${extra}`);
+    const at = time === undefined ? "" : ` ${time}`;
+    out.push(`   learned ${m.learned === null ? "date unknown" : `${shortDate(m.learned, today)}${at}`}${by}${where}${who} · ${standing}${extra}`);
   }
   for (const e of m.earlier) {
     const learned = e.learned === null ? "" : ` (learned ${shortDate(e.learned, today)})`;
@@ -1076,7 +1114,71 @@ function itemLines(m: FactItem, i: number, today: string, excerptChars: number):
     );
   }
   const words = m.body.length <= excerptChars ? m.body : cutExcerpt(m.body, excerptChars);
-  out.push(`   ${words}`);
+  // The verbatim trial (2026-10-11): a list or a table kept word for word is
+  // flattened into the excerpt; saying it is there tells a reader the rest is
+  // worth the read by id.
+  const block = m.block !== undefined && (!m.whole || words !== m.body) ? ` (${m.block}; read whole by id)` : "";
+  out.push(`   ${words}${block}`);
+  return out;
+}
+
+/** List items and table rows: a line led by a bullet or a number, or a line between pipes. */
+const LIST_ITEM = /^[ \t]*(?:[-*+•]|\d{1,4}[.)])[ \t]+\S/;
+const TABLE_ROW = /^[ \t]*\|.*\|[ \t]*$/;
+const TABLE_RULE = /^[ \t]*\|[ \t:|-]+\|[ \t]*$/;
+/** Fewer list items or table rows than these are a sentence's worth, not a block worth naming. */
+const LIST_MIN_ITEMS = 5;
+const TABLE_MIN_ROWS = 3;
+
+/**
+ * "a list, 100 items" or "a table, 12 rows" when the words hold one, else
+ * null. Counted on the words before they are flattened into an excerpt; a
+ * table's header row and its rule are not counted as rows.
+ */
+export function blockOf(text: string): string | null {
+  let items = 0;
+  let rows = 0;
+  for (const line of text.split("\n")) {
+    if (TABLE_ROW.test(line)) {
+      if (!TABLE_RULE.test(line)) rows += 1;
+    } else if (LIST_ITEM.test(line)) items += 1;
+  }
+  const data = Math.max(0, rows - 1);
+  if (data >= TABLE_MIN_ROWS && data >= items) return `a table, ${String(data)} rows`;
+  if (items >= LIST_MIN_ITEMS) return `a list, ${String(items)} items`;
+  return null;
+}
+
+/**
+ * ORDER WITHIN A DAY (2026-10-11): results that read as the same day — the
+ * same event day (else learned day) AND the same learned day — would read as
+ * a tie, so each of them shows the time it was learned (`learned 05-25
+ * 09:52`). Only when they collide in one answer and their times differ: a
+ * lone result, results on different days, results learned on different days
+ * (their learned dates already order them) and rows with no `created_at`
+ * keep their lines. An event date that is a range or a month has no day to
+ * order within. The time is when it was LEARNED, and the line says so.
+ */
+function sameDayTimes(memories: readonly FactItem[]): ReadonlyMap<string, string> {
+  const groups = new Map<string, FactItem[]>();
+  for (const m of memories) {
+    if (m.journal || m.learnedAt === undefined || m.learned === null) continue;
+    let day = m.learned;
+    if (m.occurredOn !== null) {
+      const c = parseCalendarDate(m.occurredOn);
+      if (c === null || c.precision !== "day") continue;
+      day = c.first;
+    }
+    const key = `${day}|${m.learned}`;
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, [m]);
+    else g.push(m);
+  }
+  const out = new Map<string, string>();
+  for (const g of groups.values()) {
+    if (g.length < 2 || new Set(g.map((m) => m.learnedAt)).size < 2) continue;
+    for (const m of g) if (m.learnedAt !== undefined) out.set(m.id, m.learnedAt);
+  }
   return out;
 }
 
@@ -1147,9 +1249,10 @@ function renderAt(r: FactsResult, today: string, excerpt: number): string {
     lines.push("Nothing matched. Try the words the memory itself would use, a person or project it names, or a wider time.");
     return lines.join("\n");
   }
+  const times = sameDayTimes(r.memories);
   r.memories.forEach((m, i) => {
     lines.push("");
-    lines.push(...itemLines(m, first + i + 1, today, excerpt));
+    lines.push(...itemLines(m, first + i + 1, today, excerpt, times.get(m.id)));
   });
   lines.push("");
   const foot: string[] = [];

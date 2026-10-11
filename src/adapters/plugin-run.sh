@@ -231,9 +231,13 @@ data="${CLAUDE_PLUGIN_DATA:-}"
 # `/counterparts:doctor` runs this through Claude Code's Bash tool, whose
 # environment need not carry CLAUDE_PLUGIN_DATA: then the directory Claude
 # Code gives this plugin (`<config dir>/plugins/data/<name>-<marketplace>`),
-# if it is there.
+# if it is there. Exported, so the single binary kept in it knows itself for
+# the plugin's (adapters/plugin.ts#runningAsPlugin reads it) and doctor names
+# the plugin's fixes, not `bun add -g`.
 if [ -z "$data" ] && [ -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/data/counterparts-counterparts" ]; then
   data="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/data/counterparts-counterparts"
+  CLAUDE_PLUGIN_DATA="$data"
+  export CLAUDE_PLUGIN_DATA
 fi
 [ -z "$data" ] && [ -z "$why" ] && why="the plugin has no data directory to keep it in"
 case "${COUNTERPARTS_BINARY_DOWNLOAD:-}" in off | 0 | no | false) [ -z "$why" ] && why="COUNTERPARTS_BINARY_DOWNLOAD is off" ;; esac

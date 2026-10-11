@@ -234,6 +234,18 @@ export function nightTimeoutMs(config: AdapterConfig): number {
 }
 
 /**
+ * THE WATCHDOG A `started` ROW CARRIES FROM THE START (2026-10-11): the main
+ * child's, and — for a whole night — the catch-up's before it, all of it
+ * (`NIGHT_WRITE_UP_TOTAL_MS`, and the last child's kill graces). The catch-up
+ * may take most of an hour on a heavy morning, and a row that said twenty
+ * minutes would read as LOST past thirty (`nightRunLost`): the next prompt
+ * would ask to dream while the run was still catching up.
+ */
+export function nightRowTimeoutMs(config: AdapterConfig, kind: NightKind["kind"]): number {
+  return nightTimeoutMs(config) + (kind === "night" ? TUNABLES.NIGHT_WRITE_UP_TOTAL_MS + KILL_GRACE_MS + REAP_GRACE_MS : 0);
+}
+
+/**
  * EVERYTHING DECIDED FOR THE DETACHED PROCESS, NOTHING STARTED. Pure, and a
  * `SpawnPlan` so `spawnDetached` starts it like the worker. Its OWN planner,
  * not `planSpawn`: that one checks the watchdog against `remember/`'s claim
@@ -247,8 +259,9 @@ export type NightRunnerPlan = Omit<SpawnPlan, "reason"> & { readonly reason: Nig
 export function planNightRunner(input: NightRunnerInput): NightRunnerPlan {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(input.baseEnv ?? process.env)) if (v !== undefined) env[k] = v;
-  // The catch-up child runs first, under its own watchdog (2026-10-01).
-  const timeoutMs = nightTimeoutMs(input.config) + TUNABLES.NIGHT_WRITE_UP_MS + 2 * (KILL_GRACE_MS + REAP_GRACE_MS) + 60_000;
+  // The catch-up runs first, under its own watchdog (2026-10-01; the whole
+  // run's since 2026-10-11).
+  const timeoutMs = nightRowTimeoutMs(input.config, input.kind.kind) + KILL_GRACE_MS + REAP_GRACE_MS + 60_000;
   const args = [...(input.args ?? [])];
   const no = (reason: NightRunnerRefusal): NightRunnerPlan => ({
     ok: false,
@@ -481,6 +494,8 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
         }),
       start: input.startCatchUp ?? ((p: ChildPlan) => startChild(p)),
       now,
+      // The night's ceiling, not the command's (Mike, 2026-10-11).
+      parts: TUNABLES.NIGHT_WRITE_UP_PARTS,
       ...(input.onEvent === undefined ? {} : { onEvent: input.onEvent }),
     });
     if (report !== null) catchUpMs = report.ms;
@@ -582,6 +597,11 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   let writerRan = false;
   let dreamed = false;
   let requeued: number | null = null;
+  // THE STORE WOULD NOT OPEN AFTER THE CHILD (2026-10-11): what the run did is
+  // then unknown, not nothing — on 10-11 an install landed mid-run, its
+  // migration put the store ahead of this build, and the run was logged
+  // `nothing-ran` from the exit alone.
+  let unread: string | null = null;
   try {
     const c = input.open();
     try {
@@ -629,8 +649,9 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
       }
       c.close();
     }
-  } catch {
-    /* read nothing: the exit decides alone */
+  } catch (err) {
+    /* read nothing: the exit decides alone, and says it could not read */
+    unread = errorCode(err);
   }
   // WHICH PARTS RAN (2026-09-29, owner): the dream counts once journaled, the
   // reflection once finished. All the run was for: done. Some: partial —
@@ -659,10 +680,19 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
     if (!began && ms < TUNABLES.NIGHT_QUICK_EXIT_MS) return ended({ state: "could-not-start", reason: "quick-exit", detail: null, code: result.code });
     return ended({ state: "failed", reason: "exit", detail: null, code: result.code, ...found });
   }
+  // What it began could not be read: said as such, never as nothing.
+  if (unread !== null) return ended({ state: "failed", reason: "unread", detail: unread, code: result.code });
   // A clean exit that began nothing could not do the job at all — the tools
   // were not there for it.
   if (!began) return ended({ state: "could-not-start", reason: "nothing-ran", detail: null, code: 0 });
   return ended({ state: "failed", reason: "unfinished", detail: null, code: 0, ...found });
+}
+
+/** An error's code (`SCHEMA_AHEAD`, `SQLITE_BUSY`), else its name. */
+function errorCode(err: unknown): string {
+  const code = err !== null && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+  if (typeof code === "string" && code.length > 0) return code;
+  return err instanceof Error ? err.name : "UNKNOWN";
 }
 
 /**

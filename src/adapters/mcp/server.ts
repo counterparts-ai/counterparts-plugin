@@ -161,7 +161,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.16";
+export const SERVER_VERSION = "0.3.17";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD

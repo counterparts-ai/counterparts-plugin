@@ -63,6 +63,7 @@ import { homedir } from "node:os";
 
 import { CODE_TAB_ENTRYPOINT, isDesktopScratchWorkspace } from "../hosts.js";
 import { scopeCommand, scopeCommandContext, stanceOfMode } from "../scopes.js";
+import type { InstallRoute } from "../plugin.js";
 import type { ScopeCommandContext } from "../scopes.js";
 import {
   NON_INTERACTIVE_ENTRYPOINTS,
@@ -84,7 +85,8 @@ import { TUNABLES as RECALL_TUNABLES } from "../../core/recall/tunables.js";
 import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessage, readCheckout } from "./doctor.js";
 import type { CheckoutReading } from "./doctor.js";
 import { primacy } from "./primacy.js";
-import { nightTimeoutMs, planNightRunner } from "./night-run.js";
+import { nightRowTimeoutMs, planNightRunner } from "./night-run.js";
+import { catchUpOf, catchUpWords } from "./night-catch-up.js";
 import type { NightKind } from "./night-run.js";
 import { spawnDetached } from "../spawn.js";
 import type { SpawnOutcome } from "../spawn.js";
@@ -313,6 +315,12 @@ export interface AdapterOptions extends LifecycleOptions {
    * with `--config` only when `configPath` names another registry.
    */
   readonly scopeCommand?: ScopeCommandContext;
+  /**
+   * How this copy was installed (`plugin.ts#installRoute`), for the notice's
+   * fix lines: the plugin's `/plugin` rather than `bun add -g`. Absent (a
+   * test, an embedder): not known, and those lines name both.
+   */
+  readonly install?: InstallRoute;
 }
 
 /**
@@ -528,6 +536,7 @@ export const STOP_HUMAN_LINE = "Counterparts: asking the assistant to write up t
 export class ClaudeCodeAdapter extends Lifecycle {
   private readonly nightArgs: readonly string[] | undefined;
   private readonly scopeCommandCtx: ScopeCommandContext | undefined;
+  private readonly install: InstallRoute | undefined;
   /** The anti-loop guard: one hook per session in flight at a time. */
   private readonly inFlight = new Set<string>();
 
@@ -535,6 +544,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
     super(opts);
     this.nightArgs = opts.nightArgs;
     this.scopeCommandCtx = opts.scopeCommand;
+    this.install = opts.install;
   }
 
   // ── session start: the wake ────────────────────────────────────────────────
@@ -1065,7 +1075,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
       kind: kind.kind,
       session: input.sessionId,
       startedAt: store.now(),
-      timeoutMs: nightTimeoutMs(this.config),
+      timeoutMs: nightRowTimeoutMs(this.config, kind.kind),
       endedAt: null,
       reason: null,
       detail: null,
@@ -1131,6 +1141,17 @@ export class ClaudeCodeAdapter extends Lifecycle {
     }
     const spill = dreams.nightSpillLine(night);
     if (spill !== null) out.push(spill);
+    // WHAT THE NIGHT CAUGHT UP (2026-10-11), one line from its row — a read of
+    // one event, so the session knows other sessions were written up overnight
+    // (and why it was not asked to). Never the hand-back's problem.
+    try {
+      const cu = catchUpOf(this.counterpart.store, night.run);
+      if (cu !== null && cu.granted > 0) {
+        out.push(`Counterparts: before it dreamed, the nightly run caught up on sessions that had ended before they were written up — ${catchUpWords(cu)}. Nothing to do; mention it only if asked.`);
+      }
+    } catch {
+      /* the line is a courtesy */
+    }
     this.emit("adapter.night.handed", { run: night.run, lines: out.length });
     return out;
   }
@@ -1624,6 +1645,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
         starts: this.spawnStarts(),
         budgetMs: opts.budgetMs ?? SESSION_NOTICE_BUDGET_MS,
         ...(opts.now === undefined ? {} : { now: opts.now }),
+        ...(this.install === undefined ? {} : { install: this.install }),
       });
       return noticeMessage(findings);
     } catch (err) {

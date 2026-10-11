@@ -77,22 +77,53 @@ export const TUNABLES = {
    */
   NIGHT_MAX_TURNS: 60,
   /**
-   * THE MORNING CATCH-UP (2026-10-01, build 3): before the page writer, the
-   * nightly run writes up owed stretches in any directory, through a short
-   * `claude -p` of its own (`night-run.ts#runCatchUp`). Its bounds, each a
-   * working default: at most this many sessions a night...
+   * THE CATCH-UP (2026-10-01, build 3; unbounded 2026-10-11): before the page
+   * writer, the nightly run writes up EVERYTHING owed in any directory, and
+   * `counterparts catch-up` does the same on demand
+   * (`night-catch-up.ts#runCatchUp`). It runs as a series of short `claude -p`
+   * children, each a fresh context, until nothing is owed. One child takes at
+   * most this many bytes of words (whole ~24 KB parts; the first part is taken
+   * whatever its size) — about 50k tokens, so no child's context grows past a
+   * 200k-token model's...
    */
-  NIGHT_WRITE_UP_SESSIONS: 4,
-  /** ...and at most this many bytes of their words (whole ~24 KB parts; the
-   *  first part is taken whatever its size). What is left stays owed, and the
-   *  run's row says how much. */
-  NIGHT_WRITE_UP_BYTES: 96 * 1024,
-  /** The catch-up child's watchdog, ms — inside `WRITE_UP_CLAIM_MS`, so its
-   *  claims outlive it. */
+  NIGHT_WRITE_UP_BYTES: 192 * 1024,
+  /** ...and at most this many parts: two tool calls a part, so the child's
+   *  turn ceiling below holds. */
+  NIGHT_WRITE_UP_BATCH_PARTS: 16,
+  /**
+   * THE SANITY CEILINGS, parts a run, against runaway cost — not pacers. A
+   * part costs about 7k tokens of new work (its ~5k tokens of words written to
+   * the cache, the memories it writes, a share of each child's start) and two
+   * tool calls; the nightly run's measured baseline is 246k new work and 20
+   * calls (2026-10-10). A typical morning owes 20–40 parts; a heavy day owed
+   * in full is about 200 (on 10-11, 30 pieces of one session were 16 parts;
+   * 10-10 had 404 pieces).
+   *
+   * THE NIGHT'S (decided by Mike, 2026-10-11, lightly held; it was 400): 100
+   * parts is about 700k tokens and 200 calls, roughly 3× the baseline, so a
+   * typical morning clears in one night and a heavy day takes two. What is
+   * left stays owed for the next night, and the row says how much.
+   */
+  NIGHT_WRITE_UP_PARTS: 100,
+  /** ...and `counterparts catch-up`'s, which the owner runs on purpose
+   *  (decided by Mike, 2026-10-11, lightly held): 400 parts, about 2.8M
+   *  tokens and 800 calls, roughly 11× the baseline — about twice a heavy
+   *  day. What is left stays owed: run it again, or the nights take it. */
+  CATCH_UP_COMMAND_PARTS: 400,
+  /** One child's watchdog, ms — inside `WRITE_UP_CLAIM_MS`, so its claims
+   *  outlive it. A batch measured 4–8 s a part on 2026-10-11. */
   NIGHT_WRITE_UP_MS: 10 * 60_000,
-  /** The catch-up child's turn ceiling: two calls a part, and room to look a
-   *  tool up. */
-  NIGHT_WRITE_UP_MAX_TURNS: 40,
+  /** THE WHOLE RUN'S WATCHDOG, ms, the night's and the command's alike: no
+   *  child starts that could end past it. The command's 400 parts at the
+   *  measured 4–8 s is 27–53 minutes; the night's 100 is 7–13. The night's
+   *  row carries it from the start (`night-run.ts#nightRowTimeoutMs`), so a
+   *  long catch-up is never read as a lost run. */
+  NIGHT_WRITE_UP_TOTAL_MS: 60 * 60_000,
+  /** One child's turn ceiling: two calls a part for the most parts a child
+   *  takes (2 × 16), and 16 more — room to look a tool up and for the odd
+   *  re-sent answer (one in five parts on 2026-10-11). A child that hits it
+   *  ends short, and the run starts no further batch. */
+  NIGHT_WRITE_UP_MAX_TURNS: 48,
   /** Reference resolution at a session-ending boundary (recall §9.2), ms. The
    *  resolver stops between candidates past it and the row says so
    *  (`recall.credit` reason `budget-exceeded`); nothing is truncated silently. */

@@ -12,6 +12,7 @@
 import { homedir } from "node:os";
 
 import { COVERAGE_TUNABLES, lapsesSince, ledger } from "../../core/coverage/index.js";
+import { dreamingSetting } from "../../core/dream/index.js";
 import type { LedgerEntry } from "../../core/coverage/index.js";
 import { SpanBuffer } from "../../core/remember/index.js";
 import type { Store } from "../../core/store/index.js";
@@ -39,7 +40,7 @@ function place(scopes: readonly string[]): string {
 const plural = (n: number, one: string, many: string): string => `${String(n)} ${n === 1 ? one : many}`;
 
 /** What is not written up in one session, and what that means now. */
-function standing(e: LedgerEntry, zone: string): string {
+function standing(e: LedgerEntry, zone: string, auto: boolean): string {
   const s = e.stretch;
   if (s === null) return "all written up";
   const what = `not yet written up: ${plural(s.pieces, "piece", "pieces")} over ${lengthWords(s.minutes)}, since ${localStamp(s.firstAt, zone)}`;
@@ -48,7 +49,11 @@ function standing(e: LedgerEntry, zone: string): string {
   }
   if (e.owed) {
     const why = e.state === "ended" ? "it ended" : "it has been quiet since the date changed";
-    return `${what} — owed (${why}); the next session in its project is asked to write it up${e.small ? ", one line is enough" : ""}`;
+    // WHO CATCHES IT UP (2026-10-11): under dreaming `auto` the nightly run
+    // does, and the SessionStart pointer is retired; otherwise the next
+    // session in its project is asked. The command does it now either way.
+    const who = auto ? "the nightly run catches it up" : `the next session in its project is asked to write it up${e.small ? ", one line is enough" : ""}`;
+    return `${what} — owed (${why}); ${who}, or counterparts catch-up now`;
   }
   if (e.state === "active") return `${what} — still at work`;
   return (
@@ -68,6 +73,12 @@ export function coverageLines(input: { store: Store; date: string; today: string
   const entries = ledger(spans, { now, zone, host: (s) => ({ endedAt: host(s).endedAt }) });
   const on = entries.filter((e) => e.perDate[date] !== undefined);
   const said = readableDate(date) || date;
+  let auto = false;
+  try {
+    auto = dreamingSetting(store) === "auto";
+  } catch {
+    auto = false;
+  }
   const out: string[] = [];
   if (on.length === 0) {
     out.push(`${said}${date === input.today ? " (today)" : ""}: nothing captured.`);
@@ -82,7 +93,7 @@ export function coverageLines(input: { store: Store; date: string; today: string
       const cell = e.perDate[date] ?? { pieces: 0, written: 0 };
       out.push(
         `  ${e.session}  ${place(e.scopes)}`,
-        `    that day: ${String(cell.written)} of ${plural(cell.pieces, "piece", "pieces")} written up; now ${standing(e, zone)}`,
+        `    that day: ${String(cell.written)} of ${plural(cell.pieces, "piece", "pieces")} written up; now ${standing(e, zone, auto)}`,
       );
     }
   }

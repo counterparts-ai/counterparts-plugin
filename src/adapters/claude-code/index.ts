@@ -90,6 +90,7 @@ export {
   kindValue,
   nightMaxTurns,
   nightMcpConfig,
+  nightRowTimeoutMs,
   nightTimeoutMs,
   openNightCounterpart,
   planNightChild,

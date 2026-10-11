@@ -64,7 +64,7 @@ import type { LogEvent, ProcessLog } from "../../log/index.js";
 import { serveStdio } from "../stdio.js";
 import { stoodDownServer } from "../stood-down.js";
 import { npmWiring } from "../../host-wiring.js";
-import { PLUGIN_ROOT_ENV, ensureFirstRun, mcpGate, pluginOrigin, runningAsPlugin } from "../../plugin.js";
+import { PLUGIN_ROOT_ENV, ensureFirstRun, installRoute, mcpGate, pluginOrigin, runningAsPlugin } from "../../plugin.js";
 import { DATA_DIR_ENV, describeGuardRefusal } from "../../../core/store/index.js";
 import { BINARY, scriptArgs } from "../../runtime.js";
 import type { Binary } from "../../runtime.js";
@@ -291,6 +291,7 @@ export function desktopDoctorNotice(input: {
       refusals,
       starts: { date: startsDate, count: Number(input.store.getMeta(SPAWN_START_COUNT_KEY) ?? "0") },
       budgetMs: SESSION_NOTICE_BUDGET_MS,
+      install: installRoute(process.env),
     });
     return noticeMessage(findings);
   } catch {

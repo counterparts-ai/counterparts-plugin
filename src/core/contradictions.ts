@@ -63,7 +63,7 @@ import { randomBytes } from "node:crypto";
 
 import { lineOf } from "./fit/index.js";
 import { changedFade, cosine, unfade } from "./physics/index.js";
-import { isHandoff } from "./recall/index.js";
+import { earlierMark, headOf, isHandoff } from "./recall/index.js";
 import { similarity } from "./remember/index.js";
 import { isStoreError, rowTombstoned } from "./store/index.js";
 import type { ContradictionRow, MemoryRow, Store } from "./store/index.js";
@@ -557,6 +557,12 @@ const MIND_SEEN_KEY_PREFIX = "mind.seen.";
 /** One neighbour of a memory just written: enough to recognise it and decide. */
 export interface Neighbour {
   readonly id: string;
+  /**
+   * `earlier (now mem_…)` when a later memory has settled over this one
+   * (`recall/standing.ts#headOf`, 2026-10-11): before the title, so its
+   * words are not read as current. Absent: it stands.
+   */
+  readonly standing?: string;
   readonly title: string | null;
   readonly excerpt: string;
 }
@@ -635,11 +641,29 @@ export function writeNeighbours(
     scored.push({ id, score: Math.max(lex, cos ?? 0), row: c });
   }
   scored.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : 1));
-  return scored.slice(0, input.limit ?? T.NEIGHBOURS).map((s) => ({
-    id: s.id,
-    title: s.row.title === null || s.row.title.trim().length === 0 ? lineOf({ body: s.row.body }) || null : s.row.title,
-    excerpt: excerptOf(s.row.body, T.EXCERPT_CHARS),
-  }));
+  // SETTLED OVER (2026-10-11): a memory a later one changed is still live,
+  // so it can be close — and on 10-11 its bare title was read as the rule.
+  // It is listed marked with the memory that holds now; left out when that
+  // one is already in view (the write itself, what it updates, a sibling, a
+  // neighbour listed above) or is not this writer's to see.
+  const limit = input.limit ?? T.NEIGHBOURS;
+  const out: Neighbour[] = [];
+  for (const s of scored) {
+    if (out.length >= limit) break;
+    const head = headOf(store, s.id);
+    if (head !== null) {
+      if (skip.has(head) || out.some((n) => n.id === head)) continue;
+      const h = store.row(head);
+      if (h === undefined || (h.confidential === 1 && !input.owner)) continue;
+    }
+    out.push({
+      id: s.id,
+      ...(head === null ? {} : { standing: earlierMark(head) }),
+      title: s.row.title === null || s.row.title.trim().length === 0 ? lineOf({ body: s.row.body }) || null : s.row.title,
+      excerpt: excerptOf(s.row.body, T.EXCERPT_CHARS),
+    });
+  }
+  return out;
 }
 
 // ── THE UPDATE GUARD (2026-10-09) ───────────────────────────────────────────

@@ -528,7 +528,7 @@ export interface Inherited {
    * The best source's era standing, as meta keys (`operational.ts
    * #eraCarriedFrom`) — for a row that takes the best source's STORED claim
    * (a dream merge) and only for one: a row with a claim of its own (a
-   * revision) is new, and the era reads it as new. Empty without a
+   * revision, a gist) is new, and the era reads it as new. Empty without a
    * `cutoff`.
    */
   readonly era: Record<string, unknown>;
@@ -538,10 +538,10 @@ export interface Inherited {
  * WHAT A NEW ROW MADE FROM EXISTING ONES INHERITS (2026-10-11; decided by
  * random-06, 2026-10-11, lightly held): one model for "this replaces that",
  * so each path that makes a row out of others reads it the same way — the
- * dream's merge, a revision by `updates:` (its one source, the memory it
- * revises); not yet the dream's gist (held until D6, dream CONTRACT §7 Q2,
- * is decided). `best` is the source whose words and claim the new
- * row takes; absent, the first in order.
+ * dream's merge and gist (D6 closed by Mike, 2026-10-11, lightly held), a
+ * revision by `updates:` (its one source, the memory it revises). `best` is
+ * the source whose words and claim the new row takes; absent, the first in
+ * order.
  *
  * WHAT IT IS ABOUT: the best source's mark unless that is not personal and
  * another source is (`CORE_ABOUT_MARKS`: me, us, owner): a personal mark is

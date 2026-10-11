@@ -28,6 +28,7 @@
  */
 import { HANDOFF_LIFE_DAYS, daysLeft, liveHandoffRows, newestPerScope } from "../handoff/index.js";
 import { lineOf } from "../fit/index.js";
+import { headOf } from "../recall/standing.js";
 import type { MemoryRow, Store } from "../store/index.js";
 import { addDays, daysBetween, isDay } from "../time.js";
 
@@ -126,6 +127,9 @@ export function mindRanked(store: Store, input: MindInput): { items: MindItem[];
   if (isDay(input.today)) {
     try {
       for (const d of store.datedMemories(input.today, addDays(input.today, T.COMING_UP_DAYS))) {
+        // Settled over by a later memory (2026-10-11): not coming up — the
+        // wake's "Arriving:" leaves it out the same way (`settledOver`).
+        if (headOf(store, d.id) !== null) continue;
         const text = words(d.id);
         if (text === null) continue;
         const start = d.eventDate.slice(0, 10);

@@ -70,6 +70,7 @@ import {
   firstRunLine,
   firstRunNoticePath,
   hookGate,
+  installRoute,
   pluginOrigin,
   runningAsPlugin,
   takeFirstRunNotice,
@@ -932,6 +933,8 @@ async function runHook(
     // How the first-launch question's console line must read here: the
     // plugin's launcher under the plugin, `--config` for another registry.
     scopeCommand: hookScopeContext(choice.path),
+    // How this copy came, for doctor's fix lines in the session notice.
+    install: installRoute(process.env),
     // The verdict travels IN: it is a fact about this process's startup, decided before anything opened, and
     // the adapter's jobs with it are to record it and — when it is `unset` — to
     // ask the question once (G41).

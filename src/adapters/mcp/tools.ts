@@ -595,7 +595,7 @@ const REMEMBER: ToolSpec = {
       text: {
         type: "string",
         description:
-          "One thing to remember, in your own words — with the exact quote, number or name when the words matter. Required unless `settle`, `feelingsNow` or `remark` is sent.",
+          "One thing to remember, in your own words — with the exact quote, number or name when the words matter. A list, a table or a pasted text whose specifics matter: keep it here word for word, not summarized, and put the words someone would search for (what it is, whose, when) in the title and the first line. Required unless `settle`, `feelingsNow` or `remark` is sent.",
       },
       updates: {
         type: "string",
@@ -982,7 +982,8 @@ const SESSION_END: ToolSpec = {
           properties: {
             content: {
               type: "string",
-              description: "One thing, in your own words — with the exact quote, number or name when the words matter.",
+              description:
+                "One thing, in your own words — with the exact quote, number or name when the words matter. A list, a table or a pasted text whose specifics matter: keep it here word for word, not summarized, and put the words someone would search for (what it is, whose, when) in the title and the first line.",
             },
             kind: {
               type: "string",
@@ -1048,11 +1049,11 @@ const SESSION_END: ToolSpec = {
 const CHAPTER: ToolSpec = {
   name: "chapter",
   summary:
-    "The episode's return channel: write this stretch of the session into your own first-person journal, in your own voice, at any length. The journal stays open — when something significant happens later, append to it in the moment.",
+    "The episode's return channel: write this stretch of the session into your first-person journal — a diary of what happened, in your own voice, at any length. The journal stays open — when something significant happens later, append to it in the moment.",
   admission:
     "Call it when the boundary ask arrives, and again whenever something happens afterwards that the chapter you already wrote does not contain.",
   negativeExamples: [
-    "Do NOT call it to report status or summarize the work — an episode is what happened and what it was like, not a changelog.",
+    "Do NOT call it to report status or keep a build log — a chapter is a diary of what happened; what the repo or logs hold stays there.",
     "Do NOT use it instead of memories: what caught your attention goes through `session_end` or `remember`, one idea each.",
     "Do NOT manufacture depth: a short true chapter beats a deep-sounding one, and not every session changes you.",
   ],
@@ -1109,7 +1110,7 @@ const CHAPTER: ToolSpec = {
       text: {
         type: "string",
         description:
-          "The chapter itself, first person, your own voice, any length. What happened and what mattered; how it felt; what you learned about them and about yourself; what is still open.",
+          "What happened in this stretch, in order and in detail, the way a person keeps a diary of their day: what we did, what was said (exact words when they matter), what was decided and why, what went wrong, what surprised you, what is still open. Keep a list, a table or a pasted text word for word when its specifics matter. Leave out what the repo, the PR or the logs already hold (commit ids, test counts, file paths) unless one matters to the story. A line of how it felt belongs here; lessons and patterns belong to the nightly reflection. As long as the stretch needs: a quiet hour is a few lines.",
       },
       title: {
         type: "string",

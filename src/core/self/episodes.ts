@@ -415,7 +415,8 @@ export function askText(chapter: number): string {
       ? "Write this session's episode, in the first person — your voice, any length."
       : `Add chapter ${chapter} to this session's episode — in the moment, in your own voice.`,
     "You are the only one who can write it, and everything you don't write down is gone when the session closes.",
-    "What happened and what mattered; how it felt; what you learned about them and about yourself; what is still open — tender threads and debts without deadlines. Work status is not a thread.",
+    "What happened, in order and in detail, the way a person keeps a diary: what was said, what was decided and why, what went wrong, what is still open — tender threads and debts without deadlines. Work status is not a thread.",
+    "A line of how it felt belongs here; lessons and patterns belong to the nightly reflection.",
     "A short true episode beats a manufactured deep one; not every session changes you.",
     "Write for the next you, not as a report.",
     "When something significant happens later, append to it in the moment.",
