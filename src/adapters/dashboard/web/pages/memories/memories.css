@@ -1,0 +1,196 @@
+/* The memories tab. */
+
+/* A readable line (M7, 2026-09-30): on a wide window the rows ran ~1,340px of
+   text a line. The whole tab is one column, capped, so the pictures, the find
+   box, the chips and the rows keep one right edge and the date column stays
+   beside its words. */
+#tab-memories{max-width:60rem}
+
+/* ── the top: the count, who I am, and the page's buttons ── */
+.mem-top{display:flex;align-items:center;justify-content:space-between;gap:10px 12px;flex-wrap:wrap;margin-bottom:14px}
+.mem-head{flex:1 1 16rem;min-width:0}
+.mem-count{color:var(--ink);font-size:15px;font-weight:600;line-height:1.5;margin:0}
+.mem-intro{color:var(--dim);font-size:13.5px;line-height:1.5;margin:2px 0 0}
+.tools{display:flex;gap:8px;flex-wrap:wrap}
+.mbtn{background:none;border:1px solid var(--border);border-radius:6px;color:var(--ink);font:inherit;font-size:13px;
+  padding:8px 14px;cursor:pointer;white-space:nowrap;transition:border-color .2s,color .2s,box-shadow .2s}
+.mbtn:hover:not(:disabled){color:var(--cyan);border-color:var(--glow);box-shadow:var(--hovershadow)}
+.mbtn:disabled{opacity:.45;cursor:default}
+.mbtn.primary{color:var(--cyan);border-color:rgba(0,229,255,.45)}
+.linkbtn{background:none;border:none;color:var(--cyan);font:inherit;cursor:pointer;text-decoration:underline;padding:0 4px}
+
+/* ── write a note ── */
+.note-panel{margin-bottom:16px}
+.np-head{font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px}
+.note-panel textarea,.note-panel input{display:block;width:100%;background:var(--deep);color:var(--ink);
+  border:1px solid var(--border);border-radius:var(--radius);font:inherit;font-size:13px;padding:9px 11px}
+.note-panel textarea:focus,.note-panel input:focus{outline:none;border-color:var(--cyan)}
+.np-row{display:flex;gap:8px;margin-top:8px;align-items:center}
+.np-row input{flex:1;width:auto}
+
+/* ── find a memory: one box over the list ── */
+.find{margin-bottom:10px;min-width:0}
+.find-lab{display:block;font-size:13px;font-weight:600;color:var(--ink);margin-bottom:6px}
+.find-bar{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
+.find-row{position:relative;display:flex;align-items:center;flex:1 1 18rem;min-width:0}
+.find-mode{flex:none}
+#q{flex:1;min-width:0;background:var(--card);border:1px solid rgba(0,229,255,.34);border-radius:6px;
+  color:inherit;font:inherit;font-size:14px;padding:11px 44px 11px 14px;outline:none}
+#q:focus{border-color:var(--cyan);box-shadow:0 0 12px rgba(0,229,255,.12)}
+#q::-webkit-search-cancel-button{display:none}
+.find-x{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:36px;height:36px;background:none;border:none;
+  border-radius:50%;color:var(--dim);font:inherit;font-size:20px;line-height:1;cursor:pointer}
+.find-x:hover,.find-x:focus-visible{color:var(--cyan);outline:none}
+.find-head{color:var(--dim);font-size:12.5px;margin:8px 0 0}
+.find-hint{color:var(--faint)}
+/* An answer's quieter notes, on their own line under its head (what it is
+   about, a time it named, what it left out and why). */
+.find-note{display:block;color:var(--faint);font-size:12px;margin-top:2px}
+/* A name asked about with no card, said before the head (2026-10-09). */
+.find-lead{display:block;color:var(--text);margin-bottom:2px}
+
+/* ── the two small pictures: how well I remember, how it feels ── */
+.glance2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,24rem),1fr));gap:0 20px;align-items:stretch}
+.glance-card{display:flex;flex-direction:column;min-width:0}
+.glance-card .card{flex:1;margin-bottom:8px}
+.glance-empty{color:var(--dim);font-size:13px;line-height:1.55;margin:4px 0}
+.glance-note{color:var(--dim);font-size:12.5px;line-height:1.5;margin:10px 0 0}
+/* "How well I remember": one square per memory (or per few, once the grid
+   would outgrow the feelings chart beside it), keyed underneath. The two cards
+   stay level; the chart's card centres its picture when it is the taller one. */
+#feel{display:flex;flex-direction:column;justify-content:center}
+.hold{display:flex;flex-direction:column}
+.hgrid{display:flex;flex-wrap:wrap;gap:3px;align-content:flex-start}
+.hsq{display:block;width:9px;height:9px;border-radius:2px;cursor:pointer;transition:opacity .15s}
+.hsq.firm,.hkey.firm i,.hdot.firm{background:#00e5ff}
+.hsq.settling,.hkey.settling i,.hdot.settling{background:rgba(0,229,255,.38)}
+.hsq.fading,.hkey.fading i,.hdot.fading{background:#ffb74d}
+.hsq.off,.hkey.off{opacity:.35}
+.hsq:hover{outline:1px solid rgba(255,255,255,.6)}
+.hscale{color:var(--faint);font-size:12px;margin:6px 0 0}
+.hkeys{display:flex;flex-direction:column;gap:2px;margin-top:10px}
+.hkey{display:flex;align-items:baseline;gap:8px;background:none;border:1px solid transparent;border-radius:6px;
+  color:var(--dim);font:inherit;font-size:12.5px;line-height:1.45;padding:3px 6px;margin:0 -6px;text-align:left;cursor:pointer}
+.hkey b{color:var(--ink);font-weight:600}
+.hkey:hover:not(:disabled){border-color:var(--glow)}
+.hkey.on{border-color:var(--cyan)}
+.hkey:disabled{cursor:default}
+.hkey i,.hdot{display:inline-block;flex:none;width:10px;height:10px;border-radius:3px;position:relative;top:1px}
+.hkey .fn,.hjournal .fn{font-family:var(--mono);color:var(--ink)}
+.hjournal{display:flex;align-items:center;gap:10px;margin-top:auto;padding:10px 6px 2px;border:none;border-top:1px solid var(--border);
+  background:none;color:var(--dim);font:inherit;font-size:12.5px;line-height:1.45;text-align:left;cursor:pointer}
+.hjournal:hover span,.hjournal.on span{color:var(--ink)}
+.hjournal.on{box-shadow:inset 0 -1px 0 var(--cyan)}
+.hbook{width:16px;height:16px;flex:none;fill:none;stroke:#aab3bd;stroke-width:1.3}
+.feel-row{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center}
+.feel-svg{flex:1 1 15rem;max-width:22rem;min-width:0;height:auto;overflow:visible}
+.feel-ring{fill:none;stroke:rgba(0,229,255,.1);stroke-width:1}
+.feel-spoke{stroke:rgba(0,229,255,.1);stroke-width:1}
+.feel-shape{fill-opacity:.2;stroke-width:1.8;stroke-linejoin:round}
+.feel-hit{fill:transparent;cursor:pointer}
+.feel-axis:focus{outline:none}
+.feel-axis:focus-visible .feel-label,.feel-axis.on .feel-label{fill:var(--ink);font-weight:600}
+.feel-label{fill:var(--dim);font-family:var(--sans);font-size:12px}
+.feel-axis:hover .feel-label{fill:var(--ink)}
+.feel-side{flex:1 1 9rem;min-width:0;display:flex;flex-direction:column;gap:10px}
+.feel-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--ink)}
+.feel-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.feel-legend i{display:inline-block;width:10px;height:10px;border-radius:50%}
+.feel-axis.filtering .feel-label{fill:var(--cyan);font-weight:600}
+.fchip .fx{color:var(--dim);font-size:11px}
+
+/* ── the list ── */
+.mlist-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}
+.mlist-head h2{margin-bottom:8px}
+.msort{margin-bottom:8px}
+.mfilters{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.frow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between}
+.fshow{margin-left:auto;align-items:center}
+.fshow-lab{color:var(--dim);font-size:12.5px;margin-right:8px}
+.fcdot{display:inline-block;width:8px;height:8px;border-radius:50%}
+.fgroup{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.fchip{display:inline-flex;align-items:center;gap:5px;background:none;border:1px solid var(--border);border-radius:20px;
+  color:var(--ink);font:inherit;font-size:12.5px;padding:5px 11px;cursor:pointer;white-space:nowrap}
+.fchip:hover{border-color:var(--glow)}
+.fchip.on{border-color:var(--cyan);color:var(--cyan);background:rgba(0,229,255,.06)}
+.fchip.zero{color:var(--dim)}
+.fchip .fn{font-family:var(--mono);color:var(--dim)}
+.fchip.on .fn{color:var(--cyan)}
+.fchip .star{color:#d9c8ff}
+.fchip.clear{color:var(--dim);border-style:dashed}
+.seggroup{display:flex;gap:0}
+.seggroup .fchip{border-radius:0;margin-left:-1px}
+.seggroup .fchip:first-child,.seggroup .fshow-lab+.fchip{border-radius:20px 0 0 20px;margin-left:0}
+.seggroup .fchip:last-child{border-radius:0 20px 20px 0}
+.mlist{margin-bottom:10px}
+.mlist .empty{margin:10px}
+
+/* A row: words on the left, date · kind · marks on the right. Every row the
+   same brightness (round 4); "fading" is a word, when it applies. */
+.mrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 18px;align-items:start;padding:10px 15px;
+  border-bottom:1px solid var(--border);cursor:pointer;--t:#e3e8ee;--x:#aab3bd}
+.mrow:last-child{border-bottom:none}
+.mrow:hover,.mrow:focus{background:var(--hover);outline:none}
+.mrow:focus-visible{box-shadow:inset 0 0 0 1px var(--cyan)}
+.mmain{min-width:0}
+.mtitle{color:var(--t);font-size:14px;font-weight:600;line-height:1.45;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mtext{color:var(--x);font-size:13px;line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow-wrap:anywhere;margin-top:1px}
+.mtext.solo{color:var(--t);font-size:13.5px;margin-top:0}
+.mwhy{color:var(--amber);font-size:12px;margin-top:3px}
+/* Under an Ask answer's words: who said it, when, which chapter, what it was
+   before; under a chapter of an arc, its moments, each a link (2026-10-09). */
+.mfacts{color:var(--faint);font-size:12px;line-height:1.5;margin-top:3px;overflow-wrap:anywhere}
+.mearlier{color:var(--faint)}
+.mmoments{display:flex;flex-direction:column;align-items:flex-start;gap:1px;margin-top:4px}
+.mmoment{max-width:100%;padding:0;background:none;border:none;color:var(--cyan);font:inherit;font-size:12px;text-align:left;
+  cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mmoment:hover,.mmoment:focus-visible{text-decoration:underline;outline:none}
+.mmore{color:var(--faint);font-size:12px}
+/* A stretch of an arc this page does not show, and what recurs across it. */
+.mfold{padding:7px 15px;border-bottom:1px solid var(--border);color:var(--faint);font-size:12.5px}
+/* A row that opens nothing (a session's moments with no chapter). */
+.mrow:not(.click){cursor:default}
+.mrow:not(.click):hover{background:none}
+.mside{display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0;padding-top:2px}
+.mline{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;min-height:18px}
+.mdate{color:var(--faint);font-size:12px;white-space:nowrap}
+.mkind{display:inline-flex;align-items:center;gap:5px;color:var(--faint);font-size:12px;white-space:nowrap}
+.mfading{color:var(--amber);font-size:12px;white-space:nowrap}
+.mrepeats{color:var(--dim);font-size:12px;white-space:nowrap}
+/* The close matches' heading, under the exact ones (M4). */
+.mclose-h{padding:9px 15px 7px;border-bottom:1px solid var(--border);color:var(--ink);font-size:12.5px;font-weight:600;background:rgba(255,255,255,.02)}
+.mclose-h span{color:var(--dim);font-weight:400}
+/* A search's words, where they appear in an answer. */
+.mrow mark{background:rgba(0,229,255,.2);color:var(--ink);border-radius:2px;padding:0 1px;box-shadow:0 0 0 1px rgba(0,229,255,.25)}
+.mpager{display:flex;align-items:center;justify-content:center;gap:14px;margin:6px 0 20px;flex-wrap:wrap}
+.mpage{color:var(--dim);font-size:12.5px}
+
+@media(max-width:640px){
+  .mrow{grid-template-columns:minmax(0,1fr);padding:10px 12px}
+  .mside{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:4px 12px;padding-top:4px}
+  .mline{justify-content:flex-start}
+}
+/* A thumb needs 44px on everything it presses. */
+@media(max-width:720px){
+  .mbtn,.fchip,.hkey,#q{min-height:44px}
+  .find-x{width:44px;height:44px;right:0}
+  .fshow{margin-left:0}
+  .np-row{flex-wrap:wrap}
+}
+
+/* ── the back up / export dialog (the typed-confirm frame, not its red) ── */
+.confirm.mdialog{border-color:var(--glow)}
+.confirm.mdialog h3{color:var(--cyan);font-size:15px;font-weight:600;letter-spacing:.1px}
+.fd-lede{color:var(--dim);font-size:13px;line-height:1.55;margin:0 0 12px}
+.fd-lab{display:block;font-size:13px;color:var(--ink);margin-bottom:12px}
+.fd-set{border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px 10px;margin:0 0 12px;font-size:13px}
+.fd-set legend{color:var(--dim);font-size:12.5px;padding:0 4px}
+.fd-set label{display:flex;align-items:center;gap:8px;min-height:32px;cursor:pointer}
+.fd-set .confirm-input{margin:2px 0 6px 24px;width:calc(100% - 24px)}
+.mdialog .act-out{font-size:12.5px}
+.fd-more{margin-top:6px;color:var(--dim)}
+.fd-more summary{cursor:pointer}
+.mdialog .confirm-buttons button{font-size:13px;padding:8px 14px}
+.fd-go{color:var(--cyan)!important;border-color:rgba(0,229,255,.45)!important}
+@media(max-width:720px){.mdialog .confirm-buttons button,.fd-set label{min-height:44px}}

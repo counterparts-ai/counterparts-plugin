@@ -1,0 +1,11 @@
+{
+  "name": "counterparts",
+  "version": "0.3.16",
+  "private": true,
+  "description": "The Counterparts Claude Code plugin. Generated from github.com/mlapeter/counterparts by tools/plugin-bundle/build.ts.",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "counterparts-model-potion": "0.1.0"
+  }
+}

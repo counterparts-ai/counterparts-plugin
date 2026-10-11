@@ -1,0 +1,19 @@
+/* ── the `?`: the explaining words, out of the reading path (`tips.js`) ── */
+.q-wrap{position:relative;display:inline-block;vertical-align:middle;line-height:1}
+.q{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;margin:0 0 0 2px;
+  border:1px solid var(--glow);border-radius:50%;background:none;color:var(--dim);font-family:var(--sans);
+  font-size:12px;font-weight:600;line-height:1;cursor:pointer;position:relative}
+/* A small glyph with a thumb-sized hit area around it. */
+.q::after{content:"";position:absolute;inset:-12px}
+.q:hover,.q:focus-visible,.q-wrap.open .q{color:var(--cyan);border-color:var(--cyan)}
+.q-pop{display:none;position:absolute;left:0;top:calc(100% + 8px);z-index:30;width:max-content;
+  max-width:min(22rem,calc(100vw - 32px));background:var(--deep);border:1px solid var(--glow);border-radius:6px;
+  padding:9px 12px;font-family:var(--sans);font-size:13px;font-weight:400;line-height:1.55;color:var(--ink);
+  text-transform:none;letter-spacing:0;text-align:left;white-space:normal;box-shadow:0 6px 26px rgba(0,0,0,.6)}
+/* Hovered: a floating note that never takes the pointer, so it can't sit in
+   the way of what is under it. Pinned (tap / click / Enter): the words drop
+   into the flow under the line they explain and cover nothing. */
+@media(hover:hover){.q-wrap:not(.open):hover .q-pop,.q-wrap:not(.open) .q:focus-visible+.q-pop{display:block;pointer-events:none}}
+.q-wrap.open{display:inline}
+.q-wrap.open .q-pop{display:block;position:static;width:auto;max-width:none;margin:8px 0 2px;box-shadow:none;
+  background:rgba(0,229,255,.05);border-color:var(--border)}

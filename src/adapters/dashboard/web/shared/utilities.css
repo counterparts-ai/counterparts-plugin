@@ -1,0 +1,5 @@
+.foot{color:var(--faint);font-size:10.5px;line-height:1.7;margin-top:10px;max-width:96ch}
+.tone-amber{color:var(--amber)}
+.tone-notable{color:var(--ink)}
+.tone-calm{color:var(--dim)}
+#err{display:none;margin-bottom:12px}

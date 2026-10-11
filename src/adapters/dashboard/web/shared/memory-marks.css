@@ -1,0 +1,22 @@
+/* The marks a memory carries anywhere it is shown (`memory-marks.js`): its
+   kind's icon, feeling dots and the badges for
+   special cases. The memories tab's rows and the memory card both use these. */
+.kic{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;
+  vertical-align:-2px;flex:none}
+.kic .f{fill:currentColor;stroke:none}
+.kmark{display:inline-flex;align-items:center}
+.fdots{display:inline-flex;gap:3px;align-items:center}
+.fdots i{display:block;width:8px;height:8px;border-radius:50%}
+.fdots .fwords{color:var(--faint);font-size:12px;white-space:nowrap;margin-left:3px}
+.mbadge{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;line-height:1.3;color:var(--dim);
+  border:1px solid var(--border);border-radius:9px;padding:1px 7px;white-space:nowrap}
+.mbadge.core{color:#e8dcff;border-color:rgba(179,136,255,.45)}
+.mbadge.lock{color:var(--amber);border-color:rgba(255,215,64,.35);padding:1px 5px}
+.mbadge.journal{color:var(--purple);border-color:rgba(179,136,255,.3)}
+/* An id inside a memory's words, drawn as what it is ("memory ↗"), the id on
+   hover (`idMark`). Quiet: the same word, not a link. */
+.idref{display:inline;padding:0;margin:0;background:none;border:none;border-radius:3px;font:inherit;font-size:.92em;
+  color:var(--cyan);cursor:pointer;white-space:nowrap}
+.idref:hover,.idref:focus-visible{text-decoration:underline;outline:none}
+.idref.quiet{color:var(--faint);cursor:inherit}
+.idref.quiet:hover{text-decoration:none}

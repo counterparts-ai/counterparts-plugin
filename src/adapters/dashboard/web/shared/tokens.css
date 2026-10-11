@@ -1,0 +1,50 @@
+/* ───────────────────────────────────────────────────────────────────────────
+   The glow theme, and the only theme — now the website's (counterparts.ai,
+   `features/home-v2/styles/home-v2.css`), so the dashboard and the site read
+   as one thing: near-black ground, neon cyan and purple, Outfit for anything
+   read as words, Courier only for big numbers and ids (see type.css).
+   Every colour is a variable so a second theme is a block, not a rewrite.
+
+   The faces are SELF-HOSTED from this origin (`shared/fonts/`, OFL licences
+   beside them): no CDN, no network beyond this server, so the page still
+   renders identically with the machine unplugged. Courier asks for Apple's
+   installed Courier first, exactly as the site does (every Mac and iPhone has
+   it), and Courier Prime — Courier redrawn for screens — is the bundled
+   fallback everywhere else.
+   ─────────────────────────────────────────────────────────────────────────── */
+@font-face{font-family:"Outfit";font-style:normal;font-weight:100 900;font-display:swap;
+  src:url("/shared/fonts/outfit-latin-wght.woff2") format("woff2")}
+@font-face{font-family:"Courier Prime";font-style:normal;font-weight:400;font-display:swap;
+  src:url("/shared/fonts/courier-prime-latin-400.woff2") format("woff2")}
+@font-face{font-family:"Courier Prime";font-style:normal;font-weight:700;font-display:swap;
+  src:url("/shared/fonts/courier-prime-latin-700.woff2") format("woff2")}
+:root{
+  /* The site's ground (#04070c) with its soft top-right lift (`--lift`, painted
+     on body). Cards stay OPAQUE (#0d1117): the contrast ramp below is measured
+     against them, and a translucent card would make every ratio depend on
+     what happens to sit behind it. */
+  --bg:#04070c; --lift:#0a1220; --card:#0d1117; --hover:#111820; --deep:#060a10;
+  --border:rgba(0,229,255,.14); --glow:rgba(0,229,255,.28);
+  /* The three text steps, measured rather than eyeballed. WCAG ratios against
+     the page ground (#0a0e14) and the card (#0d1117), which are the only two
+     backgrounds any text sits on:
+       --ink   11.8 : 1  — memory prose, table cells, node state
+       --dim    6.4 : 1 / 6.2 : 1 — the narration lede, nav, legends, headers
+       --faint  5.1 : 1 / 5.0 : 1 — the per-memory metadata row
+     The old values were 3.35 and 1.86. The 1.86 was the line carrying what was
+     remembered and when — the least legible text on the page was the one
+     constitution line 16 is actually about. The hierarchy survives as a real
+     three-step ramp; only the floor moved.
+     2026-09-25: the ground moved to the site's #04070c (darker, so every ratio
+     on it rose); the lift at the top right peaks at #0a1220, a touch lighter
+     than the old ground, and --faint measures about 4.8 : 1 at its brightest.
+     `tools/visual-loop` re-measures all of it on every run. */
+  --ink:#c5cdd8; --dim:#8a95a3; --faint:#79848f;
+  --cyan:#00e5ff; --purple:#b388ff; --amber:#ffd740; --teal:#00bfa5; --red:#ff5252;
+  --radius:4px;
+  /* The two faces, as the site names them. --sans: prose, body, headings and
+     the wordmark. --mono: labels, numbers, pills, ids, terminals. */
+  --sans:"Outfit",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:Courier,"Courier Prime","Courier New",monospace;
+  --hovershadow:0 0 15px rgba(0,229,255,.15), inset 0 0 15px rgba(0,229,255,.02);
+}

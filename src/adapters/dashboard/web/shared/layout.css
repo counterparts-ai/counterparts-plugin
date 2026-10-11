@@ -1,0 +1,31 @@
+.cols{display:grid;grid-template-columns:1.05fr 1fr;gap:20px;align-items:start}
+.cols-wide{display:grid;grid-template-columns:1.35fr 1fr;gap:20px;align-items:start}
+/* A grid item defaults to `min-width:auto`, which means it refuses to shrink
+   below its widest content — so `.tablewrap{overflow-x:auto}` never engaged and
+   a seven-column table pushed the whole PAGE wider than the device. The page
+   body must never scroll horizontally; this is the line that makes the
+   per-panel scrollers do their job instead. */
+.cols>*,.cols-wide>*{min-width:0}
+/* THE PHONE HEADER. Measured at 390 before this existed: 150px of chrome in
+   three rows, `nav a` 29.2px tall and `.hright a` the same, against the 44px
+   minimum for something a thumb has to hit. The fix is not to shrink the header
+   further — it is to stop the nav wrapping. Brand and chips take one row; the
+   six sections become a single horizontal strip that scrolls on its own, with
+   real 44px hits, which is both smaller overall and actually usable. */
+@media(max-width:720px){
+  header{gap:8px 12px;margin-bottom:10px}
+  h1{font-size:16px;letter-spacing:4px;order:1}
+  .hright{order:2;margin-left:auto;gap:8px}
+  nav{order:3;flex:1 0 100%;flex-wrap:nowrap;overflow-x:auto;gap:0;
+    border-top:1px solid var(--glow);padding-top:2px;scrollbar-width:none}
+  nav::-webkit-scrollbar{display:none}
+  nav a{min-height:44px;display:inline-flex;align-items:center;padding:0 14px;
+    font-size:13px;white-space:nowrap}
+  .hright a{min-height:44px;display:inline-flex;align-items:center}
+  .badge{font-size:10px;padding:4px 9px}
+  /* The chips have to fit ONE line, or the header grows a row back. The
+     observer badge is the long one, and `observer` alone is the whole claim —
+     the sentence is still in its `title`. */
+  .badge .wide{display:none}
+}
+@media(max-width:1080px){.cols,.cols-wide{grid-template-columns:1fr}}

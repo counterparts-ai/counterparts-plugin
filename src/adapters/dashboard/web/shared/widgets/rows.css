@@ -1,0 +1,7 @@
+.rows .r{padding:10px 15px;border-bottom:1px solid var(--border);font-size:11.5px;line-height:1.6}
+.rows .r:last-child{border-bottom:none}
+.rows .r.click{cursor:pointer}
+.rows .r.click:hover{background:var(--hover)}
+.rows .meta{color:var(--faint);font-size:10px;margin-top:4px;display:flex;gap:10px;flex-wrap:wrap}
+.rows .meta .k{color:var(--dim)}
+.withheld{color:var(--amber);font-style:italic}

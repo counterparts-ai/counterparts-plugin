@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-theme="glow">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>counterparts — the owner's window</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<!-- The server fills this with a per-launch token; every management action
+     echoes it (web/actions.ts). Empty means this page cannot act. -->
+<meta name="counterparts-action-token" content="">
+<!--
+  The shell. Styles, scripts and the two font faces are served beside this file
+  (see README.md): no CDN, no network of any kind beyond this origin.
+  The <link> order IS the cascade order — it reproduces the one stylesheet this
+  page used to inline, so a rule's position still decides its ties.
+-->
+<link rel="preload" href="/shared/fonts/outfit-latin-wght.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/base.css">
+<link rel="stylesheet" href="/shared/widgets/tiles.css">
+<link rel="stylesheet" href="/shared/layout.css">
+<link rel="stylesheet" href="/shared/widgets/card.css">
+<link rel="stylesheet" href="/shared/widgets/bar.css">
+<link rel="stylesheet" href="/shared/widgets/feed.css">
+<link rel="stylesheet" href="/shared/widgets/rows.css">
+<link rel="stylesheet" href="/shared/widgets/table.css">
+<link rel="stylesheet" href="/shared/widgets/chart.css">
+<link rel="stylesheet" href="/shared/tip.css">
+<link rel="stylesheet" href="/shared/widgets/tips.css">
+<link rel="stylesheet" href="/shared/widgets/light.css">
+<link rel="stylesheet" href="/pages/home/home.css">
+<link rel="stylesheet" href="/shared/memory-marks.css">
+<link rel="stylesheet" href="/pages/memories/memories.css">
+<link rel="stylesheet" href="/pages/self/self.css">
+<link rel="stylesheet" href="/pages/flow/flow.css">
+<link rel="stylesheet" href="/pages/health/health.css">
+<link rel="stylesheet" href="/shared/modal.css">
+<link rel="stylesheet" href="/shared/widgets/confirm.css">
+<link rel="stylesheet" href="/shared/utilities.css">
+<link rel="stylesheet" href="/shared/type.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>counterparts</h1>
+    <nav id="nav"></nav>
+  </header>
+
+  <div class="empty" id="err"></div>
+
+  <!-- One section per page; each page module (pages/<name>/index.js) writes
+       its own markup into its section at load. -->
+  <section class="tab" id="tab-home"></section>
+  <section class="tab" id="tab-memories" hidden></section>
+  <section class="tab" id="tab-self" hidden></section>
+  <section class="tab" id="tab-flow" hidden></section>
+  <section class="tab" id="tab-health" hidden></section>
+</div>
+
+<div id="tip"></div>
+<div id="overlay"><div id="modal"></div></div>
+</body>
+</html>

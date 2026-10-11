@@ -1,0 +1,39 @@
+{
+  "name": "counterparts",
+  "displayName": "Counterparts",
+  "version": "0.3.16",
+  "description": "Memory that turns Claude into a counterpart: a local-first memory layer modeled on human memory. Wakes each session with what matters, remembers by meaning, forgets on purpose. Everything stays on your computer.",
+  "author": {
+    "name": "Mike LaPeter",
+    "url": "https://counterparts.ai"
+  },
+  "homepage": "https://counterparts.ai",
+  "repository": "https://github.com/mlapeter/counterparts",
+  "documentationUrl": "https://github.com/mlapeter/counterparts#readme",
+  "supportUrl": "https://github.com/mlapeter/counterparts/issues",
+  "privacyPolicyUrl": "https://counterparts.ai/privacy",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "local-first",
+    "mcp",
+    "hooks",
+    "long-term memory",
+    "recall",
+    "context",
+    "local",
+    "sidebar",
+    "sessions",
+    "privacy"
+  ],
+  "types": "./hooks/sidebar/types/index.d.ts",
+  "mcpServers": {
+    "counterparts": {
+      "command": "sh",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh",
+        "mcp"
+      ]
+    }
+  }
+}

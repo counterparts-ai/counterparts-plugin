@@ -1,0 +1,31 @@
+/* The typed confirmation (widgets/confirm.js) and the console's answer as the
+   page shows it (shared/actions.js). Above the overlay card on purpose. */
+.confirm-back{position:fixed;inset:0;background:rgba(3,6,11,.85);z-index:300;display:flex;
+  align-items:flex-start;justify-content:center;padding:12vh 16px}
+.confirm{background:var(--card);border:1px solid var(--red);border-radius:8px;max-width:640px;width:100%;
+  max-height:76vh;overflow-y:auto;padding:18px 22px}
+.confirm h3{font-size:13px;color:var(--red);font-weight:400;letter-spacing:1px;margin-bottom:10px}
+.confirm-body{font-size:11px;line-height:1.6;margin-bottom:12px}
+.confirm-label{display:block;font-size:11px;color:var(--dim);margin-bottom:12px}
+.confirm-label b{color:var(--ink);font-weight:400}
+.confirm-input,.act-form input,.act-form textarea{display:block;width:100%;margin-top:6px;background:var(--deep);
+  color:var(--ink);border:1px solid var(--border);border-radius:var(--radius);font:inherit;font-size:12px;padding:7px 9px}
+.confirm-buttons{display:flex;gap:10px;justify-content:flex-end}
+.confirm-buttons button,.act-btn{background:none;border:1px solid var(--border);border-radius:3px;color:var(--dim);
+  font:inherit;font-size:10.5px;letter-spacing:.6px;padding:4px 12px;cursor:pointer}
+.confirm-buttons button:hover,.act-btn:hover{color:var(--cyan);border-color:var(--glow)}
+.confirm-go{color:var(--red)!important;border-color:var(--red)!important}
+.confirm-go:disabled{opacity:.35;cursor:not-allowed}
+.act-danger{color:var(--red);border-color:rgba(255,82,82,.4)}
+.act-out{white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.6;background:var(--deep);
+  border:1px solid var(--border);border-radius:var(--radius);padding:9px 11px;margin-top:8px}
+.act-out.act-refused{border-color:rgba(255,215,64,.35)}
+.act-out.act-bad{border-color:rgba(255,82,82,.4)}
+.act-cmd{color:var(--faint);margin-bottom:4px}
+.act-err{color:var(--amber)}
+.act-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:6px 0 14px}
+.act-form details{font-size:11px;color:var(--dim)}
+.act-form summary{cursor:pointer;letter-spacing:.6px}
+.act-form summary:hover{color:var(--cyan)}
+.act-form .act-row{display:flex;gap:8px;margin-top:6px}
+@media (max-width:760px){.act-form{grid-template-columns:1fr}}

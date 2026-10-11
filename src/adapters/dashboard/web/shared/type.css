@@ -1,0 +1,52 @@
+/* ───────────────────────────────────────────────────────────────────────────
+   Which face goes where, in one place. Loaded LAST, so a page rule's family or
+   case never wins by accident.
+
+   OUTFIT (`--sans`, set on `body` in base.css) for anything a person reads as
+   words: headings and their subtitles, tab labels, badges, tile captions,
+   table headers, feed lines, pills. The owner found Courier hard to read
+   (2026-09-25), so the old small-caps, letter-spaced labels are softened too:
+   sentence case, a little weight, the way counterparts.ai reads.
+
+   COURIER (`--mono`) only where fixed-width really helps: the big tile
+   numbers, ids and dotted record names, hashes, byte figures. If in doubt,
+   Outfit.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── the Courier list: numbers, ids, machine names ── */
+.tile .n,.ev .k,td .ident,#modal .copy,#modal .sub .path{font-family:var(--mono)}
+
+/* ── headings: Outfit, sentence case, weight instead of tracking ── */
+h2{font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:.1px;text-transform:none;
+  color:var(--ink);margin:26px 0 10px}
+h2:first-child{margin-top:0}
+h2 small{font-size:13px;font-weight:400;color:var(--dim)}
+#flowdetail h3,.story h3,#modal h3{font-family:var(--sans);font-weight:600;letter-spacing:.1px;font-size:15px}
+
+/* the small labels that used to be spaced capitals */
+.tile .l,th,.lane h4,#modal h4,#flowdetail .lab,.story .about{
+  text-transform:none;letter-spacing:.1px;font-weight:500}
+.tile .l{font-size:12px;color:var(--dim)}
+th{font-size:12px}
+.lane h4{font-size:13px}
+#modal h4{font-size:12.5px;color:var(--dim)}
+#flowdetail .lab{font-size:12px;color:var(--dim)}
+.story .about{font-size:12px}
+
+/* ── the header strip ── */
+nav a{font-size:14px}
+.badge{font-size:11.5px;letter-spacing:.1px}
+
+/* ── prose, one step up from sizes set for a wide monospace ── */
+.lede{font-size:14.5px}
+.rows .r,.ev,.blind,.lane .item,.story .said,#flowdetail p{font-size:13px}
+.bar{font-size:13px}
+#modal .body{font-size:13.5px}
+#tip{font-size:12.5px}
+.empty{font-size:13px}
+.foot{font-size:12px}
+
+/* ── the small lines under prose ── */
+.rows .meta,.ev .d,.legend,.beat .day,.beat .verdict,.fnode .sb,.gloss,.tile .s,#qn,#tip .dimline{font-size:12px}
+.fnode .nm{font-size:13px;letter-spacing:.2px}
+.ev .k,td .ident{font-size:11px}

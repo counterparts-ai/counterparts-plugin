@@ -1,0 +1,84 @@
+/* The home page (round 4, 2026-09-28): a headline and a health dot across the
+   top; "Today" with the brain on its right; the feelings radar beside the self
+   map. One column on a phone, in that order (headline, Today, brain, radar,
+   map). Outfit for words. The radar's and the
+   map's own styles are their tabs' (memories.css, self.css). */
+
+/* ── the headline and the health dot ─────────────────── */
+.home-top{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 24px;margin:6px 0 10px}
+.home-headline{font-family:var(--sans);font-weight:700;font-size:clamp(22px,2.4vw,32px);line-height:1.25;
+  letter-spacing:-.3px;color:#e8eef5;margin:0;min-width:0}
+.home-headline .hh-part{display:inline-block;white-space:nowrap}
+.home-health{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 12px;border:1px solid var(--border);
+  border-radius:18px;color:var(--ink);font-size:13.5px;text-decoration:none;white-space:nowrap}
+.home-health:hover,.home-health:focus-visible{border-color:var(--glow);color:#e8eef5;outline:none}
+.home-health .hc-dot{flex:none}
+
+/* ── the two rows ─────────────────────────────────────── */
+.home-row{display:grid;gap:24px;align-items:start}
+.home-row>*{min-width:0}
+.home-row-a{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:center;margin:0 0 18px}
+.home-row-b{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:stretch}
+.home-card{display:flex;flex-direction:column;min-width:0}
+.home-card .card{flex:1;margin-bottom:8px}
+.home-feel .feel-row{flex-direction:column;flex-wrap:nowrap;align-items:center;justify-content:center;gap:4px}
+.home-feel .feel-svg{flex:none;width:100%;max-width:24rem}
+.home-feel{display:flex;flex-direction:column;justify-content:center}
+.home-feel .feel-side{flex:none;align-items:center}
+.home-map .sm{margin:0}
+.home-more{display:inline-flex;align-items:center;min-height:32px;margin-top:4px;font-size:13.5px}
+
+/* ── today ────────────────────────────────────────────── */
+/* Centred beside the brain, a new line moves Today's top: first in the page
+   now, it would be the browser's scroll anchor and the page would jump. */
+.home-today{min-width:0;overflow-anchor:none}
+.td-list{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.td-line{position:relative;padding-left:18px}
+.td-line::before{content:"";position:absolute;left:2px;top:17px;width:7px;height:7px;border-radius:50%;
+  transform:translateY(-50%);background:var(--cyan);opacity:.8}
+.td-core::before{background:var(--purple);opacity:1}
+.td-dream::before{background:rgba(179,136,255,.55)}
+.td-let-go::before{background:var(--faint)}
+.td-more::before{display:none}
+.td-link{display:block;width:100%;padding:6px 0;background:none;border:0;font:inherit;font-size:15px;line-height:1.5;text-align:left;
+  color:var(--ink);cursor:pointer;text-decoration:underline dotted rgba(0,229,255,.35);text-underline-offset:4px;overflow-wrap:anywhere}
+.td-link:hover,.td-link:focus-visible{color:var(--cyan);outline:none}
+.td-core .td-link{color:#e8eef5}
+.td-more .td-link{color:var(--dim);font-size:14px}
+.td-none{color:var(--dim);font-size:14px;line-height:1.6}
+
+/* ── the brain ────────────────────────────────────────── */
+.home-brain{position:relative;height:min(460px,calc(100vh - 200px));min-height:340px;width:100%;min-width:0}
+.brain-canvas{position:absolute;inset:0;width:100%;height:100%;cursor:grab;touch-action:pan-y}
+.brain-canvas.is-drag{cursor:grabbing}
+.brain-pin{position:absolute;left:0;top:0;margin:-22px 0 0 -11px;min-height:44px;display:inline-flex;align-items:center;
+  gap:8px;padding:0 10px 0 5px;background:transparent;border:0;cursor:pointer;font-family:var(--sans);font-size:13px;
+  font-weight:500;color:var(--ink);white-space:nowrap;will-change:transform;--pin:rgb(138,149,163)}
+/* a point's name shows only while it is hovered or focused (round 4) */
+.brain-pin-name{display:none;background:var(--card);border:1px solid var(--pin);color:var(--pin);border-radius:4px;padding:2px 8px}
+.brain-pin:hover,.brain-pin:focus-visible{--pin:var(--cyan)}
+.brain-pin:hover .brain-pin-name,.brain-pin:focus-visible .brain-pin-name{display:inline}
+.brain-pin-dot{width:10px;height:10px;border-radius:50%;background:var(--pin);color:var(--pin);box-shadow:0 0 10px currentColor;flex:none}
+.brain-pin:focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:6px}
+.brain-hint{position:absolute;right:8px;bottom:4px;margin:0;font-size:12px;color:var(--faint);pointer-events:none}
+.hint-touch{display:none}
+@media(hover:none){.hint-mouse{display:none}.hint-touch{display:inline}}
+.brain-off{position:absolute;inset:12% 8%;display:flex;flex-direction:column;justify-content:center;gap:8px;text-align:center;
+  border:1px dashed var(--glow);border-radius:8px;padding:24px;color:var(--dim);font-size:14px;line-height:1.6}
+.home-brain.is-nogl .brain-canvas,.home-brain.is-nogl .brain-pin,.home-brain.is-nogl .brain-hint{display:none}
+
+
+/* ── narrow ───────────────────────────────────────────── */
+@media(max-width:900px){
+  .home-row-a,.home-row-b{grid-template-columns:1fr}
+  .home-brain{height:340px;min-height:0}
+}
+@media(max-width:560px){
+  .home-brain{height:300px}
+  .home-headline{font-size:22px}
+}
+@media(max-width:720px),(pointer:coarse){
+  .td-link{padding:10px 0}
+  .td-line::before{top:21px}
+  .home-more{min-height:44px}
+}

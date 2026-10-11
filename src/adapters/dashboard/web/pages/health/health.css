@@ -1,0 +1,246 @@
+/* The health tab: the checklist, the cycle line, the archive bar, the index
+   check. */
+
+/* ── the lights (doctor's grades) ── */
+.hc-dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none;background:var(--faint);opacity:.6}
+.hc-green{background:var(--teal);opacity:1;box-shadow:0 0 8px rgba(0,191,165,.6)}
+.hc-amber{background:var(--amber);opacity:1;box-shadow:0 0 8px rgba(255,215,64,.45)}
+.hc-red{background:var(--red);opacity:1;box-shadow:0 0 8px rgba(255,82,82,.55)}
+.hc-grey,.hc-off{background:var(--faint);opacity:.55}
+
+/* ── the checklist ── */
+.hc{padding:0}
+.hc-sum{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border)}
+.hc-sum .hc-dot{width:14px;height:14px}
+.hc-verdict{font-size:20px;font-weight:600;color:var(--ink)}
+.hc-sub{font-size:13px;color:var(--dim);margin-left:auto}
+.hc-list{display:flex;flex-direction:column}
+.hc-row{display:grid;grid-template-columns:10px minmax(150px,220px) 1fr;gap:14px;align-items:center;width:100%;
+  min-height:44px;padding:8px 18px;background:none;border:none;border-bottom:1px solid var(--border);
+  color:var(--ink);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
+.hc-row:hover,.hc-row[aria-expanded="true"]{background:var(--hover)}
+.hc-name{font-weight:500}
+.hc-line{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.hc-more{padding:10px 18px 14px 42px;border-bottom:1px solid var(--border);background:var(--deep);font-size:13px;line-height:1.6}
+.hc-detail{color:var(--ink);word-break:break-word}
+.hc-fix{margin-top:6px;color:var(--ink)}
+.hc-fix b{color:var(--amber);font-weight:500}
+.hc-key{margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+.hc-fold{list-style:none;margin:0;padding:0}
+.hc-fold li{display:grid;grid-template-columns:10px minmax(140px,200px) 1fr;gap:12px;align-items:baseline;padding:4px 0}
+.hc-fold .hc-dot{width:8px;height:8px}
+.hc-fold .hc-detail{color:var(--dim);word-break:break-word}
+.hc-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 18px;font-size:12px;color:var(--dim)}
+.hc-again{min-height:32px}
+.hc-problem{padding:12px 18px;font-size:13px;color:var(--amber)}
+
+/* ── the last cycle ── */
+.hcy{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-top:10px}
+.hcy-line{font-size:15px;color:var(--ink)}
+.hcy-dots{display:flex;gap:8px;align-items:center}
+.hcy-dot{width:12px;height:12px;cursor:help}
+
+/* ── is the wake overflowing? one compact row (round 3b, from the self tab) ── */
+.hwk{margin-top:10px}
+.hwk-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.hwk-line{font-size:15px;color:var(--ink)}
+.wk-bar{display:flex;height:12px;border-radius:4px;overflow:hidden;background:var(--deep);border:1px solid var(--border)}
+.wk-seg{display:block;height:100%}
+.wk-seg+.wk-seg{border-left:1px solid var(--card)}
+.p-furn{background:#3a4552}.p-page{background:var(--cyan)}.p-craft{background:var(--purple)}
+.p-threads{background:var(--amber)}.p-hints{background:var(--teal)}.p-horizon{background:#ff8a80}
+.p-room{background:transparent;border:1px dashed var(--glow)}
+.wk-legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin:8px 0 0;font-size:12.5px;color:var(--dim)}
+.wk-key i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:0}
+.wk-key em{font-style:normal;color:var(--faint);font-family:var(--mono);font-size:11.5px;margin-left:2px}
+
+/* ── where archived memories went ── */
+.ha-total{font-size:14px;color:var(--dim);margin-bottom:10px}
+.ha-total b{font-family:var(--mono);font-size:20px;color:var(--ink);font-weight:700;margin-right:4px}
+.ha-bar{display:flex;height:28px;border-radius:var(--radius);overflow:hidden;gap:2px;background:var(--deep)}
+.ha-seg{border:none;padding:0;min-width:6px;cursor:pointer;opacity:.85}
+.ha-seg:hover,.ha-seg.on{opacity:1;box-shadow:inset 0 0 0 2px rgba(255,255,255,.55)}
+.ha-legend{display:flex;flex-wrap:wrap;gap:4px 18px;margin-top:12px}
+.ha-key{display:inline-flex;align-items:center;gap:7px;background:none;border:none;border-radius:3px;padding:4px 6px;
+  margin-left:-6px;color:var(--ink);font:inherit;font-size:13.5px;cursor:pointer;min-height:32px}
+.ha-key b{font-family:var(--mono);font-weight:700}
+.ha-key:hover,.ha-key.on{background:var(--hover)}
+.ha-zero{color:var(--dim);cursor:default;font-size:13.5px}
+.ha-zero:hover{background:none}
+.ha-sw{display:inline-block;width:11px;height:11px;border-radius:2px;flex:none}
+.ha-sw0{background:transparent;border:1px solid var(--faint)}
+.ha-none{font-size:15px;color:var(--ink)}
+.ha-none+.ha-legend{margin-top:8px}
+.ha-none+.ha-legend .ha-zero{margin-right:4px}
+.ha-list:not(:empty){margin-top:12px;border-top:1px solid var(--border);padding-top:10px;max-height:320px;overflow-y:auto}
+.ha-listhead{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;margin-bottom:6px}
+.ha-item{display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--border);
+  color:var(--ink);font:inherit;font-size:13px;padding:7px 4px;cursor:pointer}
+.ha-item:hover{background:var(--hover);color:var(--cyan)}
+.ha-still{cursor:default}
+.ha-still:hover{background:none;color:var(--ink)}
+.ha-note{display:block;color:var(--dim);font-size:12px;margin-top:2px}
+.ha-more{font-size:12px;color:var(--dim);padding:6px 4px}
+
+/* ── the index check ── */
+.hv{margin-top:18px}
+.hv-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.hv-title{font-size:15px;font-weight:600}
+.hv-sub{font-size:13px;color:var(--dim);margin-top:2px}
+.hv-btn{font-size:13px;padding:8px 16px;min-height:40px;white-space:nowrap}
+.hv-res{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:14px}
+.hv-facts{font-size:13px;color:var(--dim);margin:4px 0 0 20px}
+.hv-full{margin-top:10px;font-size:12.5px;color:var(--dim)}
+.hv-full summary{cursor:pointer}
+.hv-full summary:hover{color:var(--cyan)}
+
+@media (max-width:700px){
+  .hc-row{grid-template-columns:10px 1fr;gap:4px 12px;padding:10px 14px}
+  .hc-row .hc-line{grid-column:2;white-space:normal}
+  .hc-sum{flex-wrap:wrap;padding:14px}
+  .hc-sub{margin-left:0;width:100%}
+  .hc-more{padding:10px 14px}
+  .hc-fold li{grid-template-columns:8px 1fr}
+  .hc-fold li .hc-detail{grid-column:2}
+  .hv-head{flex-direction:column;align-items:stretch}
+  .hv-btn,.hc-again,.ha-key{min-height:44px}
+}
+
+/* ── how the memory works (sections/mechanisms.js — on Home until round 4, 2026-09-28) ── */
+.mech-card{--reg:var(--cyan);border:1px solid var(--border);border-top:2px solid var(--reg);border-radius:6px;background:var(--card);
+  padding:18px clamp(14px,2.2vw,28px) 24px;box-shadow:0 -20px 60px -30px var(--reg);transition:border-color .3s,box-shadow .3s;
+  scroll-margin-top:12px}
+.mech-top{display:flex;gap:10px;align-items:center;margin:0 0 18px}
+.mech-top .mechs{flex:1;min-width:0;margin:0}
+.mech-legend{flex:none}
+.mech-legend .q-wrap.open .q-pop{position:absolute;right:0;left:auto;top:calc(100% + 8px);width:min(22rem,calc(100vw - 48px));max-width:none}
+/* ONE line of pills that scrolls sideways inside itself (round 3b): the stage is
+   the small colour mark on each pill, not a heading above a group. */
+.mechs{display:flex;flex-wrap:nowrap;gap:6px;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;
+  scrollbar-width:thin;scrollbar-color:rgba(197,205,216,.2) transparent;padding:2px 2px 6px;margin:0 0 18px}
+.mechs.more-right{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent)}
+.mechs.more-left{-webkit-mask-image:linear-gradient(to right,transparent,#000 36px);mask-image:linear-gradient(to right,transparent,#000 36px)}
+.mechs.more-left.more-right{-webkit-mask-image:linear-gradient(to right,transparent,#000 36px,#000 calc(100% - 36px),transparent);
+  mask-image:linear-gradient(to right,transparent,#000 36px,#000 calc(100% - 36px),transparent)}
+.mechs::-webkit-scrollbar{height:4px}
+.mechs::-webkit-scrollbar-thumb{background:rgba(197,205,216,.2);border-radius:2px}
+.mech-pill{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:0 10px 0 8px;border-radius:16px;
+  border:1px solid color-mix(in srgb,var(--pin) 35%,transparent);background:transparent;color:var(--ink);
+  font-family:var(--sans);font-size:12.5px;white-space:nowrap;cursor:pointer}
+.mech-pill:hover,.mech-pill:focus-visible{border-color:var(--pin);background:color-mix(in srgb,var(--pin) 10%,transparent);outline:none}
+.mech-pill:focus-visible{box-shadow:0 0 0 2px color-mix(in srgb,var(--pin) 60%,transparent)}
+.mech-pill.is-on{border-color:var(--pin);color:var(--pin);background:color-mix(in srgb,var(--pin) 14%,var(--card))}
+.mech-pill.is-notbuilt{color:var(--dim);border-style:dashed}
+.mech-stage{flex:none;width:3px;height:13px;border-radius:2px;background:var(--pin)}
+.mech-tag,.mech-dev{font-size:9.5px;font-weight:500;color:var(--amber);border:1px solid rgba(255,215,64,.3);
+  border-radius:8px;padding:0 5px;line-height:14px;white-space:nowrap}
+.mech-dev{font-size:10.5px;padding:0 6px;vertical-align:2px;font-family:var(--sans)}
+
+/* the panel: a big number, those memories, one line — then the fold */
+.mech-grid{display:grid;grid-template-columns:minmax(0,4fr) minmax(0,7fr);grid-template-areas:"main side";gap:32px;align-items:start}
+.mech-main{grid-area:main}
+.mech-side{grid-area:side;min-width:0}
+.mech-name{font-family:var(--sans);font-size:13.5px;font-weight:600;letter-spacing:0;color:var(--reg);margin:0 0 10px}
+.mech-lead{margin:0 0 12px;line-height:1.3;color:#e8eef5}
+.mech-n{display:block;font-family:var(--mono);font-size:48px;font-weight:700;line-height:1.05;color:var(--reg);
+  text-shadow:0 0 18px color-mix(in srgb,var(--reg) 25%,transparent)}
+.mech-words{display:block;font-size:15.5px;font-weight:500;margin-top:4px}
+.mech-lead-none{font-size:17px;color:var(--dim)}
+.mech-does{font-size:14px;line-height:1.6;color:var(--dim);margin:0}
+.mech-notbuilt{border:1px dashed var(--glow);border-radius:6px;padding:14px 16px;color:var(--dim);font-size:14px;line-height:1.6}
+
+.mech-how{margin-top:20px;border-top:1px solid var(--border);padding-top:6px}
+.mech-how summary{display:inline-flex;align-items:center;gap:6px;min-height:36px;cursor:pointer;list-style:none;
+  font-size:13px;color:var(--dim);user-select:none}
+.mech-how summary::-webkit-details-marker{display:none}
+.mech-how summary:hover,.mech-how summary:focus-visible{color:var(--cyan);outline:none}
+.mech-how summary:focus-visible .mech-how-l{text-decoration:underline}
+.mech-how-arrow{display:inline-block;transition:transform .2s}
+.mech-how[open] .mech-how-arrow{transform:rotate(180deg)}
+.mech-how-body{padding:6px 0 4px;max-width:62rem}
+.mech-quote{font-size:16px;line-height:1.5;color:#e8eef5;margin:0 0 10px}
+.mech-explainer{font-size:14px;line-height:1.7;margin:0 0 12px}
+.mech-evidence{font-size:13.5px;line-height:1.6;margin:0 0 10px;color:var(--ink)}
+.mech-evidence b{font-weight:600}
+.mech-evidence .light{vertical-align:0}
+.mech-guide{margin:14px 0 0;font-size:13.5px}
+.mech-guide a{display:inline-flex;align-items:center;min-height:32px}
+.mech-foot{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:16px}
+.mech-h{font-family:var(--sans);font-size:13.5px;font-weight:600;color:var(--dim);margin:0 0 6px}
+.mech-foot + .mech-h{margin-top:18px}
+.mech-list{margin:0 0 4px 18px;font-size:13.5px;line-height:1.65}
+.mech-list li{margin:3px 0}
+.mech-feed{max-height:none}
+
+/* ── the pictures (mechanisms/<id>/panel.js) ──────────── */
+.mech-picture{font-size:13px;line-height:1.55}
+.pic-none{color:var(--dim);font-size:13.5px;margin:0}
+.pic-cap{color:var(--dim);font-size:12.5px;margin:10px 0 0}
+.pic-meta{display:block;color:var(--faint);font-size:12px;margin-top:2px}
+.pic-mem{color:var(--ink);cursor:pointer;border-bottom:1px dotted rgba(0,229,255,.35)}
+.pic-mem:hover,.pic-mem:focus-visible{color:var(--cyan);outline:none}
+.pic-head{font-size:12.5px;color:var(--dim);font-weight:600;margin:0 0 4px}
+.pic-svg{display:block;width:100%;height:auto;max-height:230px;overflow:visible}
+.pic-svg .pic-guide{stroke:rgba(197,205,216,.25);stroke-dasharray:2 4}
+.pic-svg .pic-now{stroke:rgba(0,229,255,.45)}
+.pic-svg .pic-tick{fill:var(--faint);font-family:var(--sans);font-size:11px}
+.pic-legend,.pic-list,.pic-climb,.pic-sal{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:9px}
+.pic-legend li,.pic-sal li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start}
+.pic-swatch{width:12px;height:3px;border-radius:2px;margin-top:9px}
+.pic-list li{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.pic-list li .pic-meta{display:inline}
+.pic-turns{display:grid;gap:12px}
+.pic-turn ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.pic-turn li{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.pic-tag{font-size:11px;font-weight:500;border:1px solid var(--glow);border-radius:9px;padding:0 7px;color:var(--dim);white-space:nowrap}
+.pic-tag.on{color:var(--cyan);border-color:rgba(0,229,255,.5)}
+.pic-used{font-size:12px;color:var(--faint);white-space:nowrap}
+.pic-used.yes{color:var(--teal)}
+.pic-two{display:grid;grid-template-columns:auto minmax(80px,1fr);gap:4px 10px;align-items:center;margin-top:5px}
+.pic-lab{font-size:12px;color:var(--dim);white-space:nowrap}
+.pic-bar{position:relative;display:block;height:6px;border-radius:3px;background:rgba(197,205,216,.1);overflow:visible}
+.pic-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px}
+.pic-mark{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);opacity:.6}
+.pic-hubs{display:grid;gap:10px}
+.pic-hubs .pic-two{grid-template-columns:minmax(80px,1fr) auto}
+.pic-hubs .pic-meta{display:inline;margin:0}
+.pic-dotwrap{width:30px;height:30px;display:flex;align-items:center;justify-content:center}
+.pic-dot{display:block;border-radius:50%;background:#00e5ff;box-shadow:0 0 10px rgba(0,229,255,.5);opacity:.85}
+.pic-rev{margin:2px 0}
+.pic-rev .pic-meta{display:inline;margin:0 4px}
+.pic-crossed{color:var(--amber)}
+.pic-gap{margin-top:16px}
+.pic-dim{color:var(--faint)}
+.pic-returns,.pic-use{font-size:13px;color:var(--ink);margin:0 0 12px;line-height:1.55}
+.pic-use{display:flex;gap:10px;align-items:flex-start}
+.pic-use b{font-weight:600;color:var(--cyan)}
+.use-trend{flex:none;margin-top:2px;overflow:visible}
+.use-trend .use-bar{fill:var(--teal)}
+.use-trend .use-none{fill:rgba(197,205,216,.25)}
+.pic-climb .pic-tag{vertical-align:1px;margin-left:4px}
+/* the short lists (round 3b): a memory, and a few words under it */
+.pic-rows{gap:10px}
+.pic-rows li{display:block}
+.pic-rows li .pic-meta{display:block;margin-top:2px}
+.pic-rows .pic-tag{font-size:10.5px;padding:0 6px}
+.pic-dream .pic-mem{color:var(--dim)}
+.pic-feel{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--dim);border:1px solid rgba(197,205,216,.16);
+  border-radius:9px;padding:0 7px;line-height:17px;white-space:nowrap}
+.pic-feel i{display:inline-block;width:7px;height:7px;border-radius:50%}
+.pic-more{display:inline-flex;align-items:center;min-height:32px}
+.pic-rows + .pic-use,.pic-none + .pic-use{margin:14px 0 0}
+
+
+/* ── the mechanisms, narrow ───────────────────────────── */
+@media(max-width:900px){
+  .mech-grid{grid-template-columns:1fr;grid-template-areas:"main" "side";gap:16px}
+  .mech-foot{grid-template-columns:1fr;gap:18px}
+}
+@media(max-width:720px),(pointer:coarse){
+  .mech-pill{min-height:44px;padding:0 12px 0 10px}
+  .mech-guide a,.pic-more,.mech-how summary{min-height:44px}
+  .mech-n{font-size:40px}
+}
+@media(prefers-reduced-motion:reduce){.mech-card,.mech-how-arrow{transition:none}}
+/* The kinds' fading and correcting, in words (round 4, from the memories tab). */
+.mech-kinds{color:var(--dim);font-size:13px;line-height:1.6;margin:0 0 10px;max-width:60rem}

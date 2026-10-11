@@ -1,0 +1,38 @@
+#flowbox{padding:4px}
+#flowcv{width:100%;display:block;cursor:pointer}
+/* Below ~900px the diagram becomes a LIST of the same fourteen nodes. A canvas
+   shrunk to a phone is text clipped mid-word inside overlapping boxes; the data
+   behind it is a list of {label, sub, state} records, and a list is honest. */
+#flowlist{padding:4px 2px}
+.fnode{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:baseline;
+  padding:11px 13px;border:1px solid var(--border);border-radius:var(--radius);
+  margin:6px 4px;cursor:pointer;background:var(--card)}
+.fnode:hover,.fnode.on{border-color:var(--glow);background:var(--hover)}
+.fnode .nm{font-size:11.5px;letter-spacing:1.4px}
+.fnode .sb{color:var(--dim);font-size:10px;display:block;margin-top:3px;letter-spacing:0}
+.fnode .st{font-size:10.5px;color:var(--ink);white-space:nowrap;text-align:right}
+.fnode.silent .st{color:var(--dim)}
+.fchain{color:var(--faint);font-size:9px;letter-spacing:1px;text-align:center;padding:1px 0}
+#flowdetail h3{color:var(--cyan);font-size:13px;font-weight:400;letter-spacing:1.5px;margin-bottom:6px}
+#flowdetail .brain{color:var(--purple);font-size:11px;line-height:1.65;margin:8px 0}
+#flowdetail .breaks{color:var(--amber);font-size:11px;line-height:1.65;margin:8px 0}
+#flowdetail .lab{color:var(--faint);font-size:9px;text-transform:uppercase;letter-spacing:1.4px;margin-top:12px}
+#flowdetail p{font-size:11.5px;margin:6px 0;line-height:1.7}
+
+/* ── Under the hood (moved from the health tab, 2026-09-25): the developer
+   panels — band symmetry, what fired, every durable record, the heatmap, the
+   blind spots. ── */
+#underhood{margin-top:34px;padding-top:18px;border-top:1px solid var(--border)}
+#underhood>.lede{margin-bottom:14px}
+.heat{overflow-x:auto}
+.heatgrid{border-collapse:collapse;font-size:9px}
+.heatgrid td{padding:0;border:none}
+.heatgrid .cell{width:15px;height:15px;border:1px solid var(--bg);border-radius:2px;background:var(--deep)}
+.heatgrid th{padding:2px 8px 2px 0;font-size:9px;text-transform:none;letter-spacing:0;border:none;
+  color:var(--dim);text-align:right;white-space:nowrap}
+.heatgrid .dayhdr{color:var(--faint);font-size:8.5px;text-align:center;padding:0 0 4px;border:none}
+.blind{font-size:11.5px;line-height:1.7;padding:10px 0;border-bottom:1px solid var(--border)}
+.blind:last-child{border-bottom:none}
+.blind .w{color:var(--amber)}
+.blind .y{color:var(--dim)}
+#underhood>h2{font-size:18px}

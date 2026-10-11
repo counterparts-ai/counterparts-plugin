@@ -1,0 +1,4 @@
+.chart{padding:12px 14px 6px;position:relative}
+.chart canvas{width:100%;display:block}
+.legend{display:flex;gap:14px;font-size:10px;color:var(--dim);padding:2px 15px 12px;flex-wrap:wrap}
+.legend .chip{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:5px;vertical-align:-1px}

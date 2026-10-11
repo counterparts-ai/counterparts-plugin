@@ -1,0 +1,17 @@
+table{width:100%;border-collapse:collapse;font-size:11px}
+th{text-align:left;color:var(--dim);font-weight:400;text-transform:uppercase;letter-spacing:1.1px;
+  font-size:9px;padding:9px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:8px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr.click{cursor:pointer}
+tbody tr.click:hover{background:var(--hover)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td.dimtd{color:var(--dim)}
+.tablewrap{overflow-x:auto}
+/* The durable-record table: English on top, the identifier under it. Two
+   columns rather than three, so it survives a phone without a scroller. */
+td .lead{color:var(--ink);line-height:1.5}
+td .ident{color:var(--faint);font-size:9.5px;letter-spacing:.5px;margin-top:4px;
+  display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+td .ident .hostmark{color:var(--teal);text-transform:uppercase;letter-spacing:1px;font-size:8.5px}
+td .ident .notemark{color:var(--faint)}

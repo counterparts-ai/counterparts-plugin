@@ -1,0 +1,4 @@
+#tip{position:fixed;display:none;background:var(--deep);border:1px solid var(--glow);border-radius:6px;
+  padding:8px 11px;font-size:11px;max-width:330px;pointer-events:none;z-index:120;color:var(--ink);
+  line-height:1.55;box-shadow:0 6px 26px rgba(0,0,0,.6)}
+#tip .dimline{color:var(--dim);font-size:10px;margin-top:4px}

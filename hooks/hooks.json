@@ -1,0 +1,21 @@
+{
+  "description": "Counterparts: the five events the npm install wires into settings.json, launched from the plugin root; and the sidebar mod (hooks/sidebar/), a module of function hooks.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+    ]
+  },
+  "modules": ["./sidebar/hooks/register.tsx"]
+}

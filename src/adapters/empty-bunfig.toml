@@ -1,0 +1,16 @@
+# Empty but for one setting. Every Bun launch Counterparts makes passes
+# --config=<this file>, so Bun reads this instead of the bunfig.toml in the
+# folder it starts in (the person's project), whose `preload` would otherwise
+# run inside the hooks and the memory server. adapters/runtime.ts says why.
+# Installed commands name this path: it must stay.
+#
+# The one setting turns Bun's runtime auto-install off, in every process that
+# names this file (the hooks, the server, the console, and the runner and
+# embedding worker they start). Where no node_modules sits above the code (a
+# plugin whose dependency install did not run), Bun would otherwise fetch a
+# missing package from the npm registry, unpinned, behind the person's back.
+# Off, a missing embedding table stays missing and doctor says so. npm installs
+# are unaffected: their node_modules exists, so auto-install never applied.
+# It names no registry, scope or other package source.
+[install]
+auto = "disable"
