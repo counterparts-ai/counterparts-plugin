@@ -798,7 +798,9 @@ export const NARRATORS = {
 
   // ── waking ─────────────────────────────────────────────────────────────────
   "adapter.wake.injected": (t) =>
-    notable(`I handed the host who I have been — ${n(t, "bytes") ?? 0} bytes of briefing, at the start of a session.`),
+    t.p["resumed"] === true
+      ? calm(`A session was resumed, and its briefing from earlier today was still in front of it: I said so in one line.`)
+      : notable(`I handed the host who I have been — ${n(t, "bytes") ?? 0} bytes of briefing, at the start of a session.`),
   "adapter.wake.delivered": (t) => {
     const seen = t.p["seen"] === true || t.p["sentinelSeen"] === true || t.p["ok"] === true;
     if (seen) return calm(`I checked the session's transcript and my briefing had arrived intact.`);
@@ -967,7 +969,15 @@ export const NARRATORS = {
   // author asked for exactly that.
   "prospective.plain": (t) => {
     const beat = s(t, "beat");
-    const when = beat === "last-day" ? "on its last day" : beat === "opens" ? "as its dates opened" : "on the day";
+    // A day told late, inside its week (2026-10-11): its day had passed untold.
+    const when =
+      t.p["late"] === true
+        ? "after its day had passed, as soon as a session came"
+        : beat === "last-day"
+          ? "on its last day"
+          : beat === "opens"
+            ? "as its dates opened"
+            : "on the day";
     return notable(`I told you plainly about ${subject(t)} ${when}, as it was asked to be.`);
   },
 
@@ -1090,6 +1100,8 @@ export const NARRATORS = {
       : notable(`${who} settled a contradiction as ${how}: ${s(t, "holds") ?? "one"} holds over ${s(t, "over") ?? "the other"}.`);
   },
   "contradiction.undone": (t) => calm(`A settle was undone (${s(t, "pair") ?? "a pair"}); the pair is unsettled again.`),
+  "contradiction.proposed": (t) =>
+    calm(`A new memory (${s(t, "holds") ?? "one"}) read as the newer state of ${s(t, "over") ?? "an older one"}, which was marked possibly out of date until it is confirmed.`),
   "contradiction.held": (t) =>
     calm(
       `A new memory said it ${s(t, "how") === "corrected" ? "corrected" : "changed"} ${s(t, "over") ?? "another"}, which looked unrelated to it` +
@@ -1280,6 +1292,8 @@ export const REF_KIND = {
   "contradiction.undone": "none",
   // A held `updates` points at the NEW memory (2026-10-09).
   "contradiction.held": "memory",
+  // A slot proposal's row points at the PAIR (2026-10-11).
+  "contradiction.proposed": "none",
   // A coverage row names a session in its payload; a written row's ref is the
   // claim (a proposal id, or `nothing-new:` / `chapter:` / `writeup:` and an id).
   "coverage.owed": "none",

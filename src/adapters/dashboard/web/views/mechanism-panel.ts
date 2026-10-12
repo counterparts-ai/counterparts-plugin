@@ -29,6 +29,7 @@ import { TUNABLES, pruneVerdict, strength } from "../../../../core/physics/index
 import type { MemoryPhysics } from "../../../../core/types.js";
 import { isJournal } from "../../../../core/sleep/index.js";
 import type { DreamRow, EventRow } from "../../../../core/store/index.js";
+import { compareCalendarDates, occurrenceOnOrAfter, readableRecurrence } from "../../../../core/time.js";
 import type { Band, Kind } from "../../../../core/types.js";
 import type { DashboardSource } from "../../source.js";
 import { narrateForPanel } from "../narrate.js";
@@ -134,8 +135,10 @@ export type Picture =
       readonly kind: "prospective";
       /** Reminders that came back in the window, newest first: said plainly, or a quiet footnote. */
       readonly came: readonly (Said & { readonly day: number; readonly plain: boolean })[];
-      /** Dated memories whose day is today or ahead, soonest first (fills the rest of the rows). */
-      readonly waiting: readonly (Said & { readonly date: string })[];
+      /** Dated memories whose day is today or ahead, soonest first (fills the rest of the rows).
+       *  A repeating one (a birthday) is listed at its NEXT occurrence, with how often it comes
+       *  round as a person says it (`every May 14`, `time#readableRecurrence`). */
+      readonly waiting: readonly (Said & { readonly date: string; readonly repeats?: string })[];
       /** How many came back in the window, and how many are waiting — the lists above are the first of these. */
       readonly counts: { readonly came: number; readonly waiting: number };
     }
@@ -574,6 +577,11 @@ function emotionalPicture(src: DashboardSource): Picture {
  * Reminders that came back this week (both rows point at the memory whose day
  * it was), newest first; the rest of the rows are the dated memories still
  * waiting for their day, soonest first.
+ *
+ * A REPEATING date waits for its NEXT occurrence (2026-10-11, review 07 C5;
+ * the group-5 builder, lightly held): a birthday stored as 1990-05-14 used to
+ * be missing here, because the dated index reads the date as stated and that
+ * one is long past. Now it is listed at the next May 14, saying it repeats.
  */
 function prospectivePicture(src: DashboardSource, day: number): Picture {
   const store = src.store;
@@ -594,10 +602,23 @@ function prospectivePicture(src: DashboardSource, day: number): Picture {
   const from = typeof today === "string" && /^\d{4}-\d{2}-\d{2}$/.test(today) ? today : "0001-01-01";
   // Every one that came back is counted, not only the rows listed.
   for (const { r } of rows) if (r.ref !== null) seen.add(r.ref);
-  const ahead = store.datedMemories(from, "9999-12-31").filter((d) => !seen.has(d.id));
+  const repeating = new Map<string, { date: string; repeats: string }>();
+  for (const r of store.recurringMemories()) {
+    const next = occurrenceOnOrAfter(r.eventDate, r.recurring, from);
+    if (next !== null) repeating.set(r.id, { date: next.date, repeats: readableRecurrence(r.eventDate, r.recurring) });
+  }
+  const ahead: { id: string; date: string; repeats?: string }[] = [
+    ...store
+      .datedMemories(from, "9999-12-31")
+      .filter((d) => !repeating.has(d.id))
+      .map((d) => ({ id: d.id, date: d.eventDate })),
+    ...[...repeating].map(([id, r]) => ({ id, ...r })),
+  ]
+    .filter((d) => !seen.has(d.id))
+    .sort((a, b) => compareCalendarDates(a.date, b.date) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const waiting = ahead
     .slice(0, Math.max(0, PICTURE_ROWS - came.length))
-    .map((d) => ({ ...said(src, d.id), date: d.eventDate }));
+    .map((d) => ({ ...said(src, d.id), date: d.date, ...(d.repeats === undefined || d.repeats === "" ? {} : { repeats: d.repeats }) }));
   return { kind: "prospective", came, waiting, counts: { came: seen.size, waiting: ahead.length } };
 }
 

@@ -299,6 +299,11 @@ export interface PluginInstallRead {
   readonly id: string;
   readonly installPath: string | null;
   readonly version: string | null;
+  /** The record's `scope` (`user`, `project`, `local`, `managed`) and, for a
+   *  project or local one, the folder it was installed for — what
+   *  `claude plugin uninstall --scope` needs. Absent when not recorded. */
+  readonly scope?: string | null;
+  readonly projectPath?: string | null;
   /** `enabledPlugins[id]` from user, project and local settings, the last one
    *  that says anything winning (Claude Code's precedence); unset is enabled. */
   readonly enabled: boolean;
@@ -342,6 +347,8 @@ export function pluginInstall(input: {
     id,
     installPath: first !== undefined && typeof first["installPath"] === "string" ? first["installPath"] : null,
     version: first !== undefined && typeof first["version"] === "string" ? first["version"] : null,
+    scope: first !== undefined && typeof first["scope"] === "string" ? first["scope"] : null,
+    projectPath: first !== undefined && typeof first["projectPath"] === "string" ? first["projectPath"] : null,
     enabled,
   };
 }

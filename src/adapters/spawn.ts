@@ -77,7 +77,23 @@ export const WATCHDOG_ENV = "COUNTERPARTS_WATCHDOG_MS";
  * of the span buffer it already owns.
  */
 export const SESSION_ENV = "COUNTERPARTS_SESSION";
+/**
+ * THE QUIET-CHILD FLAG, and the night run's id (`claude-code/night-run.ts`
+ * sets it on the headless run's environment). Here, beside the other names a
+ * child inherits, so the MCP server can tell a night child's call without
+ * importing the Claude Code adapter.
+ */
+export const NIGHT_RUN_ENV = "COUNTERPARTS_NIGHT_RUN";
 export const SCOPE_ENV = "COUNTERPARTS_SCOPE";
+/**
+ * WHICH CHILD OF THE HEADLESS NIGHT this MCP server serves (2026-10-11):
+ * `dream` (the page writer and the dream) or `reflection`, set on the
+ * server's own environment by the night's MCP configuration
+ * (`claude-code/night-run.ts#nightMcpConfig`). The dream's child is told to
+ * stop at its journal, because the reflection runs after it in a child of its
+ * own. Absent everywhere else.
+ */
+export const NIGHT_CHILD_ENV = "COUNTERPARTS_NIGHT_CHILD";
 /**
  * The configuration file the PARENT read, pinned onto the child for exactly the
  * reason the data dir is (§2.13): two processes resolving one value twice is two

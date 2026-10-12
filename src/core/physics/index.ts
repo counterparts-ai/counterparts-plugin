@@ -829,7 +829,8 @@ export function base(m: MemoryPhysics): number {
 
 /**
  * I(m) — a memory's emotional intensity: the STRONGEST of its numeric
- * `emotional` score and the recorded strengths of the feelings on it, whoever's
+ * `emotional` score and the recorded strengths of the feelings on it (since
+ * 2026-10-11, its LATEST recording's — `store.row()`'s `feeling_peak`), whoever's
  * they are (owner decision 2026-09-25/26: "how long a memory lasts follows the
  * strongest feeling on it, his or mine"). A MAX, like `base`, so a lone strong
  * feeling is never averaged down by quieter ones. 0 when there is neither.

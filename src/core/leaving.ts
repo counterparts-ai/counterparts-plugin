@@ -36,7 +36,7 @@
  * and otherwise returns null — which the census counts as an exit, so an
  * unknown leaving is never hidden under "nothing was forgotten".
  */
-import { CORRECTED_REASON } from "./contradictions.js";
+import { CORRECTED_REASON } from "./reconsolidation.js";
 import { DREAM_MERGE_REASON, DREAM_UNDONE_REASON } from "./dream/index.js";
 import { TUNABLES as SCHEMA_TUNABLES } from "./schemas/index.js";
 import { MERGE_ARCHIVE_REASON, PRUNE_ARCHIVE_REASON } from "./sleep/index.js";

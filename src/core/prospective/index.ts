@@ -42,7 +42,7 @@ import { derive } from "./derive.js";
 import type { DerivableMemory, DeriveReason, ExtractedDate, Prospectivity } from "./derive.js";
 import { TEMPORAL_MAX_TIER, withTunables } from "./tunables.js";
 import type { ProspectiveTunables } from "./tunables.js";
-import { imminence, parseWindowKey, phaseOf, precisionOf, rampAt, windowFor } from "./windows.js";
+import { imminence, parseWindowKey, phaseOf, precisionOf, rampAt, recurringWindowAt, windowFor } from "./windows.js";
 import type { DatePrecision, Phase, Window, WindowPrecision } from "./windows.js";
 
 export * from "./derive.js";
@@ -328,6 +328,14 @@ export interface PlainDue {
   /** The span the date names, `YYYY-MM-DD` both. */
   readonly firstDay: string;
   readonly lastDay: string;
+  /**
+   * A DAY item whose day passed untold, told once LATE inside its grace
+   * (2026-10-11, review 07 C4). Its beat is still `day`, so its latch is the
+   * day's own: whatever asks "was the day told" — the lane, the occurrence
+   * credit, the doctor's reading — reads a late telling as the day told, and
+   * it can never be told twice. Absent on a beat told on time.
+   */
+  readonly late?: true;
 }
 
 export interface SuppressionRecord {
@@ -435,29 +443,6 @@ export interface RescheduleOutcome {
   readonly armedKey: string | null;
 }
 
-/** Every dated memory names its exit (§5 G12, scar §2.17). */
-export type ExitKind =
-  | "open"
-  | "fired"
-  | "referenced"
-  | "superseded-by-reschedule"
-  | "faded"
-  | "expired";
-
-export interface Exit {
-  readonly memoryId: string;
-  readonly windowKey: string;
-  readonly kind: ExitKind;
-  readonly fires: number;
-}
-
-export interface ExitReport {
-  readonly at: string;
-  readonly day: number;
-  readonly counts: Record<ExitKind, number>;
-  readonly exits: Exit[];
-}
-
 /**
  * A memory's content-date: its reminder date, `ProseDoc.eventDate` (schema v7,
  * the `event_date` column), exactly as stated. SHAPE ONLY — nothing here reads
@@ -507,15 +492,6 @@ interface Loaded {
   dates: ExtractedDate[];
   strength: number;
 }
-
-const EXIT_KINDS: readonly ExitKind[] = [
-  "open",
-  "fired",
-  "referenced",
-  "superseded-by-reschedule",
-  "faded",
-  "expired",
-];
 
 export class Prospective {
   readonly store: Store;
@@ -781,9 +757,20 @@ export class Prospective {
    *     again on the last day it names (`last-day`) — the deadline end of
    *     "before the 15th". Seen first ON its last day, it gets that beat only.
    *
-   * Only the stated span counts — no lead days, no grace: "on the day" is what
-   * was asked. A YEAR has no day it could mean, so it is never told (the same
+   * Only the stated span counts — no lead days: "on the day" is what was
+   * asked. A YEAR has no day it could mean, so it is never told (the same
    * structural exclusion as a window, §12 G3).
+   *
+   * ONE LATE BEAT, AND ONLY FOR A DAY (2026-10-11, review 07 C4; decided by
+   * the group-5 builder, lightly held). A day item whose day passed with
+   * nothing told — no session that day, or none with room for the line — is
+   * told once at the first session inside its grace (`GRACE_DAYS`; for a
+   * repeat, its occurrence's own grace), marked `late` so the host says which
+   * day it was for. It shares the day's latch, so it is never told twice, and
+   * after the grace it is never told at all. A memory written after its day
+   * was never missed, so it gets no late beat (nor one with no written date:
+   * fail closed, §12 G3). A month or a range keeps its two beats and no late
+   * one: its span already gave it two chances.
    *
    * It does NOT run the eligibility predicate. The salience floor is the tact
    * principle's gate on UNASKED surfacing; this is asked-for, and an ordinary
@@ -802,14 +789,29 @@ export class Prospective {
     // A REPEATING date is due on each occurrence (2026-10-09): the occurrence
     // that falls on `at` stands in for the date, so its window key — and with
     // it the latch per beat — is that occurrence's own.
-    const due: { id: string; eventDate: string }[] = [];
+    // A LATE candidate (`late`) is a day already past, carried with the last
+    // day its grace allows.
+    const due: { id: string; eventDate: string; lateUntil?: string }[] = [];
     const repeating = new Set<string>();
     for (const r of this.store.recurringMemories()) {
       repeating.add(r.id);
       const occurrence = occurrenceBetween(r.eventDate, r.recurring, at, at);
-      if (occurrence !== null) due.push({ id: r.id, eventDate: occurrence });
+      if (occurrence !== null) {
+        due.push({ id: r.id, eventDate: occurrence });
+        continue;
+      }
+      // Still in the last occurrence's grace (cut short where the next one's
+      // lead begins, `recurringWindowAt`): that occurrence may be owed late.
+      const last = recurringWindowAt(r.eventDate, r.recurring, at, this.tunables, r.id);
+      if (last !== null && last.eventDate < at && at <= last.closesOn) {
+        due.push({ id: r.id, eventDate: last.eventDate, lateUntil: last.closesOn });
+      }
     }
     for (const d of this.store.datedMemories(at, at)) if (!repeating.has(d.id)) due.push(d);
+    for (const d of this.store.datedMemories(addDays(at, -this.tunables.GRACE_DAYS), addDays(at, -1))) {
+      if (repeating.has(d.id) || !isDay(d.eventDate)) continue;
+      due.push({ ...d, lateUntil: addDays(d.eventDate, this.tunables.GRACE_DAYS) });
+    }
     for (const dated of due) {
       const id = dated.id;
       if (denied.has(id)) continue;
@@ -825,7 +827,14 @@ export class Prospective {
       const precision = precisionOf(dated.eventDate);
       if (precision === null || precision === "year") continue;
       const w = windowFor(dated.eventDate, precision, this.tunables, id);
-      if (w === null || at < w.firstDay || at > w.lastDay) continue;
+      if (w === null) continue;
+      const late = dated.lateUntil !== undefined;
+      if (late) {
+        // Missed, and still inside its grace; written by its day (else it was never missed).
+        const written = doc.learnedOn.slice(0, 10);
+        if (w.precision !== "day" || at <= w.lastDay || at > (dated.lateUntil as string)) continue;
+        if (!isDay(written) || written > w.eventDate) continue;
+      } else if (at < w.firstDay || at > w.lastDay) continue;
       const beat: PlainBeat =
         w.precision === "day" ? "day" : at === w.lastDay ? "last-day" : "opens";
       if (this.plainTold(id, w.key, beat)) continue;
@@ -837,9 +846,11 @@ export class Prospective {
         beat,
         firstDay: w.firstDay,
         lastDay: w.lastDay,
+        ...(late ? { late: true as const } : {}),
       });
     }
-    return out;
+    // What is due today first; what is owed late after it.
+    return [...out.filter((d) => d.late !== true), ...out.filter((d) => d.late === true)];
   }
 
   /**
@@ -863,6 +874,8 @@ export class Prospective {
           precision: due.precision,
           date: opts.at,
           mode: "plain",
+          // Told after its day, inside its grace (2026-10-11): same latch, marked.
+          ...(due.late === true ? { late: true } : {}),
           // The session it was told in, when the caller knows (2026-10-11).
           ...(isKnownSession(opts.session) ? { session: opts.session } : {}),
         },
@@ -1177,7 +1190,7 @@ export class Prospective {
    * memory, so this window is done — zero further fires, whatever budget was
    * left. *Remembering completes by being lived, not by acknowledgment UI.*
    * Idempotent, and it does not care whether a fire ever happened: the user may
-   * have raised the occasion themselves.
+   * have raised the occasion themselves. Its live caller is `actedOn`.
    */
   reference(memoryId: string, windowKey: string, day?: number): TransitionOutcome {
     const d = day ?? this.store.livedDay();
@@ -1189,6 +1202,40 @@ export class Prospective {
       precision: parsed.precision,
       extra: { day: d },
     }));
+  }
+
+  /**
+   * THE SESSION SAID IT ACTED ON THIS MEMORY (2026-10-11, review 07 C3; wired
+   * by the group-5 builder, lightly held): it named the memory in `drewOn`
+   * (`Counterpart#creditDrewOn`), which credits half a use and stops nothing
+   * — so without this a reminder already dealt with still came back as a
+   * footnote until its fire budget ran out. Every window of the memory OPEN
+   * on `at` is referenced (`reference`), so it fires no more this window; a
+   * repeat's other occurrences are untouched, and a window not yet open owes
+   * this nothing.
+   *
+   * A PLAIN item keeps its day: until its last beat is told (`toldForGood`)
+   * its window is left alone, because the person asked to be told on the day
+   * and a session that drew on it the day before has not told them. The
+   * plain line never reads this state anyway; leaving the window open keeps
+   * the item first under "Arriving:" on its day too. Returns the keys it
+   * referenced. Observer: none.
+   */
+  actedOn(memoryId: string, at: string, day?: number): string[] {
+    if (this.observer || !isDay(at)) return [];
+    const d = day ?? this.store.livedDay();
+    const loaded = this.load(memoryId, [], d);
+    if (loaded === null) return [];
+    const p = derive(loaded.memory, loaded.dates, at, this.tunables);
+    if (!p.eligible) return [];
+    const mode = cueModeOf(loaded.doc);
+    const out: string[] = [];
+    for (const w of p.windows) {
+      if (phaseOf(w, at) !== "arrived") continue;
+      if (mode === "plain" && !this.plainTold(memoryId, w.key, w.precision === "day" ? "day" : "last-day")) continue;
+      if (this.reference(memoryId, w.key, d).recorded) out.push(w.key);
+    }
+    return out;
   }
 
   /**
@@ -1282,69 +1329,6 @@ export class Prospective {
       retiredKey: current.key,
       armedKey: nextWindow.key,
     };
-  }
-
-  // ── exits (§5 G12: every dated memory names its exit) ─────────────────────
-
-  /**
-   * Every window this store knows about, classified by how it ended, with
-   * counts. A pure read: nothing is stamped, nothing is swept. The property
-   * expires by itself, so exit accounting is a QUESTION, never a pass (§12 G2).
-   */
-  exitReport(at: string, day?: number): ExitReport {
-    const d = day ?? this.store.livedDay();
-    const exits: Exit[] = [];
-    const counts = Object.fromEntries(EXIT_KINDS.map((k) => [k, 0])) as Record<ExitKind, number>;
-
-    // Every memory that has a date (archived ones included — archived before its
-    // window is the `faded` exit) and every memory that has a firing row (a row
-    // can outlive a cleared date). Two indexed reads, not a scan of the store.
-    const ids = new Set<string>(
-      this.store.datedMemories("0001-01-01", "9999-12-31", { archived: true }).map((m) => m.id),
-    );
-    for (const id of this.store.prospectiveMemoryIds()) ids.add(id);
-    for (const id of [...ids].sort()) {
-      const loaded = this.load(id, [], d);
-      if (loaded === null) continue;
-      const p = derive(loaded.memory, loaded.dates, at, this.tunables);
-      const byKey = new Map<string, { window: Window | null; phase: Phase | null }>();
-      for (const w of p.windows) byKey.set(w.key, { window: w, phase: w.phase });
-      const rows = this.rowsFor(id);
-      for (const key of rows.keys()) {
-        if (byKey.has(key)) continue;
-        const parsed = parseWindowKey(key);
-        const w =
-          parsed === null ? null : windowFor(parsed.eventDate, parsed.precision, this.tunables, id);
-        byKey.set(key, { window: w, phase: w === null ? null : phaseOf(w, at) });
-      }
-
-      const laterExists = (key: string): boolean => {
-        const self = byKey.get(key)?.window;
-        if (self === undefined || self === null) return p.windows.length > 0;
-        return p.windows.some((w) => w.key !== key && w.opensOn > self.opensOn);
-      };
-
-      for (const [key, info] of byKey) {
-        const row = rows.get(key);
-        const fires = row?.fires ?? 0;
-        let kind: ExitKind;
-        if (windowStateOf(row) === "suppressed") kind = "referenced";
-        else if (windowStateOf(row) === "expired") {
-          kind = laterExists(key) ? "superseded-by-reschedule" : "expired";
-        } else if (fires > 0) kind = "fired";
-        else if (info.phase === "passed") {
-          kind =
-            loaded.memory.archived || loaded.strength <= this.tunables.FADED_STRENGTH
-              ? "faded"
-              : "expired";
-        } else kind = "open";
-        exits.push({ memoryId: id, windowKey: key, kind, fires });
-        counts[kind] += 1;
-      }
-    }
-
-    this.emit("prospective.exits", undefined, { day: d, ...counts });
-    return { at, day: d, counts, exits };
   }
 
   events(name?: string): ProspectiveEvent[] {

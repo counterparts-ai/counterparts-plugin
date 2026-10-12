@@ -5,11 +5,11 @@
  * how, why), and the week's held corrections nobody has settled since
  * (2026-10-09); with `--pair`/`--holds`/`--over`/`--how` it settles one, as the
  * owner; `--undo <pair>` reverses a settle. Every decision is
- * `core/contradictions.ts`'s — this file only reads and prints. Reading works
+ * `core/reconsolidation.ts`'s — this file only reads and prints. Reading works
  * under observer; the two changes refuse there.
  */
-import { heldPairs } from "../../core/contradictions.js";
-import type { HeldPair } from "../../core/contradictions.js";
+import { SLOT_SOURCE, heldPairs } from "../../core/reconsolidation.js";
+import type { HeldPair } from "../../core/reconsolidation.js";
 import type { Counterpart } from "../../core/counterpart.js";
 import type { ContradictionRow, SettleRow } from "../../core/store/index.js";
 import { CONTRADICTION_WINDOW_DAYS } from "../claude-code/doctor.js";
@@ -71,7 +71,10 @@ export function heldListLines(counterpart: Counterpart): string[] {
 /** What `counterparts settle` prints with no flags. */
 export function settleListLines(counterpart: Counterpart): string[] {
   const store = counterpart.store;
-  const unsettled = store.contradictions({ state: "unsettled" });
+  const waiting = store.contradictions({ state: "unsettled" });
+  // A slot proposal (2026-10-11) is not a disagreement: listed on its own.
+  const unsettled = waiting.filter((p) => p.source !== SLOT_SOURCE);
+  const proposed = waiting.filter((p) => p.source === SLOT_SOURCE);
   const settled = store.contradictions({ state: "settled" }).slice(0, SETTLE_LIST_RECENT);
   const out: string[] = [];
   out.push(
@@ -85,6 +88,15 @@ export function settleListLines(counterpart: Counterpart): string[] {
     out.push(`  ${p.id}  (flagged by ${from})`);
     out.push(`    older: ${p.a} "${memoryWords(counterpart, p.a)}"`);
     out.push(`    newer: ${p.b} "${memoryWords(counterpart, p.b)}"`);
+  }
+  if (proposed.length > 0) {
+    out.push("", `Proposed as a newer state (${String(proposed.length)}) — read by arithmetic, waiting for the dream to confirm; undo one if they are two things:`);
+    for (const p of proposed.slice(0, SETTLE_LIST_RECENT)) {
+      out.push(`  ${p.id}`);
+      out.push(`    older: ${p.a} "${memoryWords(counterpart, p.a)}"`);
+      out.push(`    newer: ${p.b} "${memoryWords(counterpart, p.b)}"`);
+    }
+    if (proposed.length > SETTLE_LIST_RECENT) out.push(`  (+${String(proposed.length - SETTLE_LIST_RECENT)} more)`);
   }
   if (settled.length > 0) {
     out.push("", `Settled lately (${String(settled.length)}):`);

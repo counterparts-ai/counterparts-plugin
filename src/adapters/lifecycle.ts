@@ -64,6 +64,7 @@ import type {
   Turn as CapturedTurn,
 } from "../core/remember/index.js";
 import { calendarDate } from "../core/self/index.js";
+import { ahaDue, ahaLine, markAha, meetPending, meetState, noteOffered, offerDue, offerLine, onboardingMarker, settleOffer } from "../core/onboarding.js";
 import { localClock, localDate, readableDate } from "../core/time.js";
 
 import { CONFIG_FILE_EVENT } from "./config-path.js";
@@ -244,7 +245,10 @@ export interface LifecycleOptions {
  * **Retired under dreaming `auto` (2026-10-11).** There the nightly run writes
  * up everything owed in any directory, and `counterparts catch-up` does it on
  * demand, so a new session no longer spends its start on another session's
- * words (`writeUpPointerRetired`). Under `ask` or `off` no night runs, and this
+ * words (`writeUpPointerRetired`). The night starts for that alone when
+ * write-ups from an earlier day are owed and the dream is not due
+ * (`claude-code/hooks.ts#catchUpWhenOwed`), so a first day with few memories
+ * is still written up. Under `ask` or `off` no night runs, and this
  * pointer is still the way a session in a quiet folder gets written up.
  *
  * **Why a pointer (owner's choice, 2026-09-23, option (b) of claude-code
@@ -636,7 +640,13 @@ export class Lifecycle implements HostLifecycle {
    * under observer or for the nightly run; a folder that is off or paused
    * never reaches here (`guard`). Never throws.
    */
-  sinceLine(input: SessionInput & { nightRun?: boolean }, room: number): string {
+  sinceLine(
+    input: SessionInput & { nightRun?: boolean },
+    room: number,
+    /** A RESUMED session's start (2026-10-11): its short wake says what changed
+     *  since it last heard, whatever the state and the hour. */
+    opts: { readonly resumed?: boolean } = {},
+  ): string {
     if (this.observer || input.nightRun === true || input.sessionId.length === 0) return "";
     try {
       const dir = this.counterpart.store.dir;
@@ -644,13 +654,13 @@ export class Lifecycle implements HostLifecycle {
       if (record === null) return "";
       const now = this.nowFn();
       const seen = record.sinceSeen ?? { at: record.startedAt, state: "woke" as const };
-      if (seen.state === "woke") {
+      if (seen.state === "woke" && opts.resumed !== true) {
         markSinceSeen(dir, input.sessionId, { at: seen.at, state: "armed" });
         return "";
       }
-      if (seen.state === "shown" && now - seen.at < TUNABLES.SINCE_LINE_EVERY_MS) return "";
+      if (seen.state === "shown" && now - seen.at < TUNABLES.SINCE_LINE_EVERY_MS && opts.resumed !== true) return "";
       const lines = this.counterpart.sinceElsewhere(
-        { since: seen.at, until: now, started: seen.state === "armed" },
+        { since: seen.at, until: now, started: seen.state !== "shown" },
         this.elsewhereHere(input),
       );
       if (lines === null) return "";
@@ -665,6 +675,85 @@ export class Lifecycle implements HostLifecycle {
     } catch (err) {
       this.emit("adapter.since.failed", { code: err instanceof Error ? err.name : "unknown" });
       return "";
+    }
+  }
+
+  /**
+   * THE FIRST MEETING'S LINE BESIDE THE WAKE (2026-10-11, `core/onboarding.ts`),
+   * for every host: the offer while the meeting is due (at most once a calendar
+   * day, never twice in a session, none once done or skipped), else — in the
+   * first session after it was finished — one memory from it. A READ, but for
+   * moving a stale `offered` to `later`: the caller measures the line against
+   * its envelope and calls `commit` only once the envelope certainly carries
+   * it, so a line that gave way is offered again next time. Null when nothing
+   * is due, under observer, for the nightly run, without an id; never throws.
+   * Whether a person can see the reply at all (`claude -p`) is the host's
+   * test: the hook asks only for an interactive session.
+   */
+  onboardingLine(input: SessionInput & { nightRun?: boolean }): { kind: "offer" | "aha"; text: string; commit: () => void } | null {
+    if (this.observer || input.nightRun === true || input.sessionId.length === 0) return null;
+    const store = this.counterpart.store;
+    try {
+      const on = input.at ?? store.today();
+      const offer = offerDue(store, { on, session: input.sessionId });
+      if (offer.due) {
+        return {
+          kind: "offer",
+          text: offerLine(offer.state),
+          commit: () => {
+            noteOffered(store, { on, session: input.sessionId, state: false });
+            this.emit("adapter.meet.offered", { state: offer.state });
+          },
+        };
+      }
+      const live = (id: string): boolean => {
+        const r = store.row(id);
+        // Not one marked confidential since (review of #419): this line rides
+        // into wakes that are not the owner's own, such as a Desktop chat.
+        return r !== undefined && r.archived === 0 && r.superseded_by === null && r.confidential === 0;
+      };
+      const aha = ahaDue(store, input.sessionId, live);
+      if (aha === null) return null;
+      return {
+        kind: "aha",
+        text: ahaLine(store.readProse(aha.memoryId).body, aha.memoryId),
+        commit: () => {
+          markAha(store, input.sessionId);
+          this.emit("adapter.meet.aha", { step: aha.step });
+        },
+      };
+    } catch (err) {
+      this.emit("adapter.meet.failed", { code: err instanceof Error ? err.name : "unknown" });
+      return null;
+    }
+  }
+
+  /**
+   * The first meeting's machine marker for a session-start wake
+   * (`core/onboarding.ts#onboardingMarker`). Given the session, it says the
+   * SETTLED state (review of #419): an `offered` from an earlier day is moved
+   * to `later` first, as the line beside the wake would move it, so the two
+   * never disagree. Under observer, for the nightly run or without an id it
+   * only reads. Never throws.
+   */
+  onboardingMarker(input?: SessionInput & { nightRun?: boolean }): string {
+    const store = this.counterpart.store;
+    if (input !== undefined && !this.observer && input.nightRun !== true && input.sessionId.length > 0) {
+      try {
+        return onboardingMarker(settleOffer(store, input.at ?? store.today()));
+      } catch {
+        /* the read below says what it can */
+      }
+    }
+    return onboardingMarker(meetState(store));
+  }
+
+  /** Is the first meeting still to happen? The first-launch scope question waits while it is: the meeting asks where. */
+  meetPending(): boolean {
+    try {
+      return meetPending(this.counterpart.store);
+    } catch {
+      return false;
     }
   }
 
@@ -1816,12 +1905,17 @@ export function substanceOf(turns: readonly HostTurn[]): { turns: number; bytes:
  *   day        `Today: pay your taxes`
  *   opens      `This month: launch the beta` / `Until Sat 31 Oct 2026: book flights`
  *   last-day   `Last day today: file the extension`
+ *   late       `This was for Mon 12 Oct 2026: pay your taxes`
+ *
+ * A LATE one (2026-10-11) is a day item whose day passed untold, said once
+ * inside its grace (`PlainDue.late`), so it says which day it was for.
  *
  * `what` is the memory's title or first line (`Counterpart.plainReminders`).
  */
-export function plainLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay" | "what">): string {
+export function plainLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay" | "what" | "late">): string {
   const max = TUNABLES.PLAIN_WHAT_MAX_CHARS;
   const what = r.what.length <= max ? r.what : `${r.what.slice(0, max - 1).trimEnd()}…`;
+  if (r.late === true) return `This was for ${readableDate(r.lastDay)}: ${what}`;
   if (r.beat === "day") return `Today: ${what}`;
   if (r.beat === "last-day") return `Last day today: ${what}`;
   if (r.precision === "month") return `This month: ${what}`;
@@ -1833,7 +1927,7 @@ export function plainLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay
  * memory so it can be looked up. One line, no newline — `what` is folded to
  * single spaces upstream — so `withoutPlain` can take it back out by line.
  */
-export function plainContextLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay" | "what" | "memoryId">): string {
+export function plainContextLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay" | "what" | "memoryId" | "late">): string {
   return `Plain reminder (they asked to be told) — ${plainLine(r)} [${r.memoryId}]`;
 }
 

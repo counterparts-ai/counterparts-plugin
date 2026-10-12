@@ -122,6 +122,21 @@ export interface Candidate {
   /** Kept only because a stamp brought it, past the cut the words and meaning
    *  made (R1): the gate leaves it out of the background whole. */
   readonly pastCut?: true;
+  /**
+   * THE CHAIN HEAD WINS (2026-10-11, Group 2): set on a memory a later one
+   * settled over — the memory that holds now (`standing.ts#headOf`). The gate
+   * inhibits this one when its head is admitted or already in the session.
+   */
+  readonly head?: string;
+  /**
+   * Set on a head brought in for the earlier memory the turn reached (the id
+   * of that earlier one): it takes the earlier's place, with its numbers, and
+   * is left out of the turn's background (it was not reached on its own).
+   */
+  readonly standsFor?: string;
+  /** LIFTED BY A LINK (2026-10-11, Group 4 item 7): in the cut only because a
+   *  hop raised it — the cut without hops left it out. Absent otherwise. */
+  readonly lifted?: true;
 }
 
 /**
@@ -181,6 +196,11 @@ export interface SpreadStats {
   readonly pointerCandidates: number;
   readonly pointersShown?: number;
   readonly pointersUnanchored?: number;
+  /** Candidates in the cut only because a hop raised them (`Candidate.lifted`,
+   *  2026-10-11), and — filled in by `Recall.build` — how many of those were
+   *  SHOWN. Absent on a record written before then. */
+  readonly lifted?: number;
+  readonly liftedShown?: number;
 }
 
 export interface ActivationInput {
@@ -907,6 +927,12 @@ export function activate(
   let strongestSeed = 0;
   let hopsCapped = 0;
   let spreadRun: Omit<SpreadStats, "landed" | "pointerCandidates" | "hopsCapped"> | null = null;
+  // The cut as it stands BEFORE the hops (2026-10-11): what a hop then lifts
+  // into it is marked, so the turn's record can say a link changed what was shown.
+  const preHop =
+    input.spread === undefined
+      ? new Set<string>()
+      : new Set(scored.filter((c) => c.cue - c.stamp + c.semantic > 0).slice(0, input.maxCandidates).map((c) => c.id));
   if (input.spread !== undefined && scored.length > 0) {
     const seeds = scored
       .filter((c) => c.cue - c.stamp + c.semantic > 0)
@@ -1030,6 +1056,7 @@ export function activate(
       ...(c.feeling > 0 ? { feeling: c.feeling } : {}),
       ...(c.stamp > 0 ? { stamp: c.stamp } : {}),
       ...(topIds.has(id) ? {} : { pastCut: true as const }),
+      ...(hops > 0 && topIds.has(id) && !preHop.has(id) ? { lifted: true as const } : {}),
     });
   }
 
@@ -1129,6 +1156,7 @@ export function activate(
         : {
             ...spreadRun,
             landed: kept.filter((c) => c.hops > 0).length,
+            lifted: candidates.filter((c) => c.lifted === true).length,
             hopsCapped,
             pointerCandidates,
           },

@@ -86,7 +86,7 @@ import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessa
 import type { CheckoutReading } from "./doctor.js";
 import { primacy } from "./primacy.js";
 import { nightRowTimeoutMs, planNightRunner } from "./night-run.js";
-import { catchUpOf, catchUpWords } from "./night-catch-up.js";
+import { NOTHING_OWED_BEFORE_KEY, catchUpOf, catchUpWords, owedBefore } from "./night-catch-up.js";
 import type { NightKind } from "./night-run.js";
 import { spawnDetached } from "../spawn.js";
 import type { SpawnOutcome } from "../spawn.js";
@@ -173,6 +173,14 @@ export interface HookInput extends SessionInput {
    * the entrypoint list is the fallback.
    */
   readonly attended?: boolean;
+  /**
+   * WHY THE HOST FIRED `SessionStart` (its `source`: `startup`, `resume`,
+   * `clear`, `compact`, `fork`), carried for the wake (2026-10-11): a resume
+   * replays the transcript, the first wake in it, so a second full one is
+   * context the model reads twice (`Adapter#resumesToday`). Absent on every
+   * other event.
+   */
+  readonly source?: string;
 }
 
 export interface HookResult {
@@ -374,8 +382,9 @@ interface EnvelopeRoom {
 
 /** What rode beside the wake when the pointer was measured, in words for
  *  doctor ("the first-launch question and 1 plain reminder"), or "". */
-function besideWords(question: boolean, plain: number): string {
+function besideWords(question: boolean, plain: number, meet = false): string {
   const parts = [
+    ...(meet ? ["the first meeting's line"] : []),
     ...(question ? ["the first-launch question"] : []),
     ...(plain > 0 ? [`${String(plain)} plain reminder${plain === 1 ? "" : "s"}`] : []),
   ];
@@ -495,6 +504,20 @@ export function stopAsk(sessionId: string, chapter: number): string {
   ].join("\n");
 }
 
+/**
+ * WHAT A RESUME TODAY IS HANDED IN PLACE OF A SECOND WAKE (2026-10-11): the
+ * host replays the transcript, the first wake included, so this line points
+ * at it. The "Since you started" line rides under it when something changed
+ * (`ClaudeCodeAdapter#resumeWake`).
+ */
+export const RESUME_WAKE_LINE =
+  "Counterparts: this session was resumed; the wake it was handed when it started (above) still holds.";
+
+/** What `sessionStart` hands the host: a composed wake, or a resume's line. */
+type WokeHere = Pick<ReturnType<Lifecycle["composeWake"]>, "text" | "ok" | "bytes" | "sentinel" | "preface"> & {
+  readonly reason: string;
+};
+
 /** Re-exported where the hooks' callers already look (`hosts.ts` owns it). */
 export { CODE_TAB_ENTRYPOINT };
 
@@ -560,6 +583,10 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // record whole, so the flag that says "this session has already been
       // asked" has to be read while it is still the previous process's answer.
       const wantsAsk = this.scopeAskDue(input);
+      // And for the same reason, whether this is a resume of a session that
+      // was handed its wake today: `noteSession` keeps the start, but a record
+      // it CREATES (one pruned, or never written) would read as started now.
+      const resumed = this.resumesToday(input);
       // BEFORE the delivery verdict, because the registry is not delivery: a
       // muted shadow still lives a session, and the tool that writes its dump
       // still has to be able to find out that the session is real.
@@ -592,10 +619,17 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // if any, belongs at the foot of this wake.
       // The composition and THE EXPECTATION, written where the next process
       // can read it (`Lifecycle#composeWake` → `noteWakeExpectation`).
-      const woke = this.composeWake(input, budget);
+      //
+      // A RESUME TODAY IS HANDED A SHORT WAKE (2026-10-11, `resumesToday`):
+      // the host replays the transcript, so the wake this session was handed
+      // is already in front of the model; one line says it still holds, and
+      // the "Since you started" line says what changed elsewhere since it
+      // last heard. No wake is composed, so no new expectation is written for
+      // the delivery check, and the since-line's state is left to the line.
+      const woke: WokeHere = resumed ? this.resumeWake(input) : this.composeWake(input, budget);
       // The wake has just said what the other directories did today, so the
       // prompt's "Since you started" line counts from here (2026-10-11).
-      this.noteSinceWoke(input);
+      if (!resumed) this.noteSinceWoke(input);
 
       // THE PERSON'S CLOCK, as the wake's first line (docs/time.md rule 5,
       // 2026-09-25): `Now: Fri 25 Sep 2026, 1:40 pm MDT`, in the store's zone.
@@ -644,7 +678,11 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // are Claude Desktop's server, which serves a call as this session only
       // when the call names it. A terminal session's wake is unchanged.
       const codeTab = codeTabSessionLine(input);
-      const lead = `${woke.text.length === 0 && plain.context.length === 0 && codeTab === null ? "" : `${this.nowLine()}\n`}${codeTab === null ? "" : `${codeTab}\n`}${plain.context}`;
+      // THE FIRST MEETING'S MARKER (2026-10-11), on its own line under the
+      // clock, on every session-start wake: the state word only, for the mod,
+      // which cannot reach the dashboard before somebody starts it.
+      const marker = `${this.onboardingMarker(input)}\n`;
+      const lead = `${woke.text.length === 0 && plain.context.length === 0 && codeTab === null ? "" : `${this.nowLine()}\n`}${marker}${codeTab === null ? "" : `${codeTab}\n`}${plain.context}`;
       const sent = woke.bytes + Buffer.byteLength(lead, "utf8");
       const rides =
         plain.due.length > 0 &&
@@ -681,6 +719,8 @@ export class ClaudeCodeAdapter extends Lifecycle {
         // only the headless run or `claude -p` came is not a day a reminder
         // could have been said.
         interactive: isInteractive(input) && input.nightRun !== true,
+        // A resume's short wake (2026-10-11): `bytes` is the line, not a bundle.
+        resumed,
       });
       // THE QUESTION RIDES BESIDE THE WAKE, NEVER INSIDE IT, and only if it
       // FITS.
@@ -705,7 +745,17 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // page writer's ask used to contend for it (and after two mornings of
       // losing went first); since 2026-09-28 the writer runs inside the
       // nightly run and is handed its day through a tool result instead.
-      const chosen = wantsAsk ? this.deliverScopeAsk(input, room) : "";
+      //
+      // THE FIRST MEETING'S LINE GOES FIRST (2026-10-11): the offer while the
+      // meeting is due, or the second session's one memory from it
+      // (`Lifecycle#onboardingLine`), only where a person will see the reply.
+      // While the meeting is still to happen the scope question waits: the
+      // meeting asks where memory is on, and asking twice is the wall of
+      // questions the meeting replaces.
+      const meet = isInteractive(input) ? this.deliverMeetLine(input, room) : "";
+      const meetBytes = meet.length === 0 ? 0 : room.cost(`\n\n${meet}`);
+      const scope = wantsAsk && !this.meetPending() ? this.deliverScopeAsk(input, { ...room, spent: room.spent + meetBytes }) : "";
+      const chosen = [meet, scope].filter((a) => a.length > 0).join("\n\n");
       // THE WRITE-UP POINTER RIDES AFTER WHICHEVER ASK TOOK THE FIELD, never
       // instead of it (C2): it may coincide with either, it is measured against
       // the room BOTH of them left, and it is fail-open by construction — a
@@ -714,7 +764,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
       const writeUp = this.deliverWriteUpAsk(input, room.spent + chosenBytes, {
         limit: room.limit,
         cost: room.cost,
-        beside: besideWords(chosen.length > 0, room.plain),
+        beside: besideWords(scope.length > 0, room.plain, meet.length > 0),
       });
       const asks = [chosen, writeUp].filter((a) => a.length > 0).join("\n\n");
       return {
@@ -728,6 +778,47 @@ export class ClaudeCodeAdapter extends Lifecycle {
         ...(plain.due.length === 0 ? {} : { notices: plain.notices, plain: plain.due }),
       };
     });
+  }
+
+  /**
+   * IS THIS A RESUME OF A SESSION HANDED ITS WAKE TODAY (2026-10-11)? The host
+   * fires `SessionStart` again on `--resume`, `--continue` and `/resume`, and
+   * replays the transcript with the first wake still in it (measured
+   * 2026-10-10, ~/counterparts-notes/2026-10-10-session-start-limits.md), so a
+   * full wake there is ~9 KB the model reads twice. Four things must hold:
+   * the host says `resume`; this session has a record; that record holds a
+   * wake's sentinel — a wake was printed, not a stand-down or an empty store;
+   * and it started on today's date, because a session resumed on a later day
+   * is owed the new day's wake (its Yesterday line, what is arriving, the
+   * reminders). `compact` is not a resume: compaction summarizes the first
+   * wake away, so it is handed a full one. Read BEFORE `noteSession` rewrites
+   * the record. Never throws: unsure is the full wake.
+   */
+  private resumesToday(input: HookInput): boolean {
+    if (input.source !== "resume" || input.sessionId.length === 0 || input.nightRun === true) return false;
+    try {
+      const record = readSession(this.counterpart.store.dir, input.sessionId);
+      if (record === null || record.wakeSentinel === undefined || record.wakeSentinel.length === 0) return false;
+      const zone = this.counterpart.store.zone();
+      const today = input.at ?? localDate(this.nowFn(), zone);
+      return localDate(record.startedAt, zone) === today;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * THE SHORT WAKE A RESUME IS HANDED: one line saying the wake above still
+   * holds, and the "Since you started" line when another directory changed
+   * since this session last heard (`Lifecycle#sinceLine`, its gates waived:
+   * a resume is a moment the model asks "what did I miss"). No bundle, no
+   * sentinel, no expectation written.
+   */
+  private resumeWake(input: HookInput): WokeHere {
+    const room = TUNABLES.HOST_OUTPUT_CHARS - Buffer.byteLength(`${RESUME_WAKE_LINE}\n`, "utf8");
+    const since = this.sinceLine(input, room, { resumed: true });
+    const text = since.length === 0 ? RESUME_WAKE_LINE : `${RESUME_WAKE_LINE}\n${since}`;
+    return { text, ok: true, reason: "resumed", bytes: Buffer.byteLength(text, "utf8"), sentinel: null, preface: null };
   }
 
   /**
@@ -760,6 +851,23 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // hook; the quiet answer is the safe one.
       return false;
     }
+  }
+
+  /**
+   * THE FIRST MEETING'S LINE, if one is due and it FITS — measured like the
+   * question below and deferred the same way (nothing is recorded, so the
+   * next session offers it instead). Returns the block, or "".
+   */
+  private deliverMeetLine(input: HookInput, room: EnvelopeRoom): string {
+    const line = this.onboardingLine(input);
+    if (line === null) return "";
+    const need = room.cost(`\n\n${line.text}`);
+    if (room.spent + need > room.limit) {
+      this.emit("adapter.meet.deferred", { kind: line.kind, wakeBytes: room.spent, budget: room.limit, need, form: room.form });
+      return "";
+    }
+    line.commit();
+    return line.text;
   }
 
   /**
@@ -982,6 +1090,9 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // started now — the start is the point, the terminal line a courtesy —
       // and a run that cannot even be started falls back to the ask at once.
       let offer = dreams.offer({ at: input.at, session: input.sessionId });
+      // NOT DUE, BUT WRITE-UPS OWED (2026-10-11): the night may start for its
+      // catch-up alone. Nothing is said to anyone, here or in the terminal.
+      if (offer === null) this.catchUpWhenOwed(input);
       if (offer !== null && offer.headless) {
         const started = dreams.claimOffer(offer) ? this.startNightRun(input, offer) : null;
         if (started === null) offer = null;
@@ -1027,13 +1138,59 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // first prompt never starts a run under an `auto` this version resets.
       dreams.resetAutoOnce();
       const offer = dreams.offer({ at: input.at, session: input.sessionId });
-      if (offer === null || !offer.headless || !dreams.claimOffer(offer)) return;
+      // The catch-up alone, as at a watched prompt — no line to hold for it.
+      if (offer === null) {
+        const started = this.catchUpWhenOwed(input);
+        if (started) this.emit("adapter.dream.unwatched", { started, catchUpOnly: true, entrypoint: input.entrypoint ?? null });
+        return;
+      }
+      if (!offer.headless || !dreams.claimOffer(offer)) return;
       const started = this.startNightRun(input, offer);
       const night = dreams.nightRun();
       if (started && night !== null && night.state === "started") dreams.holdTold({ run: night.run, date: input.at });
       this.emit("adapter.dream.unwatched", { started, entrypoint: input.entrypoint ?? null });
     } catch {
       /* the run is a courtesy here; nothing is lost by not starting it */
+    }
+  }
+
+  /**
+   * THE NIGHT, STARTED FOR ITS CATCH-UP ALONE (2026-10-11) — under `auto`,
+   * when the dream is not due (too little new, or a first day) and write-ups
+   * from an earlier day are owed: without it a new person who saved fewer than
+   * three memories on their first day would get no night and, since the
+   * pointer is retired under `auto`, no write-up either. The dream's side is
+   * `Dreams#catchUpOffer` (the day unclaimed, no run under way); what is owed
+   * is the catch-up's own reading (`night-catch-up.ts#owedBefore`), asked
+   * only after that says yes — it reads every held session's words, so a real
+   * zero is remembered for the rest of the day (`NOTHING_OWED_BEFORE_KEY`,
+   * review of #426: ~30 ms a prompt on a real-sized store otherwise). Claimed
+   * through the day's one latch (`claimOffer`), so two sessions racing start
+   * one run, and a day the catch-up took starts no second run except through
+   * the ordinary relaunch, once the dream is due. A run that cannot start
+   * falls back to nothing: there is no dream to ask about. True when it
+   * started. Never throws.
+   */
+  private catchUpWhenOwed(input: HookInput): boolean {
+    if (input.at === undefined) return false;
+    try {
+      const dreams = this.counterpart.dreams;
+      const offer = dreams.catchUpOffer({ at: input.at, session: input.sessionId });
+      if (offer === null) return false;
+      const store = this.counterpart.store;
+      if (store.getMeta(NOTHING_OWED_BEFORE_KEY) === input.at) return false;
+      const owed = owedBefore(this.counterpart, input.at);
+      if (owed === null) return false;
+      if (owed === 0) {
+        store.setMeta(NOTHING_OWED_BEFORE_KEY, input.at);
+        return false;
+      }
+      if (!dreams.claimOffer(offer)) return false;
+      const started = this.startNightRun(input, offer);
+      this.emit("adapter.night.catch-up-only", { started, owed, dream: offer.dreamSkipped ?? null });
+      return started;
+    } catch {
+      return false;
     }
   }
 
@@ -1068,7 +1225,12 @@ export class ClaudeCodeAdapter extends Lifecycle {
     const dreams = this.counterpart.dreams;
     const store = this.counterpart.store;
     const run = newNightRunId();
-    const kind: NightKind = offer.reflects === null ? { kind: "night" } : { kind: "reflection", dream: offer.reflects };
+    const kind: NightKind =
+      offer.reflects !== null
+        ? { kind: "reflection", dream: offer.reflects }
+        : offer.dreamSkipped === undefined
+          ? { kind: "night" }
+          : { kind: "night", dreamSkipped: offer.dreamSkipped };
     const base = {
       run,
       date: offer.at,
@@ -1082,6 +1244,18 @@ export class ClaudeCodeAdapter extends Lifecycle {
       code: null,
       dream: null,
       reflection: null,
+      // THE CATCH-UP ALONE says so from its first row (review of #426): doctor's
+      // "running now", and a row that never reports an end, read as it rather
+      // than as the whole night — and `fellBack` never reads it as a dream that
+      // could not start.
+      ...(offer.dreamSkipped === undefined
+        ? {}
+        : {
+            children: [
+              { child: "dream" as const, code: null, ms: 0, skipped: offer.dreamSkipped },
+              { child: "reflection" as const, code: null, ms: 0, skipped: offer.dreamSkipped },
+            ],
+          }),
     };
     const couldNot = (reason: string, detail: string | null): false => {
       dreams.recordNightRun({ ...base, state: "could-not-start", endedAt: store.now(), reason, detail });
@@ -1106,7 +1280,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
       });
       if (!out.started) return couldNot("runner", out.code ?? String(out.reason));
       dreams.recordNightRun({ ...base, state: "started" });
-      this.emit("adapter.night.started", { run, pid: out.pid, kind: kind.kind });
+      this.emit("adapter.night.started", { run, pid: out.pid, kind: kind.kind, ...(offer.dreamSkipped === undefined ? {} : { dreamSkipped: offer.dreamSkipped }) });
       return true;
     } catch (err) {
       return couldNot("runner", codeOf(err));

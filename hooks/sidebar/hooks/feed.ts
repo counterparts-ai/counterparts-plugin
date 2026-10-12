@@ -16,7 +16,7 @@
  * disagree.
  */
 
-import type { SidebarHit, SidebarRow, SidebarSaved } from '../types';
+import type { SidebarHit, SidebarMeet, SidebarOnboarding, SidebarRow, SidebarSaved } from '../types';
 import { MECHS, MEMORIES_URL, mechById, mechUrl } from './mechanisms';
 import type { MechId } from './mechanisms';
 import { cells, ellipsizeCells, headCells } from './width';
@@ -63,9 +63,12 @@ export const RULES: readonly Rule[] = [
   { name: 'gate.chunk', mech: 'salience', word: 'kept', when: e => num(e, 'accepted') > 0 },
   { name: 'recall.decision', mech: 'retrieval', word: 'recalled', when: e => num(e, 'surfacedCount') + num(e, 'footnoteCount') > 0 },
   { name: 'recall.decision', mech: 'emotional', word: 'brought closer', when: e => num(e, 'moodMatched') > 0 },
+  // A memory a link put in front of the model (2026-10-11, Group 4).
+  { name: 'recall.decision', mech: 'association', word: 'brought to mind by a link', when: e => num(e, 'linksReached') > 0 },
   { name: 'mcp.recall', mech: 'retrieval', word: 'looked up' },
   { name: 'recall.credit', mech: 'retrieval', word: 'strengthened', when: e => num(e, 'credited') > 0 },
-  { name: 'associate.flush', mech: 'association', word: 'linked', when: e => num(e, 'rows') > 0 },
+  // Links LAID, not rows rewritten (2026-10-11, Group 4): `deposited`.
+  { name: 'associate.flush', mech: 'association', word: 'linked', when: e => num(e, 'deposited') > 0 },
   { name: 'prospective.plain', mech: 'prospective', word: 'reminded' },
   { name: 'prospective.fire', mech: 'prospective', word: 'reminded' },
   { name: 'band.transition', mech: 'decay', word: 'faded', when: e => detail(e, 'site') === 'decay' && detail(e, 'direction') !== 'up' },
@@ -75,6 +78,8 @@ export const RULES: readonly Rule[] = [
   { name: 'band.promoted', mech: 'consolidation', word: 'became core' },
   { name: 'memory.merged', mech: 'consolidation', word: 'merged' },
   { name: 'dream.journaled', mech: 'dreaming', word: 'dreamed' },
+  // The replay's faint trails, laid as the dream opens (2026-10-11, Group 4).
+  { name: 'dream.begun', mech: 'association', word: 'linked', when: e => num(e, 'replayLinks') > 0 },
   // A change the dream made, or a core suggestion (`applied` counts both).
   { name: 'dream.changed', mech: 'dreaming', word: 'dreamed', when: e => num(e, 'applied') > 0 || num(e, 'nominate-core') > 0 },
   { name: 'dream.changed', mech: 'episodic-semantic', word: 'dreamed a pattern', when: e => num(e, 'gist') > 0 },
@@ -294,7 +299,9 @@ const DREAM_ACTION: Partial<Record<MechId, string>> = { interference: 'merge', c
  *     (Interference, Consolidation) and patterns (Gist) from `/api/dreams`'
  *     changes, which name memories the event row only counts;
  *   - left out, nothing to name: a look-up (`mcp.recall` counts what it
- *     opened), a link flush (`associate.flush` counts pairs), a flagged
+ *     opened), a link flush (`associate.flush` counts pairs), a turn a link
+ *     reached recall on (`recall.decision`'s `linksReached` is a count), a
+ *     dream's replay links (`dream.begun` counts them), a flagged
  *     contradiction (a pair id), a sleep cycle's fades (counts).
  */
 export function mechFirings(events: readonly DashEvent[], mech: MechId, dreams: readonly DashDream[] = [], limit = 8): Firing[] {
@@ -306,6 +313,9 @@ export function mechFirings(events: readonly DashEvent[], mech: MechId, dreams: 
     if (out.length >= limit) break;
     const rule = provedBy(e).find(r => r.mech === mech);
     if (rule === undefined) continue;
+    // A turn a link reached recall on counts only (2026-10-11): its row does not
+    // say WHICH shown memory the link brought, so naming them all would be wrong.
+    if (e.name === 'recall.decision' && mech === 'association') continue;
     if (e.name === 'recall.decision' || e.name === 'recall.credit') {
       const ids = e.name === 'recall.decision' ? [...surfacedIds(e), ...idList(e, 'footnotes')] : idList(e, 'ids');
       const quoted = quotedTitles(e.text);
@@ -713,4 +723,69 @@ export function humanDates(title: string, now: number): string {
     .replace(/\s{2,}/g, ' ')
     .trim();
   return out === '' ? title : out;
+}
+
+// ── the first meeting: core's onboarding state ─────────────────────────────
+
+const MEET_STATES: readonly SidebarMeet[] = ['not_started', 'offered', 'later', 'done', 'skipped'];
+
+/** Not read, or read as nothing the sidebar knows: it does nothing about the meeting. */
+export const UNKNOWN_ONBOARDING: SidebarOnboarding = { meet: 'unknown', where: null, style: null };
+
+/**
+ * Core's `GET /api/onboarding` answer (`{ meet, where, style }`), read
+ * strictly: anything but an object whose `meet` is one of the five states is
+ * unknown, so a core from before onboarding (a 404 page, an error body, a
+ * renamed field) never moves the sidebar.
+ */
+export function parseOnboarding(text: string): SidebarOnboarding {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return UNKNOWN_ONBOARDING;
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return UNKNOWN_ONBOARDING;
+  const rec = raw as Record<string, unknown>;
+  const meet = rec['meet'];
+  if (typeof meet !== 'string' || !(MEET_STATES as readonly string[]).includes(meet)) return UNKNOWN_ONBOARDING;
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+  return { meet: meet as SidebarMeet, where: str(rec['where']), style: str(rec['style']) };
+}
+
+/**
+ * THE ONE PLACE THE WAKE'S MARKER IS SPELLED. Core writes it on its own line
+ * in every SessionStart wake (done included; `start-fresh` resets it to
+ * not_started): `<!-- counterparts:onboarding meet=<state> -->`. No marker:
+ * an older core, the state unknown. Change the text here if core's changes.
+ */
+export const ONBOARDING_MARKER = /<!--\s*counterparts:onboarding\s+meet=([a-z_]+)\s*-->/;
+
+/** The state the wake's marker names, or null: no marker, or a state the sidebar doesn't know. */
+export function parseOnboardingMarker(text: string): SidebarMeet | null {
+  const state = ONBOARDING_MARKER.exec(text)?.[1];
+  return state !== undefined && (MEET_STATES as readonly string[]).includes(state) ? (state as SidebarMeet) : null;
+}
+
+/**
+ * Whether the sidebar shows "Meet your counterpart": core says the meeting
+ * was put off (`later`) or offered and not finished (`offered`), or it never
+ * started though this install's one speak-first went out in an EARLIER
+ * session (the turn ended before Claude reached core's `meet`: a dead end
+ * otherwise). Never in a folder where the meeting can't keep anything
+ * (`canMeet`), and never for an unknown state.
+ */
+export function meetShows(meet: SidebarMeet, folderMode: string, firedIn: string | null, session: string): boolean {
+  if (!canMeet(folderMode)) return false;
+  if (meet === 'later' || meet === 'offered') return true;
+  return meet === 'not_started' && firedIn !== null && firedIn !== session;
+}
+
+/**
+ * A folder where a first meeting makes sense: Counterparts on by its own
+ * entry or a parent's, or unset (on by default). Not paused, off or
+ * observer (nothing new is kept there), and not unknown (never acted on as on).
+ */
+export function canMeet(folderMode: string): boolean {
+  return folderMode === 'on' || folderMode === 'unset';
 }

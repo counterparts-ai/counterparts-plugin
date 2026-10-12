@@ -783,10 +783,10 @@ export const MECHANISMS: readonly Mechanism[] = [
     // evidence is the settle rows; the flags and the undos are covered.
     id: "contradictions",
     label: "two memories that disagree were settled — changed, corrected or kept open — or flagged, or a settle undone",
-    module: "core/contradictions.ts (revision.ts, dream/, mcp remember, cli settle)",
+    module: "core/reconsolidation.ts (revision.ts, dream/, mcp remember, cli settle)",
     cadence: { kind: "occasion", when: "two memories disagree" },
     evidence: { kind: "event", names: ["contradiction.settled"] },
-    covers: ["contradiction.flagged", "contradiction.undone", "contradiction.held"],
+    covers: ["contradiction.flagged", "contradiction.undone", "contradiction.held", "contradiction.proposed"],
     since: "2026-09-29",
   },
   {
@@ -2020,7 +2020,9 @@ function readOccasion(m: Mechanism, store: ReadOnlyStore, log: LogRead, w: Windo
  * span and is due again on its last day (`last-day`); a YEAR is never told.
  * A beat is told when its latch row exists (`prospective.plain`, keyed
  * `<memory>:<window>:<beat>`) on the memory or on any memory its reminder
- * moved from — the same lineage `plainTold` walks.
+ * moved from — the same lineage `plainTold` walks. A day told LATE, inside its
+ * grace (`PlainDue.late`, 2026-10-11), writes the day's own latch, so it reads
+ * here as said.
  *
  * A beat counts as DUE only on a day of the window, today excluded, on which a
  * session a person could be told something in was there AFTER the memory

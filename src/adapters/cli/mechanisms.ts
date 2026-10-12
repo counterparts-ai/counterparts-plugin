@@ -211,10 +211,22 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
     id: "association",
     evidence: ["association-saved", "association"],
     read: (v, rows) => {
-      const saved = part(v, "links");
+      // Links LAID, and memories links brought to mind (2026-10-11, Group 4):
+      // laid with none reaching recall is not working yet.
+      const saved = part(v, "links", "replayed");
+      const reached = part(v, "reached");
       const held = rows("association")?.total ?? 0;
       if (v.fired) {
-        return { light: LIGHT.working, says: `${plural(saved, "link")} written this week; ${plural(held, "link")} held` };
+        return {
+          light: LIGHT.working,
+          says: `${plural(reached, "memory", "memories")} links brought to mind this week; ${plural(saved, "link")} laid; ${plural(held, "link")} held`,
+        };
+      }
+      if (v.starved !== undefined) {
+        return { light: LIGHT.idle, says: `${plural(saved, "link")} laid this week, but none brought a memory to mind (${plural(held, "link")} held)` };
+      }
+      if (v.young !== undefined) {
+        return { light: LIGHT.working, says: `${plural(saved, "link")} laid this week; too early for one to bring a memory to mind (${plural(held, "link")} held)` };
       }
       return {
         light: LIGHT.idle,

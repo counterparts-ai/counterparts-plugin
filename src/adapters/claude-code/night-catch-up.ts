@@ -70,6 +70,7 @@ import {
   writeUpStanding,
 } from "../sessions.js";
 import type { WriteUpProgress } from "../sessions.js";
+import type { HeldSession } from "../../core/remember/index.js";
 import type { ChildPlan, ChildResult } from "./child.js";
 
 /** The one tool the catch-up child may call, as the host names it. */
@@ -126,6 +127,44 @@ export function plannedParts(plan: Pick<CatchUpPlan, "subjects">): number {
 }
 
 /**
+ * WHAT THE CATCH-UP TAKES: every session owing a write-up a person's
+ * conversation left (`pointable`, the pointer's own test). One definition, for
+ * the batch's plan and for the hook's question below.
+ */
+export function catchUpOwing(plan: readonly HeldSession[], dataDir: string): HeldSession[] {
+  return plan.filter((h) => h.owes && pointable(h, dataDir));
+}
+
+/**
+ * HOW MANY OF THOSE ARE FROM AN EARLIER DAY than `date` (the store's calendar
+ * date, its zone): the last thing known about the session — its last words, a
+ * boundary, its end — was before that day began (2026-10-11). The hook asks it
+ * to start the night for the catch-up alone when the dream is not due. A
+ * session that ran past midnight counts from the day it last moved: one more
+ * day, never a loss (it owes for `LAPSE_DAYS_OF_USE` days of use). Reads every
+ * held session's words once, like the plan (~30 ms on a store of the author's
+ * size, review of #426 — hence `NOTHING_OWED_BEFORE_KEY`). Never throws: null
+ * when it could not read.
+ */
+export function owedBefore(c: Counterpart, date: string): number | null {
+  try {
+    const zone = c.store.zone();
+    return catchUpOwing(writeUpPlan({ store: c.store, spans: c.spans }), c.store.dir).filter((h) => calendarDate(h.clockFrom, zone) < date).length;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * THE DAY NOTHING WAS OWED FROM AN EARLIER DAY (review of #426): the store's
+ * calendar date on which `owedBefore` last read a real zero. Within one day
+ * the earlier days' debt only shrinks — a session's last activity moves only
+ * later, and write-ups only take sessions away — so the hook asks once a day,
+ * not at every prompt. A meta row, no schema.
+ */
+export const NOTHING_OWED_BEFORE_KEY = "night.nothing-owed-before";
+
+/**
  * WHAT ONE BATCH WRITES UP, decided and nothing written. Every session owing a
  * write-up a person's conversation left (`pointable`, the pointer's own test),
  * oldest stretch first; another writer's claim passes it over; the bound takes
@@ -146,7 +185,7 @@ export function planCatchUp(
   const zone = c.store.zone();
   const plan = writeUpPlan({ store: c.store, spans: c.spans });
   const progress = readWriteUpProgress(c.store);
-  const owing = plan.filter((h) => h.owes && pointable(h, dir)).sort((a, b) => a.clockFrom - b.clockFrom || (a.session < b.session ? -1 : 1));
+  const owing = catchUpOwing(plan, dir).sort((a, b) => a.clockFrom - b.clockFrom || (a.session < b.session ? -1 : 1));
   const subjects: CatchUpSubject[] = [];
   let busy = 0;
   let bounded = 0;

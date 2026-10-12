@@ -63,6 +63,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { join } from "node:path";
 
 import { ownerNames } from "../../../core/sleep/index.js";
+import { onboardingView } from "../../../core/onboarding.js";
 import { dataDir, isStoreError } from "../../../core/store/index.js";
 import { zoneBeside, zoneOfConfig } from "../../config.js";
 import { Dashboard } from "../index.js";
@@ -253,6 +254,9 @@ export function router(
     }
 
     if (path === "/api/meta") return json(metaView(src));
+    // THE FIRST MEETING'S STATE, for the sidebar mod (2026-10-11): `{ meet,
+    // where, style }`, option keys only, never an answer's words.
+    if (path === "/api/onboarding") return json(onboardingView(src.store));
     if (path === "/api/pulse") return json(pulse(src));
     if (path === "/api/overview") return json(overviewView(src, intParam(url, "limit", 40)));
     if (path === "/api/memories") return json(memoriesView(src, { limit: intParam(url, "limit", 4000) }));

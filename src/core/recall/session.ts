@@ -65,6 +65,11 @@ export const ASKED_MAX = 200;
 export function askedTurn(nowMs: number): number {
   return Math.floor(nowMs / 1000);
 }
+
+/** An `asked` record's moment back in UTC ms (the start of its second). */
+export function askedAt(turn: number): number {
+  return turn * 1000;
+}
 /**
  * `judged` (2026-10-09): how far the boundary's credit pass has scored this
  * session's ambient showings. One row (`ref` `JUDGED_REF`) whose `turn` is the

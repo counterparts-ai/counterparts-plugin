@@ -521,6 +521,8 @@ export function toHookInput(
     // nothing (`hooks.ts#askAtStop`).
     ...(payload["stop_hook_active"] === true ? { reFired: true } : {}),
     ...(typeof payload["prompt"] === "string" ? { prompt: payload["prompt"] } : {}),
+    // Why a SessionStart fired (2026-10-11): a resume is handed a short wake.
+    ...(typeof payload["source"] === "string" && payload["source"].length > 0 ? { source: payload["source"] } : {}),
     // The headless nightly run's child (`night-run.ts` sets this, 2026-09-29):
     // a windowless session our hooks keep QUIET — no capture, no asks.
     ...(((opts.env ?? process.env)[NIGHT_RUN_ENV] ?? "").trim().length > 0 ? { nightRun: true } : {}),

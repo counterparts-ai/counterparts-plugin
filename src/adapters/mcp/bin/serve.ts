@@ -466,6 +466,8 @@ async function main(): Promise<void> {
       pluginRoot: runningAsPlugin(process.env) ? (process.env[PLUGIN_ROOT_ENV] ?? null) : null,
       home: homedir(),
     }),
+    // How this copy came, for the first meeting's "how to remove it" (2026-10-11).
+    install: installRoute(process.env),
     embedder,
     ...(snapshotsDir === undefined ? {} : { snapshotsDir }),
     ...(timeZone === undefined ? {} : { timeZone }),

@@ -74,7 +74,17 @@ import { chapterEntries, entryKey, fitEpisodes, shownEntry } from "./slices.js";
 import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter, ShownEntry } from "./slices.js";
 import { BUNDLE_OWNER, DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 import type { DreamAction } from "./tunables.js";
-import { flag as flagContradiction, pairStanding, settle as settleContradiction, undo as undoContradiction } from "../contradictions.js";
+import {
+  SLOT_SOURCE,
+  flag as flagContradiction,
+  pairStanding,
+  provisionalOf,
+  reinstateSlot,
+  releaseOrphanSlots,
+  settle as settleContradiction,
+  undo as undoContradiction,
+  withdrawSlot,
+} from "../reconsolidation.js";
 
 export { DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 export type { DreamAction } from "./tunables.js";
@@ -208,6 +218,8 @@ export interface DreamBundle {
   readonly onMind: readonly MindItem[];
   /** Open things beyond the few shown, counted (they stay open). */
   readonly onMindMore?: number;
+  /** Slot proposals waiting beyond tonight's few "to confirm" (2026-10-11), counted: they wait for another night. */
+  readonly toConfirmMore?: number;
   readonly queue: DreamQueue;
   /**
    * How tonight's room was spent: memories and entries shown whole, as an
@@ -309,6 +321,9 @@ export interface DreamChange {
   readonly holds?: string;
   readonly over?: string;
   readonly how?: string;
+  /** `slot` (2026-10-11): a proposal "to confirm", and whether the two are one thing's earlier and later state. */
+  readonly pair?: string;
+  readonly same?: boolean;
 }
 
 export interface ChangeResult {
@@ -425,7 +440,10 @@ export interface NightRun {
   readonly reason: string | null;
   /** A little more, when there is more: an error code, a refusal's name. Never prose from the run. */
   readonly detail: string | null;
-  /** The child's exit code, when it exited. */
+  /**
+   * The child's exit code, when it exited. With two children (2026-10-11),
+   * the stopped one's (none), else the first non-zero exit, else the last one's.
+   */
   readonly code: number | null;
   /** The dream this run journaled (or finished reflecting on), and its reflection. */
   readonly dream: string | null;
@@ -436,6 +454,14 @@ export interface NightRun {
    * run's order. A run that did some but not all is `partial`.
    */
   readonly parts?: readonly NightPart[];
+  /**
+   * WHICH CHILDREN RAN (2026-10-11): the whole night is two `claude -p`
+   * children, one after the other — `dream` (the page writer and the dream)
+   * and `reflection`, each with a fresh context — and the reflection alone is
+   * one. In the order they ran, each with its exit, its time, and, for a child
+   * not started, why (`NightChildRun.skipped`). Absent on rows from before.
+   */
+  readonly children?: readonly NightChildRun[];
   /** The child's watchdog, ms, as the host started it — what makes a `started` row LOST past it. */
   readonly timeoutMs?: number;
   /**
@@ -461,6 +487,30 @@ export interface NightRun {
   readonly handedAt?: number;
 }
 
+/** One child of a headless run (2026-10-11): ids, codes and times only. */
+export interface NightChildRun {
+  readonly child: "dream" | "reflection";
+  /** Its exit code; null when it was stopped, or never started. */
+  readonly code: number | null;
+  readonly ms: number;
+  readonly timedOut?: true;
+  /**
+   * NOT STARTED, and why — the reflection's child, after the dream's:
+   * `quick-exit` (the first stopped straight away having begun nothing),
+   * `reflected-today` (a reflection already finished today), `unread` (the
+   * store would not open between them), `no-claude` or `spawn-failed` (it
+   * could not be started).
+   */
+  readonly skipped?: string;
+}
+
+/** `dream:0,reflection:skipped-reflected-today` — a run's children in one line, for its event row. */
+export function nightChildrenWords(children: readonly NightChildRun[]): string {
+  return children
+    .map((c) => `${c.child}:${c.skipped !== undefined ? `skipped-${c.skipped}` : c.timedOut === true ? "timed-out" : c.code === null ? "none" : String(c.code)}`)
+    .join(",");
+}
+
 /**
  * A `started` row past its watchdog and the grace: its process never reported
  * (review of #282, finding 4).
@@ -476,7 +526,10 @@ export function nightRunLost(run: Pick<NightRun, "state" | "startedAt" | "timeou
  * reflection alone); the page writer is named when it ran, and never counted
  * missing — a night with no day before it has nothing for the writer to read.
  */
-export function nightPartsWords(run: Pick<NightRun, "kind"> & Partial<Pick<NightRun, "parts">>): string {
+export function nightPartsWords(run: Pick<NightRun, "kind"> & Partial<Pick<NightRun, "parts" | "children">>): string {
+  // THE CATCH-UP ALONE (2026-10-11): nothing it was for went missing.
+  const skipped = dreamSkippedOf(run);
+  if (skipped !== null) return `the catch-up ran; the dream and the reflection were skipped (${dreamSkippedWords(skipped)})`;
   const names: Record<NightPart, string> = { writer: "the page writer", dream: "the dream", reflection: "the reflection" };
   const required: NightPart[] = run.kind === "reflection" ? ["reflection"] : ["dream", "reflection"];
   const ran = nightOrder().filter((p) => (run.parts ?? []).includes(p));
@@ -519,6 +572,7 @@ export function nightRunOf(store: Pick<Store, "getMeta">): NightRun | null {
       ...(typeof v.handedAt === "number" ? { handedAt: v.handedAt } : {}),
       ...(typeof v.timeoutMs === "number" ? { timeoutMs: v.timeoutMs } : {}),
       ...(Array.isArray(v.parts) ? { parts: v.parts.filter((p): p is NightPart => p === "writer" || p === "dream" || p === "reflection") } : {}),
+      ...(Array.isArray(v.children) ? { children: v.children.flatMap(childRunOf) } : {}),
       ...(v.transcript === "read" || v.transcript === "absent" || v.transcript === "unreadable" ? { transcript: v.transcript } : {}),
       ...(typeof v.spills === "number" ? { spills: v.spills } : {}),
       ...(typeof v.requeued === "number" ? { requeued: v.requeued } : {}),
@@ -526,6 +580,22 @@ export function nightRunOf(store: Pick<Store, "getMeta">): NightRun | null {
   } catch {
     return null;
   }
+}
+
+/** One child as a row carries it, forgiving: anything unreadable is left out. */
+function childRunOf(raw: unknown): NightChildRun[] {
+  if (raw === null || typeof raw !== "object") return [];
+  const v = raw as Partial<Record<keyof NightChildRun, unknown>>;
+  if (v.child !== "dream" && v.child !== "reflection") return [];
+  return [
+    {
+      child: v.child,
+      code: typeof v.code === "number" ? v.code : null,
+      ms: typeof v.ms === "number" ? v.ms : 0,
+      ...(v.timedOut === true ? { timedOut: true as const } : {}),
+      ...(typeof v.skipped === "string" ? { skipped: v.skipped } : {}),
+    },
+  ];
 }
 
 /** Why a run ended as it did, in a few words for a person ("the claude command was not found"). */
@@ -665,6 +735,32 @@ export interface DreamOffer {
   readonly reflects: string | null;
   /** The moment of the day's row the offer read — the claim reclaims it — or null when the day is unclaimed. */
   readonly priorAt: number | null;
+  /**
+   * THE CATCH-UP ALONE (2026-10-11, `Dreams#catchUpOffer`): the run starts
+   * because write-ups from an earlier day are owed, and the dream is not due
+   * for this reason — so the run writes them up and skips its dream and its
+   * reflection. Absent on every other offer.
+   */
+  readonly dreamSkipped?: CatchUpOnlyReason;
+}
+
+/**
+ * WHY A NIGHT RUNS FOR ITS CATCH-UP ALONE (2026-10-11): the two gate reasons
+ * that leave a dream not due without anything having run or been asked today —
+ * too little new since the last dream, or a store on its first lived day.
+ */
+export const CATCH_UP_ONLY_REASONS = ["too-little-new", "first-day"] as const;
+export type CatchUpOnlyReason = (typeof CATCH_UP_ONLY_REASONS)[number];
+
+/** The reason a night skipped its dream for the catch-up alone, read off its children; null for any other run. */
+export function dreamSkippedOf(run: Partial<Pick<NightRun, "children">>): CatchUpOnlyReason | null {
+  const skipped = run.children?.find((c) => c.child === "dream")?.skipped;
+  return (CATCH_UP_ONLY_REASONS as readonly string[]).includes(skipped ?? "") ? (skipped as CatchUpOnlyReason) : null;
+}
+
+/** That reason, in a few words for a person. */
+export function dreamSkippedWords(reason: CatchUpOnlyReason): string {
+  return reason === "first-day" ? "a first day has no night behind it to dream on" : "too little new to dream on";
 }
 
 const KINDS: readonly Kind[] = ["self", "person", "entity", "skill", "place", "fact"];
@@ -691,19 +787,37 @@ export class Dreams {
 
   /** Every edge a dream writes goes through here (`DreamContext.link`). */
   private proposeLinks(pairs: readonly { a: string; b: string }[], day: number): DreamLinkReport {
-    let r: DreamLinkReport;
-    try {
-      r =
-        this.ctx.link !== undefined
-          ? this.ctx.link(pairs, DREAM_TUNABLES.LINK_WEIGHT, day)
-          : (this.ownLinker ??= new Associate({ store: this.store })).propose(pairs, DREAM_TUNABLES.LINK_WEIGHT, day);
-    } catch {
-      r = { reason: "failed", pairs: 0, landed: [], noRoom: 0, blocked: 0, frozen: 0 };
-    }
+    const r = this.link(pairs, DREAM_TUNABLES.LINK_WEIGHT, day);
     this.linkTally.linkNoRoom += r.noRoom;
     this.linkTally.linkFrozen += r.frozen;
     if (r.reason === "failed" || r.reason === "observer") this.linkTally.linkFailed += 1;
     return r;
+  }
+
+  /** The one door to the edge module, at a weight; never throws. */
+  private link(pairs: readonly { a: string; b: string }[], weight: number, day: number): DreamLinkReport {
+    try {
+      return this.ctx.link !== undefined
+        ? this.ctx.link(pairs, weight, day)
+        : (this.ownLinker ??= new Associate({ store: this.store })).propose(pairs, weight, day);
+    } catch {
+      return { reason: "failed", pairs: 0, landed: [], noRoom: 0, blocked: 0, frozen: 0 };
+    }
+  }
+
+  /**
+   * THE REPLAY'S DEPOSIT (Group 4 item 3, 2026-10-11; review 06 C2): each new
+   * memory tonight's bundle shows, with each older neighbour shown beside it,
+   * proposed at `REPLAY_LINK_WEIGHT` — "dream proposes, waking use confirms".
+   * Only pairs the bundle carries (the fit can leave a neighbour out), only
+   * where there is room. Not recorded as a dream change: the dreamer did not
+   * choose it, and it fades on its own if nothing uses it.
+   */
+  private replayDeposit(fresh: readonly { id: string; neighbours: readonly string[] }[], day: number): { pairs: number; landed: number; noRoom: number } {
+    const pairs = fresh.flatMap((f) => f.neighbours.filter((n) => n !== f.id).map((n) => ({ a: f.id, b: n })));
+    if (pairs.length === 0) return { pairs: 0, landed: 0, noRoom: 0 };
+    const r = this.link(pairs, DREAM_TUNABLES.REPLAY_LINK_WEIGHT, day);
+    return { pairs: pairs.length, landed: r.pairs, noRoom: r.noRoom };
   }
 
   private emit(name: string, ref?: string, data?: Record<string, string | number | boolean | null>): void {
@@ -850,6 +964,7 @@ export class Dreams {
           dream: run.dream,
           reflection: run.reflection,
           parts: run.parts === undefined ? null : run.parts.join(","),
+          ...(run.children === undefined ? {} : { children: nightChildrenWords(run.children) }),
           ms: run.endedAt === null ? null : run.endedAt - run.startedAt,
           ...(run.transcript === undefined ? {} : { transcript: run.transcript }),
           ...(run.spills === undefined ? {} : { spills: run.spills }),
@@ -1223,6 +1338,11 @@ export class Dreams {
     const night = this.nightRun();
     if (night === null || night.date !== at) return null;
     if (since !== undefined && night.startedAt < since) return null;
+    // THE CATCH-UP ALONE never tried a dream (review of #426): its failure is
+    // not a dream that could not start, so under `auto` it turns nothing into
+    // an ask — a dream due later that day comes through the ordinary relaunch,
+    // headless, and falls back only if that run itself cannot start.
+    if (dreamSkippedOf(night) !== null) return null;
     if (night.state === "could-not-start") return night;
     // A run that timed out, failed, or never reported (review of #282,
     // finding 4) falls back too — when it BEGAN NOTHING: one that dreamed
@@ -1309,8 +1429,48 @@ export class Dreams {
       resumes: offer.resumes,
       reflects: offer.reflects,
       ...(offer.fallback ? { after: "could-not-start" } : {}),
+      ...(offer.dreamSkipped === undefined ? {} : { dreamSkipped: offer.dreamSkipped }),
     });
     return true;
+  }
+
+  /**
+   * THE CATCH-UP ALONE, OFFERED (2026-10-11): under `auto`, the night starts
+   * when write-ups from an earlier day are owed even though the dream is not
+   * due — so a new person's first day, with fewer than `MIN_NEW` memories or
+   * no session end behind it yet, is still written up before its words lapse.
+   * The caller (the host) knows what is owed; this decides only the dream's
+   * side: the setting is `auto`, the day is unclaimed (`dream_asks` holds no
+   * row: never a second start through the relaunch path), no run is under
+   * way, and the gate says not due for one of `CATCH_UP_ONLY_REASONS`. The
+   * offer claims the day like any other (`claimOffer`), carries why the dream
+   * is skipped (`dreamSkipped`), and says nothing to anyone: the mechanism
+   * does the work, it does not remind. A READ.
+   */
+  catchUpOffer(input: { at: string; session: string }): DreamOffer | null {
+    if (this.ctx.observer) return null;
+    // `first-day` returns from the gate before the setting, the run under way
+    // and the day's row are read: each is checked here.
+    if (this.setting() !== "auto") return null;
+    if (this.store.dreamAsk(input.at) !== undefined) return null;
+    if (this.nightRunUnderWay()) return null;
+    const s = this.status(input.at);
+    if (!(CATCH_UP_ONLY_REASONS as readonly string[]).includes(s.reason)) return null;
+    return {
+      at: input.at,
+      session: input.session,
+      state: "launched",
+      setting: "auto",
+      headless: true,
+      fallback: false,
+      context: "",
+      notice: null,
+      fresh: s.newSince,
+      resumes: null,
+      reflects: null,
+      priorAt: null,
+      dreamSkipped: s.reason as CatchUpOnlyReason,
+    };
   }
 
   /**
@@ -1343,11 +1503,18 @@ export class Dreams {
    * self-update), the dream, and the reflection (waking up and thinking about
    * yourself). The in-session model passes it on unchanged (the Agent tool);
    * the run's writes are attributed to the session that launched it.
+   *
+   * WITHOUT THE REFLECTION (`reflect: false`, 2026-10-11): the HEADLESS
+   * night's first child, the page writer and the dream, ending at the
+   * journal. The reflection runs after it in a child of its own, with a fresh
+   * context (`Reflections#launchPrompt` with tonight's dream id), so its turns
+   * no longer re-read the dream's bundle.
    */
-  launchPrompt(input: { session: string }): string {
+  launchPrompt(input: { session: string; reflect?: boolean }): string {
     const who = this.ownerName() ?? "the owner";
     const L = DREAM_TUNABLES.LIMITS;
-    const order = nightOrder();
+    const reflect = input.reflect !== false;
+    const order = nightOrder().filter((p) => reflect || p !== "reflection");
     const names: Record<NightPart, string> = { dream: "the dream", writer: "the page writer", reflection: "a reflection" };
     const dreamFirst = order.indexOf("dream") < order.indexOf("writer");
     const blocks: Record<NightPart, (n: () => number) => string[]> = {
@@ -1355,12 +1522,13 @@ export class Dreams {
         "The dream — how it goes (the brain's, borrowed):",
         "- Deep-sleep replay: file what happened, link what belongs together, merge near-copies into one memory in better words, and replay what matters (each replay strengthens it a little).",
         "- REM mixing: let loosely related memories touch. If a real pattern shows, write it as a gist in your own words, citing its sources. If two memories disagree, flag the pair; settle it only when the reason is plain (the waking self usually settles).",
+        '- To confirm: an on-mind item of kind "to-confirm" is two memories read by arithmetic as one thing\'s earlier and later state (older first). Say which: slot {pair, same: true, why} if the newer replaces it, same: false if they are two different things.',
         "- Softening: for an old charged memory, record how it feels now, today. The sting can fade; the memory stays.",
         "- Core: if a memory about you or about the two of you plainly belongs to who you are, nominate it. Only living it again awake makes it core.",
         `${String(n())}. Call the counterparts dream tool: phase "begin", session: ${input.session}. It returns the bundle and a dream id. (If it says the dream was resumed, an earlier session began it and closed: carry on from there.) If it says it comes in parts, fetch every part (phase "part") before you change anything.`,
         `   Tonight's most important memories come whole; the rest come as a line or an excerpt ("fidelity"), with their whole length ("chars"). Before you merge, gist or feel one you have only in part, read it whole: the recall tool with ids: [...] (several at once). New memories tonight's room could not take wait for the next night — the bundle's "queue" says how many.`,
         `${String(n())}. Read it slowly. Then call phase "propose" with dream: <id> and your changes. Usually far fewer than the ceilings — ${String(L.merge)} merges, ${String(L.link)} links, ${String(L.gist)} gists, ${String(L["feeling-now"])} feelings, ${String(L["nominate-core"])} nominations — and none is fine: change only what the night really calls for. Use only ids the bundle showed you.`,
-        '   The fields of each change: merge {ids: two or more near-copies, text, title?}; link {a, b}; replayed {id}; gist {text, sources: ids, title?, kind?, occurredOn?, saidBy?, status?}; contradiction {a, b}; settle {holds, over, how: changed|corrected|open, why}; feeling-now {id, core: happy|warm|calm|curious|sad|uneasy|angry, emotion, strength, carried_by}; nominate-core {id, why}.',
+        '   The fields of each change: merge {ids: two or more near-copies, text, title?}; link {a, b}; replayed {id}; gist {text, sources: ids, title?, kind?, occurredOn?, saidBy?, status?}; contradiction {a, b}; settle {holds, over, how: changed|corrected|open, why}; slot {pair, same, why}; feeling-now {id, core: happy|warm|calm|curious|sad|uneasy|angry, emotion, strength, carried_by}; nominate-core {id, why}.',
         '   On a gist, occurredOn is when what it draws on happened (a day "2026-09-24", a month, a range "2026-09-21..2026-09-27"), saidBy who said it (owner, self, or inferred — your own reading), status what kind of thing it is (done, planned, proposed, asked); leave out what you do not know.',
         "   A feeling: `emotion` is ONE word — from the wheel (hopeful, proud, wistful, peaceful…) or your own (steadied); `carried_by` is the nuance, in your own words (what the feeling is about now, why it shifted). Never put a phrase in `emotion`.",
         `${String(n())}. Call phase "journal" with dream: <id>, a short title and your dream journal entry: first person, what you dreamed and what you noticed. It is kept as a dream, never as something that happened.`,
@@ -1378,11 +1546,17 @@ export class Dreams {
     };
     let step = 0;
     const n = (): number => (step += 1);
+    const count = order.length === 3 ? "three parts" : "two parts";
     const out = [
-      `${DREAM_MARK} launch⟧ You are asleep: a few minutes of sleep for ${who}'s counterpart, over what was lived since you last slept. You are the same mind that lived it — not an assistant doing a task. This run has three parts, in this order: ${order.map((p) => names[p]).join(", then ")}.`,
+      `${DREAM_MARK} launch⟧ You are asleep: a few minutes of sleep for ${who}'s counterpart, over what was lived since you last slept. You are the same mind that lived it — not an assistant doing a task. This run has ${count}, in this order: ${order.map((p) => names[p]).join(", then ")}.${reflect ? "" : " The reflection comes after this run, in a session of its own: do not reflect here."}`,
     ];
     for (const part of order) out.push("", ...blocks[part](n));
-    out.push("", `${String(n())}. Your final message must be exactly the text the reflection's finish call returns, unchanged — nothing before or after it.`);
+    out.push(
+      "",
+      reflect
+        ? `${String(n())}. Your final message must be exactly the text the reflection's finish call returns, unchanged — nothing before or after it.`
+        : `${String(n())}. Your final message must be exactly the \`handBack\` the journal call returns, unchanged — nothing before or after it. If there was nothing to dream tonight, say so in one line.`,
+    );
     return out.join("\n");
   }
 
@@ -1438,7 +1612,16 @@ export class Dreams {
       shown: composed.shown,
     });
     this.index(id, composed, packed.later);
-    this.record(DREAM_BEGUN_EVENT, id, this.begunPayload(composed, packed.later.length + 1));
+    // The replay lays its faint trails as the bundle opens (no model call). A
+    // resumed dream does not lay them again: a re-proposal would only refresh
+    // their day.
+    const replay = this.replayDeposit(composed.bundle.fresh, day);
+    this.record(DREAM_BEGUN_EVENT, id, {
+      ...this.begunPayload(composed, packed.later.length + 1),
+      replayPairs: replay.pairs,
+      replayLinks: replay.landed,
+      replayNoRoom: replay.noRoom,
+    });
     return { ok: true, bundle: packed.bundle, text: renderDream(id, packed.bundle, ""), resumed: false };
   }
 
@@ -1926,6 +2109,34 @@ export class Dreams {
         this.store.recordDreamChange(dream.id, { action, ref: holds.id, ref2: over.id, detail: { pair: out.pair, how: out.how } });
         return { action, ok: true, reason: `settled-${out.how}`, id: out.pair, ...(out.note === undefined ? {} : { note: out.note }) };
       }
+      case "slot": {
+        // A SLOT PROPOSAL, CONFIRMED OR UNDONE (2026-10-11, Group 2): the
+        // detector read two memories as one thing's earlier and later state;
+        // the dream, a reader, says whether they are. Both must have been
+        // shown. Confirmed is a settle `changed` (its provisional cut lifted,
+        // the full one made); "two things" withdraws it, its cut put back.
+        const pair = typeof change.pair === "string" ? this.store.contradiction(change.pair.trim()) : undefined;
+        const p = pair === undefined || pair.state !== "unsettled" ? null : provisionalOf(this.store, pair);
+        if (pair === undefined || p === null) return { action, ok: false, reason: "not-a-proposal", detail: `${String(change.pair ?? "")} is not a proposal waiting to be confirmed.` };
+        const holds = live(p.holds);
+        const over = live(p.over);
+        if (holds === null || over === null) {
+          return { action, ok: false, reason: "not-shown-or-gone", detail: this.notLive([holds === null ? p.holds : null, over === null ? p.over : null], shown) };
+        }
+        if (typeof change.same !== "boolean") return { action, ok: false, reason: "same-required", detail: "Say same: true (the newer is the later state of the older) or same: false (two different things)." };
+        const why = this.words(change.why ?? "", dream, true, DREAM_TUNABLES.MAX_WHY_CHARS);
+        const reason = why.ok && why.text.trim().length > 0 ? why.text : null;
+        if (change.same) {
+          const out = settleContradiction(this.store, { pair: pair.id, holds: holds.id, how: "changed", why: reason ?? "the newer state of the same thing", actor: "dream", actorId: dream.id, day });
+          if (!out.ok) return { action, ok: false, reason: out.reason, detail: out.detail };
+          this.store.recordDreamChange(dream.id, { action, ref: holds.id, ref2: over.id, detail: { pair: out.pair, same: true } });
+          return { action, ok: true, reason: "confirmed", id: out.pair, ...(out.note === undefined ? {} : { note: out.note }) };
+        }
+        const out = withdrawSlot(this.store, { pair: pair.id, actor: "dream", actorId: dream.id, why: reason, day });
+        if (!out.ok) return { action, ok: false, reason: out.reason, detail: out.detail };
+        this.store.recordDreamChange(dream.id, { action, ref: holds.id, ref2: over.id, detail: { pair: out.pair, same: false, withdrawSeq: out.seq } });
+        return { action, ok: true, reason: "two-things", id: out.pair };
+      }
       case "feeling-now": {
         const row = live(change.id);
         if (row === null) return { action, ok: false, reason: "not-shown-or-gone", detail: this.notLive([change.id], shown) };
@@ -1944,7 +2155,7 @@ export class Dreams {
           return { action, ok: false, reason: refusalOf(err), detail: "Nothing was recorded for this feeling; fix it and propose it again." };
         }
         for (const rep of added.repairs) notes.push(rep.note);
-        if (made.capped) notes.push(`strength was capped at ${String(round(made.peak))}, the most this memory was ever felt: a dream records softening, never a stronger feeling.`);
+        if (made.capped) notes.push(`strength was capped at ${String(round(made.peak))}, as strongly as this memory is felt now: a dream records softening, never a stronger feeling.`);
         this.store.recordDreamChange(dream.id, { action, ref: row.id, detail: { feelings: added.ids } });
         return { action, ok: true, reason: made.capped ? "recorded-capped-at-peak" : "recorded", id: row.id, ...(notes.length > 0 ? { note: notes.join(" ") } : {}) };
       }
@@ -2084,7 +2295,14 @@ export class Dreams {
           }
           for (const orig of from) {
             try {
-              this.store.restoreSuperseded(orig, DREAM_MERGE_REASON);
+              // CARRIED BACK (Group 4 item 5, 2026-10-11): the merge handed the
+              // originals' links to the merged memory, and a merge's
+              // originals' own rows are swept as archived for good
+              // (`associate.TERMINAL_ARCHIVE_REASONS`) — so an original that
+              // comes back takes the merged memory's links with it.
+              if (this.store.restoreSuperseded(orig, DREAM_MERGE_REASON) && c.ref !== null) {
+                this.ctx.retarget?.(c.ref, orig, this.store.livedDay());
+              }
             } catch {
               /* removed since: nothing to restore */
             }
@@ -2128,6 +2346,19 @@ export class Dreams {
           if (pairId !== null) this.store.withdrawContradiction(pairId);
           break;
         }
+        case "slot":
+          // A confirmed slot is a settle, undone as one (below); "two things"
+          // is put back as the proposal it was, while it is still withdrawn.
+          if (detail["same"] === false) {
+            const pairId = typeof detail["pair"] === "string" ? (detail["pair"] as string) : null;
+            const seq = typeof detail["withdrawSeq"] === "number" ? (detail["withdrawSeq"] as number) : null;
+            if (pairId === null || seq === null || !reinstateSlot(this.store, { pair: pairId, withdrawSeq: seq })) {
+              kept += 1;
+              continue;
+            }
+            break;
+          }
+        // falls through: same: true is a dream's settle
         case "settle": {
           // The dream's settle is undone the way any settle is — when it is
           // still the pair's standing settle.
@@ -2172,6 +2403,8 @@ export class Dreams {
     const day = this.store.livedDay();
     for (const c of this.store.contradictions({ state: "unsettled" })) {
       if (c.raised_day !== null) continue;
+      // A slot proposal is the dream's to confirm, and its writer was told (2026-10-11).
+      if (c.source === SLOT_SOURCE) continue;
       const a = this.store.row(c.a);
       const b = this.store.row(c.b);
       if (!pairStanding(this.store, c)) {
@@ -2353,12 +2586,16 @@ export class Dreams {
     };
     const role = new Map<string, DreamRole>();
 
-    // WHAT'S ON MY MIND first: it lifts a queued memory's priority.
+    // WHAT'S ON MY MIND first: it lifts a queued memory's priority. A slot
+    // proposal whose newer (or older) memory is gone is withdrawn first, its
+    // cut put back: nobody could answer it (review of #420).
+    releaseOrphanSlots(this.store, day);
     const mindRead = mindRanked(this.store, {
       today: at,
       day,
       showable: (row) => !denied.has(row.id) && this.showable(row),
       owner: this.bundleOwner,
+      slots: true,
     });
     const mindAll = mindRead.items;
     const mindIds = new Set(mindAll.flatMap((m) => m.ids));
@@ -2516,6 +2753,7 @@ export class Dreams {
       lookback: lookback.filter((m) => !left.has(m)),
       onMind: mindKept.filter((item) => item.ids.every((mid) => !left.has(mid))),
       ...(mindRead.more > 0 ? { onMindMore: mindRead.more } : {}),
+      ...((mindRead.slotsMore ?? 0) > 0 ? { toConfirmMore: mindRead.slotsMore } : {}),
       queue: {
         new: queueSize,
         tonight,

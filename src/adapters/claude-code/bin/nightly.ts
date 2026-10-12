@@ -13,6 +13,7 @@
  */
 import { implicitConfigRefusal, namedConfigRefusal, namedUnreadableRefusal } from "../../config-path.js";
 import { openLog } from "../../log/index.js";
+import { nightChildrenWords } from "../../../core/dream/index.js";
 
 import { NIGHT_KIND_ENV, NIGHT_RUN_ENV, openNightCounterpart, readKind, runNight } from "../night-run.js";
 import { isEntryPoint, pinnedScope, pinnedSession, runnerConfig, runnerConfigChoice } from "./runner.js";
@@ -67,6 +68,7 @@ async function main(): Promise<void> {
     detail: out.detail,
     code: out.code,
     parts: (out.parts ?? []).join(","),
+    children: nightChildrenWords(out.children ?? []),
   });
 }
 

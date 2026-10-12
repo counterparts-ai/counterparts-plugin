@@ -225,6 +225,7 @@ import { coverageLines } from "./coverage.js";
 import { catchUpCommand } from "./catch-up.js";
 import type { ChildPlan, ChildResult } from "../claude-code/child.js";
 import { DREAMING_SETTINGS, NIGHT_RUN_FINISHES } from "../../core/dream/index.js";
+import { NEW_INSTALL_DREAMING_LINE, beginNewInstall } from "../../core/onboarding.js";
 import { REFLECTED_FEELING_KEY } from "../../core/sleep/index.js";
 // The console's shared manners (2026-09-21): is there a person here, ask them,
 // and say one marked line back.
@@ -272,7 +273,8 @@ import type {
 // the folder `install` offers to bring back is the one `uninstall --park` set
 // aside — the same folder, named twice on two screens, has to carry the same
 // number.
-import { humanBytes as humanDiskBytes, uninstall } from "./uninstall.js";
+import { humanBytes as humanDiskBytes, uninstall, uninstallJson } from "./uninstall.js";
+import type { UninstallInput } from "./uninstall.js";
 import { NO_PAGE_VERSION } from "../../core/self/index.js";
 import { snapshot, snapshotName } from "./snapshot.js";
 import { feelingsLine } from "../feelings-line.js";
@@ -737,7 +739,7 @@ export const COMMAND_FLAGS: Record<Command, readonly string[]> = {
   // still asks, and its question is about somebody's memory.
   connect: ["config", "dry-run"],
   disconnect: ["config", "dry-run"],
-  uninstall: ["config", "yes", "park", "delete-memories", "nothing-is-open"],
+  uninstall: ["config", "yes", "park", "delete-memories", "keep-memories", "nothing-is-open", "json"],
   // `init` takes `--name` for the same reason `install` does: §3 routes second
   // and scratch stores here, and a store with no identity core is a store the
   // wake has nothing to say about.
@@ -850,7 +852,7 @@ export const COMMAND_BLURB: Record<Command, string> = {
   disconnect:
     "Disconnect an AI: take the Counterparts hooks back out of the host's settings file and deregister the memory server. It removes only what it recognises as ours; another tool's hooks are never candidates. Your memory is not touched.",
   uninstall:
-    "Leave: disconnect Claude Code, then say where your memory still is and how to remove the package. It never touches your memory unless you say --park (one rename, dated) or --delete-memories (which counts first and asks you to type a phrase).",
+    "Leave: disconnect Claude Code, then say where your memory still is and how to remove the package. At a terminal it then asks whether to delete your memory too (Enter keeps it; a yes asks you to type a phrase). Otherwise it never touches your memory unless you say --park (one rename, dated) or --delete-memories (which counts first and asks you to type a phrase).",
   init: "Just a store: create a data dir and PRINT the install steps. For a second store or a scratch one.",
   "start-fresh":
     "Begin again as a stranger (or --undo to put the parked store back): park the store your configuration names beside itself under a dated name, park its snapshots the same way, and create a blank store at the same path. One atomic rename each — it never copies, never deletes, and never opens the old store, not even read-only. The configuration is kept byte for byte.",
@@ -1058,6 +1060,8 @@ const FLAG_HELP: Record<string, string> = {
   park: "move the whole directory aside under a dated name — one rename, nothing copied, nothing deleted, and the store is never opened",
   "delete-memories":
     "destroy it. It counts what is about to go, says the number, and takes a typed phrase; there is no way to answer it from a script",
+  "keep-memories":
+    "keep your memory and do not ask: without it, at a terminal, uninstall asks whether to delete it too once Claude Code is disconnected (Enter keeps it)",
 };
 
 /**
@@ -1091,7 +1095,8 @@ const INSTALL_FLAG_HELP: Record<string, string> = {
 const HOST_FLAG_HELP: Record<string, string> = {
   // `connect` and `disconnect` no longer declare this one — they do not ask.
   // `uninstall` does, and this is its sentence.
-  yes: "do not ask: take the ordinary answer to every question this command would put",
+  yes: "do not ask: take the ordinary answer to every question this command would put (for uninstall's question about deleting your memory, that answer is keep)",
+  json: "for uninstall: one JSON object instead of the screen. Alone it is the plan — what a delete would remove and leave, and whether it can go ahead now — and changes nothing; with --keep-memories it uninstalls. It never deletes: that is typed by a person, at a terminal",
   "nothing-is-open":
     "you are asserting you have closed every session, dashboard and worker. It is the way past a check that could NOT LOOK — no usable `ps` — and never past one that found something",
   "dry-run": "print what would change and change nothing (this command is NOT dry by default)",
@@ -1495,6 +1500,7 @@ export function parse(argv: readonly string[]): Parsed {
       "no-connect": { type: "boolean" },
       park: { type: "boolean" },
       "delete-memories": { type: "boolean" },
+      "keep-memories": { type: "boolean" },
       // `dashboard`'s two. `--port` is a string for the reason every valued flag
       // here is: a trailing `--port` would otherwise arrive as the boolean
       // `true` and be read as "no port named", which is the right answer by
@@ -3570,6 +3576,14 @@ function installCommand(
     /** True for the conversational arm: a configuration this call CREATES
      *  gets the local embedder switched on when no flag said otherwise. */
     defaultEmbedder?: boolean;
+    /**
+     * What a store this call CREATES starts as (`core/onboarding.ts#beginNewInstall`):
+     * `install` (the default) — the first meeting `not_started` and dreaming
+     * `auto`; `start-fresh` — the meeting only (a fresh store is a fresh
+     * meeting), the dreaming setting left to its default, as a returning
+     * owner's blank store has always started.
+     */
+    newInstall?: "install" | "start-fresh";
   } = {},
 ): number {
   const dirFlag = typeof parsed.flags["dir"] === "string" ? parsed.flags["dir"] : undefined;
@@ -3684,6 +3698,22 @@ function installCommand(
     return EXIT.refused;
   }
   const resolved = store.dir;
+  // A NEW INSTALL'S STARTING STATE (onboarding, 2026-10-11): the first meeting
+  // `not_started` and dreaming `auto`, written ONLY into a store this call has
+  // just created. A store that was already here — every upgrade, Mike's
+  // included — is never touched: it has no meeting key, which reads `done`,
+  // and its dreaming setting is whatever it was. `start-fresh`'s blank store
+  // gets the meeting and not the dreaming change; its `--undo` renames the
+  // parked store back, and that store's own state with it.
+  if (!existed) {
+    try {
+      beginNewInstall(store, { dreaming: opts.newInstall !== "start-fresh" });
+    } catch (err) {
+      store.close();
+      io.err(prefixedRefusal(describeDirRefusal(err, layout.store)));
+      return EXIT.failed;
+    }
+  }
   store.close();
 
   // SEED THE CORE NOW, not at the first hook. `install` used to write the name
@@ -4267,6 +4297,13 @@ async function installConversation(
     io.out("Recall by meaning: on. A small model runs on your machine; nothing is sent anywhere.");
     u.blank();
   }
+  // DREAMING IS ON FOR A NEW INSTALL (2026-10-11), and a person is told so
+  // where they can see it, with the way to turn it off. A re-run over a store
+  // that was here keeps its setting and says nothing about it.
+  if (!already) {
+    io.out(NEW_INSTALL_DREAMING_LINE);
+    u.blank();
+  }
   if (tableMissing) {
     u.warn("recall by meaning is on, but its table was not found — recall will match on words only.");
     u.hint(`Install it: bun add -g ${STATIC_WEIGHTS_PACKAGE} — or set ${STATIC_WEIGHTS_ENV} to a folder holding it.`);
@@ -4609,26 +4646,31 @@ async function hostWiringCommand(
   const lister = opts.processes ?? realProcessLister(env);
 
   if (command === "uninstall") {
+    const uninstallInput: UninstallInput = {
+      io,
+      env,
+      home: home_,
+      configPath,
+      custom,
+      // THE WHOLE CONFIGURATION, not just `dataDir`: the plan has to find the
+      // snapshots directory and the store wherever the file put them, because "the directory the config sits in" is exactly
+      // the reasoning the 2026-09-21 review broke.
+      config: host.config,
+      now: now(),
+      yes: parsed.flags["yes"] === true,
+      park: parsed.flags["park"] === true,
+      deleteMemories: parsed.flags["delete-memories"] === true,
+      keepMemories: parsed.flags["keep-memories"] === true,
+      nothingIsOpen: parsed.flags["nothing-is-open"] === true,
+      exe: process.execPath,
+      spawner,
+      lister,
+    };
+    // `--json`: the plugin command's door (`uninstall.ts#uninstallJson`).
     return exitFor(
-      await uninstall({
-        io,
-        env,
-        home: home_,
-        configPath,
-        custom,
-        // THE WHOLE CONFIGURATION, not just `dataDir`: the plan has to find the
-        // snapshots directory and the store wherever the file put them, because "the directory the config sits in" is exactly
-        // the reasoning the 2026-09-21 review broke.
-        config: host.config,
-        now: now(),
-        yes: parsed.flags["yes"] === true,
-        park: parsed.flags["park"] === true,
-        deleteMemories: parsed.flags["delete-memories"] === true,
-        nothingIsOpen: parsed.flags["nothing-is-open"] === true,
-        exe: process.execPath,
-        spawner,
-        lister,
-      }),
+      parsed.flags["json"] === true
+        ? await uninstallJson(uninstallInput)
+        : await uninstall(uninstallInput),
     );
   }
 
@@ -5512,7 +5554,7 @@ async function startFreshCommand(
       env,
       home_,
       named,
-      { hostSteps: false },
+      { hostSteps: false, newInstall: "start-fresh" },
     );
   } catch (err) {
     io.err(`the install failed: ${String((err as Error).message ?? err)}`);

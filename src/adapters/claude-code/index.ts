@@ -80,6 +80,8 @@ export type { ChunkFailure, EmbedderStats, LiveEmbedder } from "./embed-client.j
 export { DEFAULT_HOST_COMMAND, KILL_GRACE_MS, PERMISSION_MODE, REAP_GRACE_MS, startChild } from "./child.js";
 export type { ChildPlan, ChildResult } from "./child.js";
 export {
+  DREAM_CHILD_DENIED,
+  DREAM_CHILD_TOOLS,
   HOST_SESSION_ENV,
   NIGHT_KIND_ENV,
   NIGHT_DENIED_TOOLS,
@@ -88,6 +90,7 @@ export {
   NIGHT_RUN_ENV,
   NIGHT_TOOLS,
   kindValue,
+  nightChildrenTimeoutMs,
   nightMaxTurns,
   nightMcpConfig,
   nightRowTimeoutMs,
@@ -99,9 +102,9 @@ export {
   readNightSpills,
   runNight,
 } from "./night-run.js";
-export type { NightChildPlan, NightKind, NightRunInput, NightRunnerPlan, NightStarter } from "./night-run.js";
+export type { NightChild, NightChildPlan, NightKind, NightRunInput, NightRunnerPlan, NightStarter } from "./night-run.js";
 
-export { DATA_DIR_ENV, SCOPE_ENV, SESSION_ENV, WATCHDOG_ENV, planSpawn, spawnDetached } from "../spawn.js";
+export { DATA_DIR_ENV, NIGHT_CHILD_ENV, SCOPE_ENV, SESSION_ENV, WATCHDOG_ENV, planSpawn, spawnDetached } from "../spawn.js";
 export type { PlanInput, SpawnOutcome, SpawnPlan, SpawnRefusal, Spawner } from "../spawn.js";
 
 export {

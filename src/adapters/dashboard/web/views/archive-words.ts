@@ -10,7 +10,7 @@
  * one table of what counts as having left, which the `status` census reads
  * too — so the home tile and the census cannot disagree.
  */
-import { CORRECTED_REASON } from "../../../../core/contradictions.js";
+import { CORRECTED_REASON } from "../../../../core/reconsolidation.js";
 import { DREAM_MERGE_REASON, DREAM_UNDONE_REASON } from "../../../../core/dream/index.js";
 import { EPISODE_REGROWN_REASON, LEAVING, REMOVED_BY_OWNER, leftAs } from "../../../../core/leaving.js";
 import type { LeftAs } from "../../../../core/leaving.js";

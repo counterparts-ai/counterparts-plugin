@@ -16,6 +16,11 @@
  * with no mechanism cannot be added to a description without failing that test,
  * because there is no other way to add text to a description.
  *
+ * The converse does not hold, on purpose (2026-10-11): not every mechanized
+ * guarantee is served. A tool's `engine` rows are kept, audited and exercised
+ * the same way, and left out of the description because they change nothing
+ * the model writes or calls (`ToolSpec.engine`).
+ *
  * CONTRACT §5 G3 is the second shape: **every tool carries an admission test and
  * at least one named negative example.** v1's `thread.open` shipped with no
  * criteria and produced 33 opens and zero closes in 13 days (scar §2.16). Both
@@ -61,6 +66,7 @@ import { RECALL_MAX_IDS } from "./deliberate.js";
 import { FACTS_MEANING_CAP, FACTS_PAGE_SIZE } from "./facts.js";
 import { RECURRENCES } from "../../core/time.js";
 import { PAGE_ROOM_BYTES } from "../../core/self/briefing.js";
+import { MEET_STEPS } from "../../core/onboarding.js";
 
 /**
  * A MEMORY'S TITLE, ASKED FOR AS ONE LINE (2026-09-28, build B). Indexes — the
@@ -83,6 +89,7 @@ export type ToolName =
   | "self_page"
   | "dream"
   | "reflect"
+  | "meet"
   /** Claude Desktop only (`WAKE`); never in `TOOL_NAMES`. */
   | "wake";
 
@@ -127,6 +134,7 @@ export const TOOL_NAMES: readonly ToolName[] = [
   "self_page",
   "dream",
   "reflect",
+  "meet",
 ];
 
 /**
@@ -150,7 +158,20 @@ export interface ToolSpec {
   readonly admission: string;
   /** At least one named case that is NOT this tool's job. Required by the type. */
   readonly negativeExamples: readonly string[];
+  /** The claims SERVED in the description: the ones that change what the
+   *  model writes or calls, or name a refusal it can avoid by how it calls. */
   readonly privileges: readonly Privilege[];
+  /**
+   * WHAT THE ENGINE KEEPS AND THE MODEL NEED NOT READ (2026-10-11, the
+   * context-trims lane). Guarantees that change nothing the model writes or
+   * calls — what the engine does with a write, what a result already says, or
+   * what a field the host serves whole already states. Mechanized and audited
+   * exactly as `privileges` are (`test/mcp.test.ts`), and never rendered: a
+   * description is loaded into the model's context every time the tool is,
+   * and these cost it ~1k tokens a session without changing a call. Listed
+   * in `CONTRACT.md` §5 G2.
+   */
+  readonly engine?: readonly Privilege[];
   readonly inputSchema: Record<string, unknown>;
 }
 
@@ -409,7 +430,7 @@ const EVENT_DATE_FIELD_PRIVILEGE: Privilege = {
 const REMINDER_PRIVILEGES: readonly Privilege[] = [
   {
     claim:
-      'A "plain" reminder is said at most once per beat — on its day, or on the first and the last day of a month or range — and never under observer stance; a "quiet" one is only ever a cue, capped at the footnote tier and spent at most twice per window. A recurring date counts each time it comes round as its own, and each time it is said or surfaced counts once as a use of the memory; while it repeats, the nightly prune keeps it, and it comes round on its date even when it has faded.',
+      'A "plain" reminder is said at most once per beat — on its day, or on the first and the last day of a month or range — and never under observer stance; a missed day is said once, late, within the week after; a "quiet" one is only ever a cue, capped at the footnote tier and spent at most twice per window. A recurring date counts each time it comes round as its own, and each time it is said or surfaced counts once as a use of the memory; while it repeats, the nightly prune keeps it, and it comes round on its date even when it has faded.',
     mechanizedBy:
       "src/core/prospective/index.ts#Prospective.plainDue + claimPlain (dedupKey latch) + fire (FIRES_PER_WINDOW) -> src/core/counterpart.ts#recallForTurn; src/core/prospective/windows.ts#recurringWindowAt (one window key per occurrence); Prospective.occurrenceUndelivered -> src/core/counterpart.ts#creditOccurrence (store.reinforce, surfaced) + src/core/physics/index.ts#pruneVerdict (recurring); src/core/prospective/derive.ts#derive (a live repeat is not refused faded)",
   },
@@ -458,19 +479,25 @@ const SETTLE_PRIVILEGES: readonly Privilege[] = [
   {
     claim:
       "`how` beside `updates` settles the memory it revises — changed (it fades once and is shown as earlier), corrected (archived: out of recall, readable by its id, never deleted), or open (both kept, shown together) — and every settle is recorded (who, how, why, when) and can be undone. A belief, a core memory, a current-state fact and a protected memory keep their own revision path, and the result says so.",
-    mechanizedBy: "src/core/revision.ts#applyRevision -> src/core/contradictions.ts#settleOnWrite",
+    mechanizedBy: "src/core/revision.ts#applyRevision -> src/core/reconsolidation.ts#settleOnWrite",
   },
   {
     claim:
       "A changed or corrected at a memory that looks unrelated to the new one — not close in meaning, or with no embedder, no content word in common — is held: the new memory is stored unlinked, the old one is left as it was, its title and text come back with the ask to settle it yourself if you meant it, and the hold is recorded. Closing an open thread, moving or dropping a date, and changing a status go straight through.",
-    mechanizedBy: "src/core/counterpart.ts#guardUpdate -> src/core/contradictions.ts#updateRelatedness",
+    mechanizedBy: "src/core/counterpart.ts#guardUpdate -> src/core/reconsolidation.ts#updateRelatedness",
   },
   {
     claim:
       "A stored memory comes back with its nearest few existing memories, when any are close, so you can settle one there and then.",
-    mechanizedBy: "src/core/contradictions.ts#writeNeighbours",
+    mechanizedBy: "src/core/reconsolidation.ts#writeNeighbours",
   },
 ];
+/** The neighbours claim is served — it says what a write's result holds and
+ *  what to do with it; the two before it are the engine's (`ToolSpec.engine`):
+ *  the `how` field says what each settle does, and that an unrelated one is
+ *  held and shown. */
+const SETTLE_ENGINE: readonly Privilege[] = SETTLE_PRIVILEGES.slice(0, 2);
+const SETTLE_SERVED: readonly Privilege[] = SETTLE_PRIVILEGES.slice(2);
 
 /**
  * THE SALIENCE SCALE, ANCHORED, AND FRAMED BY ATTENTION (2026-10-10, Group 1c;
@@ -533,6 +560,20 @@ const REMEMBER: ToolSpec = {
       mechanizedBy: "src/core/physics/index.ts#clampSalienceAtSeam",
     },
     {
+      claim: "A stub is refused: a memory has to say something.",
+      mechanizedBy: "src/core/encode/floor.ts#contentFloor",
+    },
+    {
+      claim: "The same content twice is refused, not stored twice.",
+      mechanizedBy: "src/core/remember/proposals.ts#submitProposal (content-idempotency ledger)",
+    },
+    WRITE_FACTS_PRIVILEGE,
+    ...SETTLE_SERVED,
+  ],
+  // The engine's (2026-10-11): each is said on a field the host serves whole,
+  // in the result, or in a refusal that names itself (`ToolSpec.engine`).
+  engine: [
+    {
       claim:
         "Claim nothing and this still counts as something: an unclaimed memory gets a default floor by what it is about — lowest for a work event that is done, higher for the world, highest for the owner, the two of you or you — never zero. An explicit claim, however low, is kept as you wrote it.",
       mechanizedBy: "src/core/mint.ts#mintProposal -> src/core/physics/index.ts#defaultClaimFor + clampSalienceAtSeam",
@@ -541,10 +582,6 @@ const REMEMBER: ToolSpec = {
       claim:
         "You may score the three dimensions yourself — relevance, emotional, predictive — and they are stored exactly as you gave them, never rewritten to fit the floor. Novelty is not yours to claim: it is measured against what is already held.",
       mechanizedBy: "src/core/remember/proposals.ts#submitProposal (novelty stripped; dims carried)",
-    },
-    {
-      claim: "A stub is refused: a memory has to say something.",
-      mechanizedBy: "src/core/encode/floor.ts#contentFloor",
     },
     {
       claim:
@@ -557,25 +594,20 @@ const REMEMBER: ToolSpec = {
       mechanizedBy: "src/core/encode/secrets.ts + src/core/encode/floor.ts#contentFloor",
     },
     {
-      claim: "The same content twice is refused, not stored twice.",
-      mechanizedBy: "src/core/remember/proposals.ts#submitProposal (content-idempotency ledger)",
-    },
-    {
       claim:
         "Your own words ride the buffer as their own span, so the end-of-session sweep does not mint them a second time.",
       mechanizedBy: "src/core/counterpart.ts#captureJot -> SubmitContext.ownSpanHash",
     },
     ...REMINDER_PRIVILEGES,
-    WRITE_FACTS_PRIVILEGE,
     {
       claim: "Under observer stance nothing is written and the refusal says so.",
       mechanizedBy: "src/core/store/index.ts#mutate (observer stand-down)",
     },
-    ...SETTLE_PRIVILEGES,
+    ...SETTLE_ENGINE,
     {
       claim:
         "`settle` settles two memories that already exist, by the same rules, and rewrites neither: the pair and a short why are the record.",
-      mechanizedBy: "src/core/counterpart.ts#settleContradiction -> src/core/contradictions.ts#settle",
+      mechanizedBy: "src/core/counterpart.ts#settleContradiction -> src/core/reconsolidation.ts#settle",
     },
     {
       claim:
@@ -688,23 +720,14 @@ const RECALL: ToolSpec = {
     },
     {
       claim:
-        "A search strengthens nothing — a memory you were only shown in a list is no stronger for having been listed. OPENING one, by id or by title handle, is using it, and so is QUOTING the words a question's answer showed you in your reply: either is credited at the session boundary, once per lived day. The tool never writes a memory; what it writes is bookkeeping — which memory a title reached, which memories an answer showed this session, and one count row per call.",
+        "A search strengthens nothing — a memory you were only shown in a list is no stronger for having been listed. OPENING one, by id or by title handle, is using it, and so is QUOTING the words a question's answer showed you in your reply: either is credited at the session boundary, once per lived day.",
       mechanizedBy:
         "src/adapters/mcp/facts.ts#factsRecall (reads only) + src/adapters/expansions.ts#recordHandleResolution -> src/adapters/lifecycle.ts#creditAtBoundary -> src/core/recall/reference.ts (expansion and quote) + src/adapters/mcp/server.ts#noteAsked -> src/core/counterpart.ts#noteAsked / creditReferences (asked records) -> src/core/recall/index.ts#resolveUse (once per lived day)",
-    },
-    {
-      claim: `Facts mode considers every memory the question's words reach, every memory linked to a person or project it names, and the ${String(FACTS_MEANING_CAP)} closest by meaning — and, for a question that is only a time, everything in that window. A memory matched more ways ranks higher; it ranks by how strongly it matched, and newer comes first only on a tie.`,
-      mechanizedBy:
-        "src/adapters/mcp/facts.ts#factsRecall (store.search per word with a limit of its document count; schemas#subjectsIn -> store.memoriesNaming; FACTS_MEANING_CAP)",
     },
     {
       claim:
         "A time in the question filters: \"last week\", \"in September\", \"early October\", \"3 days ago\", \"last Saturday\", a date, \"since 09-20\", \"before 09-20\", \"this morning\" — only memories inside the window come back, by when the thing happened or, with no event date, when it was learned, and the header counts the matches outside it. A week or a month stretches two days each side; a date stays exact; \"before\" a date is every day before it, \"after\" every day after, \"until\" or \"by\" every day through it. \"Around the cut-over\" resolves the event to the date of the memory that best names it, shown in the header as \"cut-over → 09-21\"; \"the last session\" or \"where did we leave off\" means the session the session-start \"Last here\" line named, and its own rows come first.",
       mechanizedBy: "src/core/recall/time-ask.ts#readTimeAsk + src/adapters/mcp/facts.ts#factsRecall (inWindow, lastSession)",
-    },
-    {
-      claim: `A facts answer opens with a count of distinct facts — \"12 match · showing ${String(FACTS_PAGE_SIZE)} · 2 more → page 2\" — and pages with page: 2, 3, … in a stable order. It says \"may not be everything\" only when a cap cut something or weak matches were left out, and says which.`,
-      mechanizedBy: "src/adapters/mcp/facts.ts#renderFacts (FACTS_PAGE_SIZE, FACTS_WEAK_FRACTION, meaningCapped)",
     },
     {
       claim:
@@ -719,6 +742,31 @@ const RECALL: ToolSpec = {
     },
     {
       claim:
+        "A chapter of the journal can come back — it is a first-person account and may rightly come to mind — and every one that does is marked journal. It is the account a memory was made from, not a memory: it is outside decay, dedup and the prune, and it is not a claim about the world the way a memory is. A chapter and the memory made from it come back as one result.",
+      mechanizedBy: "src/adapters/mcp/facts.ts#factsRecall (the chapter-copy fold, FACTS_JOURNAL_GLOSS) + src/adapters/mcp/deliberate.ts#JOURNAL_GLOSS (ProseDoc.type === episode)",
+    },
+  ],
+  // The engine's (2026-10-11): how a facts answer is gathered, ranked, paged
+  // and bounded, and what it withholds — each said by the answer itself or by
+  // the `page` field (`ToolSpec.engine`).
+  engine: [
+    {
+      claim:
+        "The tool never writes a memory; what it writes is bookkeeping — which memory a title reached, which memories an answer showed this session, and one count row per call.",
+      mechanizedBy:
+        "src/adapters/mcp/facts.ts#factsRecall (reads only) + src/adapters/expansions.ts#recordHandleResolution + src/adapters/mcp/server.ts#noteAsked",
+    },
+    {
+      claim: `Facts mode considers every memory the question's words reach, every memory linked to a person or project it names, and the ${String(FACTS_MEANING_CAP)} closest by meaning — and, for a question that is only a time, everything in that window. A memory matched more ways ranks higher; it ranks by how strongly it matched, and newer comes first only on a tie.`,
+      mechanizedBy:
+        "src/adapters/mcp/facts.ts#factsRecall (store.search per word with a limit of its document count; schemas#subjectsIn -> store.memoriesNaming; FACTS_MEANING_CAP)",
+    },
+    {
+      claim: `A facts answer opens with a count of distinct facts — \"12 match · showing ${String(FACTS_PAGE_SIZE)} · 2 more → page 2\" — and pages with page: 2, 3, … in a stable order. It says \"may not be everything\" only when a cap cut something or weak matches were left out, and says which.`,
+      mechanizedBy: "src/adapters/mcp/facts.ts#renderFacts (FACTS_PAGE_SIZE, FACTS_WEAK_FRACTION, meaningCapped)",
+    },
+    {
+      claim:
         "An answer is bounded and never ships every body at full length: a short fact comes whole, a long one as an excerpt, and the whole answer stays under the result's room. An answer the host truncates is not a smaller answer, it is no answer.",
       mechanizedBy: "src/adapters/mcp/facts.ts#renderFacts (RECALL_EXCERPT_CHARS, RECALL_RESULT_CHARS)",
     },
@@ -726,11 +774,6 @@ const RECALL: ToolSpec = {
       claim:
         "Confidential material is returned only in the owner's own session: a direct lookup says it is withholding, a list simply does not contain it.",
       mechanizedBy: "src/adapters/mcp/facts.ts#factsRecall (confidential column) + src/adapters/mcp/deliberate.ts#expandHandle (isConfidential)",
-    },
-    {
-      claim:
-        "A chapter of the journal can come back — it is a first-person account and may rightly come to mind — and every one that does is marked journal. It is the account a memory was made from, not a memory: it is outside decay, dedup and the prune, and it is not a claim about the world the way a memory is. A chapter and the memory made from it come back as one result.",
-      mechanizedBy: "src/adapters/mcp/facts.ts#factsRecall (the chapter-copy fold, FACTS_JOURNAL_GLOSS) + src/adapters/mcp/deliberate.ts#JOURNAL_GLOSS (ProseDoc.type === episode)",
     },
     {
       claim:
@@ -839,8 +882,8 @@ const DREW_ON_PROPERTY = {
 /** The claim `session_end` and `chapter` share about `drewOn`. */
 const DREW_ON_PRIVILEGE = {
   claim:
-    "`drewOn` credits only memories this session was shown — its footnotes, loud memories and recall answers — at half a use, at most 3 per boundary and once a day each. An id it was not shown, a handoff, a superseded memory or one faded under a newer one is refused by name, and nothing is credited for it.",
-  mechanizedBy: "src/core/counterpart.ts#creditDrewOn",
+    "`drewOn` credits only memories this session was shown — its footnotes, loud memories and recall answers — at half a use, at most 3 per boundary and once a day each. An id it was not shown, a handoff, a superseded memory or one faded under a newer one is refused by name, and nothing is credited for it. A dated memory it names stops coming back as a footnote for that date.",
+  mechanizedBy: "src/core/counterpart.ts#creditDrewOn -> src/core/prospective/index.ts#Prospective.actedOn",
 };
 
 const SESSION_END: ToolSpec = {
@@ -878,6 +921,18 @@ const SESSION_END: ToolSpec = {
         "An entry that claims no salience gets a default floor by what it is about rather than zero, and each entry may score relevance, emotional and predictive itself.",
       mechanizedBy: "src/core/mint.ts#mintProposal -> src/core/physics/index.ts#defaultClaimFor + clampSalienceAtSeam",
     },
+    WRITE_FACTS_PRIVILEGE,
+    {
+      claim:
+        "The handoff is refused past its size limit rather than cut, and passes the same gate battery, because what is cut at write time is the only copy.",
+      mechanizedBy: "src/core/handoff/index.ts#Handoffs.write (HANDOFF_MAX_BYTES, gate-refused)",
+    },
+    ...SETTLE_SERVED,
+  ],
+  // The engine's (2026-10-11): the `memories`, `handoff`, `retireHandoff`,
+  // `writeUp`, `eventDate`, `remind`, `how` and `drewOn` fields say what a call
+  // needs of each, and the host serves them whole (`ToolSpec.engine`).
+  engine: [
     {
       claim:
         "An EMPTY `memories` array is a real answer, not an error: nothing happened since you last wrote. It mints nothing, is recorded against this session as answered, and counts what this session said so far as written up, whatever happens to a `handoff` sent with it — the handoff's own outcome rides beside the answer. Only a call that leaves `memories` out and lands no handoff is refused.",
@@ -904,7 +959,6 @@ const SESSION_END: ToolSpec = {
     },
     EVENT_DATE_FIELD_PRIVILEGE,
     ...REMINDER_PRIVILEGES,
-    WRITE_FACTS_PRIVILEGE,
     {
       claim: "Under observer stance nothing is written and the refusal says so.",
       mechanizedBy: "src/core/store/index.ts#mutate (observer stand-down)",
@@ -931,16 +985,11 @@ const SESSION_END: ToolSpec = {
     },
     {
       claim:
-        "The handoff is refused past its size limit rather than cut, and passes the same gate battery, because what is cut at write time is the only copy.",
-      mechanizedBy: "src/core/handoff/index.ts#Handoffs.write (HANDOFF_MAX_BYTES, gate-refused)",
-    },
-    {
-      claim:
         "`writeUp` writes up a session that ended here before it was written up, and ONLY the one a session-start pointer named for THIS session. With no `memories` it returns that session's next part (what was said to it, up to ~24 KB); with `memories` it answers the part you fetched — recorded as this session's, through the same road as every entry, and `[]` is a real answer (nothing happened in it). When the last part comes back the ended session is marked written up. A live session, an unknown one, one from another project, one that owes nothing or is already written up, and one you were not pointed at are each refused by name, and nothing is written.",
       mechanizedBy:
         "src/adapters/mcp/write-up.ts#writeUpDoor -> src/adapters/sessions.ts#writeUpStanding -> src/core/remember/write-up-seam.ts#recordWriteUp",
     },
-    ...SETTLE_PRIVILEGES,
+    ...SETTLE_ENGINE,
     DREW_ON_PRIVILEGE,
   ],
   inputSchema: {
@@ -1075,16 +1124,6 @@ const CHAPTER: ToolSpec = {
     },
     {
       claim:
-        "The journal is a gated entrance like any other: credentials are redacted before anything is written, and the gate's text — not your draft — is what lands.",
-      mechanizedBy: "src/core/counterpart.ts#appendEpisode -> episodeGate()",
-    },
-    {
-      claim:
-        "Every earlier state of the episode is kept: appending revises, and revision archives what was there first.",
-      mechanizedBy: "src/core/store/index.ts#revise (archive-on-overwrite)",
-    },
-    {
-      claim:
         "The episode becomes MEMORY only through ordinary ingestion at the boundary — once, as a self-kind memory, through the same battery everything else crosses. Writing here is not a way to write memory directly.",
       mechanizedBy: "src/core/counterpart.ts#sessionEnd -> src/core/self/index.ts#reconcileEpisodes -> ingestEpisode",
     },
@@ -1092,6 +1131,20 @@ const CHAPTER: ToolSpec = {
       claim:
         "`about` is carried to the chapter's memory copy, and kept when the copy regrows; a later chapter's mark replaces an earlier one. Only me, us and owner let the chapter reach a wake in another directory.",
       mechanizedBy: "src/core/self/episodes.ts#appendChapter (meta.about) -> src/core/self/index.ts#ingestEpisode -> src/core/counterpart.ts#selfChapterElsewhere",
+    },
+  ],
+  // The engine's (2026-10-11): what the gate and the store do with a chapter,
+  // and `drewOn`, which its field says whole (`ToolSpec.engine`).
+  engine: [
+    {
+      claim:
+        "The journal is a gated entrance like any other: credentials are redacted before anything is written, and the gate's text — not your draft — is what lands.",
+      mechanizedBy: "src/core/counterpart.ts#appendEpisode -> episodeGate()",
+    },
+    {
+      claim:
+        "Every earlier state of the episode is kept: appending revises, and revision archives what was there first.",
+      mechanizedBy: "src/core/store/index.ts#revise (archive-on-overwrite)",
     },
     {
       claim: "Under observer stance nothing is written and the refusal says so.",
@@ -1402,13 +1455,13 @@ const DREAM: ToolSpec = {
       changes: {
         type: "array",
         description:
-          "`propose`: the changes, each an object with `action` — `merge` (ids: two or more near-copies, text: the one memory in better words, title?), `link` (a, b), `replayed` (id), `gist` (text, sources: ids, title?, kind?, occurredOn?: when what it draws on happened, saidBy?: owner|self|inferred, status?: done|planned|proposed|asked), `contradiction` (a, b), `settle` (holds, over, how: changed|corrected|open, why — only when the reason is plain; flag otherwise), `feeling-now` (id, core, emotion: ONE word, strength, carried_by: the nuance in your own words), `nominate-core` (id, why). Usually far fewer changes than the limits; none is fine.",
+          "`propose`: the changes, each an object with `action` — `merge` (ids: two or more near-copies, text: the one memory in better words, title?), `link` (a, b), `replayed` (id), `gist` (text, sources: ids, title?, kind?, occurredOn?: when what it draws on happened, saidBy?: owner|self|inferred, status?: done|planned|proposed|asked), `contradiction` (a, b), `settle` (holds, over, how: changed|corrected|open, why — only when the reason is plain; flag otherwise), `slot` (pair, same: true|false, why — an on-mind to-confirm pair: is the newer the later state of the same thing?), `feeling-now` (id, core, emotion: ONE word, strength, carried_by: the nuance in your own words), `nominate-core` (id, why). Usually far fewer changes than the limits; none is fine.",
         items: {
           type: "object",
           properties: {
             action: {
               type: "string",
-              enum: ["merge", "link", "replayed", "gist", "contradiction", "settle", "feeling-now", "nominate-core"],
+              enum: ["merge", "link", "replayed", "gist", "contradiction", "settle", "slot", "feeling-now", "nominate-core"],
             },
             ids: { type: "array", items: { type: "string" } },
             id: { type: "string" },
@@ -1429,6 +1482,8 @@ const DREAM: ToolSpec = {
             holds: { type: "string", description: "`settle`: the memory that holds." },
             over: { type: "string", description: "`settle`: the memory it changes, corrects or disagrees with." },
             how: { type: "string", enum: ["changed", "corrected", "open"] },
+            pair: { type: "string", description: "`slot`: the to-confirm pair's id (ctr_…)." },
+            same: { type: "boolean", description: "`slot`: true when the newer is the later state of the same thing; false when they are two things." },
           },
           required: ["action"],
         },
@@ -1479,7 +1534,7 @@ const REFLECT: ToolSpec = {
     {
       claim:
         "`settle` settles two memories it was shown — changed, corrected or open — only with a plain reason, and the record names the reflection; it can be undone like any settle.",
-      mechanizedBy: "src/core/dream/reflect.ts#Reflections.settle -> src/core/contradictions.ts#settle",
+      mechanizedBy: "src/core/dream/reflect.ts#Reflections.settle -> src/core/reconsolidation.ts#settle",
     },
     {
       claim:
@@ -1592,6 +1647,38 @@ const REFLECT: ToolSpec = {
   },
 };
 
+/**
+ * `meet` — THE FIRST MEETING (2026-10-11, onboarding core). The tenth tool
+ * every host is offered. Its DESCRIPTION IS SHORT ON PURPOSE: a tool's schema
+ * rides in context in every session, and this one matters in one session per
+ * install (`~/counterparts-notes/2026-10-11-token-costs.md`). The script is
+ * the tool's RESULT (`core/onboarding.ts#meetingInstructions`), read only when
+ * the meeting happens.
+ */
+const MEET: ToolSpec = {
+  name: "meet",
+  summary: "The first meeting with the person. No step: the script, and where it stands. With step: record that step.",
+  admission: "the wake says you haven't met, or they ask to.",
+  negativeExamples: ["Do NOT start it unasked mid-task: offer it once."],
+  privileges: [
+    {
+      claim: "Answers are stored as memories about the owner, said by them, marked from onboarding; a skipped question stores nothing; a style is preferences, never identity.",
+      mechanizedBy: "src/adapters/mcp/server.ts#meetTool -> src/core/onboarding.ts#styleMemories",
+    },
+  ],
+  inputSchema: {
+    type: "object",
+    properties: {
+      step: { type: "string", enum: [...MEET_STEPS] },
+      answer: { type: "string", description: "Their answer in your words; for where/style, the option." },
+      like: { type: "string", description: "Style character: who." },
+      traits: { type: "array", items: { type: "string" }, description: "Style character: the traits you said back; other: their words." },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
 export const TOOLS: readonly ToolSpec[] = [
   REMEMBER,
   RECALL,
@@ -1602,6 +1689,7 @@ export const TOOLS: readonly ToolSpec[] = [
   SELF_PAGE,
   DREAM,
   REFLECT,
+  MEET,
 ];
 
 /**

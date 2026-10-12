@@ -103,6 +103,7 @@ import { chaptersOf } from "../../core/handoff/last-here.js";
 import {
   OPEN_END,
   OPEN_START,
+  headOf,
   informativeness,
   localKey,
   readTimeAsk,
@@ -888,6 +889,7 @@ function factItem(
   const asked = new Set(tokens);
   const standing: string[] = [];
   let now: string | undefined;
+  let changedOver = false;
   for (const p of pairs) {
     if (p.a !== c.id && p.b !== c.id) continue;
     const other = p.a === c.id ? p.b : p.a;
@@ -901,7 +903,7 @@ function factItem(
         id: p.over,
       });
     } else if (p.state === "settled" && p.how === "changed" && p.over === c.id && p.holds !== null) {
-      now = canName(p.holds) ? p.holds : "a later version";
+      changedOver = true;
     } else if (p.state === "settled" && p.how === "corrected" && p.holds === c.id) {
       corrected += 1;
       // Named so it can be opened by id: counted, but not named, when this
@@ -923,6 +925,14 @@ function factItem(
       const b = store.row(p.b);
       if (b !== undefined && b.archived === 0 && b.superseded_by === null && canName(p.b)) standing.push(`unsettled — may be out of date, see ${p.b}`);
     }
+  }
+  // "now" names the END of the chain, the memory recall's standing, a write's
+  // neighbours and the dream's bundles name (`recall/standing.ts#headOf`): on
+  // A→B→C, A reads now C, not B. `headOf` also decides whether it is earlier
+  // at all, as it does there — re-affirmed, or nothing live after it, it stands.
+  if (changedOver) {
+    const head = headOf(store, c.id);
+    if (head !== null) now = canName(head) ? head : "a later version";
   }
   // Matched earlier memories first, then by when they changed, newest first.
   earlier.sort((a, b) => {

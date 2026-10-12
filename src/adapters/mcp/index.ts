@@ -161,6 +161,7 @@ export function openServer(opts: OpenServerOptions = {}): McpServer {
     ...(opts.registryDir === undefined ? {} : { registryDir: opts.registryDir }),
     ...(opts.scopesFile === undefined ? {} : { scopesFile: opts.scopesFile }),
     ...(opts.scopeCommand === undefined ? {} : { scopeCommand: opts.scopeCommand }),
+    ...(opts.install === undefined ? {} : { install: opts.install }),
     ...(opts.sessionTtlMs === undefined ? {} : { sessionTtlMs: opts.sessionTtlMs }),
     ...(opts.resultCeilingChars === undefined ? {} : { resultCeilingChars: opts.resultCeilingChars }),
     // Which host, and what Claude Desktop's `wake` needs (2026-09-30) — carried

@@ -28,7 +28,7 @@
  * to lexical-only rather than failing (contract §5 G1).
  */
 import type { Kind } from "../types.js";
-import { USE_TIER_WEIGHT } from "../physics/index.js";
+import { USE_TIER_WEIGHT, strength } from "../physics/index.js";
 import type { CreditOutcome, UseTier } from "../physics/index.js";
 import type { ProseDoc, Store } from "../store/index.js";
 import { activate } from "./activate.js";
@@ -41,7 +41,7 @@ import { NO_MOOD, currentMood } from "./mood.js";
 import { loadGateState, saveGateState } from "./session.js";
 import type { GateState, SemanticSource } from "./session.js";
 import { render } from "./render.js";
-import { standingOf } from "./standing.js";
+import { headOf, standingOf } from "./standing.js";
 import type { RenderResult, Resolve, Resolved } from "./render.js";
 import { withTunables } from "./tunables.js";
 import type { RecallTunables } from "./tunables.js";
@@ -440,9 +440,13 @@ export class Recall {
       return { ...quiet("no-candidates", cueStats), carry };
     }
 
+    // THE CHAIN HEAD WINS (2026-10-11, Group 2): an earlier version the turn
+    // reached is shown as the memory that holds now (`headsWin`).
+    const candidates = headsWin(this.store, act.candidates, day);
+
     const gated = gate(
       {
-        candidates: act.candidates,
+        candidates,
         state,
         storeSize: act.storeSize,
         owner,
@@ -455,9 +459,10 @@ export class Recall {
     if (this.now() - started > budgetMs) return quiet("latency-abort");
 
     const docs = new Map<string, ProseDoc>();
-    for (const c of act.candidates) docs.set(c.id, c.doc);
+    for (const c of candidates) docs.set(c.id, c.doc);
     // Quiet pointers render with their one-word label (`FRAMING.linked`).
-    const linked = new Set(act.candidates.filter((c) => c.linkOnly === true).map((c) => c.id));
+    const linked = new Set(candidates.filter((c) => c.linkOnly === true).map((c) => c.id));
+    const lifted = new Set(candidates.filter((c) => c.lifted === true).map((c) => c.id));
     // A memory's standing in a contradiction (2026-09-29): read once per id per
     // build — the trim loop composes more than once.
     const standings = new Map<string, { prefix: string; suffix: string } | null>();
@@ -537,6 +542,7 @@ export class Recall {
           : {
               ...act.spread,
               pointersShown: rendered.footnotes.filter((id) => linked.has(id)).length,
+              liftedShown: [...rendered.surfaced, ...rendered.footnotes].filter((id) => lifted.has(id)).length,
               pointersUnanchored: gated.verdicts.filter((v) => v.via === "link" && v.verdict === "dark-uncued").length,
             },
       dropped: act.dropped,
@@ -870,6 +876,56 @@ function upgradeOf(prior: { tier: UseTier; day: number } | undefined, today: num
   if (prior === undefined || prior.day !== today) return undefined;
   const from = USE_TIER_WEIGHT[prior.tier];
   return from > 0 && from < w ? prior.tier : undefined;
+}
+
+/**
+ * THE CHAIN HEAD WINS AMBIENT RECALL (2026-10-11, Group 2; review 04 change
+ * 1, MOD #3). A candidate a later memory settled over (`headOf`) carries its
+ * head, and the gate inhibits it when the head is admitted or already in the
+ * session. When the turn did not reach the head itself, the head is brought
+ * in to stand for it — the earlier's numbers (what came to mind), the head's
+ * words, and its standing label naming the earlier one (`(earlier: [id])`) —
+ * left out of the turn's background. Not a confidential head for a guest:
+ * the gate withholds it, and the earlier one then shows, labelled. Bounded:
+ * one `headOf` per candidate (a few indexed reads); never throws.
+ */
+export function headsWin(store: Store, candidates: readonly Candidate[], day: number): Candidate[] {
+  const ids = new Set(candidates.map((c) => c.id));
+  const out: Candidate[] = [];
+  const brought = new Set<string>();
+  for (const c of candidates) {
+    let head: string | null = null;
+    try {
+      head = headOf(store, c.id);
+    } catch {
+      head = null;
+    }
+    if (head === null) {
+      out.push(c);
+      continue;
+    }
+    out.push({ ...c, head });
+    if (ids.has(head) || brought.has(head)) continue;
+    try {
+      const row = store.row(head);
+      if (row === undefined) continue;
+      const physics = store.physicsOf(head);
+      out.push({
+        ...c,
+        id: head,
+        kind: row.kind as Kind,
+        doc: store.readProse(head),
+        physics,
+        strength: strength(physics, day),
+        confidential: row.confidential === 1,
+        standsFor: c.id,
+      });
+      brought.add(head);
+    } catch {
+      /* an unreadable head: the earlier one shows, labelled */
+    }
+  }
+  return out;
 }
 
 function trainsOf(verdicts: readonly CandidateVerdict[], id: string): boolean {

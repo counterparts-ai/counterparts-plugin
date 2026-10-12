@@ -8,7 +8,10 @@
  * Read off the pair rows (`contradictions`, schema v10) and the row's own
  * forwarding address; ids only, so the label names where to look rather than
  * repeating anyone's words. A LABEL, never a filter: nothing about what is
- * recallable, ranked or gated moves — the same rule as `FRAMING.journal`.
+ * recallable, ranked or gated moves here — the same rule as `FRAMING.journal`.
+ * (Since 2026-10-11, Group 2, ambient recall hides a settled-over memory
+ * behind its head: `recall/index.ts#headsWin` and the gate, reading `headOf`
+ * below. The label is what it carries wherever it still shows.)
  *
  *   | the pair                         | this memory is… | shown as                                   |
  *   |----------------------------------|-----------------|--------------------------------------------|

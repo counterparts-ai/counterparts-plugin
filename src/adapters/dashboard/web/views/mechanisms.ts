@@ -149,7 +149,8 @@ export const LEADS: Readonly<Record<string, readonly LeadCandidate[]>> = {
     lead(["turns"], "turn brought memories to mind", "turns brought memories to mind"),
     lead(["lookups"], "deliberate look-up", "deliberate look-ups"),
   ],
-  association: [lead(["links"], "link made", "links made")],
+  // What links brought to mind first; what was laid when nothing reached recall (2026-10-11).
+  association: [lead(["reached"], "memory a link brought to mind", "memories links brought to mind"), lead(["links", "replayed"], "link laid", "links laid")],
   prospective: [
     lead(["plain", "quiet"], "reminder came back", "reminders came back"),
     lead(["held"], "dated memory held", "dated memories held", false),
@@ -220,6 +221,20 @@ export function lightOf(v: Verdict, returns?: ReturnsBySource): MechanismLight {
       evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} lived days.${todayLine}${heldLine}`,
       events: v.events,
     };
+  }
+  // STARVED (2026-10-11, Group 4): it worked and changed nothing — amber, and said.
+  if (v.starved !== undefined) {
+    const said = v.parts.filter((p) => p.count > 0).map((p) => plural(p.count, p.says));
+    const missing = v.parts.find((p) => p.key === v.starved);
+    const none = missing === undefined ? "" : `, but no ${missing.says[0]}`;
+    return { ...base, status: "amber", evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} lived days${none}.${heldLine}`, events: v.events };
+  }
+  // YOUNG (reviewer of #423): the same, on a store too new to expect it — waiting, in plain words.
+  if (v.young !== undefined) {
+    const said = v.parts.filter((p) => p.count > 0).map((p) => plural(p.count, p.says));
+    const missing = v.parts.find((p) => p.key === v.young);
+    const none = missing === undefined ? "" : ` No ${missing.says[0]} yet; that takes a few weeks of use.`;
+    return { ...base, status: "waiting", evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} lived days.${none}${heldLine}`, events: v.events };
   }
   if (row.held !== undefined && v.held === 0) {
     return { ...base, status: "waiting", evidence: row.held.none, events: [] };

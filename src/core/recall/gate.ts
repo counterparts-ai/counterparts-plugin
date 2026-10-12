@@ -292,7 +292,9 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   // (`pastCut` — the words reached it too weakly to make the cut), is outside
   // the sample; its bar is the whole sample's. Absent on every ambient turn, so there nothing changes.
   const own = (c: Candidate): number => c.activation - (c.stamp ?? 0);
-  const inSample = (c: Candidate): boolean => c.pastCut !== true && c.cue - (c.stamp ?? 0) + c.semantic > 0;
+  // A head brought in for an earlier memory (`standsFor`, 2026-10-11) is the
+  // same reach counted twice: outside the sample too.
+  const inSample = (c: Candidate): boolean => c.pastCut !== true && c.standsFor === undefined && c.cue - (c.stamp ?? 0) + c.semantic > 0;
   const acts = input.candidates.filter(inSample).map(own);
   const bg = background(acts, input.storeSize, t);
   /** The loud-tier floors are in the same unit as hard gate (b)'s (`floorUnit`). */
@@ -438,8 +440,19 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   // the footnote tier never see salience — that is what keeps the footnote tier
   // a recency DISCOVERY channel rather than a second salience ranking).
   admitted.sort((a, b) => b.c.activation - a.c.activation || (a.c.id < b.c.id ? -1 : 1));
+  // THE CHAIN HEAD WINS (2026-10-11, Group 2; review 04 change 1): a memory a
+  // later one settled over is inhibited when the one that holds now is
+  // admitted beside it or is already in this session — before the
+  // near-duplicate check, so the head is never the one inhibited as a copy.
+  // Measured on 10-10: earlier versions were shown 55 times after their
+  // settle, 51 of them without their successor; the newer only 43.
+  const admittedIds = new Set(admitted.map((a) => a.c.id));
   const kept: { c: Candidate; loud: boolean }[] = [];
   for (const a of admitted) {
+    if (a.c.head !== undefined && (admittedIds.has(a.c.head) || input.state.surfaced[a.c.head] !== undefined)) {
+      record(a.c, "inhibited");
+      continue;
+    }
     const dup = kept.some((k) => similarity(k.c, a.c) >= t.NEAR_DUPLICATE);
     if (dup) {
       record(a.c, "inhibited");
@@ -486,6 +499,11 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   for (const { p, a } of ranked) {
     if (!(a > 0) || a < anchorBar) {
       record(p, "dark-uncued");
+      continue;
+    }
+    // A pointer whose head is shown, or already in the session, is its earlier version (2026-10-11).
+    if (p.head !== undefined && (shownIds.has(p.head) || pointers.some((q) => q.id === p.head) || input.state.surfaced[p.head] !== undefined)) {
+      record(p, "inhibited");
       continue;
     }
     if (kept.some((k) => similarity(k.c, p) >= t.NEAR_DUPLICATE) || pointers.some((q) => similarity(q, p) >= t.NEAR_DUPLICATE)) {

@@ -76,7 +76,7 @@ import {
   preMigrationDir,
 } from "../../core/store/index.js";
 import { BUSY_TIMEOUT_MS, journalModeOf } from "../../core/store/db.js";
-import { heldCorrections } from "../../core/contradictions.js";
+import { heldCorrections } from "../../core/reconsolidation.js";
 import { CLI_SCRIPT, NODE_HOOKS, bundledModelDir } from "../runtime.js";
 import { acceptsReflectedFeeling, laterFeelingWasAwake, laterFeelingWasReflections, selfRelevantFeeling } from "../../core/sleep/index.js";
 import { TUNABLES as ASSOCIATE_TUNABLES, isDead, pairKey } from "../../core/associate/index.js";
@@ -88,7 +88,7 @@ import { WORK_OVERFLOW_EVENT } from "../../core/self/work.js";
 import { HANDOFF_REFUSED_EVENT } from "../../core/handoff/index.js";
 import { LAST_HERE_NOROOM_EVENT } from "../../core/handoff/last-here.js";
 import { TOOL_RESULT_CEILING } from "../../core/fit/index.js";
-import { awakeFeelingCounts, dreamingSetting, nightPartsWords, nightRunLost, nightRunOf, nightRunWords } from "../../core/dream/index.js";
+import { awakeFeelingCounts, dreamSkippedOf, dreamSkippedWords, dreamingSetting, nightPartsWords, nightRunLost, nightRunOf, nightRunWords } from "../../core/dream/index.js";
 import type { DreamingSetting } from "../../core/dream/index.js";
 // The page's own reader, so this line cannot drift from what the wake prints.
 import { clearedMarker, findPageRow, readSelfPage } from "../../core/self/page.js";
@@ -3070,7 +3070,9 @@ export function contradictionFindings(store: Store): Finding[] {
     return r !== undefined && r.archived === 0 && r.superseded_by === null && r.body !== "";
   };
   const open = pairs.filter((p) => p.state === "settled" && p.how === "open" && p.via === null).length;
-  const unsettled = pairs.filter((p) => p.state === "unsettled" && live(p.a) && live(p.b)).length;
+  // A slot proposal (2026-10-11) is not a disagreement: counted on its own.
+  const unsettled = pairs.filter((p) => p.state === "unsettled" && p.source !== "slot" && live(p.a) && live(p.b)).length;
+  const proposed = pairs.filter((p) => p.state === "unsettled" && p.source === "slot" && live(p.a) && live(p.b)).length;
   const kinds = ["changed", "corrected", "open"].map((k) => `${String(how[k] ?? 0)} ${k}`).join(", ");
   const whoWords = Object.entries(who)
     .sort((a, b) => b[1] - a[1])
@@ -3094,7 +3096,7 @@ export function contradictionFindings(store: Store): Finding[] {
       "contradictions",
       "green",
       "Contradictions",
-      `last ${String(CONTRADICTION_WINDOW_DAYS)} lived days: ${String(flagged)} flagged, ${String(kept.length)} settled (${kinds})${kept.length > 0 ? ` by ${whoWords}` : ""}${undone > 0 ? `, ${String(undone)} undone` : ""}; standing: ${String(open)} open, ${String(unsettled)} unsettled${unsettled > 0 ? " (counterparts settle lists them)" : ""}${heldWords}`,
+      `last ${String(CONTRADICTION_WINDOW_DAYS)} lived days: ${String(flagged)} flagged, ${String(kept.length)} settled (${kinds})${kept.length > 0 ? ` by ${whoWords}` : ""}${undone > 0 ? `, ${String(undone)} undone` : ""}; standing: ${String(open)} open, ${String(unsettled)} unsettled${unsettled > 0 ? " (counterparts settle lists them)" : ""}${proposed > 0 ? `, ${String(proposed)} proposed as a newer state (the dream confirms)` : ""}${heldWords}`,
       "",
       {
         ...heldData,
@@ -3111,6 +3113,7 @@ export function contradictionFindings(store: Store): Finding[] {
         byOwner: who["owner"] ?? 0,
         standingOpen: open,
         standingUnsettled: unsettled,
+        standingProposed: proposed,
       },
     ),
   ];
@@ -4011,12 +4014,19 @@ export function dreamingFindings(input: DoctorInput, store: Store): Finding[] {
             ? "started today, in the background"
             : "asked today";
   const unfinished = last !== undefined && last.state === "begun" ? `; dream ${last.id} is begun and not yet journaled` : "";
+  // `auto` SAYS WHAT IT WILL DO, AND HOW TO STOP IT (2026-10-11): it is a new
+  // install's default now, so the person reading this line may never have
+  // chosen it.
+  const said =
+    setting === "auto"
+      ? 'auto (the first session of each day starts the nightly run in the background; say "no dreams", or counterparts dream --setting off, to turn it off)'
+      : setting;
   return [
     finding(
       "dreaming",
       "green",
       "Dreaming",
-      `${setting}; ${when === null ? "has not dreamed yet" : `last dreamed ${when}${last?.title ? ` — "${last.title}"` : ""}`}; ${today}${unfinished}`,
+      `${said}; ${when === null ? "has not dreamed yet" : `last dreamed ${when}${last?.title ? ` — "${last.title}"` : ""}`}; ${today}${unfinished}`,
       "",
       { setting, last: when, dream: last?.id ?? null, ask: ask?.state ?? null },
     ),
@@ -4045,7 +4055,7 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
   }
   if (run === null) {
     if (setting !== "auto") return [];
-    return [finding("night-run", "green", "Nightly run", "auto; no headless run yet — the first session of a day with enough new memory starts one", "", { setting, state: null })];
+    return [finding("night-run", "green", "Nightly run", "auto; no headless run yet — the first session of a day with enough new memory, or with write-ups owed from an earlier day, starts one", "", { setting, state: null })];
   }
   // ITS MORNING CATCH-UP (2026-10-01, build 3), when it had anything owed.
   const cu = catchUpOf(store, run.run);
@@ -4063,7 +4073,8 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
   };
   const mins = (ms: number): string => `${String(Math.max(1, Math.round(ms / 60_000)))} min`;
   const took = run.endedAt === null ? "" : ` after ${mins(run.endedAt - run.startedAt)}`;
-  const what = run.kind === "reflection" ? "the reflection alone" : "the whole night";
+  const skipped = dreamSkippedOf(run);
+  const what = run.kind === "reflection" ? "the reflection alone" : skipped !== null ? `the catch-up alone; ${dreamSkippedWords(skipped)}` : "the whole night";
   if (run.state === "done") {
     const ids = [run.dream, run.reflection].filter((x): x is string => x !== null).join(", ");
     return [finding("night-run", "green", "Nightly run", `${setting}; last run ${run.date} (${what}) finished${took}${ids.length > 0 ? ` — ${ids}` : ""}${caught}`, "", data)];

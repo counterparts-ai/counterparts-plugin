@@ -88,6 +88,22 @@ export interface MechanismEvidence {
   /** For a mechanism that is not built: the one plain line shown instead. */
   readonly grey?: string;
   /**
+   * THE PROOF THAT SAYS IT DID ITS JOB (2026-10-11, Group 4 item 7; review 06
+   * C6, D7): the key of a proof that must count above zero for the mechanism
+   * to have fired at all. Its other proofs firing without it is STARVED — the
+   * work happened and changed nothing — which a surface shows as amber, not
+   * green (Association: links laid, none reached recall).
+   */
+  readonly vital?: string;
+  /**
+   * WHEN THE VITAL PROOF'S ABSENCE STARTS TO MEAN SOMETHING (reviewer of #423,
+   * 2026-10-11): the window's lived day is at least `livedDays` and the other
+   * proofs counted at least `others` in it. Before that, the work happening
+   * with no vital proof is YOUNG — a new store has not had time for it — and a
+   * surface says so as waiting, not amber. Absent: starved from day one.
+   */
+  readonly vitalAfter?: { readonly livedDays: number; readonly others: number };
+  /**
    * WHAT THE MECHANISM IS HOLDING, when that decides whether it can fire at all
    * (prospective: dated memories). Zero, with nothing fired, means there is
    * truly nothing for it to do.
@@ -196,12 +212,29 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
     ],
   },
   {
-    // PARTLY (audit: built but starved): links form only between memories used
-    // in the same turn, and a hop only lifts what the turn already reached.
+    // PARTLY (audit: built but starved). Since 2026-10-11 (Group 4, review 06
+    // C6) the proofs are honest: LINKS LAID is pairs that landed as a link
+    // (`deposited`: co-use, contiguity, write-time links), not the rows a flush
+    // rewrote, plus the replay's faint trails; and LINKS REACHED RECALL is what
+    // a link put in front of the model (pointers shown, candidates a hop lifted
+    // into the cut and then shown). Links laid with none reaching recall in the
+    // window is amber (`vital`).
     id: "association",
     family: "retrieval",
     build: "partly",
-    proofs: [{ key: "links", event: "associate.flush", sum: "rows", says: ["link written", "links written"] }],
+    vital: "reached",
+    // Not amber for a new store (reviewer of #423): two weeks of lived days
+    // (the window, and one before it for trails to be laid and used) and 20
+    // links laid this week, about three a lived day.
+    vitalAfter: { livedDays: 14, others: 20 },
+    proofs: [
+      { key: "links", event: "associate.flush", sum: "deposited", says: ["link laid", "links laid"] },
+      // Counted even when the dream is undone (reviewer of #423): an undo
+      // takes back what the dreamer chose, not the replay, so the trails stay
+      // in the graph and the count says what is there.
+      { key: "replayed", event: "dream.begun", sum: "replayLinks", says: ["faint link a dream's replay laid", "faint links a dream's replay laid"] },
+      { key: "reached", event: "recall.decision", sum: "linksReached", says: ["memory a link brought to mind", "memories links brought to mind"] },
+    ],
   },
   {
     // Built end to end since 2026-09-26 (#243, #247): a date on a note or a
@@ -378,6 +411,13 @@ export interface Verdict {
   readonly held: number | null;
   /** When it did not fire in the window: the newest lived day it ever did. */
   readonly lastFiredDay: number | null;
+  /** Set when its other proofs counted in the window and its `vital` one did
+   *  not: that proof's key. `fired` is false then. Absent otherwise. */
+  readonly starved?: string;
+  /** Set instead of `starved` while the store is too young for the vital
+   *  proof to be expected (`MechanismEvidence.vitalAfter`): that proof's key.
+   *  `fired` is false then too. Absent otherwise. */
+  readonly young?: string;
   readonly schedule: Schedule | null;
 }
 
@@ -508,7 +548,14 @@ export function mechanismEvidence(
         held = null;
       }
     }
-    const fired = parts.some((p) => p.count > 0);
+    const anyPart = parts.some((p) => p.count > 0);
+    const vitalCount = m.vital === undefined ? null : (parts.find((p) => p.key === m.vital)?.count ?? 0);
+    const without = anyPart && vitalCount === 0 ? m.vital : undefined;
+    const others = parts.reduce((t, p) => t + (p.key === m.vital ? 0 : p.count), 0);
+    const mature = m.vitalAfter === undefined || (window.today >= m.vitalAfter.livedDays && others >= m.vitalAfter.others);
+    const starved = without !== undefined && mature ? without : undefined;
+    const young = without !== undefined && !mature ? without : undefined;
+    const fired = anyPart && without === undefined;
     const events = backing
       .sort((a, b) => b.seq - a.seq)
       .slice(0, RECENT_IDS)
@@ -535,6 +582,8 @@ export function mechanismEvidence(
       held,
       lastFiredDay,
       schedule: m.schedule === undefined ? null : scheduleOf(store, m.schedule, window.today),
+      ...(starved === undefined ? {} : { starved }),
+      ...(young === undefined ? {} : { young }),
     };
   });
   return { verdicts, truncated };

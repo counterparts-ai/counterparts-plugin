@@ -10,8 +10,9 @@
  * Three rules the code mechanizes:
  *
  *   1. **Adjacent only.** Each memory links to its `CONTIGUITY_WINDOW`
- *      neighbours in its session's write order (lag 1, lag 2), never to the
- *      whole session: a 30-memory session makes at most ~57 pairs, not 435.
+ *      neighbours in its session's write order (lag 1 since 2026-10-11; it
+ *      was lag 1 and 2), never to the whole session: a 30-memory session
+ *      makes 29 pairs, not 435.
  *   2. **Lag-weighted.** Lag 1 gets `CONTIGUITY_RATE`; each further lag keeps
  *      `CONTIGUITY_LAG_DECAY` of the one before.
  *   3. **Forward bias only where the order is real.** Most memories are written

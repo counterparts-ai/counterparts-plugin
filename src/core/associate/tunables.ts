@@ -114,14 +114,15 @@ export interface AssociateTunables {
    * confirms it. How long each kind lives above the floor if nothing confirms
    * it (`S_EDGE` 30, floor 0.02; review of #281, finding 7): lag 1 forward
    * with a real order 0.06, 33 lived days; lag 1 in one batch 0.045, 24; lag 1
-   * back 0.03, 12; lag 2 forward 0.03, 12; lag 2 in one batch 0.0225, 3.5;
-   * lag 2 back 0.015, swept at once. Lag 2 in the common one-batch case is
-   * close to inert (it passes 0.28% of its node) — whether it earns its rows
-   * is the owner's call (associate NOTES §14). CAL, no ancestry.
+   * back 0.03, 12. (Lag 2 lived 3.5 lived days in the common one-batch case
+   * and conducted nothing; it was dropped 2026-10-11, NOTES §17.) CAL, no
+   * ancestry.
    */
   CONTIGUITY_RATE: number;
-  /** Neighbours on each side a memory links to: lag 1 and lag 2. Adjacent
-   *  pairs only, never all pairs in a session. CAL. */
+  /** Neighbours on each side a memory links to: lag 1 only since 2026-10-11
+   *  (it was lag 1 and 2; review 06 C5 — lag 2 was 15% of the table, lived
+   *  3.5 lived days and never conducted). Adjacent pairs only, never all pairs
+   *  in a session. CAL. */
   CONTIGUITY_WINDOW: number;
   /** The backward delta as a fraction of the forward one (TCM's forward bias:
    *  in free recall a lag of +1 follows about twice as often as −1). CAL. */
@@ -138,6 +139,35 @@ export interface AssociateTunables {
    * mid-session, then the session's end) and the forward bias applies. CAL.
    */
   CONTIGUITY_BATCH_MS: number;
+
+  // ── write-time links (Group 4, 2026-10-11) ───────────────────────────────
+  /**
+   * The weight a new memory's link to what was IN MIND when it was written
+   * starts at (`at-write.ts`; bench item 5): for a memory written in the
+   * moment (the jot door), the memories recall showed its session in the last
+   * `WRITE_LINK_TURNS` turns; for any memory, what a deliberate question
+   * showed within `WRITE_LINK_ASKED_MS` of the write, when that is on. Proposed
+   * (`Associate.propose`), so room-only and never evicting. Half a co-use
+   * because footnotes are often noise (G1b precision 0.17–0.33): a faint trail
+   * that lives ~27 lived days unconfirmed and passes 0.6% of its node's
+   * activation until use strengthens it. CAL, no ancestry.
+   */
+  WRITE_LINK_WEIGHT: number;
+  /** How many of the session's most recent recall turns count as "in mind"
+   *  for a memory written in the moment: 1, the write's own turn (reviewer of
+   *  #423, 2026-10-11: hand-read on the 10-11 copy, the own turn's showings
+   *  were 7 right, 4 unsure, 9 noise of 20; the two turns before it 2, 4, 14).
+   *  It was 3. CAL. */
+  WRITE_LINK_TURNS: number;
+  /** A deliberate question's answer counts as in mind this long either side
+   *  of the write; 0 is off. Off since the review of #423 (2026-10-11): what a
+   *  deliberate question returned near a write hand-read 0 right of 20 for
+   *  both doors (broad answers, chapter copies among them), and 0 of 20 even
+   *  counting only questions before the write and no chapters. It was 15
+   *  minutes. CAL. */
+  WRITE_LINK_ASKED_MS: number;
+  /** At most this many write-time links per new memory, the nearest in mind first. CAL. */
+  WRITE_LINK_MAX: number;
 }
 
 export const TUNABLES: AssociateTunables = {
@@ -159,10 +189,15 @@ export const TUNABLES: AssociateTunables = {
   SPREAD_MIN_FRACTION: 0.02,
 
   CONTIGUITY_RATE: 0.06,
-  CONTIGUITY_WINDOW: 2,
+  CONTIGUITY_WINDOW: 1,
   CONTIGUITY_BACKWARD: 0.5,
   CONTIGUITY_LAG_DECAY: 0.5,
   CONTIGUITY_BATCH_MS: 60_000,
+
+  WRITE_LINK_WEIGHT: 0.05,
+  WRITE_LINK_TURNS: 1,
+  WRITE_LINK_ASKED_MS: 0,
+  WRITE_LINK_MAX: 4,
 };
 
 export function withTunables(overrides: Partial<AssociateTunables> = {}): AssociateTunables {

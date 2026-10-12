@@ -487,6 +487,7 @@ export const EVENT_NODE = {
   "contradiction.settled": "schemas",
   "contradiction.undone": "schemas",
   "contradiction.held": "schemas",
+  "contradiction.proposed": "schemas",
 } as const satisfies Record<DurableEventName, NodeKey>;
 
 export function nodeOf(name: string): NodeKey | null {

@@ -225,6 +225,25 @@ export type SidebarScope = {
   unread: 'unreadable' | null;
 };
 
+/**
+ * Where the first meeting stands, as core's `GET /api/onboarding` says it
+ * (2026-10-11: core owns the steps and the state; the mod triggers and
+ * draws). `unknown`: not read yet, the dashboard down, a 404 (a core from
+ * before onboarding) or any other shape: the mod then does nothing about it.
+ */
+export type SidebarMeet = 'unknown' | 'not_started' | 'offered' | 'later' | 'done' | 'skipped';
+
+export type SidebarOnboarding = {
+  meet: SidebarMeet;
+  /**
+   * Core's answers, passed through as read (never drawn yet): `where` is
+   * `every` or `this`, `style` `straight`, `think`, `friendly`, `character`
+   * or `other` (core #419); null from the wake's marker, which names only `meet`.
+   */
+  where: string | null;
+  style: string | null;
+};
+
 /** A line or two the switch explains itself with, above the switches. */
 export type SidebarNote = { text: string; at: number };
 
@@ -262,6 +281,14 @@ declare module 'claude-code' {
       scope: SidebarScope;
       /** Claude Code's own memory (MEMORY.md and its prompt section): on unless turned off. */
       claudeMemory: boolean;
+      /**
+       * Whether the footer draws the Claude memory switch: only for someone
+       * who opted in (`COUNTERPARTS_SIDEBAR_CC_MEMORY=1`, or `$.store`
+       * `claudeMemorySwitch`, set for whoever had already turned it off).
+       */
+      claudeMemorySwitch: boolean;
+      /** Where the first meeting stands (core's `/api/onboarding`). */
+      onboarding: SidebarOnboarding;
       view: SidebarView;
       brain: SidebarBrain;
       /** The pane is placed and showing (opened and not closed since). */
@@ -270,11 +297,13 @@ declare module 'claude-code' {
       switchNote: SidebarNote | null;
       /**
        * The confirm row a press on the Counterparts switch opens before a
-       * pause (since 2026-10-09: a press meant for the other switch paused a
-       * folder): `dir` is the folder it would pause, `at` when it opened.
-       * Only its [Pause] calls the scope tool; [Cancel] or 30 s closes it.
+       * pause or an off (since 2026-10-09: a press meant for the other switch
+       * paused a folder): `dir` is the folder it would change, `at` when it
+       * opened, `to` what it would set (absent: a pause, as before the
+       * three-way switch). Only its [Pause] / [Turn off] calls the scope
+       * tool; [Cancel] or 30 s closes it.
        */
-      pauseAsk: { dir: string; at: number } | null;
+      pauseAsk: { dir: string; at: number; to?: 'pause' | 'off' | 'on' } | null;
     };
   }
 }

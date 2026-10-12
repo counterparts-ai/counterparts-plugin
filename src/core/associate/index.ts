@@ -10,6 +10,8 @@
  *   `spread.ts`    a pure traversal `recall/` consumes as its hop channel
  *   `contiguity.ts` a pure planner: memories a session made next to each other
  *                  (temporal contiguity, 2026-09-28)
+ *   `at-write.ts`  a pure planner: a new memory's faint links to what was in
+ *                  mind when it was written (2026-10-11)
  *   `index.ts`     the binding: observer stance, the flush ordering, telemetry
  *
  * Three properties are structural here and worth stating at the top:
@@ -42,6 +44,7 @@ import type { Seed, SpreadResult } from "./spread.js";
 import { pairCredit, tierFactor, withTunables } from "./tunables.js";
 import type { AssociateTunables } from "./tunables.js";
 
+export * from "./at-write.js";
 export * from "./buffer.js";
 export * from "./contiguity.js";
 export * from "./edges.js";
@@ -72,7 +75,33 @@ export interface AssociateStore {
    * either way. Returns how many rows went.
    */
   sweepEdges?(filter: { floor: number; staleOnOrBefore: number }, dead: (e: EdgeRow) => boolean): number;
+  /**
+   * Remove the rows with an endpoint archived for one of `reasons`
+   * (2026-10-11, `TERMINAL_ARCHIVE_REASONS`). Optional, like the sweep: a
+   * store without it keeps those rows, which conduct nothing either way.
+   */
+  sweepArchivedEdges?(reasons: readonly string[], graceMs?: number): number;
 }
+
+/**
+ * ARCHIVED FOR GOOD (2026-10-11, Group 4 item 5; review 06 C3): the archive
+ * reasons whose memory never conducts again AND whose links were carried to
+ * what replaced it when it was archived — a regrown chapter copy (to the live
+ * copy, NOTES §15) and a dream merge's originals (to the merged memory; a
+ * dream's undo carries them back). Their rows are swept after every flush.
+ * NOT here: a decay archive, so a memory that comes back keeps its trails;
+ * and `corrected`, whose settle does not carry its links today and whose
+ * undo brings it back — sweeping it would drop them.
+ */
+export const TERMINAL_ARCHIVE_REASONS: readonly string[] = ["episode-regrown", "dream-merge"];
+
+/**
+ * How long ago such an end must have been archived before its rows go
+ * (reviewer of #423, 2026-10-11): both paths archive first and carry the
+ * links a moment later, so a flush from another process in between must not
+ * take rows still to be carried. Ten minutes is far beyond that moment.
+ */
+export const TERMINAL_ARCHIVE_GRACE_MS = 10 * 60_000;
 
 /** Telemetry: ids, counts, weights, reasons. NEVER body text or turn text. */
 export interface AssociateEvent {
@@ -153,6 +182,9 @@ export interface FlushReport {
   /** Dead rows (zeroed by an eviction, or decayed to the floor) the flush swept
    *  away after it landed (2026-09-28). */
   readonly swept: number;
+  /** Of `swept`, rows with an endpoint archived for good
+   *  (`TERMINAL_ARCHIVE_REASONS`, 2026-10-11). Absent when none went. */
+  readonly sweptArchived?: number;
 }
 
 /** What buffering one pass of temporal contiguity did (2026-09-28). */
@@ -488,7 +520,7 @@ export class Associate {
     // HYGIENE, after the write has landed (2026-09-28): the rows that carry
     // nothing — an eviction's zero, an edge decayed to the floor — are swept,
     // and counted. A sweep that fails costs only the tidying: the flush stands.
-    const swept = this.sweep(day);
+    const { swept, archived: sweptArchived } = this.sweep(day);
     this.emit("associate.flush.done", undefined, {
       day,
       pairs: deltas.length,
@@ -511,21 +543,36 @@ export class Associate {
       blocked,
       dropped: 0,
       swept,
+      ...(sweptArchived > 0 ? { sweptArchived } : {}),
     };
   }
 
-  /** Sweep dead edge rows; 0 when the store has no sweep or it failed. */
-  private sweep(day: number): number {
-    if (this.store.sweepEdges === undefined) return 0;
-    try {
-      return this.store.sweepEdges(
-        { floor: this.tunables.EDGE_FLOOR, staleOnOrBefore: day - fadeHorizon(this.tunables) },
-        (e) => isDead({ src: e.src, dst: e.dst, weight: e.weight, lastDay: e.last_day }, day, this.tunables),
-      );
-    } catch (err) {
-      this.emit("associate.sweep.failed", undefined, { day, error: codeOf(err) });
-      return 0;
+  /**
+   * Sweep dead edge rows, then the rows with an endpoint archived for good
+   * (2026-10-11); 0 for a half the store lacks or that failed. `swept` is the
+   * total, `archived` the second half's share.
+   */
+  private sweep(day: number): { swept: number; archived: number } {
+    let dead = 0;
+    let archived = 0;
+    if (this.store.sweepEdges !== undefined) {
+      try {
+        dead = this.store.sweepEdges(
+          { floor: this.tunables.EDGE_FLOOR, staleOnOrBefore: day - fadeHorizon(this.tunables) },
+          (e) => isDead({ src: e.src, dst: e.dst, weight: e.weight, lastDay: e.last_day }, day, this.tunables),
+        );
+      } catch (err) {
+        this.emit("associate.sweep.failed", undefined, { day, error: codeOf(err) });
+      }
     }
+    if (this.store.sweepArchivedEdges !== undefined) {
+      try {
+        archived = this.store.sweepArchivedEdges(TERMINAL_ARCHIVE_REASONS, TERMINAL_ARCHIVE_GRACE_MS);
+      } catch (err) {
+        this.emit("associate.sweep.failed", undefined, { day, error: codeOf(err), archived: true });
+      }
+    }
+    return { swept: dead + archived, archived };
   }
 
   // ── proposed links (the dream's, 2026-09-28) ───────────────────────────────

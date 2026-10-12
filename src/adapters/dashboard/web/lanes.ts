@@ -71,6 +71,8 @@ export const LANES = {
   "contradiction.undone": "flow",
   // A held `updates` (2026-10-09) moved nothing: housekeeping.
   "contradiction.held": "flow",
+  // A slot proposal (2026-10-11) is provisional until confirmed: housekeeping.
+  "contradiction.proposed": "flow",
   // A session end that strengthened nothing is housekeeping — unless the credit
   // itself failed, which is a real problem about memories and stays home.
   "recall.credit": (p) =>

@@ -37,7 +37,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { Associate, appendPendingDeltas, claimPending, pairKey, planContiguity, releasePending } from "./associate/index.js";
+import { Associate, appendPendingDeltas, claimPending, pairKey, planAtWrite, planContiguity, releasePending } from "./associate/index.js";
 import type { CoactivateResult, Credited, FlushReport, PairDelta, PendingClaim } from "./associate/index.js";
 import { horizonFor, selfRenderer } from "./briefing.js";
 import { batteryGate, episodeGate, gateSweepChunk } from "./bridge.js";
@@ -52,6 +52,7 @@ import type { PlainDue } from "./prospective/index.js";
 import {
   ASKED_KIND,
   ASKED_MAX,
+  askedAt,
   askedTurn,
   Recall,
   isConfidential,
@@ -120,13 +121,16 @@ import { applyRevision } from "./revision.js";
 import type { RevisionApplication } from "./revision.js";
 import {
   CONTRADICTION_HELD_EVENT,
+  detectSlot,
+  guardBar,
   heldView,
+  proposeSlot,
   settle as settleContradiction,
   undo as undoContradiction,
   updateRelatedness,
   writeNeighbours,
-} from "./contradictions.js";
-import type { HeldUpdate, Neighbour, SettleInput, SettleOutcome, UndoOutcome } from "./contradictions.js";
+} from "./reconsolidation.js";
+import type { HeldUpdate, Neighbour, SettleInput, SettleOutcome, SlotOutcome, UndoOutcome } from "./reconsolidation.js";
 import { Schemas } from "./schemas/index.js";
 import {
   HANDOFF_CLEARED_EVENT,
@@ -197,7 +201,7 @@ import type {
   WakeTrigger,
   WriterInput,
 } from "./self/index.js";
-import { cyclePartial, ownerNames, runCycle } from "./sleep/index.js";
+import { acceptsReflectedFeeling, cyclePartial, ownerNames, runCycle } from "./sleep/index.js";
 import type { CyclePartial, CycleReport, Phase } from "./sleep/index.js";
 import { ABOUT_MARKS, CORE_ABOUT_MARKS, Store, assertSafeDataDir, inheritFrom, rowTombstoned, hashText, indexTextOf, occurredOnOf, saidByOf, statusOf } from "./store/index.js";
 import type {
@@ -553,6 +557,17 @@ export interface DrewOnResult {
   readonly refused: { id: string; reason: string }[];
   /** Past the boundary's cap (`DREW_ON_MAX_PER_BOUNDARY`), not attempted. */
   readonly capped: string[];
+  /** Dated memories whose open reminder window this stopped
+   *  (`Prospective#actedOn`): acted on, so no more footnotes this window. */
+  readonly actedOn: string[];
+  /**
+   * Pairs of named memories handed to the edge module as one co-use
+   * (2026-10-11, Group 4 item 1): the ones credited, and the ones refused only
+   * for their day cadence (the credit pass's own rule, `linksDespite`), each
+   * pair at the referenced tier — one `HEBB_RATE` deposit. Written to the
+   * pending file; the boundary's worker lands them. 0 when fewer than two.
+   */
+  readonly linked: number;
 }
 /**
  * ONE ROW PER APPLY OF CARRIED CO-ACTIVATION, written by the process that
@@ -637,6 +652,29 @@ export interface ContiguityPass {
   readonly evictedOwn?: number;
   readonly evictedOther?: number;
   readonly renormalizedNodes?: number;
+  readonly code?: string;
+  /** The same pass's write-time links (Group 4 item 2, 2026-10-11): what was in mind. */
+  readonly atWrite?: AtWritePass;
+}
+
+/**
+ * WRITE-TIME LINKS (Group 4 item 2, 2026-10-11; bench item 5): each new memory
+ * the boundary's contiguity pass reads gets a faint link (`WRITE_LINK_WEIGHT`)
+ * to what was in mind when it was written — what a deliberate question showed
+ * near the write, and what recall showed its session in the last few turns.
+ * Proposed, so room-only: `noRoom` pairs were refused, never forced. Counts
+ * only, on the boundary's `associate.flush` row as `atWrite`.
+ */
+export interface AtWritePass {
+  readonly reason: "linked" | "nothing-in-mind" | "failed";
+  /** New memories that had something in mind, and the pairs planned for them. */
+  readonly memories: number;
+  readonly pairs: number;
+  /** Pairs that landed (or already weighed at least the proposal). */
+  readonly landed: number;
+  readonly noRoom: number;
+  readonly blocked: number;
+  readonly frozen: number;
   readonly code?: string;
 }
 export const SPAWN_REFUSED_EVENT = "adapter.spawn.refused";
@@ -996,16 +1034,19 @@ export interface CounterpartOptions extends Stance {
    * the client, exactly as it owns `InterpretFn` (`remember/INTERFACE-GAPS §3`).
    *
    * Wiring it turns novelty from `no-chunk-vector` into a measurement on the
-   * authored door, and the vector one deposit pays for is the vector box 3
-   * stores — but ONLY because of an ordering that is easy to break: the text
-   * embedded is the GATE'S output, shaped by `indexTextOf`, which is exactly
-   * what `Store.indexOne` will look the vector up by.
+   * authored door. The gate's vector is NOT handed to the store: `Store.put →
+   * indexOne` asks the sync `embed` for its own, by the same string. What keeps
+   * that to one computation is the embedder (the static table remembers its
+   * last text, `embed-client.ts#createStaticEmbedder`) — and an ordering that is
+   * easy to break: the text embedded here is the GATE'S output, shaped by
+   * `indexTextOf`, which is exactly what `Store.indexOne` will ask for.
    *
-   * Embed the author's draft instead and BOTH halves fail at once: raw text goes
-   * on the wire (the redaction is bypassed), and every gate rewrite — 18.9% of
-   * chunks in the replay corpus — caches under a key the store never asks for,
-   * so the deposit pays for a vector it then discards. `bridge.batteryGate`
-   * holds that order; `test/claude-code.test.ts` holds it to it.
+   * Embed the author's draft instead and BOTH halves fail at once: the novelty
+   * is measured on text the gate redacted or rewrote (the redaction is
+   * bypassed), and every gate rewrite — 18.9% of chunks in the replay corpus —
+   * asks under a key the store never asks for, so the write pays for a vector it
+   * then discards. `bridge.batteryGate` holds that order;
+   * `test/claude-code.test.ts` holds it to it.
    */
   vectors?: LiveVectors;
   /** Retention window for the bounded logs. `store/` owns the default. */
@@ -1162,6 +1203,13 @@ export interface DepositContext {
    * Absent: the process's own `owner`.
    */
   owner?: boolean;
+  /**
+   * Memories the same call wrote before this one (a dump's earlier entries):
+   * the writer's own words of the same moment, never read as an earlier state
+   * of this one by the slot detector (review of #420; the neighbours' rule,
+   * review of #284 M1).
+   */
+  siblings?: readonly string[];
 }
 
 /**
@@ -1243,6 +1291,13 @@ export interface DepositResult {
   readonly thread?: { readonly from: string; readonly closed: boolean; readonly refused?: ThreadRefusal };
   /** v12: the writer's three fields as recorded — after a revision's carry-over. */
   readonly facts?: DepositFacts;
+  /**
+   * The older memory the slot detector read this one as the newer state of
+   * (2026-10-11, Group 2): proposed provisionally, for the writer to confirm
+   * now or the dream tonight (`reconsolidation.ts#detectSlot`). Absent when
+   * none qualified.
+   */
+  readonly slot?: Extract<SlotOutcome, { ok: true }>;
   /**
    * What it is about, when the writer sent no mark and this revision took the
    * one of the memory it revises (2026-10-11, `Counterpart#carryAbout`).
@@ -1716,6 +1771,8 @@ export const RECALL_DECISION_FIELDS = [
   // Association build 1 (2026-09-28): what spreading did, and the cut's count.
   "spread",
   "dropped",
+  // Group 4 (2026-10-11): shown memories a link put there (pointers + lifted).
+  "linksReached",
 ] as const;
 
 export type SurfaceSetField = (typeof RECALL_DECISION_FIELDS)[number];
@@ -1800,6 +1857,11 @@ function recallDecisionRecord(
     // a turn it did not run.
     spread: d.spread,
     dropped: d.dropped,
+    // LINKS THAT REACHED RECALL (2026-10-11, Group 4 item 7; review 06 C6):
+    // memories SHOWN this turn that a link put there — quiet pointers, and
+    // candidates a hop lifted into the cut. Top-level, so the dashboard's
+    // proof can sum it.
+    linksReached: (d.spread?.pointersShown ?? 0) + (d.spread?.liftedShown ?? 0),
   } satisfies Record<SurfaceSetField, unknown>;
   return surfaceSet;
 }
@@ -3855,16 +3917,27 @@ export class Counterpart {
    * already credited above this tier. An open later the same day lifts an
    * engaged credit to a full use (`physics#creditUse`'s `upgradeFrom`).
    *
+   * A DATED memory named here was ACTED ON (2026-10-11, review 07 C3; wired
+   * by the group-5 builder, lightly held): once an id passes the guards
+   * above — shown, live, not replaced — its open reminder window is stopped
+   * (`Prospective#actedOn`, the referenced-stop), whether or not the credit
+   * itself lands under the cap or the once-a-day rule: the session said it
+   * used it, and a reminder already used should not come back as a footnote.
+   * Needs the calendar day the host is on (`opts.at`); without one, nothing
+   * is stopped. A plain reminder keeps its day (`actedOn`).
+   *
    * Under observer stance nothing is read or written: every id comes back
    * refused `observer`.
    */
-  creditDrewOn(sessionId: string, named: readonly string[]): DrewOnResult {
+  creditDrewOn(sessionId: string, named: readonly string[], opts: { at?: string } = {}): DrewOnResult {
     const day = this.store.livedDay();
     const ids = [...new Set(named.map((id) => id.trim()).filter((id) => id.length > 0))];
     const credited: string[] = [];
     const refused: { id: string; reason: string }[] = [];
     const capped: string[] = [];
-    const done = (): DrewOnResult => ({ day, named: ids.length, credited, refused, capped });
+    const actedOn: string[] = [];
+    let linked = 0;
+    const done = (): DrewOnResult => ({ day, named: ids.length, credited, refused, capped, actedOn, linked });
     if (this.observer) {
       for (const id of ids) refused.push({ id, reason: "observer" });
       return done();
@@ -3878,6 +3951,7 @@ export class Counterpart {
     }
     // What this boundary already credited this way: the other tool's answer
     // to the same ask shares the cap.
+    const members: Credited[] = [];
     let slots =
       DREW_ON_MAX_PER_BOUNDARY -
       Object.values(state.credited).filter((c) => c.tier === "engaged" && c.day === day && c.turn === state.turn).length;
@@ -3913,12 +3987,31 @@ export class Counterpart {
         refuse("faded-under-newer");
         continue;
       }
+      if (opts.at !== undefined && row.event_date !== null) {
+        try {
+          if (this.prospective.actedOn(id, opts.at, day).length > 0) actedOn.push(id);
+        } catch (err) {
+          // A lost stop costs one more polite footnote, never the credit (§12 G12).
+          this.emit("counterpart.drewOn.actedOn.failed", id, { code: errCode(err) });
+        }
+      }
       if (slots <= 0) {
         capped.push(id);
         continue;
       }
       try {
         const r = this.resolveUse(sessionId, id, "engaged");
+        // THE DEPOSIT (2026-10-11, Group 4 item 1; review 06 C1): what the
+        // session drew on together was thought together, so the named
+        // memories enter one pair set at the REFERENCED tier — a co-use, one
+        // `HEBB_RATE` per pair, homeostasis bounding it at the flush. Strength
+        // stays the engaged tier's half use; only the link is a full deposit.
+        // As in `creditReferences`, a memory refused only for its day cadence
+        // (opened earlier today, born today) still joins the pair set. The set
+        // holds at most DREW_ON_MAX_PER_BOUNDARY (reviewer of #423): a refusal
+        // for cadence spends no credit slot, so without this bound a session
+        // naming twenty memories it had opened would send 190 full-rate pairs.
+        if ((r.credited || linksDespite(r)) && members.length < DREW_ON_MAX_PER_BOUNDARY) members.push({ id, tier: "referenced" });
         if (r.credited) {
           credited.push(id);
           slots -= 1;
@@ -3929,12 +4022,15 @@ export class Counterpart {
         refuse(errCode(err));
       }
     }
+    if (members.length > 1) linked = this.publishCoactivation(members, day);
     this.emit("counterpart.drewOn", sessionId, {
       day,
       named: ids.length,
       credited: credited.length,
       refused: refused.length,
       capped: capped.length,
+      actedOn: actedOn.length,
+      linked,
     });
     return done();
   }
@@ -4031,7 +4127,7 @@ export class Counterpart {
    * evented in process, so it stays distinguishable from a hook that broke
    * (observer-mode.md G6, scar §2.4).
    */
-  private publishCoactivation(members: readonly Credited[], day: number): void {
+  private publishCoactivation(members: readonly Credited[], day: number): number {
     const started = this.store.now();
     let co: CoactivateResult | null = null;
     let deltas: PairDelta[] = [];
@@ -4044,7 +4140,7 @@ export class Counterpart {
     }
     if (this.observer) {
       this.emit("counterpart.associate.standdown", undefined, { site: "pending" });
-      return;
+      return 0;
     }
     const eligible = co?.members.filter((m) => m.reason === "eligible").length ?? 0;
     const append =
@@ -4063,6 +4159,8 @@ export class Counterpart {
       code: append.code,
       elapsedMs: this.store.now() - started,
     });
+    // What reached the file: the pairs a later boundary can land.
+    return append.pairs;
   }
 
   /**
@@ -4202,6 +4300,10 @@ export class Counterpart {
       corrupt: out.corrupt,
       stuck: out.stuck,
       oldestMs: out.oldestMs,
+      // LINKS LAID (2026-10-11, Group 4 item 7): co-use pairs that landed —
+      // not `rows`, which counts both directions and every sibling a touched
+      // node's decay rewrote. What the dashboard's "links made" sums.
+      deposited: Math.max(0, out.pairs - out.blocked - out.dropped),
       ...rowIds(linked),
       // The APPLYING session (2026-10-11): the boundary whose worker carried
       // these claims. A claim may hold lines several sessions credited.
@@ -4298,7 +4400,7 @@ export class Counterpart {
   }
 
   /**
-   * SETTLE A CONTRADICTION (2026-09-29, `contradictions.ts`) — an existing
+   * SETTLE A CONTRADICTION (2026-09-29, `reconsolidation.ts`) — an existing
    * pair, or two memories by `holds` and `over` — with the `why` through the
    * SECRETS half of the battery: a reason is words, and a credential must not
    * land in the trail any more than in a body.
@@ -4310,7 +4412,7 @@ export class Counterpart {
     });
   }
 
-  /** Undo a settle (`contradictions.ts#undo`), the reason through the same scan. */
+  /** Undo a settle (`reconsolidation.ts#undo`), the reason through the same scan. */
   undoContradiction(input: Parameters<typeof undoContradiction>[1]): UndoOutcome {
     return undoContradiction(this.store, {
       ...input,
@@ -4319,12 +4421,17 @@ export class Counterpart {
   }
 
   /**
-   * The nearest few live memories of one just written (`contradictions.ts
+   * The nearest few live memories of one just written (`reconsolidation.ts
    * #writeNeighbours`), for the write's result — minus the memory it updates.
    */
-  writeNeighbours(id: string, opts: { exclude?: readonly string[]; owner: boolean }): Neighbour[] {
+  writeNeighbours(id: string, opts: { exclude?: readonly string[]; owner: boolean; session?: string | null }): Neighbour[] {
     try {
-      return writeNeighbours(this.store, { id, owner: opts.owner, ...(opts.exclude === undefined ? {} : { exclude: opts.exclude }) });
+      return writeNeighbours(this.store, {
+        id,
+        owner: opts.owner,
+        ...(opts.exclude === undefined ? {} : { exclude: opts.exclude }),
+        ...(opts.session === undefined ? {} : { session: opts.session }),
+      });
     } catch {
       // A neighbour search that fails costs the list, never the write.
       return [];
@@ -4566,8 +4673,16 @@ export class Counterpart {
    * a dream's or a reflection's words move only toward work or world, as the
    * reflection's do, and a confidential memory outside the owner's session is
    * not found. Refusals come back as reasons, never thrown.
+   *
+   * `night` (2026-10-11): the call comes from a night run's child (a dream or
+   * a reflection whose user allowed `remember`). The owner's `--reflected-feeling
+   * off` closes the core to the night's own judgment, and the reflection's
+   * re-marks already honour it (`dream/reflect.ts`, `door-closed-work-or-world-only`);
+   * a night child's `remark` is the same judgment by another door, so it is
+   * held to the same rule: only work or world. An AWAKE session's re-mark is
+   * not the reflection's, and the switch does not reach it.
    */
-  markAbout(input: { id: string; mark: string; by: "owner" | "self"; why?: string | null; owner?: boolean }): MarkAboutOutcome {
+  markAbout(input: { id: string; mark: string; by: "owner" | "self"; why?: string | null; owner?: boolean; night?: boolean }): MarkAboutOutcome {
     if (this.observer) return { ok: false, reason: "observer", detail: "This is an observer; it reads and changes nothing." };
     const mark = input.mark.trim();
     if (!(ABOUT_MARKS as readonly string[]).includes(mark)) {
@@ -4592,6 +4707,13 @@ export class Counterpart {
           ok: false,
           reason: row.source === "dreamed" ? "dreamed-is-a-suggestion" : "reflection-does-not-mark-itself",
           detail: `${id} was written by a ${row.source === "dreamed" ? "dream" : "reflection"}; only work or world may be set on it (the owner can mark it anything).`,
+        };
+      }
+      if (core && input.night === true && !acceptsReflectedFeeling(this.store)) {
+        return {
+          ok: false,
+          reason: "door-closed-work-or-world-only",
+          detail: "The owner has closed the core to the night's own judgment: from a night run, a mark may only move toward work or world.",
         };
       }
     }
@@ -5231,6 +5353,9 @@ export class Counterpart {
         }),
       );
       if (fresh.length === 0) return { pass: { ...zero, excluded, lostEarlier }, pairs: [] };
+      // After the cursor moved, so a crash cannot propose these twice (and a
+      // proposal raises to at least its weight, so a second one adds nothing).
+      const atWrite = this.linkAtWrite(fresh, day);
       const buffered = this.associate.contiguity(deltas);
       // The mark counts pairs that could be LOST, which is the pairs buffered:
       // a pair refused here (pinned or dead endpoint) is counted as `frozen`
@@ -5258,14 +5383,124 @@ export class Counterpart {
         buffered: buffered.pairs,
         blocked: buffered.blocked,
         frozen: buffered.frozen,
+        ...(atWrite === null ? {} : { atWrite }),
       };
-      this.emit("counterpart.associate.contiguity", undefined, { ...out });
+      this.emit("counterpart.associate.contiguity", undefined, {
+        ...out,
+        atWrite: atWrite === null ? null : atWrite.landed,
+      } as Record<string, string | number | boolean | null>);
       return { pass: out, pairs: buffered.accepted };
     } catch (err) {
       const code = errCode(err);
       this.emit("counterpart.associate.contiguity.failed", undefined, { code });
       return { pass: { ...zero, reason: "failed", code }, pairs: [] };
     }
+  }
+
+  /**
+   * WRITE-TIME LINKS for the memories one contiguity pass read (Group 4 item
+   * 2, 2026-10-11; tightened by the reviewer of #423). Only a memory written
+   * IN THE MOMENT, through the jot door (`submitJot`, the note tool), has
+   * something in mind: what recall showed its session on the write's own turn
+   * (the last `WRITE_LINK_TURNS` turns at the boundary, which runs at every
+   * reply's end), the loud one before footnotes. A memory written in a
+   * session's write-up batch, by the night catch-up, or copied from a chapter
+   * gets none: what the session's last turns showed is not what each of those
+   * memories was about. A memory shown only through an ambiguous handle
+   * (`trains: false`, recall §9 G5) and a handoff are not in mind. What a
+   * deliberate question showed within `WRITE_LINK_ASKED_MS` of the write
+   * joins first, for any door, when that is above 0 (0, off, by default).
+   * `planAtWrite` keeps the first `WRITE_LINK_MAX`; `Associate.propose` lands
+   * them at `WRITE_LINK_WEIGHT`, room-only.
+   *
+   * Null when no memory had anything in mind. Fail-open: a throw is a `failed`
+   * pass, and contiguity goes on.
+   */
+  private linkAtWrite(fresh: readonly { id: string; session: string; at: number; bornDay: number }[], day: number): AtWritePass | null {
+    const t = this.associate.tunables;
+    try {
+      const memories: { id: string; inMind: string[] }[] = [];
+      const jots = this.jotsAmong(fresh);
+      const asking = t.WRITE_LINK_ASKED_MS > 0;
+      const bySession = new Map<string, { recent: string[]; asked: { ref: string; at: number }[] }>();
+      const handoff = new Map<string, boolean>();
+      const notHandoff = (id: string): boolean => {
+        let h = handoff.get(id);
+        if (h === undefined) {
+          h = isHandoffRow(this.store, id);
+          handoff.set(id, h);
+        }
+        return !h;
+      };
+      for (const m of fresh) {
+        const jot = jots.has(m.id);
+        if (!jot && !asking) continue;
+        let mind = bySession.get(m.session);
+        if (mind === undefined) {
+          const state = this.recall.gateState(m.session);
+          const recent = Object.entries(state.surfaced)
+            .filter(([, rec]) => rec.trains && rec.turn > state.turn - t.WRITE_LINK_TURNS)
+            .sort((x, y) => y[1].turn - x[1].turn || (x[1].tier === y[1].tier ? 0 : x[1].tier === "surfaced" ? -1 : 1) || (x[0] < y[0] ? -1 : 1))
+            .map(([id]) => id);
+          let asked: { ref: string; at: number }[] = [];
+          if (asking) {
+            try {
+              asked = this.store.gateRecords(m.session, ASKED_KIND).map((r) => ({ ref: r.ref, at: askedAt(r.turn) }));
+            } catch {
+              asked = [];
+            }
+          }
+          mind = { recent, asked };
+          bySession.set(m.session, mind);
+        }
+        const near = mind.asked
+          .filter((r) => Math.abs(r.at - m.at) <= t.WRITE_LINK_ASKED_MS)
+          .sort((x, y) => y.at - x.at || (x.ref < y.ref ? -1 : 1))
+          .map((r) => r.ref);
+        const inMind = [...new Set([...near, ...(jot ? mind.recent : [])])].filter(notHandoff);
+        if (inMind.length > 0) memories.push({ id: m.id, inMind });
+      }
+      const plan = planAtWrite(memories, t);
+      if (plan.pairs.length === 0) return null;
+      const r = this.associate.propose(plan.pairs, t.WRITE_LINK_WEIGHT, day);
+      return {
+        reason: r.reason === "failed" ? "failed" : r.pairs > 0 ? "linked" : "nothing-in-mind",
+        memories: plan.memories,
+        pairs: plan.pairs.length,
+        landed: r.pairs,
+        noRoom: r.noRoom,
+        blocked: r.blocked,
+        frozen: r.frozen,
+        ...(r.code === undefined ? {} : { code: r.code }),
+      };
+    } catch (err) {
+      const code = errCode(err);
+      this.emit("counterpart.associate.atwrite.failed", undefined, { code });
+      return { reason: "failed", memories: 0, pairs: 0, landed: 0, noRoom: 0, blocked: 0, frozen: 0, code };
+    }
+  }
+
+  /**
+   * Which of these new memories came through the JOT door (reviewer of #423,
+   * 2026-10-11), read from the gate's deposit rows (`GATE_DEPOSIT_EVENT`: its
+   * `source` and `memoryId`), which a deposit writes as it mints. A memory
+   * with no such row (a chapter copy, a row whose ledger write failed) reads
+   * as not a jot, so it gets no write-time window: the safe direction.
+   */
+  private jotsAmong(fresh: readonly { id: string; bornDay: number }[]): Set<string> {
+    const out = new Set<string>();
+    if (fresh.length === 0) return out;
+    const want = new Set(fresh.map((m) => m.id));
+    const since = fresh.reduce((d, m) => Math.min(d, m.bornDay), Number.POSITIVE_INFINITY);
+    for (const row of this.store.eventLog({ name: GATE_DEPOSIT_EVENT, sinceDay: since, order: "desc", limit: 10_000 })) {
+      try {
+        const p = JSON.parse(row.payload ?? "{}") as { source?: unknown; memoryId?: unknown };
+        if (p.source === "jot" && typeof p.memoryId === "string" && want.has(p.memoryId)) out.add(p.memoryId);
+      } catch {
+        /* an unreadable row names no jot */
+      }
+    }
+    return out;
   }
 
   /**
@@ -5321,7 +5556,9 @@ export class Counterpart {
    */
   private recordBoundaryFlush(edges: FlushReport, contiguity: ContiguityPass, session?: string): boolean {
     const flushed = edges.reason === "flushed" || edges.reason === "failed";
-    const contiguitySays = contiguity.reason === "failed" || contiguity.buffered > 0 || contiguity.lostEarlier > 0;
+    const atWrite = contiguity.atWrite;
+    const contiguitySays =
+      contiguity.reason === "failed" || contiguity.buffered > 0 || contiguity.lostEarlier > 0 || (atWrite !== undefined && atWrite.pairs > 0);
     if (!flushed && !contiguitySays) return false;
     const data: Record<string, unknown> = {
       reason: edges.reason,
@@ -5335,6 +5572,8 @@ export class Counterpart {
       blocked: edges.blocked,
       evicted: edges.evictions.length,
       swept: edges.swept,
+      // Of them, rows with an end archived for good (Group 4 item 5).
+      ...(edges.sweptArchived === undefined ? {} : { sweptArchived: edges.sweptArchived }),
       dropped: edges.dropped,
       pendingDropped: 0,
       corrupt: 0,
@@ -5361,6 +5600,15 @@ export class Counterpart {
         evictedOther: contiguity.evictedOther ?? 0,
         renormalizedNodes: contiguity.renormalizedNodes ?? 0,
       },
+      ...(atWrite === undefined ? {} : { atWrite: { ...atWrite } }),
+      // LINKS LAID (2026-10-11, Group 4 item 7): pairs that landed as a link —
+      // contiguity's, the write-time links', and any co-use this process
+      // buffered itself — not `rows` (both directions, plus every sibling a
+      // touched node's decay rewrote).
+      deposited:
+        (contiguity.landed ?? 0) +
+        (atWrite?.landed ?? 0) +
+        (edges.reason === "flushed" ? Math.max(0, edges.pairs - contiguity.buffered - edges.blocked) : 0),
     };
     if (edges.code !== undefined) data["error"] = edges.code;
     try {
@@ -6470,6 +6718,10 @@ export class Counterpart {
     const keepOpen = thread?.refused === "confidential" || thread?.refused === "other-directory";
     const revision = this.applyDeclaredRevision(keepOpen ? withoutHow(proposal) : proposal, mint, source, ctx.session);
     if (held !== null) this.recordHold(held, mint.id, source, ctx, proposal.day);
+    // THE SLOT DETECTOR (2026-10-11, Group 2), after the declared revision:
+    // what the writer named is settled first, then arithmetic reads whether
+    // this is the newer state of something it did not name.
+    const slot = this.proposeSlotFor(mint.id, proposal, ctx.session, ctx.siblings ?? []);
     // THE WAKE IS BEHIND EVERY ACCEPTED MEMORY (2026-10-10), whatever door it
     // came through. Only `session_end` marked it before, so a `note` — the
     // most common write mid-session — left Still open, Nearby and Arriving as
@@ -6491,7 +6743,28 @@ export class Counterpart {
       ...(thread === null ? {} : { thread }),
       ...(facts === null ? {} : { facts }),
       ...(about === null ? {} : { aboutCarried: { mark: about.about, from: about.from } }),
+      ...(slot === null ? {} : { slot }),
     };
+  }
+
+  /**
+   * THE SLOT DETECTOR at the write (2026-10-11): the nearest older memory this
+   * one reads as the newer state of, proposed provisionally — never the one
+   * it declared in `updates` (settled or held already), nor an earlier entry
+   * of the same call. Never throws: a detector that fails costs the proposal,
+   * never the write.
+   */
+  private proposeSlotFor(id: string, p: Proposal, session: string, siblings: readonly string[]): Extract<SlotOutcome, { ok: true }> | null {
+    if (this.observer) return null;
+    try {
+      const declared = p.updates?.resolved ?? null;
+      const candidate = detectSlot(this.store, { id, exclude: declared === null ? siblings : [declared, ...siblings], session });
+      if (candidate === null) return null;
+      const out = proposeSlot(this.store, { holds: id, candidate, actorId: session, day: p.day });
+      return out.ok ? out : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -6500,7 +6773,7 @@ export class Counterpart {
    * writer's word, and a weaker writer points at the wrong one (a 10-02
    * benchmark read: a Haiku writer, about two thirds of 149 pairs; on the
    * owner's store, Opus, all 10 checked were right). The pair is read by
-   * `contradictions.ts#updateRelatedness` — by meaning through the local
+   * `reconsolidation.ts#updateRelatedness` — by meaning through the local
    * embedder, by shared content words when there is none — and an unrelated
    * one comes back as a hold. Null: the declaration goes on as written.
    *
@@ -6559,6 +6832,8 @@ export class Counterpart {
       overVec,
       textVec,
       ignoreNames,
+      // The store's own bar (2026-10-11): what a random pair reads here.
+      ...(overVec !== null && textVec !== null ? { bar: guardBar(this.store) } : {}),
     });
     this.emit("counterpart.update.read", target, {
       related: read.related,
@@ -7130,11 +7405,26 @@ export class Counterpart {
       content,
       resolveId: (id: string) => {
         try {
-          return this.store.resolve(id);
+          const resolved = this.store.resolve(id);
+          // `resolve` hands back a REMOVED id as itself (so a reader can say
+          // "removed"), but a removed memory is not one a new memory can update:
+          // the mint's claim against it is refused by the store, and that refusal
+          // used to take the whole write with it (review of #400). Unresolved,
+          // exactly like a dangling address — the new memory is stored, unlinked.
+          return this.store.deniedIds().includes(resolved) ? null : resolved;
         } catch {
           // An address that does not resolve is not an error: content matching
           // is the fallback, and a refusal costs nothing durable (§5 G10).
           return null;
+        }
+      },
+      // Named but REMOVED: no content fallback, so the new memory is not
+      // attached to some other memory in the removed one's place (review of #422).
+      removed: (id: string) => {
+        try {
+          return this.store.deniedIds().includes(this.store.resolve(id));
+        } catch {
+          return false;
         }
       },
       candidates: (query): Candidate[] => {

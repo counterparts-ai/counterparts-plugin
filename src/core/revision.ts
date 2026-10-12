@@ -31,14 +31,14 @@
  *   | schema ENTITY row                        | link only — an entity dies by   |
  *   |                                          | decay and no model rewrites one |
  *   | any other memory, AUTHORED (`how`)       | SETTLED: changed / corrected /  |
- *   |                                          | open (`contradictions.ts`)      |
+ *   |                                          | open (`reconsolidation.ts`)      |
  *   | any other memory, swept (no `how`)       | link only (`meta.updates`)      |
  *   | protected element                        | REFUSED, on every path          |
  *
  * **The ordinary-memory arm settles (2026-09-29, contradictions).** It was
  * link-only: the loser stayed live and in recall with nothing to say it was
  * over. An AUTHORED `updates` now carries `how` (`changed` by default) and the
- * arm hands it to `contradictions.ts#settleOnWrite`: `changed` cuts the old
+ * arm hands it to `reconsolidation.ts#settleOnWrite`: `changed` cuts the old
  * memory's strength once and labels it earlier, `corrected` archives it,
  * `open` keeps both and shows them together. The rows above are unchanged —
  * a belief, an identity memory, a current-state fact, an entity and a
@@ -50,7 +50,7 @@
  * **An authored `changed` or `corrected` arrives here already read**
  * (2026-10-09): `Counterpart#guardUpdate` checks the pair before the mint,
  * and one that looks unrelated is minted with no `updates` at all, so this
- * seam is never called for it (`contradictions.ts#updateRelatedness`).
+ * seam is never called for it (`reconsolidation.ts#updateRelatedness`).
  *
  * "One declaration adds pressure; the element is superseded only when the bar is
  * crossed; the old version is retained with lineage" (constitution 7) — that is
@@ -93,8 +93,8 @@ import { hashText, occurredOnOf, saidByOf, statusOf } from "./store/index.js";
 import type { MemoryRow, Store } from "./store/index.js";
 import { applyChallenge, successorSeed, supersedeRecord } from "./physics/index.js";
 import { directionOf } from "./mint.js";
-import { flag, settleOnWrite } from "./contradictions.js";
-import type { SettleOutcome } from "./contradictions.js";
+import { flag, settleOnWrite } from "./reconsolidation.js";
+import type { SettleOutcome } from "./reconsolidation.js";
 import type { SettleHow } from "./types.js";
 import type { Schemas } from "./schemas/index.js";
 import type { PressureIncrement, RevisionReason } from "./schemas/index.js";
@@ -115,6 +115,7 @@ export type RevisionApplyReason =
   | "settled"
   | "target-is-an-entity"
   | "confirmation-not-a-challenge"
+  | "target-removed"
   | "observer";
 
 export interface RevisionInput {
@@ -264,6 +265,10 @@ export function applyRevision(
   const retargeted = targetId !== declared;
   const row = store.row(targetId);
   if (row === undefined) return settle("none", "target-unresolvable", null, { retargeted });
+  // A REMOVED memory resolves as itself, and its row may still be here; it is
+  // not one anything can revise (review of #400). Said as itself, so the writer
+  // learns it was removed, not that it could not be found (review of #422).
+  if (store.deniedIds().includes(targetId)) return settle("none", "target-removed", null, { retargeted });
 
   // A CONFIRMATION IS NOT A CHALLENGE (rule 1 in the header). The engine matched
   // a restatement; saying the same thing again must never push the thing it

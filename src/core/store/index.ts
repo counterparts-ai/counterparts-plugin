@@ -161,6 +161,8 @@ export * from "./feelings.js";
 
 /** `LATER_FEELING_SOURCES` as a SQL list — the sources `feeling_peak_lived` leaves out. Constants only, never input. */
 const LATER_SQL = LATER_FEELING_SOURCES.map((x) => `'${x}'`).join(", ");
+/** The sources of a feeling recorded after the memory was written — what `feeling_peak` reads as how it sits now (2026-10-11). Constants only. */
+const RECORDED_LATER_SQL = ["dream", ...LATER_FEELING_SOURCES].map((x) => `'${x}'`).join(", ");
 export * from "./traits.js";
 export type { Db, Statement, WalFold } from "./db.js";
 export type {
@@ -962,6 +964,8 @@ export const WRITE_METHODS = [
   "restoreEdge",
   // 2026-09-28 (association build 1): the flush sweeps edge rows that carry nothing.
   "sweepEdges",
+  // 2026-10-11 (Group 4): rows with an endpoint archived for good.
+  "sweepArchivedEdges",
   "retractFeelings",
   "retractDreamReturns",
   "retractDreamNominations",
@@ -984,6 +988,10 @@ export const WRITE_METHODS = [
   "withdrawContradiction",
   "settleContradiction",
   "undoContradictionSettle",
+  // 2026-10-11 (Group 2): the slot detector's proposal, its withdrawal and that undo.
+  "proposeContradiction",
+  "withdrawProposal",
+  "reinstateProposal",
   // v12 (2026-10-03): a card's birth and the backfill link what names it.
   "linkSubjects",
   // v13 (2026-10-10, the turn-down): derived bookkeeping and box 3.
@@ -2719,7 +2727,7 @@ export class Store {
     return last?.action === "demoted";
   }
 
-  // ── contradictions (v10, `core/contradictions.ts`) ─────────────────────────
+  // ── contradictions (v10, `core/reconsolidation.ts`) ─────────────────────────
 
   /** One pair. */
   contradiction(id: string): ContradictionRow | undefined {
@@ -2850,6 +2858,134 @@ export class Store {
     return { id, birth_day: r?.birth_day ?? 0, created_at: r?.created_at ?? null, rid: r?.rid ?? 0 };
   }
 
+  /** Has any pair EVER named these two memories, withdrawn ones included (a slot the dream said was two things)? */
+  contradictionEverBetween(x: string, y: string): boolean {
+    if (!this.hasTable("contradictions")) return false;
+    return (
+      this.ops.get<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM contradictions WHERE (a = ? AND b = ?) OR (a = ? AND b = ?)",
+        x,
+        y,
+        y,
+        x,
+      )?.n ?? 0
+    ) > 0;
+  }
+
+  /**
+   * PROPOSE A PAIR AS ONE THING'S EARLIER AND LATER STATE (2026-10-11, Group 2:
+   * the slot detector), in one transaction: the pair UNSETTLED, the trail's
+   * `propose` row naming which holds and which it is over, and the provisional
+   * cut on the one it is over (`fade`, computed by the caller through
+   * `physics/`). Idempotent on the two memories: a standing pair between them
+   * is returned as it is, and nothing is cut.
+   */
+  proposeContradiction(input: {
+    id: string;
+    holds: string;
+    over: string;
+    source: string;
+    day: number;
+    actor: string;
+    actorId: string | null;
+    fade: { id: string; fade: number } | null;
+    detail?: Record<string, unknown>;
+  }): { id: string; created: boolean; seq: number | null } {
+    const out = this.mutate("proposeContradiction", () => {
+      if (input.holds === input.over) throw new StoreError("CONTRADICTION_SAME_MEMORY", { id: input.holds });
+      const standing = this.contradictionBetween(input.holds, input.over);
+      if (standing !== undefined) return { id: standing.id, created: false, seq: null };
+      const [a, b] = olderFirst(this.ageOf(input.holds), this.ageOf(input.over));
+      const at = this.nowFn();
+      this.ops.run(
+        `INSERT INTO contradictions
+           (id, a, b, state, how, holds, over, via, source, dream_id, dream_seq, flagged_day, raised_day, settled_day, created_at, updated_at)
+         VALUES (?, ?, ?, 'unsettled', NULL, NULL, NULL, NULL, ?, NULL, NULL, ?, NULL, NULL, ?, ?)`,
+        input.id,
+        a,
+        b,
+        input.source,
+        input.day,
+        at,
+        at,
+      );
+      this.ops.run(
+        `INSERT INTO contradiction_settles (pair_id, action, how, holds, over, actor, actor_id, why, day, at, undone, detail)
+         VALUES (?, 'propose', 'changed', ?, ?, ?, ?, NULL, ?, ?, 0, ?)`,
+        input.id,
+        input.holds,
+        input.over,
+        input.actor,
+        input.actorId,
+        input.day,
+        at,
+        JSON.stringify(input.detail ?? {}),
+      );
+      const seq = this.ops.get<{ seq: number }>("SELECT last_insert_rowid() AS seq")?.seq ?? 0;
+      if (input.fade !== null) this.updatePhysics(input.fade.id, { fade: input.fade.fade });
+      return { id: input.id, created: true, seq };
+    });
+    if (out.created) this.emit("store.contradiction", out.id, { action: "propose", source: input.source });
+    return out;
+  }
+
+  /**
+   * A PROPOSAL WITHDRAWN (2026-10-11): the two were not one thing's earlier and
+   * later state. The pair is withdrawn, its `propose` row marked undone, a
+   * `withdraw` row follows, and the provisional cut is put back (`restore`,
+   * computed by the caller). `reinstate` is its undo — a dream's withdrawal
+   * undone with the dream: the pair unsettled again, the cut re-applied.
+   */
+  withdrawProposal(input: {
+    pairId: string;
+    proposeSeq: number;
+    actor: string;
+    actorId: string | null;
+    why: string | null;
+    day: number;
+    restore: { id: string; fade: number } | null;
+    detail?: Record<string, unknown>;
+  }): { seq: number } {
+    const out = this.mutate("withdrawProposal", () => {
+      const at = this.nowFn();
+      const pair = this.contradiction(input.pairId);
+      if (pair === undefined) throw new StoreError("CONTRADICTION_UNKNOWN", { id: input.pairId });
+      this.ops.run("UPDATE contradiction_settles SET undone = 1 WHERE seq = ? AND pair_id = ?", input.proposeSeq, input.pairId);
+      this.ops.run(
+        `INSERT INTO contradiction_settles (pair_id, action, how, holds, over, actor, actor_id, why, day, at, undone, detail)
+         VALUES (?, 'withdraw', NULL, NULL, NULL, ?, ?, ?, ?, ?, 0, ?)`,
+        input.pairId,
+        input.actor,
+        input.actorId,
+        input.why,
+        input.day,
+        at,
+        JSON.stringify({ ...(input.detail ?? {}), withdraws: input.proposeSeq }),
+      );
+      const seq = this.ops.get<{ seq: number }>("SELECT last_insert_rowid() AS seq")?.seq ?? 0;
+      this.ops.run(
+        "UPDATE contradictions SET state = 'withdrawn', raised_day = NULL, updated_at = ? WHERE id = ?",
+        at,
+        input.pairId,
+      );
+      if (input.restore !== null) this.updatePhysics(input.restore.id, { fade: input.restore.fade });
+      return { seq };
+    });
+    this.emit("store.contradiction", input.pairId, { action: "withdraw", actor: input.actor });
+    return out;
+  }
+
+  /** The undo of `withdrawProposal`: the pair unsettled, the proposal standing, its cut back on. */
+  reinstateProposal(input: { pairId: string; proposeSeq: number; withdrawSeq: number; fade: { id: string; fade: number } | null }): void {
+    this.mutate("reinstateProposal", () => {
+      this.ops.run("UPDATE contradiction_settles SET undone = 0 WHERE seq = ? AND pair_id = ?", input.proposeSeq, input.pairId);
+      this.ops.run("UPDATE contradiction_settles SET undone = 1 WHERE seq = ? AND pair_id = ?", input.withdrawSeq, input.pairId);
+      this.ops.run("UPDATE contradictions SET state = 'unsettled', updated_at = ? WHERE id = ? AND state = 'withdrawn'", this.nowFn(), input.pairId);
+      if (input.fade !== null) this.updatePhysics(input.fade.id, { fade: input.fade.fade });
+    });
+    this.emit("store.contradiction", input.pairId, { action: "reinstate" });
+  }
+
   /** The once-only awake line was handed out for this pair, on this lived day. */
   markContradictionRaised(id: string, day: number): void {
     this.mutate("markContradictionRaised", () => {
@@ -2897,6 +3033,8 @@ export class Store {
     fade?: { id: string; fade: number } | null;
     archive?: { id: string; reason: string } | null;
     closes?: readonly string[];
+    /** 2026-10-11: provisional cuts this settle LIFTS (a slot proposal's, on the pair or one it closes) — final fades, applied before `fade`. */
+    lifts?: readonly { id: string; fade: number }[];
     detail?: Record<string, unknown>;
   }): { pairId: string; seq: number } {
     const out = this.mutate("settleContradiction", () => {
@@ -2966,6 +3104,7 @@ export class Store {
       const seq = this.ops.get<{ seq: number }>("SELECT last_insert_rowid() AS seq")?.seq ?? 0;
       // What it does to the memory it is over, LAST, so a refusal above has
       // staged nothing on the memory itself.
+      for (const l of input.lifts ?? []) this.updatePhysics(l.id, { fade: l.fade });
       if (input.fade !== undefined && input.fade !== null) {
         this.updatePhysics(input.fade.id, { fade: input.fade.fade });
       }
@@ -2997,6 +3136,8 @@ export class Store {
     restore?: { id: string; fade: number } | null;
     unarchive?: { id: string; reason: string } | null;
     reopen?: readonly string[];
+    /** 2026-10-11: provisional cuts the settle had lifted, put back on (final fades), before `restore`. */
+    reapply?: readonly { id: string; fade: number }[];
     detail?: Record<string, unknown>;
   }): { seq: number; unarchived: boolean } {
     const out = this.mutate("undoContradictionSettle", () => {
@@ -3029,6 +3170,7 @@ export class Store {
           id,
         );
       }
+      for (const r of input.reapply ?? []) this.updatePhysics(r.id, { fade: r.fade });
       if (input.restore !== undefined && input.restore !== null) {
         this.updatePhysics(input.restore.id, { fade: input.restore.fade });
       }
@@ -3300,6 +3442,22 @@ export class Store {
       return null;
     }
   }
+  /**
+   * A text's vector from this store's own embedder, computed and kept nowhere
+   * (2026-10-11: the slot detector reads two titles against each other). Null
+   * without an embedder, or when nothing ranks against this store's vectors
+   * (`rankable`). Never throws.
+   */
+  textVector(text: string): number[] | null {
+    try {
+      if (this.embed === undefined || text.trim().length === 0) return null;
+      const v = this.embed(text);
+      return v === null || !this.rankable(v.length, "textVector") ? null : Array.from(v);
+    } catch {
+      return null;
+    }
+  }
+
   setBand(id: string, band: Band, day: number): void {
     this.mutate("setBand", () => {
       this.requireRow(id);
@@ -3361,6 +3519,45 @@ export class Store {
       return doomed.length;
     });
     if (n > 0) this.emit("store.edge.swept", undefined, { count: n });
+    return n;
+  }
+
+  /**
+   * Remove the edge rows with an endpoint ARCHIVED FOR GOOD (2026-10-11, Group
+   * 4 item 5; review 06 C3): archived for one of `reasons`, whose links were
+   * carried to what replaced it when it was archived. Such a row can never
+   * conduct again (the conducting predicate refuses an archived end), so it is
+   * only rows. A pinned memory's rows stay, as in `sweepEdges`. The caller
+   * names the reasons; a decay archive is never one of them, so a memory that
+   * comes back keeps its trails. Returns how many rows went.
+   *
+   * GRACE (reviewer of #423): only an end archived at least `graceMs` ago
+   * (`updated_at`, which the archive sets) is swept. The paths that archive
+   * for good carry the links in a second step (a regrown copy is archived,
+   * then retargeted; a merge's original likewise), and another process's
+   * flush landing between the two would otherwise delete rows not yet carried.
+   */
+  sweepArchivedEdges(reasons: readonly string[], graceMs = 0): number {
+    if (reasons.length === 0) return 0;
+    const marks = reasons.map(() => "?").join(", ");
+    const cutoff = this.nowFn() - Math.max(0, graceMs);
+    const n = this.mutate("sweepArchivedEdges", () => {
+      const doomed = this.ops.all<{ src: string; dst: string }>(
+        `SELECT e.src, e.dst FROM edges e
+          WHERE EXISTS (SELECT 1 FROM memories m
+                         WHERE m.id IN (e.src, e.dst) AND m.archived = 1 AND m.archived_reason IN (${marks})
+                           AND COALESCE(m.updated_at, 0) <= ?)
+            AND NOT EXISTS (SELECT 1 FROM memories m
+                             WHERE m.id IN (e.src, e.dst) AND m.protected = 1)`,
+        ...reasons,
+        cutoff,
+      );
+      if (doomed.length === 0) return 0;
+      const st = this.ops.prepare("DELETE FROM edges WHERE src = ? AND dst = ?");
+      for (const e of doomed) st.run(e.src, e.dst);
+      return doomed.length;
+    });
+    if (n > 0) this.emit("store.edge.swept", undefined, { count: n, archived: true });
     return n;
   }
 
@@ -4475,7 +4672,7 @@ export class Store {
   }
 
   /**
-   * One memory's row — plus `feeling_peak`, the strongest feeling recorded on
+   * One memory's row — plus `feeling_peak`, the strongest feeling of the latest recording on
    * it (physics §5.10, emotion part A). Every physics read goes through here
    * (`read`, `physicsOf`, sleep, recall, the dashboard), so this one subquery
    * is what makes a feeling weigh the same everywhere. `feelings_memory` is
@@ -4490,11 +4687,27 @@ export class Store {
     // v13 (2026-10-10): `today_date`, the store's calendar today, so the
     // dated hold (`operational.ts#datedHold`) reads off this one statement.
     // The old-claims era's cutoff rides the same way (`eraClaimOf`).
+    // 2026-10-11 (Group 2, Mike): `feeling_peak` is the LATEST recording's —
+    // the strongest feeling of the newest moment a feeling was recorded
+    // LATER at (a feeling-now, a dream's or a reflection's: `RECORDED_LATER_SQL`;
+    // a recording's feelings share one moment, so a lone strong one is not
+    // averaged down by quieter ones beside it). That is how the memory sits
+    // now: an apology, new information, the sting turned to clarity lowers
+    // its weight. With none recorded later, the strongest felt at the time —
+    // so a merge, which carries each original's feelings at their own
+    // moments, reads its strongest, not its newest original's (review of
+    // #420). The first is never rewritten; recall by feeling still reads every
+    // one. The fast lane's `feeling_peak_lived` stays the strongest felt at
+    // the time.
     return this.ops.get<MemoryRow & FeelingPeak>(
       `SELECT m.*,
               (SELECT value FROM meta WHERE key = 'lastActiveDate') AS today_date,
               (SELECT value FROM meta WHERE key = '${CLAIMS_ERA_CUTOFF_KEY}') AS claims_era_cutoff,
-              (SELECT MAX(f.strength) FROM feelings f WHERE f.memory_id = m.id) AS feeling_peak,
+              COALESCE(
+                (SELECT MAX(f.strength) FROM feelings f
+                  WHERE f.memory_id = m.id AND f.source IN (${RECORDED_LATER_SQL})
+                    AND f.created_at = (SELECT MAX(g.created_at) FROM feelings g WHERE g.memory_id = m.id AND g.source IN (${RECORDED_LATER_SQL}))),
+                (SELECT MAX(f.strength) FROM feelings f WHERE f.memory_id = m.id)) AS feeling_peak,
               (SELECT MAX(f.strength) FROM feelings f
                 WHERE f.memory_id = m.id AND (f.source IS NULL OR f.source NOT IN (${LATER_SQL}))) AS feeling_peak_lived
          FROM memories m WHERE m.id = ?`,

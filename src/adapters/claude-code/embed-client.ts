@@ -133,8 +133,15 @@ export interface StaticEmbedderOptions {
  * worker's backfill still runs, for rows written by a process that had no
  * embedder (the MCP server's `note` today, mcp INTERFACE-GAPS §7).
  *
- * `vector()` and `warm()` never touch a network and never throw; there is no
- * cache, because there is nothing to save by keeping one.
+ * `vector()` and `warm()` never touch a network and never throw.
+ *
+ * **One entry of memory, the last text.** An authored write embeds the same
+ * string twice in a row: `bridge.batteryGate` asks `vector()` for the novelty
+ * lookup, then `Store.put → indexOne` asks the sync face for the vector box 3
+ * keeps — the identical `indexTextOf(title, gated content)`. The memo answers
+ * the second ask. It hands back a COPY, so a caller that mutates its vector
+ * cannot change the next caller's. Only a vector is kept: a text with no known
+ * token recomputes (and is counted again), which costs nothing worth saving.
  */
 export function createStaticEmbedder(
   model: StaticModel,
@@ -144,8 +151,14 @@ export function createStaticEmbedder(
   let hits = 0;
   let misses = 0;
   const identity: EmbedderIdentity = { model: model.model, dim: model.dim, rebuild: "inline" };
+  let last: { text: string; vec: number[] } | null = null;
   const compute = (text: string): number[] | null => {
+    if (last !== null && last.text === text) {
+      hits += 1;
+      return [...last.vec];
+    }
     const vec = model.embed(text);
+    last = vec === null ? null : { text, vec: [...vec] };
     if (vec === null) {
       misses += 1;
       // A text with no known token (empty, all symbols, an unknown script) — a

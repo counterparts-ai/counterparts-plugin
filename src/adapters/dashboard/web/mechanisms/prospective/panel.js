@@ -22,7 +22,8 @@ export function picture(p) {
       "<li>" + memLink(m, 90) + '<span class="pic-meta">' + (m.plain ? "said plainly" : "came back as a quiet footnote") + " · day " + m.day + "</span></li>"
     ).join("") +
     p.waiting.map((m) =>
-      "<li>" + memLink(m, 90) + '<span class="pic-meta pic-dim">waiting for ' + esc(dateOr(m.date)) + "</span></li>"
+      "<li>" + memLink(m, 90) + '<span class="pic-meta pic-dim">waiting for ' + esc(dateOr(m.date)) +
+        (m.repeats ? " · " + esc(m.repeats) : "") + "</span></li>"
     ).join("") +
     '</ul><p class="pic-cap">' + esc(caption(p)) + "</p>";
 }

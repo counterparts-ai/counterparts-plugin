@@ -5,7 +5,10 @@
  * what was put in front of Claude for the last message (Memories, said in
  * full; Subconscious, titles only), what this session saved, how often each
  * mechanism fired today, and the last dream; then three rows of switches
- * (Counterparts here, Claude Code's own memory; the view; the brain). Closed
+ * (Counterparts here, on · paused · off; the view; the brain), and Claude
+ * Code's own memory for whoever opted in. While core's first meeting is put
+ * off, "Meet your counterpart" tops the body; at the first start after an
+ * install, the sidebar asks Claude to speak first (once). Closed
  * (`quiet`), it is only a dim tail under the prompt, ending with how to open
  * it again. The design is the round-3 mockups Mike chose on 2026-10-10
  * (`~/counterparts-notes/mockups/2026-10-10-mod-round3/`); ../NOTES.md says
@@ -42,6 +45,7 @@ import type {
   SidebarDream,
   SidebarLatest,
   SidebarMind,
+  SidebarOnboarding,
   SidebarRow,
   SidebarSaved,
   SidebarScope,
@@ -55,6 +59,8 @@ import { encodeCells } from './cells'
 import {
   RULES,
   RULE_NAMES,
+  UNKNOWN_ONBOARDING,
+  canMeet,
   classify,
   countToday,
   dateOf,
@@ -65,9 +71,12 @@ import {
   humanDates,
   mechFirings,
   mechsOf,
+  meetShows,
   openedIds,
   ourTool,
   parseFacts,
+  parseOnboarding,
+  parseOnboardingMarker,
   parseRecallBlock,
   payloadOf,
   resolveServer,
@@ -172,6 +181,19 @@ const FALLBACK_MAX = 1200
 const SEARCH_BG = '#121a22'
 const CYAN_DIM = '#0b6f7c'
 
+/**
+ * The first meeting's line: what the sidebar submits, once per install at the
+ * first idle start while core says `not_started`, and on each press of "Meet
+ * your counterpart". Framed as the plugin's (not `asUser`): the model reads
+ * "The counterparts plugin sent a message: …", and core's wake carries the
+ * meeting's instructions.
+ */
+const MEET_PROMPT = 'Counterparts is installed. Say hello and introduce yourself.'
+/** `$.store`: the speak-first went out (`{ session, at }`); never again while it is there. */
+const MEET_FLAG = 'meetTriggered'
+/** A second press of "Meet your counterpart" this soon after the first submits nothing. */
+const MEET_PRESS_MS = 60000
+
 // ── state (the contract: ../types/index.d.ts) ──────────────────────────────
 
 const IDLE_SEARCH: SidebarSearch = { query: '', status: 'idle', header: '', total: 0, hits: [], error: null }
@@ -190,6 +212,8 @@ const firingA = atom({ plugin: 'counterparts', key: 'firing' } as const, null)
 const searchA = atom({ plugin: 'counterparts', key: 'search' } as const, IDLE_SEARCH)
 const scopeA = atom({ plugin: 'counterparts', key: 'scope' } as const, UNKNOWN_SCOPE)
 const memoryA = atom({ plugin: 'counterparts', key: 'claudeMemory' } as const, true)
+const ccSwitchA = atom({ plugin: 'counterparts', key: 'claudeMemorySwitch' } as const, false)
+const onboardingA = atom({ plugin: 'counterparts', key: 'onboarding' } as const, UNKNOWN_ONBOARDING as SidebarOnboarding)
 const viewA = atom({ plugin: 'counterparts', key: 'view' } as const, 'sidebar')
 const brainA = atom({ plugin: 'counterparts', key: 'brain' } as const, 'turning')
 const placedA = atom({ plugin: 'counterparts', key: 'placed' } as const, false)
@@ -264,6 +288,25 @@ const run = {
   countedOn: '',
   /** This session's rows were looked for on the dashboard (`seedSession`), once a module life. */
   seeded: false,
+  /** The person sent a prompt of their own, or ran a slash command, this session: the speak-first stands down. */
+  typed: false,
+  /**
+   * The person sent a PROMPT of their own (`prompt.submit`), not only a command: only this drops a
+   * speak-first already queued, since only a prompt gets a reply where core can offer the meeting.
+   */
+  prompted: false,
+  /** The speak-first was considered this module life (it goes out at most once per install, `MEET_FLAG`). */
+  meetTried: false,
+  /** The session whose start sent the speak-first, as stored; null when it never went out. */
+  meetFiredIn: null as string | null,
+  /**
+   * This module life submitted the speak-first. Unlike `meetFiredIn`, core's state moving on
+   * never clears it: the person's reply calling `meet` (state `offered`) must not let a
+   * speak-first still queued behind it through (`prompt.submit`).
+   */
+  spokeFirst: false,
+  /** When "Meet your counterpart" was last pressed (`$.clock`). */
+  meetPressedAt: -Infinity,
 }
 
 // ── pure helpers ────────────────────────────────────────────────────────────
@@ -407,10 +450,11 @@ function trimSlash(path: string): string {
  */
 function switchExplains(scope: SidebarScope): string | null {
   const here = scope.dir ?? 'this folder'
-  if (scope.mode === 'off') {
-    return scope.own || scope.setBy === null
-      ? `This folder is set off: nothing is remembered here and nothing comes to mind. The switch won't turn it back on; \`counterparts scope ${here} --on\` does.`
-      : `This folder is off because ${scope.setBy} is set off. The switch won't turn it back on; \`counterparts scope ${scope.setBy} --on\` does.`
+  // A folder off by its OWN entry: the switch turns it back on (after a confirm). Off by a parent's: never flipped from here.
+  if (scope.mode === 'off' && !scope.own) {
+    return scope.setBy === null
+      ? `This folder is off, and not by a setting of its own. \`counterparts scope ${here} --on\` turns it on.`
+      : `This folder is off because ${scope.setBy} is set off. The switch won't change that folder from here; \`counterparts scope ${scope.setBy} --on\` does.`
   }
   if (scope.mode === 'paused' && !scope.own) {
     return `Paused because ${scope.setBy ?? 'a folder above this one'} is paused. Resume it there: \`counterparts scope ${scope.setBy ?? '<that folder>'} --resume\`.`
@@ -432,9 +476,21 @@ function switchExplains(scope: SidebarScope): string | null {
 function scopeHover(scope: SidebarScope): string {
   if (scope.mode === 'unknown') return 'Not read yet: a click checks this folder, changing nothing.'
   if (switchExplains(scope) !== null) return "This switch can't change this folder. A click says why."
-  if (scope.mode === 'paused') return 'Paused in this folder, for every session. A click resumes it.'
-  if (scope.mode === 'observer') return 'Reads only here; a click pauses all sessions here (asks first).'
-  return 'A click pauses Counterparts here for every session (asks first).'
+  if (scope.mode === 'paused') return 'Paused here, for every session. on resumes it; off asks first.'
+  if (scope.mode === 'off') return 'Off here, for every session. on turns it back on (asks first).'
+  if (scope.mode === 'observer') return 'Reads only here. on, paused or off: each asks first.'
+  return 'Paused or off holds for every session here; each asks first.'
+}
+
+/** Where the three-way switch stands: `on` for on, observer and unset (on by default); null while unknown. */
+function switchAt(mode: string): 'on' | 'paused' | 'off' | null {
+  if (mode === 'unknown') return null
+  return mode === 'paused' ? 'paused' : mode === 'off' ? 'off' : 'on'
+}
+
+/** An opt-in written in the environment: `1`, `true`, `yes` or `on`. */
+function truthy(v: string | undefined): boolean {
+  return v !== undefined && /^(1|true|yes|on)$/i.test(v.trim())
 }
 
 /** What a click on the Claude Code memory switch does: whole sentences in two rows of 32. */
@@ -489,6 +545,99 @@ async function fetchJson($: EngineInterface, path: string): Promise<unknown> {
   const r = await $.http.fetch(`${await dashUrl($)}${path}`)
   if (!r.ok) throw new Error(`the dashboard answered ${String(r.status)}`)
   return JSON.parse(r.text) as unknown
+}
+
+// ── the first meeting (core owns its steps and state; this triggers and draws) ──
+
+/**
+ * Where the first meeting stands, taken in: from the marker core writes on
+ * every SessionStart wake (`feed.ts#ONBOARDING_MARKER`, the source), or from
+ * the dashboard's `/api/onboarding` (a refresh while it is up). Only a known
+ * state moves it: a missing marker or endpoint leaves what is known, and with
+ * neither ever seen it stays `unknown` (an older core): nothing happens.
+ *
+ * KEYED TO THE STORE without a store id: core says `not_started` only for a
+ * store that never got past it (`start-fresh` resets it). So every known
+ * state past it is written over the once-only mark as `{ settled }`, and a
+ * settled mark doesn't block the speak-first: a `not_started` after it is a
+ * new store, which gets its own first meeting.
+ */
+async function takeOnboarding($: EngineInterface, next: SidebarOnboarding): Promise<void> {
+  if (next.meet === 'unknown') return
+  const before = await read($, onboardingA)
+  if (before.meet === next.meet && before.where === next.where && before.style === next.style) return
+  await update($, onboardingA, () => next)
+  if (next.meet !== 'not_started') {
+    const mark = (await $.store.get(MEET_FLAG)) as { settled?: unknown } | undefined
+    if (mark?.settled !== next.meet) await $.store.set(MEET_FLAG, { settled: next.meet, at: await $.clock.now() })
+    run.meetFiredIn = null
+  }
+}
+
+/** The dashboard's `/api/onboarding`, a refresh: a 404, a refusal or another shape changes nothing, and never marks the dashboard down. */
+async function readOnboarding($: EngineInterface): Promise<void> {
+  try {
+    const r = await $.http.fetch(`${await dashUrl($)}/api/onboarding`)
+    if (r.ok) await takeOnboarding($, parseOnboarding(r.text))
+  } catch {
+    // down: what the wake said stands
+  }
+}
+
+/** The session a still-binding speak-first went out in, or null (none, or settled since: core moved past not_started). */
+function firedIn(stored: unknown): string | null {
+  const session = (stored as { session?: unknown } | null | undefined)?.session
+  return typeof session === 'string' ? session : null
+}
+
+/**
+ * SPEAK FIRST: once per store (`MEET_FLAG` in `$.store`, shared by every
+ * session and restart, settled when core moves on: `takeOnboarding`), at an
+ * interactive start, while the wake's marker says `not_started`, the sidebar
+ * submits MEET_PROMPT, which the engine runs once the session is idle. Run
+ * after the start's registry read and again when the marker arrives,
+ * whichever is last decides. Never headless, never where the folder is
+ * paused, off, observer or unknown, never once the person has typed a prompt
+ * (or is typing one), and never over a binding mark. The mark is written
+ * before the submit, so a crash between them loses the trigger rather than
+ * repeating it.
+ */
+async function speakFirst($: EngineInterface): Promise<void> {
+  if (!run.interactive || run.meetTried) return
+  const scope = await read($, scopeA)
+  // Not read yet (another read was on its way): the next registry read tries again.
+  if (scope.mode === 'unknown' && scope.unread === null) return
+  // No state yet: the wake's marker, when it comes, tries again (no marker at all: an older core, nothing).
+  const { meet } = await read($, onboardingA)
+  if (meet === 'unknown') return
+  run.meetTried = true
+  if (meet !== 'not_started' || run.typed || !canMeet(scope.mode)) return
+  if (firedIn(await $.store.get(MEET_FLAG)) !== null) return
+  // The last looks, right before: no prompt sent or typed, no other session got there meanwhile.
+  if (run.typed || (await $.session.turns().catch(() => 1)) > 0) return
+  const draft = await $.prompt.read().then(
+    b => b.text,
+    () => '',
+  )
+  if (draft.trim() !== '') return
+  if (firedIn(await $.store.get(MEET_FLAG)) !== null) return
+  if (run.session === '') run.session = await $.session.id()
+  await $.store.set(MEET_FLAG, { session: run.session, at: await $.clock.now() })
+  run.meetFiredIn = run.session
+  run.spokeFirst = true
+  // Not awaited inside a hook: the engine queues it until the session is idle.
+  $.clock.after(0, () => quiet($.prompt.submit({ text: MEET_PROMPT })))
+}
+
+
+/** "Meet your counterpart": the same line as the speak-first, once a minute at most. */
+async function pressMeet($: EngineInterface): Promise<void> {
+  const now = await $.clock.now()
+  if (now - run.meetPressedAt < MEET_PRESS_MS) return
+  const [onb, scope] = await Promise.all([read($, onboardingA), read($, scopeA)])
+  if (!meetShows(onb.meet, scope.mode, run.meetFiredIn, run.session)) return
+  run.meetPressedAt = now
+  $.clock.after(0, () => quiet($.prompt.submit({ text: MEET_PROMPT })))
 }
 
 /** Claude Code's own memory, as stored: one preference across sessions, on unless turned off. */
@@ -661,7 +810,12 @@ async function poll($: EngineInterface): Promise<boolean> {
       if ((await read($, dashA)) !== 'up') await update($, dashA, () => 'up')
       const seed = run.seeded ? Promise.resolve() : seedSession($)
       run.seeded = true
-      await Promise.all([readToday($, lastSeq).catch(() => undefined), readDream($).catch(() => undefined), seed.catch(() => undefined)])
+      await Promise.all([
+        readToday($, lastSeq).catch(() => undefined),
+        readDream($).catch(() => undefined),
+        seed.catch(() => undefined),
+        readOnboarding($),
+      ])
       run.cold = true
       run.lastSeq = lastSeq
       return true
@@ -678,6 +832,9 @@ async function poll($: EngineInterface): Promise<boolean> {
     const pulse = await read($, pulseA)
     const newDay = events.some(e => typeof e.day === 'number' && pulse !== null && e.day > pulse.day)
     if (newDay || events.some(e => COUNT_EVENTS.has(e.name))) await readPulse($)
+    // The first meeting, a refresh while it can still move (done and skipped stay; unknown: an older core).
+    const meet = (await read($, onboardingA)).meet
+    if (meet !== 'unknown' && meet !== 'done' && meet !== 'skipped') await readOnboarding($)
     // The Claude memory switch is one preference for every session: follow a change made in another.
     const stored = await claudeMemoryOn($)
     if (stored !== (await read($, memoryA))) {
@@ -1223,12 +1380,23 @@ async function noteSwitch($: EngineInterface, text: string | null): Promise<void
 }
 
 /**
- * The switch. While the folder's state is unknown a press only learns it.
- * After that: a folder whose own entry is on or observer gets a confirm row
- * (`askPause`; only its [Pause] pauses), its own pause resumes at once, and
- * every other state is explained rather than changed (`switchExplains`).
+ * The three-way switch, `on · paused · off` (2026-10-11; before, one
+ * Counterparts dot that paused and resumed). Its safety is the old switch's,
+ * with one change Mike made (2026-10-11, 15:25, lightly held):
+ *
+ * - While the folder's state is unknown, a press on any of the three only
+ *   learns it (the registry file, then the server), and says what it found.
+ * - It acts only on a folder whose OWN entry holds the mode; anything else
+ *   (unset, following a parent, off or paused by a parent) is explained, not
+ *   changed (`switchExplains`): the `scope` tool can't put a folder back to
+ *   unset, and a parent is never flipped from here.
+ * - `paused` and `off` ask first (the confirm row; only its button calls the
+ *   tool); `on` resumes the folder's own pause at once.
+ * - `on` turns a folder that is off by its own entry back on, or a reads-only
+ *   (`observer`) one fully on, after the same confirm (Mike: the switch may
+ *   undo an off). Through the `scope` tool, which answers in an off folder.
  */
-async function toggleScope($: EngineInterface): Promise<void> {
+async function pressScope($: EngineInterface, to: 'on' | 'paused' | 'off'): Promise<void> {
   const scope = await read($, scopeA)
   if (scope.busy) return
   if (scope.mode === 'unknown') {
@@ -1243,10 +1411,12 @@ async function toggleScope($: EngineInterface): Promise<void> {
         $,
         why ??
           (now.mode === 'paused'
-            ? 'Counterparts memory is paused in this folder. Press again to turn it back on.'
-            : now.mode === 'observer'
-              ? 'Counterparts reads only in this folder: memories come to mind, nothing new is kept. Press again to pause it (it asks first).'
-              : 'Counterparts memory is on in this folder. Press again to pause it (it asks first).'),
+            ? 'Counterparts memory is paused in this folder. Press on to turn it back on.'
+            : now.mode === 'off'
+              ? 'Counterparts memory is off in this folder. Press on to turn it back on (it asks first).'
+              : now.mode === 'observer'
+                ? 'Counterparts reads only in this folder: memories come to mind, nothing new is kept. Paused or off asks first.'
+                : 'Counterparts memory is on in this folder. Paused or off asks first.'),
       )
     }
     return
@@ -1256,15 +1426,24 @@ async function toggleScope($: EngineInterface): Promise<void> {
     await noteSwitch($, why)
     return
   }
-  // Here the folder's own entry is on, observer or paused.
-  if (scope.mode === 'paused') await setScope($, 'resume')
-  else await askPause($, scope)
+  // Here the folder's own entry is on, observer, paused or off.
+  if (to === 'on') {
+    if (scope.mode === 'paused') await setScope($, 'resume')
+    else if (scope.mode === 'off' || scope.mode === 'observer') await askChange($, scope, 'on')
+    return
+  }
+  if (scope.mode === 'off') {
+    if (to === 'paused') await noteSwitch($, 'Counterparts memory is off in this folder. Press on to turn it back on (it asks first).')
+    return
+  }
+  if (to === 'paused' && scope.mode === 'paused') return
+  await askChange($, scope, to === 'paused' ? 'pause' : 'off')
 }
 
-/** A pause asks first: the confirm row above the switches. Nothing is called until its [Pause]. */
-async function askPause($: EngineInterface, scope: SidebarScope): Promise<void> {
+/** A pause, an off, or an on from off or observer asks first: the confirm row above the switches. Nothing is called until its button. */
+async function askChange($: EngineInterface, scope: SidebarScope, to: 'pause' | 'off' | 'on'): Promise<void> {
   const at = await $.clock.now()
-  const ask = { dir: scope.dir ?? 'this folder', at }
+  const ask = { dir: scope.dir ?? 'this folder', at, to }
   await noteSwitch($, null)
   await update($, pauseAskA, () => ask)
   $.clock.after(AUTO_CLOSE_MS, () => {
@@ -1276,25 +1455,48 @@ async function cancelPause($: EngineInterface): Promise<void> {
   await update($, pauseAskA, () => null)
 }
 
-/** The confirm row's [Pause]: the only press that pauses, and only a folder still on or observer by its own entry. */
-async function confirmPause($: EngineInterface): Promise<void> {
+/** Which own modes each confirm may change: a pause from on or observer; an off from those or paused; an on from off or observer. */
+const CONFIRM_FROM: Record<'pause' | 'off' | 'on', readonly string[]> = {
+  pause: ['on', 'observer'],
+  off: ['on', 'observer', 'paused'],
+  on: ['off', 'observer'],
+}
+
+/**
+ * The confirm row's [Pause], [Turn off] or [Turn on]: the only presses that
+ * pause, turn off, or turn on from off, and only a folder still holding its
+ * own entry in a mode that confirm may change (`CONFIRM_FROM`).
+ */
+async function confirmChange($: EngineInterface): Promise<void> {
   const ask = await read($, pauseAskA)
   await update($, pauseAskA, () => null)
   if (ask === null) return
+  const to = ask.to ?? 'pause'
   const scope = await read($, scopeA)
-  if (scope.busy || switchExplains(scope) !== null || (scope.mode !== 'on' && scope.mode !== 'observer')) return
-  await setScope($, 'pause')
+  if (scope.busy || switchExplains(scope) !== null || !scope.own) return
+  if (!CONFIRM_FROM[to].includes(scope.mode)) return
+  await setScope($, to)
 }
 
-/** One call: pause or resume this folder's own entry. */
-async function setScope($: EngineInterface, to: 'pause' | 'resume'): Promise<void> {
+/**
+ * The scope tool stood down: this session's memory server started while the
+ * folder read only (`observer`), and changes nothing for the session's life,
+ * the scope setting included (`serve.ts`). The console still can.
+ */
+function stoodDownNote(scope: SidebarScope, to: 'pause' | 'resume' | 'off' | 'on'): string {
+  const flag = to === 'pause' ? '--pause' : to === 'off' ? '--off' : to === 'on' ? '--on' : '--resume'
+  return `This session started while the folder read only, so its memory server can't change the setting. \`counterparts scope ${scope.dir ?? '<this folder>'} ${flag}\` does; a session started after that follows it.`
+}
+
+/** One call: pause, resume, turn off or turn on this folder's own entry. */
+async function setScope($: EngineInterface, to: 'pause' | 'resume' | 'off' | 'on'): Promise<void> {
   const scope = await read($, scopeA)
   await update($, scopeA, () => ({ ...scope, busy: true }))
   try {
     const { payload, isError } = await callMemory($, 'scope', { mode: to })
     const now = scopeOf(payload, isError, scope)
     await update($, scopeA, () => now)
-    await noteSwitch($, now.error === null ? null : `The memory server said: ${now.error}`)
+    await noteSwitch($, now.error === null ? null : payload?.['stoodDown'] === true ? stoodDownNote(scope, to) : `The memory server said: ${now.error}`)
   } catch (err) {
     await update($, scopeA, () => ({ ...scope, busy: false }))
     await noteSwitch($, err instanceof Error ? err.message : String(err))
@@ -1572,13 +1774,26 @@ export const register: Register = on => {
       description: 'Counterparts sidebar: open it, make it quiet, or set the brain',
       argumentHint: '[quiet | brain turning|still|off | resume | fps [n]]',
     })
-    const [mem, viewPref, brainPref, fpsPref] = await Promise.all([
+    const [mem, viewPref, brainPref, fpsPref, ccPref, ccEnv, meetMark] = await Promise.all([
       $.store.get('claudeMemory'),
       $.store.get('view'),
       $.store.get('brain'),
       $.store.get('fps'),
+      $.store.get('claudeMemorySwitch'),
+      $.env.get('COUNTERPARTS_SIDEBAR_CC_MEMORY'),
+      $.store.get(MEET_FLAG),
     ])
     await update($, memoryA, () => mem !== false)
+    // The Claude memory switch is drawn only for someone who opted in. Whoever had already
+    // turned Claude Code's memory off keeps the switch (stored once), so nobody is left with a
+    // filter they can't see or undo.
+    let ccSwitch = ccPref === true
+    if (!ccSwitch && ccPref === undefined && mem === false) {
+      await $.store.set('claudeMemorySwitch', true)
+      ccSwitch = true
+    }
+    await update($, ccSwitchA, () => ccSwitch || truthy(ccEnv))
+    run.meetFiredIn = firedIn(meetMark)
     await update($, viewA, () => normView(viewPref))
     const mode = normBrain(brainPref)
     await update($, brainA, () => mode)
@@ -1592,12 +1807,23 @@ export const register: Register = on => {
     // stands, so a session started in a paused folder says so at once.
     quiet(refreshStatus($))
     if (run.interactive) {
-      quiet(refreshScope($))
+      // Where this folder stands, then (once per install, while core says not_started) the speak-first.
+      $.clock.after(0, () => quiet(refreshScope($).then(() => speakFirst($))))
       run.scopeTimer?.cancel()
-      run.scopeTimer = $.clock.every(SCOPE_RECHECK_MS, () => quiet(refreshScope($)))
+      // (The speak-first again too: a no-op once considered, a retry if the start's read had not landed.)
+      run.scopeTimer = $.clock.every(SCOPE_RECHECK_MS, () => quiet(refreshScope($).then(() => speakFirst($))))
     }
     return next(e)
   })
+
+  // A slash command the person ran (any: /model, /counterparts…) counts as having spoken: no
+  // command starts a turn, so `session.turns()` would not see it. Registered before the
+  // /counterparts hook, which answers without `next`.
+  on('command.run', async ($, e, next) => {
+    const kind = (e as { origin?: { kind?: string } }).origin?.kind
+    if (kind === 'composer' || kind === 'bridge') run.typed = true
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'counterparts' }, async ($, e) => {
     const [verb = '', arg = ''] = e.args.trim().split(/\s+/)
@@ -1648,7 +1874,10 @@ export const register: Register = on => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError === true) return ran
     const name = String(e.tool)
-    if (ourTool(name) === null) return ran
+    const ours = ourTool(name)
+    if (ours === null) return ran
+    // Core's first-meeting tool moved the state: read it again (the button shows or hides).
+    if (ours.tool === 'meet') quiet(readOnboarding($))
     try {
       const args = e as unknown as Record<string, unknown>
       const opened = openedIds(name, args)
@@ -1661,7 +1890,19 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => next(e))
 
-  // Memories and Subconscious: the recall block the classic hook injects
+  // A prompt the person sent: the speak-first stands down for good in this session. If the
+  // speak-first was already queued behind it, it is dropped: their prompt comes first, and
+  // core offers the meeting in that reply instead.
+  on('prompt.submit', async ($, e, next) => {
+    const kind = e.origin.kind
+    if (kind === 'composer' || kind === 'bridge') run.typed = run.prompted = true
+    if (kind === 'plugin' && e.origin.name === 'counterparts' && e.text === MEET_PROMPT && run.prompted && run.spokeFirst && run.meetPressedAt === -Infinity) {
+      return { drop: 'the person spoke first' }
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Memories and Subconscious: the recall block the classic hook injects; and the wake's onboarding marker
   on('session.append', { door: 'hook-context' }, async ($, e, next) => {
     const stored = await next(e)
     if (e.agentId !== undefined) return stored
@@ -1671,6 +1912,12 @@ export const register: Register = on => {
       if (block !== null) {
         if (run.session === '') run.session = await $.session.id()
         await onRecallBlock($, block)
+      }
+      // The wake's onboarding marker: where the first meeting stands, then the speak-first's look.
+      const meet = parseOnboardingMarker(text)
+      if (meet !== null) {
+        await takeOnboarding($, { meet, where: null, style: null })
+        $.clock.after(0, () => quiet(speakFirst($)))
       }
     } catch {
       // the row is stored whatever the sidebar made of it
@@ -1761,6 +2008,7 @@ export const register: Register = on => {
     // session's copy is read too, so a turn of the switch here draws again.)
     await read($, memoryA)
     const memoryOn = await claudeMemoryOn($)
+    const [ccSwitch, onboarding] = await Promise.all([read($, ccSwitchA), read($, onboardingA)])
     const paused = isPaused(scope.mode)
     const mode = normBrain(brainMode)
     look.mono = paused
@@ -1864,9 +2112,9 @@ export const register: Register = on => {
       const off = scope.mode === 'off'
       rows.push(<Text key="paused" color={P.amber} bold>{clip(off ? '◌ Counterparts off here' : '⏸ Counterparts paused here', w)}</Text>)
       rows.push(
-        <Button key="resume-banner" plain onPress={() => toggleScope($)}>
+        <Button key="resume-banner" plain onPress={() => pressScope($, 'on')}>
           <Text color={P.amber} underline>
-            {clip(off ? 'why, and how to turn it on' : scope.own ? 'click to resume' : `paused by ${shortDir(scope.setBy)} · how to resume`, w)}
+            {clip(off ? (scope.own ? 'click to turn it back on' : `off by ${shortDir(scope.setBy)} · why`) : scope.own ? 'click to resume' : `paused by ${shortDir(scope.setBy)} · how to resume`, w)}
           </Text>
         </Button>,
       )
@@ -1874,15 +2122,34 @@ export const register: Register = on => {
       used += 3
     }
 
-    // ── what the switches say, above them: the pause confirm, a note ──
-    const above: JSX.Element[] = []
-    if (pauseAsk !== null && !paused && scope.mode !== 'unknown') {
-      wrap(`Pause Counterparts memory in ${shortDir(pauseAsk.dir)} for every session here?`, w).forEach((l, i) =>
-        above.push(<Text key={`ask${String(i)}`} color={P.amber}>{l}</Text>),
+    // ── the first meeting, put off or not finished: one cyan row at the top of the body ──
+    if (meetShows(onboarding.meet, scope.mode, run.meetFiredIn, run.session)) {
+      rows.push(
+        <Button key="meet" plain onPress={() => pressMeet($)}>
+          <Text color={P.cyan} bold>{clip('Meet your counterpart', w)}</Text>
+        </Button>,
       )
+      rows.push(<Text key="meet-gap"> </Text>)
+      used += 2
+    }
+
+    // ── what the switches say, above them: the pause (or off) confirm, a note ──
+    const above: JSX.Element[] = []
+    const askTo = pauseAsk?.to ?? 'pause'
+    if (pauseAsk !== null && scope.mode !== 'unknown' && CONFIRM_FROM[askTo].includes(scope.mode)) {
+      const where = shortDir(pauseAsk.dir)
+      const ask =
+        askTo === 'off'
+          ? `Turn Counterparts memory off in ${where} for every session here? Nothing is kept or recalled while it's off.`
+          : askTo === 'on'
+            ? scope.mode === 'off'
+              ? `Turn memory back on in ${where}? Nothing from while it was off was kept.`
+              : `Turn memory fully on in ${where}? New memories will be kept here, for every session.`
+            : `Pause Counterparts memory in ${where} for every session here?`
+      wrap(ask, w).forEach((l, i) => above.push(<Text key={`ask${String(i)}`} color={P.amber}>{l}</Text>))
       above.push(
         <Box key="pause-ask" flexDirection="row">
-          <Button key="confirm-pause" onPress={() => confirmPause($)}>Pause</Button>
+          <Button key={`confirm-${askTo}`} onPress={() => confirmChange($)}>{askTo === 'off' ? 'Turn off' : askTo === 'on' ? 'Turn on' : 'Pause'}</Button>
           <Text> </Text>
           <Button key="cancel-pause" onPress={() => cancelPause($)}>Cancel</Button>
         </Box>,
@@ -1892,7 +2159,8 @@ export const register: Register = on => {
     if (above.length > 0) above.push(<Text key="above-gap"> </Text>)
 
     // ── the body: the five sections, folded to the room left ──
-    const footRows = 4
+    // The rule, the Counterparts switch, the view, the brain; and Claude memory for whoever opted in.
+    const footRows = ccSwitch ? 5 : 4
     const bodyRows = Math.max(4, fill - used - above.length - footRows)
     // Down, the chart names how THIS install starts the dashboard: which memory server the session connected says.
     const routes = dashboardRoutes(dash === 'down' ? await memoryServer($) : run.server)
@@ -1913,16 +2181,23 @@ export const register: Register = on => {
     rows.push(...above)
 
     // ── the footer: each dot and its word one hit target ──
-    const known = scope.mode !== 'unknown'
-    const cpOn = known && !paused
-    const readsOnly = scope.mode === 'observer'
-    const cpDot = !known ? (scope.busy ? '…' : '?') : scope.busy ? '…' : cpOn ? (readsOnly ? '◐' : '●') : '○'
-    const dotWord = (key: string, isOn: boolean, word: string, onPress: () => Promise<unknown>, dot?: string, dim = false) => (
+    const dotWord = (key: string, isOn: boolean, word: string, onPress: () => Promise<unknown>, dot?: string, dim = false, lit: string = P.cyan) => (
       <Button key={key} plain onPress={onPress}>
-        <Text color={isOn && !dim ? P.cyan : P.dim}>{dot ?? (isOn ? '●' : '○')}</Text>
+        <Text color={isOn && !dim ? lit : P.dim}>{dot ?? (isOn ? '●' : '○')}</Text>
         <Text color={isOn && !dim ? P.hi : P.dim}>{` ${word}`}</Text>
       </Button>
     )
+    // The Counterparts switch, three-way: `on` (◐ for reads-only), `paused` and `off` (amber, a warning, as
+    // the status line says it). Unknown: every dot `?` and dim, never one lit; `…` while a press is answered.
+    const at = switchAt(scope.mode)
+    const cpDot = (pos: 'on' | 'paused' | 'off'): string => {
+      if (at === null) return scope.busy ? '…' : '?'
+      if (pos !== at) return '○'
+      if (scope.busy) return '…'
+      return pos === 'on' && scope.mode === 'observer' ? '◐' : '●'
+    }
+    // `Counterparts ● on ○ paused ○ off` is 32 cells, the docked pane's text width; narrower, a shorter word.
+    const cpLabel = w >= 32 ? 'Counterparts' : 'memory'
     // What a click on a memory switch does, over the two rows above the footer while hovered: nothing moves under the pointer.
     const hoverCard = (key: string, group: string, text: string) => (
       <Box key={key} position="absolute" top={-2} left={0} width={w} height={2} display="none" hover={{ display: 'flex', scope: group }} flexDirection="column" backgroundColor={P.panel}>
@@ -1940,17 +2215,22 @@ export const register: Register = on => {
     rows.push(
       <Box key="footer" flexDirection="column" width={w}>
         {cards ? hoverCard('cp-why', HOVER_CP, scopeHover(scope)) : null}
-        {cards ? hoverCard('mem-why', HOVER_MEM, memoryHover(memoryOn)) : null}
+        {cards && ccSwitch ? hoverCard('mem-why', HOVER_MEM, memoryHover(memoryOn)) : null}
         <Text color={P.faint}>{'─'.repeat(w)}</Text>
-        <Box flexDirection="row">
-          <Box key="row-cp" hover={{ scope: HOVER_CP }}>
-            {dotWord('toggle-cp', cpOn, 'Counterparts', () => toggleScope($), cpDot, !known)}
-          </Box>
-          <Text>{'  '}</Text>
-          <Box key="row-mem" hover={{ scope: HOVER_MEM }}>
+        <Box key="row-cp" flexDirection="row" hover={{ scope: HOVER_CP }}>
+          <Text color={P.mid}>{cpLabel}</Text>
+          {(['on', 'paused', 'off'] as const).map(pos => (
+            <Box key={`cp-${pos}-box`} flexDirection="row">
+              <Text> </Text>
+              {dotWord(`cp-${pos}`, at === pos, pos, () => pressScope($, pos), cpDot(pos), at === null, pos === 'on' ? P.cyan : P.amber)}
+            </Box>
+          ))}
+        </Box>
+        {ccSwitch ? (
+          <Box key="row-mem" flexDirection="row" hover={{ scope: HOVER_MEM }}>
             {dotWord('toggle-mem', memoryOn, 'Claude memory', () => toggleClaudeMemory($))}
           </Box>
-        </Box>
+        ) : null}
         <Box flexDirection="row">
           <Text color={P.mid}>view</Text>
           {(['sidebar', 'quiet'] as const).map(v => (
@@ -1971,6 +2251,7 @@ export const register: Register = on => {
         </Box>
       </Box>,
     )
+
 
     return (
       <Box flexDirection="column" paddingX={1} width={W} minHeight={fill} backgroundColor={P.panel}>

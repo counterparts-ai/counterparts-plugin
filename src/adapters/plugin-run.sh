@@ -5,7 +5,7 @@
 #   sh plugin-run.sh mcp    - the memory server (.claude-plugin/plugin.json)
 #   sh plugin-run.sh cli …  - the console, for a plugin user with no
 #                             `counterparts` on PATH (commands/doctor.md,
-#                             commands/dashboard.md)
+#                             commands/dashboard.md, commands/uninstall.md)
 #
 # Claude Code runs this with `sh` and the absolute path, so it needs no exec
 # bit and no runtime of its own. Its one job is the one the npm install does

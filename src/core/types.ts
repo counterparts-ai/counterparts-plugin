@@ -40,7 +40,7 @@ export const MEMORY_SOURCES = [
 export type MemorySource = (typeof MEMORY_SOURCES)[number];
 
 /**
- * HOW A CONTRADICTION IS SETTLED (2026-09-29, `core/contradictions.ts`) — the
+ * HOW A CONTRADICTION IS SETTLED (2026-09-29, `core/reconsolidation.ts`) — the
  * three kinds, each with its own outcome, working defaults:
  *
  *   - `changed`: both were true at their time ("used React, now Vue"). The

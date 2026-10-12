@@ -44,6 +44,7 @@ export type UpdatesMethod = "declared" | "content" | "content+hint" | "none";
 export type UpdatesReason =
   | "NO_DECLARATION"
   | "DECLARED_RESOLVED"
+  | "DECLARED_REMOVED"
   | "NO_CANDIDATES"
   | "BELOW_FLOOR"
   | "AMBIGUOUS"
@@ -69,6 +70,13 @@ export interface UpdatesContext {
   scope: string;
   content: string;
   resolveId: IdResolver;
+  /**
+   * INJECTED, optional: does the declared id name a memory the owner REMOVED?
+   * That is not a dangling address — the writer named one memory, and it is
+   * gone on purpose — so it never falls back to content matching, which could
+   * attach the new memory to some other one in its place (review of #422).
+   */
+  removed?: (id: string) => boolean | Promise<boolean>;
   candidates: CandidateSource;
   floor?: number;
   margin?: number;
@@ -110,6 +118,9 @@ export async function resolveUpdates(
   const hit = await ctx.resolveId(declared);
   if (typeof hit === "string" && hit.length > 0) {
     return done({ ...base, resolved: hit, method: "declared", reason: "DECLARED_RESOLVED" });
+  }
+  if (ctx.removed !== undefined && (await ctx.removed(declared))) {
+    return done({ ...base, resolved: null, method: "none", reason: "DECLARED_REMOVED" });
   }
 
   const limit = ctx.limit ?? TUNABLES.UPDATES_CANDIDATES;
