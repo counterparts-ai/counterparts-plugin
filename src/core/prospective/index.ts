@@ -221,6 +221,16 @@ export type SuppressReason =
   /** Brake 3: already offered in this session. */
   | "session-dedup";
 
+/** The brakes that ration a CUE's fires and say nothing about whether the
+ *  date is still arriving, so the wake's lane does not apply them (`arrive`). */
+const CUE_ONLY_BRAKES: ReadonlySet<SuppressReason> = new Set<SuppressReason>([
+  "over-fired",
+  "already-fired-today",
+  "held-for-after",
+  "told-plainly-today",
+  "session-dedup",
+]);
+
 export type FireReason =
   | "fired"
   | "observer"
@@ -550,6 +560,23 @@ export class Prospective {
    * `recall/` gets to refuse in between.
    */
   arrivals(input: ArrivalInput): ArrivalResult {
+    return this.arrive(input, false);
+  }
+
+  /**
+   * `arrivals`, for the cue path (`lane` false) or for the wake's "Arriving:"
+   * lane (`lane` true, `horizon()` only). THE LANE IS NOT A CUE (2026-10-12,
+   * decided by the arriving-lane builder, lightly held): the brakes that ration
+   * ambient FIRES — the per-window cap, once a day, once a session, the last
+   * fire held for after, a plain line told today — say how often a dated item
+   * may be raised in a turn, not whether it is still arriving. Applied to the
+   * lane they emptied it on the very day it mattered: the owner's tax reminder,
+   * cued twice in its lead days (`over-fired`) and told plainly to another
+   * session just after midnight, was missing from every wake on its day. The
+   * lane keeps the window's own phase, a window retired or referenced, and
+   * crisis deference.
+   */
+  private arrive(input: ArrivalInput, lane: boolean): ArrivalResult {
     const day = input.day ?? this.store.livedDay();
     const arrivals: Arrival[] = [];
     const suppressed: SuppressionRecord[] = [];
@@ -590,16 +617,22 @@ export class Prospective {
       const rows = this.firingRowsFor(id);
       const mode = cueModeOf(loaded.doc);
       // Read only for a plain item, and only once per memory per call.
-      const toldToday = mode === "plain" && this.plainToldOn(id, input.at);
+      const toldToday = !lane && mode === "plain" && this.plainToldOn(id, input.at);
       for (const w of p.windows) {
         const stateRow = rows.get(w.key);
-        const brake =
+        const braked =
           this.brakeFor(w, stateRow, {
             at: input.at,
             day,
             refractory: input.refractory === true,
             sessionId: input.sessionId,
           }) ?? (toldToday ? "told-plainly-today" : null);
+        // A QUIET day item whose day is behind it keeps them (2026-10-12,
+        // decided by COUNTERPARTS, lightly held): it is no longer arriving,
+        // only "was due", and one cued out in its lead days leaves the lane
+        // after its day instead of riding the whole grace week.
+        const pastQuiet = mode !== "plain" && w.precision === "day" && isDay(w.eventDate) && isDay(input.at) && w.eventDate < input.at;
+        const brake = lane && !pastQuiet && braked !== null && CUE_ONLY_BRAKES.has(braked) ? null : braked;
         if (brake !== null) {
           suppressed.push({ memoryId: id, windowKey: w.key, reason: brake });
           continue;
@@ -672,7 +705,7 @@ export class Prospective {
    * post-window grace beat is warm or creepy is deliberately unanswered).
    */
   horizon(input: HorizonInput): HorizonResult {
-    const considered = this.arrivals(input);
+    const considered = this.arrive(input, true);
     if (input.previousSessionHighAffect === true) {
       this.emit("prospective.horizon", undefined, {
         reason: "high-affect-previous-session",
@@ -700,7 +733,11 @@ export class Prospective {
     // (which, by the filter above, take no wake line today anyway; the rule is
     // written for both so the two cannot drift if that changes). Only the lane:
     // `arrivals()` is untouched, so recall's cue path still finds it, and a
-    // quiet item is unchanged.
+    // quiet item is unchanged. On its own day it stays (2026-10-12,
+    // `toldForGood`): the turn that was told may not be one anyone read.
+    //
+    // The cue path's brakes are not applied here (2026-10-12, `arrive`): a
+    // date cued twice in its lead days is still arriving on its day.
     //
     // A DAILY repeat takes no wake line either (review of #339, 2026-10-09). It
     // is never "arriving" — it is every day — and the lane cannot say it right:
@@ -725,7 +762,7 @@ export class Prospective {
     const offered = considered.arrivals
       .filter((a) => a.precision === "day")
       .filter((a) => a.recurring !== "daily")
-      .filter((a) => !this.toldForGood(a));
+      .filter((a) => !this.toldForGood(a, input.at));
     const ordered = [...offered].sort(byArrivingOrder(input.at));
     const items = ordered.slice(0, this.tunables.HORIZON_ITEMS);
     // Past the count: named by id in the wake, never silently gone (review of #367).
@@ -916,9 +953,18 @@ export class Prospective {
 
   /** A PLAIN arrival whose window's LAST beat has been told: `day` for a day
    *  item, `last-day` for a month or a range (`plainDue`'s beats). A quiet
-   *  arrival never is. A read. */
-  private toldForGood(a: Arrival): boolean {
+   *  arrival never is. A read.
+   *
+   *  NOT ON ITS OWN DAY (2026-10-12, decided by the arriving-lane builder,
+   *  lightly held): the beat is told to whichever turn comes first on the day
+   *  — on the owner's store a coordinator session's turn at 12:19 am, an
+   *  agent's message with nobody reading — and the wakes he did read that
+   *  morning had lost it. A day item leaves the lane once its day is behind
+   *  the day asked about, which is the repeat in the grace week this rule was
+   *  written against. */
+  private toldForGood(a: Arrival, at: string): boolean {
     if (a.mode !== "plain") return false;
+    if (a.precision === "day" && isDay(a.eventDate) && isDay(at) && a.eventDate >= at) return false;
     return this.plainTold(a.memoryId, a.windowKey, a.precision === "day" ? "day" : "last-day");
   }
 

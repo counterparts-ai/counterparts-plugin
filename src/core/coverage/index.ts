@@ -3,9 +3,11 @@
  *
  * A captured piece of conversation (a line of `buffer.jsonl` or `jots.jsonl`)
  * counts as WRITTEN UP only when a claim for it stands in `coverage.jsonl`. An
- * accepted memory claims every piece of its session not yet claimed; since this
- * module, so do "nothing new" and a chapter, as claims with no proposal behind
- * them. What a session said after its last claim is its unwritten STRETCH.
+ * accepted session-end memory claims every piece of its session not yet
+ * claimed; since this module, so do "nothing new" and a chapter, as claims with
+ * no proposal behind them. A note written in the moment claims only its own
+ * turn (2026-10-11, CONTRACT §5 G7). What is not claimed is the unwritten
+ * STRETCH.
  *
  * This module is the one reader of that. It does not change how pieces are
  * claimed — `SpanBuffer.claimCoverage` still does all of it — and it knows no

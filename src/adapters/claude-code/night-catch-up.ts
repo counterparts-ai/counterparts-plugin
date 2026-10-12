@@ -57,6 +57,7 @@ import {
   WRITE_UP_CLAIM_MS,
   WRITE_UP_PART_BYTES,
   claimedByOther,
+  firstUnwrittenPart,
   grantWriteUps,
   listSessions,
   pointable,
@@ -107,6 +108,11 @@ export interface CatchUpSubject {
    *  `from - 1`, except for a last part answered whose mark did not land,
    *  where every part is already done and only the mark is owed. */
   readonly done: number;
+  /** Parts in `from`..`upTo` the door hands a reader (2026-10-11). */
+  readonly served: number;
+  /** Parts after `done` and up to `upTo` the door passes over, every word in
+   *  them already written up (2026-10-11): they cost the batch nothing. */
+  readonly passed: readonly number[];
 }
 
 export interface CatchUpPlan {
@@ -121,9 +127,9 @@ export interface CatchUpPlan {
   readonly bytes: number;
 }
 
-/** Parts a plan hands its child. */
+/** Parts a plan hands its child to read (passed-over parts are not read). */
 export function plannedParts(plan: Pick<CatchUpPlan, "subjects">): number {
-  return plan.subjects.reduce((n, s) => n + (s.upTo - s.from + 1), 0);
+  return plan.subjects.reduce((n, s) => n + s.served, 0);
 }
 
 /**
@@ -216,44 +222,63 @@ export function planCatchUp(
         bounded += 1;
         continue;
       }
-      subjects.push({ session: h.session, here, lived: calendarDate(h.clockFrom, zone), from: p.parts, upTo: p.parts, of: p.parts, bytes: 0, done: Math.min(p.done, p.parts) });
+      subjects.push({ session: h.session, here, lived: calendarDate(h.clockFrom, zone), from: p.parts, upTo: p.parts, of: p.parts, bytes: 0, done: Math.min(p.done, p.parts), served: 1, passed: [] });
       taken += 1;
       continue;
     }
     const parts = writeUpPartsDated(writeUpEntries(c.spans, { session: h.session, scopes: [here] }), chunk);
     const done = Math.min(p?.done ?? 0, parts.length);
-    const remaining = parts.slice(done);
-    if (remaining.length === 0) continue;
+    if (done >= parts.length) continue;
     if (subjects.length >= maxSessions || taken >= maxParts) {
       bounded += 1;
       continue;
     }
-    let take = 0;
+    // PARTS WITH NOTHING UNWRITTEN COST NOTHING (2026-10-11): the door passes
+    // them over without a reader (`sessions.ts#firstUnwrittenPart`), so they
+    // take neither bytes nor a place in the batch, and the batch starts at the
+    // first part the door will hand over. The last part is always served.
+    const from = firstUnwrittenPart(parts, done + 1);
+    const passedParts: number[] = [];
+    for (let k = done + 1; k < from; k++) passedParts.push(k);
+    let upTo = from - 1;
+    let served = 0;
     let bytes = 0;
-    for (const part of remaining) {
+    for (let k = from; k <= parts.length; k++) {
+      const part = parts[k - 1];
+      if (part === undefined) break;
+      if (k > from && k < parts.length && part.unwritten === 0) {
+        passedParts.push(k);
+        continue;
+      }
       const b = Buffer.byteLength(part.text, "utf8");
-      if (taken + take >= maxParts) break;
-      if (total + bytes + b > maxBytes && !(total === 0 && take === 0)) break;
-      take += 1;
+      if (taken + served >= maxParts) break;
+      if (total + bytes + b > maxBytes && !(total === 0 && served === 0)) break;
+      served += 1;
       bytes += b;
+      upTo = k;
     }
-    if (take === 0) {
+    // The allowance ends on a part the door serves: passed-over parts after it
+    // wait for the batch that serves what follows them.
+    while (passedParts.length > 0 && (passedParts[passedParts.length - 1] as number) > upTo) passedParts.pop();
+    if (served === 0) {
       bounded += 1;
       continue;
     }
-    if (take < remaining.length) bounded += 1;
+    if (upTo < parts.length) bounded += 1;
     total += bytes;
-    taken += take;
-    const first = remaining[0];
+    taken += served;
+    const first = parts[from - 1];
     subjects.push({
       session: h.session,
       here,
       lived: calendarDate(first !== undefined && first.lastAt > 0 ? first.lastAt : h.clockFrom, zone),
-      from: done + 1,
-      upTo: done + take,
+      from,
+      upTo,
       of: parts.length,
       bytes,
       done,
+      served,
+      passed: passedParts,
     });
   }
   return { runner, subjects, owed: owing.length, busy, bounded, bytes: total };
@@ -388,7 +413,7 @@ export function catchUpPrompt(plan: CatchUpPlan): string {
     "You are catching up, in a windowless session of your own: some conversations ended before they were written up, and you write them up now — second-hand, from what was said and what that session said back.",
     `Use only the counterparts session_end tool, always with session: "${plan.runner}". For each session below, in order:`,
     "1. Call session_end with writeUp: <its id> and no memories. It returns one part of that conversation.",
-    "2. Call session_end with writeUp: <its id>, part: <that part>, memories: [...] — what caught your attention in it, one idea each, in your own words; memories: [] only if nothing in it held your attention. Do not write again what is marked as already written up.",
+    "2. Call session_end with writeUp: <its id>, part: <that part>, memories: [...] — what caught your attention in it, one idea each, in your own words. Do not write again what is marked as already written up. If nothing that is not marked so is worth keeping, send memories: [] with nothing: \"<one line: why>\"; an empty answer without that line is refused while the part holds words not yet written up.",
     "3. Fetch again for its next part, until the answer is \"written-up\" or the door says this run's allowance for it is spent. Then the next session.",
     "",
     "Sessions:",
@@ -417,6 +442,13 @@ export interface CatchUpReport {
   readonly written: number;
   /** Parts that came back in this run. */
   readonly parts: number;
+  /** ...of which passed over, every word in them already written up in their
+   *  own session (2026-10-11): no reader was handed them. 0 on an older row. */
+  readonly passed: number;
+  /** Parts granted to a child to read that did not come back (2026-10-11):
+   *  answered `[]` with no reason, or never reached. They stay owed. 0 on an
+   *  older row. */
+  readonly unread: number;
   /** Sessions still owing a write-up, store-wide, once the run ended. */
   readonly left: number;
   /** ...and their parts not yet written (2026-10-11): what is really left, so
@@ -448,8 +480,14 @@ interface Granted {
   readonly done: number;
 }
 
-/** How far each granted share got: written, and parts back, read from the store. */
-function measure(c: Counterpart, subjects: readonly Granted[], now: number): { written: number; parts: number; left: number; allowed: number } {
+/** How far each granted share got: written, and parts back, read from the store
+ *  — and, for one batch's subjects, which of those were passed over and which
+ *  of the parts handed to a reader did not come back. */
+function measure(
+  c: Counterpart,
+  subjects: readonly (Granted & Partial<Pick<CatchUpSubject, "served" | "passed">>)[],
+  now: number,
+): { written: number; parts: number; left: number; allowed: number; passed: number; unread: number } {
   const after = writeUpPlan({ store: c.store, spans: c.spans });
   const progress = readWriteUpProgress(c.store);
   let written = 0;
@@ -458,6 +496,16 @@ function measure(c: Counterpart, subjects: readonly Granted[], now: number): { w
   // every part up to `upTo` done (review of #308) — a batch that did all it
   // was allowed is not a short one.
   let allowed = 0;
+  let passed = 0;
+  let unread = 0;
+  // Of a batch's own grant: how far it reached, what of that was passed over,
+  // and what a reader was handed and did not bring back.
+  const tally = (s: (typeof subjects)[number], reached: number): void => {
+    if (s.served === undefined || s.passed === undefined) return;
+    const back = s.passed.filter((k) => k <= reached).length;
+    passed += back;
+    unread += Math.max(0, s.served - Math.max(0, reached - s.done - back));
+  };
   for (const s of subjects) {
     // Written up HERE: marked, its share done and waiting on another
     // directory, or owing nothing any more.
@@ -465,6 +513,7 @@ function measure(c: Counterpart, subjects: readonly Granted[], now: number): { w
       written += 1;
       allowed += 1;
       parts += Math.max(0, s.of - s.done);
+      tally(s, Math.max(s.upTo, s.done + (s.served ?? 0)));
       continue;
     }
     // Progress is what MOVED (review of #401): a last part answered whose mark
@@ -474,9 +523,10 @@ function measure(c: Counterpart, subjects: readonly Granted[], now: number): { w
     const p = progress[progressKey(s.session, s.here)];
     if (p !== undefined) parts += Math.max(0, p.done - s.done);
     if (p !== undefined && p.done >= s.upTo && p.done > s.done) allowed += 1;
+    tally(s, Math.min(Math.max(p?.done ?? s.done, s.done), s.upTo));
   }
   const left = after.filter((h) => h.owes && pointable(h, c.store.dir)).length;
-  return { written, parts, left, allowed };
+  return { written, parts, left, allowed, passed, unread };
 }
 
 export interface CatchUpInput {
@@ -539,6 +589,8 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
   let state: CatchUpReport["state"] = "done";
   let code: number | null = null;
   let parts = 0;
+  let passed = 0;
+  let unread = 0;
   let busy = 0;
   let bytes = 0;
   let owed = 0;
@@ -621,7 +673,11 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
     } catch {
       m = null;
     }
-    if (m !== null) parts += m.parts;
+    if (m !== null) {
+      parts += m.parts;
+      passed += m.passed;
+      unread += m.unread;
+    }
     // A LATER CHILD THAT COULD NOT START ends a run that already wrote: the
     // run stopped short (`partial`), it did not fail to start.
     if (child.state !== "done") {
@@ -646,6 +702,8 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
     granted: granted.size,
     written: 0,
     parts,
+    passed,
+    unread,
     left: owed,
     partsLeft: null,
     bounded: 0,
@@ -681,6 +739,8 @@ function record(input: CatchUpInput, report: CatchUpReport, open?: Counterpart):
     granted: report.granted,
     written: report.written,
     parts: report.parts,
+    passed: report.passed,
+    unread: report.unread,
     left: report.left,
     partsLeft: report.partsLeft,
     bounded: report.bounded,
@@ -735,6 +795,8 @@ export function catchUpOf(
         granted: n("granted"),
         written: n("written"),
         parts: n("parts"),
+        passed: n("passed"),
+        unread: n("unread"),
         left: n("left"),
         bounded: n("bounded"),
         busy: n("busy"),
@@ -754,13 +816,17 @@ export function catchUpOf(
 
 /**
  * The catch-up in a person's words: "caught up 2 of 3 sessions (14 parts
- * written); 1 session still owed, 6 parts". A session counts as caught up once
- * its last part is written; the parts say how far a long one got.
+ * written, 9 of them already written up in their own session; 1 part unread);
+ * 1 session still owed, 6 parts". A session counts as caught up once its last
+ * part is written; the parts say how far a long one got, how many needed no
+ * reader (2026-10-11), and how many a reader was handed and did not bring back.
  */
 export function catchUpWords(
   r: Pick<CatchUpReport, "state" | "granted" | "written" | "parts" | "left" | "bounded" | "busy"> & {
     readonly partsLeft?: number | null;
     readonly limit?: CatchUpReport["limit"];
+    readonly passed?: number;
+    readonly unread?: number;
   },
 ): string {
   const n = (k: number, one: string, many: string): string => `${String(k)} ${k === 1 ? one : many}`;
@@ -782,5 +848,7 @@ export function catchUpWords(
       : r.limit === "time"
         ? " (it stopped at its hour)"
         : ` (${n(r.bounded, "was", "were")} over the run's ceiling)`;
-  return `caught up ${String(r.written)} of ${n(r.granted, "session", "sessions")} (${n(r.parts, "part", "parts")} written)${how}; ${left}${over}`;
+  const passed = typeof r.passed === "number" && r.passed > 0 ? `, ${String(r.passed)} of them already written up in their own session` : "";
+  const unread = typeof r.unread === "number" && r.unread > 0 ? `; ${n(r.unread, "part", "parts")} unread` : "";
+  return `caught up ${String(r.written)} of ${n(r.granted, "session", "sessions")} (${n(r.parts, "part", "parts")} written${passed}${unread})${how}; ${left}${over}`;
 }

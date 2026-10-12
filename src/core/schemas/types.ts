@@ -359,6 +359,31 @@ export interface FadeReport {
   skippedForLimit: number;
 }
 
+export interface NameBirthOptions {
+  /** Offer every name, write nothing. The observer's report. */
+  dryRun?: boolean;
+  /** Births at most this many; the rest wait for the next night, counted. */
+  limit?: number;
+}
+
+export interface NameBirthReport {
+  day: number;
+  dryRun: boolean;
+  /** Live memories the tally read. */
+  memories: number;
+  /** Names that met the bar and no card holds, most-named first (offered in that order). */
+  offered: number;
+  /** Born this night. Ids only. Empty on a dry run, which writes nothing:
+   *  `offered` and `skippedForLimit` say what a real night would try. */
+  born: string[];
+  /** `mention()`'s refusals by reason: a near collision, a second self, … */
+  refused: Record<string, number>;
+  /** Names over the night's limit, left for the next night. */
+  skippedForLimit: number;
+  /** Names that met the bar but read as English words (the case test). */
+  lowerCase: number;
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------

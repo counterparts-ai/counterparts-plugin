@@ -689,6 +689,8 @@ export class Recall {
     const outcome = this.store.reinforce(memoryId, today, tier, {
       ...(cued ? { cued: true } : {}),
       ...(upgradeFrom === undefined ? {} : { upgradeFrom }),
+      // The session it came back in (2026-10-11): the core's recurrence lane counts sessions.
+      session: sessionId,
     });
     if (outcome.credited) {
       state.credited[memoryId] = { turn: state.turn, tier, day: today };
@@ -696,7 +698,7 @@ export class Recall {
     // Only when RECALL showed the chapter this session (review of #293, S4):
     // then it was the collapsed pair. A chapter credited from the wake or the
     // `chapter` tool credits the chapter alone, as before.
-    const copies = surfaced !== undefined ? this.creditCopies(state, memoryId, today, tier, cued) : 0;
+    const copies = surfaced !== undefined ? this.creditCopies(state, memoryId, today, tier, cued, sessionId) : 0;
     if (outcome.credited || copies > 0) this.persist(state, "resolveUse");
     this.emit("recall.credit", memoryId, {
       tier,
@@ -762,7 +764,7 @@ export class Recall {
    * physics decides; a copy that throws is skipped and the chapter's own credit
    * stands. Returns how many copies were credited.
    */
-  private creditCopies(state: GateState, memoryId: string, today: number, tier: UseTier, cued: boolean): number {
+  private creditCopies(state: GateState, memoryId: string, today: number, tier: UseTier, cued: boolean, sessionId: string): number {
     let copies: string[];
     try {
       if (this.store.row(memoryId)?.type !== "episode") return 0;
@@ -781,6 +783,7 @@ export class Recall {
         const out = this.store.reinforce(copy, today, tier, {
           ...(cued ? { cued: true } : {}),
           ...(upgradeFrom === undefined ? {} : { upgradeFrom }),
+          session: sessionId,
         });
         this.emit("recall.credit", copy, { tier, w, credited: out.credited, reason: out.reason, via: "chapter" });
         if (!out.credited) continue;
@@ -890,7 +893,12 @@ function upgradeOf(prior: { tier: UseTier; day: number } | undefined, today: num
  * one `headOf` per candidate (a few indexed reads); never throws.
  */
 export function headsWin(store: Store, candidates: readonly Candidate[], day: number): Candidate[] {
-  const ids = new Set(candidates.map((c) => c.id));
+  // A HEAD REACHED ONLY BY A LINK is not the turn reaching it (2026-10-11,
+  // Group 2b, left from #420): as a quiet pointer it sat in its own slots,
+  // apart from what the words found, so the earlier version the words found
+  // was never inhibited and both showed. It is brought in to stand for the
+  // earlier one instead, and its link-only candidate is dropped.
+  const ids = new Set(candidates.filter((c) => c.linkOnly !== true).map((c) => c.id));
   const out: Candidate[] = [];
   const brought = new Set<string>();
   for (const c of candidates) {
@@ -925,7 +933,7 @@ export function headsWin(store: Store, candidates: readonly Candidate[], day: nu
       /* an unreadable head: the earlier one shows, labelled */
     }
   }
-  return out;
+  return brought.size === 0 ? out : out.filter((c) => !(c.linkOnly === true && brought.has(c.id) && c.standsFor === undefined));
 }
 
 function trainsOf(verdicts: readonly CandidateVerdict[], id: string): boolean {

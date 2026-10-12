@@ -37,6 +37,8 @@ export function paint(d) {
   // ── the one line of counts; each opens its list ──
   const counts = [
     ["core", s.core.length, plural(s.core.length, "in the core", "in the core")],
+    // Still core, waiting on a decision (2026-10-11): shown only when there are any.
+    ...((s.reconsidering || []).length > 0 ? [["reconsidering", s.reconsidering.length, plural(s.reconsidering.length, "being reconsidered", "being reconsidered")]] : []),
     ["guarded", s.guarded.length, plural(s.guarded.length, "protected", "protected")],
     ["contested", s.contested.length, plural(s.contested.length, "being argued with", "being argued with")],
   ];
@@ -103,10 +105,18 @@ function history(h) {
 }
 
 function listOf(s, key) {
-  return key === "core" ? s.core : key === "guarded" ? s.guarded : key === "contested" ? s.contested : [];
+  return key === "core" ? s.core : key === "guarded" ? s.guarded : key === "contested" ? s.contested : key === "reconsidering" ? (s.reconsidering || []) : [];
 }
 
 function list(s, key) {
+  if (key === "reconsidering") {
+    // Still core; nothing leaves without a decision — mine, or yours.
+    return s.reconsidering.map((r) =>
+      '<button type="button" class="st-row click" onclick="openMemory(\'' + esc(r.id) + '\')">' +
+        '<span class="st-text">' + said(headline(r.text), r.confidential) + "</span>" +
+        '<span class="st-hist-tail">' + esc("since day " + r.day + " · " + r.why) + "</span></button>").join("") +
+      '<p class="foot st-note">Still in the core. Nothing leaves it without a decision: keep one with <code>counterparts core --reaffirm &lt;id&gt; --reason "…"</code>, or send it back with <code>--demote</code>. I can decide too, awake or when I reflect.</p>';
+  }
   if (key === "contested") {
     return s.contested.map((c, i) =>
       '<button type="button" class="st-row st-story" data-i="' + i + '">' +
@@ -139,8 +149,9 @@ function row(r) {
 export function ruleWords(s) {
   const r = s.rule;
   const foot = ["Only a memory about me or about us joins the core, by one of two lanes: strongly felt (" + n2(r.needFeeling) +
-    " or more) and come back at least once, " + r.needGap + " or more days after it was made; or come back on " + r.days +
-    " different days over " + r.span + ". That is checked every " + r.everyDays + " lived days, at most " + r.cap + " a night. " +
+    " or more) and come back at least once, " + r.needGap + " or more days after it was made; or keep coming back — it, or the memories that are its earlier and later states — on " + r.days +
+    " different days" + (r.sessions ? ", in " + r.sessions + " sessions," : "") + " over " + r.span + (r.window ? ", within the last " + r.window : "") + ", once it has been used itself. That is checked every " + r.everyDays + " lived days, at most " + r.cap + " a night. " +
+    (r.quietDays ? "A core memory that stops coming back for " + r.quietDays + " days is reconsidered, never dropped without a decision. " : "") +
     // The map's own words (round 4 of the map, 2026-09-28: three named rings,
     // no legend) — this sentence described the legend before it.
     "On the map, “" + RING_WORDS.core + "” in the middle is the core; “" + RING_WORDS.near +
@@ -154,7 +165,7 @@ export function ruleWords(s) {
   }
   if (s.outOfReach > 0) {
     foot.push(s.outOfReach + (s.outOfReach === 1 ? " memory is" : " memories are") +
-      " not about me or about us, so the core is not for them however often they come back.");
+      " not about me or about us (about you, the work or the world), or a fact or a plan, so the core is not for them however often they come back. They are kept and recalled as before.");
   }
   return foot.join(" ");
 }

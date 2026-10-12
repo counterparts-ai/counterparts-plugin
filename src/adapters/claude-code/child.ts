@@ -41,6 +41,11 @@ export interface ChildResult {
   /** The OS's code when the child could not be started at all (`ENOENT` for a
    *  command that is not there). Absent otherwise. */
   readonly spawnCode?: string;
+  /** What the child wrote to STDOUT, when its plan asked for it
+   *  (`captureOutput`): at most `OUTPUT_MAX_BYTES`, the rest drained unread. */
+  readonly output?: string;
+  /** True when the child wrote more than was kept. */
+  readonly outputShort?: boolean;
 }
 
 /** WHAT `startChild` NEEDS OF A PLAN. */
@@ -55,7 +60,14 @@ export interface ChildPlan {
   readonly timeoutMs: number;
   /** The child's working directory; absent, this process's. */
   readonly cwd?: string;
+  /** Keep what the child writes to STDOUT (2026-10-12): the nightly run reads
+   *  its own child's `stream-json` output rather than looking for the host's
+   *  transcript under `~/.claude/projects`. Absent, STDOUT is ignored. */
+  readonly captureOutput?: boolean;
 }
+
+/** **CAL.** The most of a child's STDOUT kept in memory; the rest is drained unread. */
+export const OUTPUT_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * HOW LONG A CHILD GETS TO DIE POLITELY before it is killed, and how long after
@@ -80,12 +92,19 @@ export async function startChild(plan: ChildPlan, abort?: AbortSignal): Promise<
     let terminated = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
     let off: (() => void) | null = null;
+    // THE CHILD'S OWN OUTPUT (2026-10-12), kept only when asked for and only
+    // up to the cap. A child that writes past it is drained, never blocked.
+    const chunks: Buffer[] = [];
+    let kept = 0;
+    let outputShort = false;
+    const output = (): Pick<ChildResult, "output" | "outputShort"> =>
+      plan.captureOutput === true ? { output: Buffer.concat(chunks).toString("utf8"), ...(outputShort ? { outputShort } : {}) } : {};
     const done = (r: ChildResult): void => {
       if (settled) return;
       settled = true;
       for (const t of timers) clearTimeout(t);
       off?.();
-      resolve(r);
+      resolve({ ...r, ...output() });
     };
     let child: ReturnType<typeof spawn>;
     try {
@@ -100,7 +119,7 @@ export async function startChild(plan: ChildPlan, abort?: AbortSignal): Promise<
         // command line is readable by every process on the machine through
         // `ps` (S2 review, NIT-2). `claude -p` with no positional prompt reads
         // stdin.
-        stdio: ["pipe", "ignore", "ignore"],
+        stdio: ["pipe", plan.captureOutput === true ? "pipe" : "ignore", "ignore"],
         env: { ...plan.env },
         ...(plan.cwd === undefined ? {} : { cwd: plan.cwd }),
       });
@@ -110,6 +129,17 @@ export async function startChild(plan: ChildPlan, abort?: AbortSignal): Promise<
       done({ code: null, timedOut: false, error: err instanceof Error ? err.name : "UNKNOWN", ...spawnCodeOf(err) });
       return;
     }
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (kept >= OUTPUT_MAX_BYTES) {
+        outputShort = true;
+        return;
+      }
+      const room = OUTPUT_MAX_BYTES - kept;
+      const part = chunk.length > room ? chunk.subarray(0, room) : chunk;
+      if (part.length < chunk.length) outputShort = true;
+      chunks.push(part);
+      kept += part.length;
+    });
     try {
       child.stdin?.end(plan.stdin);
     } catch {
@@ -161,13 +191,23 @@ export async function startChild(plan: ChildPlan, abort?: AbortSignal): Promise<
     child.on("error", (err) => {
       done({ code: null, timedOut: false, error: err.name, ...spawnCodeOf(err) });
     });
-    child.on("close", (exit, sig) => {
+    const ended = (exit: number | null, sig: NodeJS.Signals | null): void => {
       done({
         code: exit,
         timedOut: terminated || sig === "SIGTERM" || sig === "SIGKILL",
         error: terminated ? "killed" : null,
       });
-    });
+    };
+    child.on("close", ended);
+    // A PIPED STDOUT can outlive the child (2026-10-12): `close` waits for every
+    // holder of the pipe, and a helper the host left behind would hold the run
+    // until the watchdog. The exit, then a short grace for the last of the
+    // output, is the end.
+    if (plan.captureOutput === true) {
+      child.on("exit", (exit, sig) => {
+        timers.push(arm(() => ended(exit, sig), REAP_GRACE_MS));
+      });
+    }
   });
 }
 

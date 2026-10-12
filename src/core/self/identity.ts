@@ -56,6 +56,9 @@ export interface Ranked {
    * self page's borrowing (`briefing.ts#ROOM_ORDER`'s `due`).
    */
   readonly due?: boolean;
+  /** Horizon only, at session start (2026-10-12): due within the next few
+   *  days (`HorizonItem.near`, `briefing.ts#ROOM_ORDER`'s `arrivingNear`). */
+  readonly near?: boolean;
 }
 
 /**
@@ -177,6 +180,21 @@ export interface Scanned {
   readonly about?: string | null;
   /** The directory it was written in (`origin_scope`), or null. */
   readonly originScope?: string | null;
+  /**
+   * A core memory BEING RECONSIDERED (2026-10-11, Group 3 part A): it waits on
+   * a decision, so it is listed under "Still open" rather than "Who I am"
+   * (`rankLanes`). Absent: not flagged.
+   */
+  readonly reconsidering?: boolean;
+}
+
+/** The core memories being reconsidered, as a set (2026-10-11); empty when none or unreadable. */
+export function reconsideringIds(store: Store): Set<string> {
+  try {
+    return new Set(store.coreReconsidering().map((r) => r.id));
+  } catch {
+    return new Set();
+  }
 }
 
 /**
@@ -187,9 +205,10 @@ export function scanActive(store: Store, day: number): Scanned[] {
   const out: Scanned[] = [];
   const rendered = lastRenderedOf(store);
   const displays = store.wakeDisplays();
+  const flagged = reconsideringIds(store);
   for (const id of store.list({ type: "memory", archived: false })) {
     const s = scanOne(store, id, day, rendered, displays);
-    if (s !== null) out.push(s);
+    if (s !== null) out.push(flagged.has(id) && s.band === "identity" ? { ...s, reconsidering: true } : s);
   }
   return out;
 }
@@ -346,7 +365,9 @@ export interface Lanes {
  *   craft    — skill-kind, not already in identity, above the warm floor. The
  *              procedural self is rendered as CONTENT, never a pointer (§1).
  *              Empty under `workAtDelivery` (below): composed per directory.
- *   threads  — `unresolved` memories: person-scoped first, oldest-opened first.
+ *   threads  — `unresolved` memories: person-scoped first, oldest-opened first;
+ *              and a core memory being reconsidered (2026-10-11), which waits
+ *              on a decision and so is listed here, not under identity.
  *   hints    — everything else warm enough to be worth a nudge, by `hintReading`:
  *              organic strength x habituation, so one strong memory cannot
  *              hold the lane every day (2026-09-26).
@@ -396,6 +417,7 @@ export function rankLanes(
   const identity: Ranked[] = [];
   const craft: Ranked[] = [];
   const threads: Ranked[] = [];
+  const reconsidering: Ranked[] = [];
   const hints: Ranked[] = [];
   const settledOver = opts.settledOver ?? new Set<string>();
   const inIdentity = new Set(scanned.filter((s) => s.band === "identity").map((s) => s.id));
@@ -403,6 +425,11 @@ export function rankLanes(
   const arriving = new Set(horizon.map((h) => h.id));
 
   for (const s of scanned) {
+    // A core memory being reconsidered waits on a decision: "Still open" (2026-10-11).
+    if (s.band === "identity" && s.reconsidering === true) {
+      reconsidering.push(rankedAs(s, "threads"));
+      continue;
+    }
     if (s.band === "identity") {
       identity.push(rankedAs(s, "identity"));
       continue;
@@ -436,6 +463,18 @@ export function rankLanes(
   identity.sort(byRotation(scanned.find((s) => s.day !== undefined)?.day));
   craft.sort(byStrength);
   threads.sort(byThreadAge);
+  // A few core memories being reconsidered lead "Still open" (2026-10-11):
+  // at most `RECONSIDERING_MAX`, the rest counted with the lane's overflow
+  // ("more still open"), one decision at a time.
+  // They TAKE TURNS by lived day (review of #430): a fixed order would show
+  // the same one every wake while the others waited unseen behind it.
+  reconsidering.sort(byThreadAge);
+  const turn = scanned.find((s) => s.day !== undefined)?.day ?? 0;
+  const turns = reconsidering.length === 0 ? 0 : ((turn % reconsidering.length) + reconsidering.length) % reconsidering.length;
+  const rotated = [...reconsidering.slice(turns), ...reconsidering.slice(0, turns)];
+  const shownFlags = Math.min(rotated.length, t.RECONSIDERING_MAX);
+  threads.unshift(...rotated.slice(0, shownFlags));
+  const flagsWaiting = rotated.slice(shownFlags).map((r) => r.id);
   hints.sort(byHint);
 
   const past = (lane: readonly Ranked[], cap: number): string[] => lane.slice(cap).map((r) => r.id);
@@ -448,7 +487,7 @@ export function rankLanes(
     overflow: {
       identity: past(identity, t.IDENTITY_MAX),
       craft: past(craft, t.CRAFT_MAX),
-      threads: past(threads, t.THREADS_MAX),
+      threads: [...past(threads, t.THREADS_MAX), ...flagsWaiting],
       hints: past(hints, t.HINTS_MAX),
       horizon: [
         ...past(horizon, t.HORIZON_MAX),

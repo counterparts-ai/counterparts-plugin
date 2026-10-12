@@ -360,6 +360,23 @@ export function isHandoff(doc: ProseDoc): boolean {
   return doc.type === "schema" && doc.meta["role"] === "handoff";
 }
 
+/**
+ * AN ENTITY CARD IS NOT A RECALL CANDIDATE (2026-10-11): a card is how a name
+ * reaches its memories (subjects, facts mode's subject channel), and a newborn
+ * one holds only its name. Read structurally off the row's `meta` column, for
+ * `isSelfPage`'s reason; a shape that does not parse reads as "not a card".
+ * The constant's owner is `schemas/` (`role: "entity"`). The identity core is
+ * one too, and holds only the owner's name.
+ */
+function isEntityCardRow(row: { meta: string }): boolean {
+  if (!row.meta.includes('"role"')) return false;
+  try {
+    return (JSON.parse(row.meta) as { role?: unknown } | null)?.role === "entity";
+  } catch {
+    return false;
+  }
+}
+
 /** `isHandoff` by id, for the scan. */
 function isHandoffRow(store: Store, id: string): boolean {
   try {
@@ -652,6 +669,11 @@ export function activate(
     // context inside another's turn. Gated on the row's own columns, as above,
     // so only a SCHEMA row of the place kind pays for the prose read.
     if (row.type === "schema" && row.kind === "place" && isHandoffRow(store, id)) return undefined;
+    // An entity CARD (2026-10-11, Group 3 part D): the index a name reaches
+    // its memories through, a stub that asserts nothing itself. Once cards were
+    // born from the names the memories say, a turn naming someone surfaced
+    // the stub as a footnote. Off the row's meta column; no prose read.
+    if (row.type === "schema" && isEntityCardRow(row)) return undefined;
     // BELOW REACH, exactly (2026-10-10): the ranking cache's prefilter is a
     // pass stale at most; this is the day's own number. Ambient only; never a
     // chapter, a chapter's copy or an entity card (`reachExempt`).

@@ -58,6 +58,8 @@ import type { MemoryRow, PutInput } from "../store/index.js";
 import type { Band, Kind, Salience } from "../types.js";
 import { AliasIndex, collision, handleKey } from "./aliases.js";
 import { TUNABLES } from "./tunables.js";
+import { tallyNames } from "./names.js";
+import type { NameCount } from "./names.js";
 import {
   BIRTH_KINDS,
   isBirthKind,
@@ -83,6 +85,8 @@ import type {
   MentionInput,
   NamedInTextInput,
   NamedInTextReport,
+  NameBirthOptions,
+  NameBirthReport,
   PlacementOutcome,
   PlacementReason,
   PressureIncrement,
@@ -117,6 +121,8 @@ export const PUBLIC_SURFACE = [
   "challengeBelief",
   "replaceCurrentState",
   "fadeSweep",
+  // 2026-10-11 (Group 3 part D): the night's name tally offers names to `mention`.
+  "birthsFromNames",
   // reads
   "entity",
   "entities",
@@ -130,6 +136,8 @@ export const PUBLIC_SURFACE = [
   "bandOf",
   "fadeVerdict",
   "story",
+  // 2026-10-11 (review of #427): a crossing's successor, read off its pressure pair (a read).
+  "crossedTo",
   "lifecycle",
   "events",
   // v12 (2026-10-03): what a memory names — the store's finder, and the
@@ -139,6 +147,29 @@ export const PUBLIC_SURFACE = [
 ] as const;
 
 const EVENT_RING = 500;
+
+/** How many of a name's memories make the source its birth is checked against. */
+const NAME_SOURCE_MEMORIES = 20;
+
+/** The share of a removed card's live linked memories a name must cover to be its name (review of #429). */
+const REMOVED_COVER = 0.8;
+
+/**
+ * A tallied name's kind, from what its memories are ABOUT: the person, place
+ * or entity memories that carry the name in their title. A person when those
+ * say person at least as often as anything else, then a place, else an entity —
+ * a name only ever mentioned in passing is a thing until a memory is about it.
+ * A skill is never inferred from a name. The kind is fixed at birth
+ * (types.ts), and for now it decides little beyond how slowly the card fades.
+ */
+function kindForName(n: NameCount): BirthKind {
+  const person = n.titledKinds["person"] ?? 0;
+  const place = n.titledKinds["place"] ?? 0;
+  const entity = n.titledKinds["entity"] ?? 0;
+  if (person > 0 && person >= place && person >= entity) return "person";
+  if (place > 0 && place >= entity) return "place";
+  return "entity";
+}
 
 interface MetaRecord {
   role: SchemaRole;
@@ -1393,6 +1424,94 @@ export class Schemas {
     return { day, date, dryRun, examined, faded, blocked, anchored, skippedForLimit };
   }
 
+  /**
+   * CARDS ARE BORN WHERE NAMES ARE (2026-10-11, Group 3 part D; review 12 C1).
+   * The night's half of birth by mention: the names the live memories keep
+   * saying (`names.ts#tallyNames`, at least `BIRTH_TALLY.MIN_MEMORIES` memories
+   * on `MIN_DAYS` lived days), most-named first, each offered to `mention()` —
+   * which judges it exactly as before: the name in the source as a whole word,
+   * no exact or near collision, never a second self. The source is the
+   * memories that name it, so the whole-word gate stays a real gate. A newborn
+   * card looks back and links every memory naming it (`linkNamingMemories`),
+   * which is what makes it recall's index for that person or project.
+   *
+   * A name a card already holds — live, or faded — is not offered: a live card
+   * is credited at every write that names it (`creditNamedIn`), and a faded one
+   * comes back when a NEW memory names it, not from the old ones that were
+   * already there when it faded. Each name is its own chunk, so the per-chunk
+   * birth cap does not bind; `limit` (sleep's nightly budget) does, and the
+   * names past it are counted and offered again the next night.
+   */
+  birthsFromNames(day: number, opts: NameBirthOptions = {}): NameBirthReport {
+    const dryRun = opts.dryRun === true;
+    const limit = opts.limit ?? Number.POSITIVE_INFINITY;
+    const denied = new Set(this.store.deniedIds());
+    const texts = this.store.liveMemoryTexts().filter((m) => !denied.has(m.id));
+    const tally = tallyNames(texts, {
+      minMemories: TUNABLES.BIRTH_TALLY.MIN_MEMORIES,
+      minDays: TUNABLES.BIRTH_TALLY.MIN_DAYS,
+      lowerCaseShare: TUNABLES.BIRTH_TALLY.LOWER_CASE_SHARE,
+      skip: (name) => this.index.lookup(name).length > 0 || this.faded.lookup(name).length > 0,
+    });
+    const byId = new Map(texts.map((m) => [m.id, m]));
+    const born: string[] = [];
+    const refused: Record<string, number> = {};
+    // A CARD THE OWNER REMOVED STAYS REMOVED (review of #429). The chase
+    // blanks its name and keeps only the ids it linked (store §16 G9), so the
+    // name is recognised by its memories: one whose memories cover
+    // `REMOVED_COVER` of the removed card's still-live ones is the same name.
+    // Its own name covers them all for as long as they say it; an alias hit
+    // the card linked may not, hence not 1.
+    const removed = this.store
+      .cardTombstoneLinks()
+      .map((ids) => ids.filter((id) => byId.has(id)))
+      .filter((ids) => ids.length > 0);
+    const names = tally.names.filter((n) => {
+      if (removed.length === 0) return true;
+      const mine = new Set(n.memories);
+      const taken = removed.some((ids) => ids.filter((id) => mine.has(id)).length >= REMOVED_COVER * ids.length);
+      if (taken) refused["removed-by-owner"] = (refused["removed-by-owner"] ?? 0) + 1;
+      return !taken;
+    });
+    let skippedForLimit = 0;
+    let attempts = 0;
+    names.forEach((n, i) => {
+      if (attempts >= limit) {
+        skippedForLimit += 1;
+        return;
+      }
+      if (dryRun) {
+        attempts += 1;
+        return;
+      }
+      const source = n.memories
+        .slice(0, NAME_SOURCE_MEMORIES)
+        .map((id) => {
+          const m = byId.get(id);
+          return m === undefined ? "" : `${m.title ?? ""}\n${m.body}`;
+        })
+        .join("\n");
+      const out = this.mention({ name: n.name, kind: kindForName(n), source, chunkRef: `names:${day}:${i}`, day });
+      if (out.born && out.id !== null) {
+        attempts += 1;
+        born.push(out.id);
+      } else {
+        refused[out.reason] = (refused[out.reason] ?? 0) + 1;
+      }
+    });
+    this.emit("schema.births.sweep", undefined, {
+      day,
+      memories: texts.length,
+      offered: names.length,
+      born: born.length,
+      refused: Object.values(refused).reduce((a, b) => a + b, 0),
+      skippedForLimit,
+      lowerCase: tally.lowerCase,
+      dryRun,
+    });
+    return { day, dryRun, memories: texts.length, offered: names.length, born, refused, skippedForLimit, lowerCase: tally.lowerCase };
+  }
+
   // ── reads ──────────────────────────────────────────────────────────────────
 
   /**
@@ -1687,7 +1806,15 @@ export class Schemas {
         });
       }
       const row: MemoryRow | undefined = this.store.row(cursor);
-      cursor = row?.superseded_by ?? undefined;
+      const crossed: string | undefined = row?.superseded_by === null ? this.crossedTo(cursor) : undefined;
+      if (crossed !== undefined) {
+        // A CROSSING THROUGH THE ONE DOOR (2026-10-11, Group 2b): the old row
+        // stays live, settled `changed` under the successor (pair source
+        // `pressure`), with no forwarding address — the pair is its lineage.
+        const pair = this.store.contradictionBetween(crossed, cursor);
+        lineage.push({ id: cursor, seq: 0, reason: TUNABLES.REVISED_REASON, day: pair?.settled_day ?? 0, successorId: crossed });
+      }
+      cursor = row?.superseded_by ?? crossed;
     }
     const headId = chain[chain.length - 1] ?? beliefId;
     const head = this.store.row(headId);
@@ -1702,6 +1829,16 @@ export class Schemas {
       strength: p === undefined ? 0 : strengthOf(p, p.lastChallengedDay ?? p.birthDay),
       increments: this.storyIncrements(chain),
     };
+  }
+
+  /** The successor a pressure crossing settled `id` under (a settled pair of source `pressure` over it), or undefined. */
+  crossedTo(id: string): string | undefined {
+    try {
+      const p = (this.store.contradictionsOf([id]).get(id) ?? []).find((c) => c.state === "settled" && c.via === null && c.source === "pressure" && c.over === id && c.holds !== null);
+      return p?.holds ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

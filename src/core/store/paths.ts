@@ -336,6 +336,24 @@ export function isDatabaseSidecar(name: string): boolean {
   return name.endsWith("-shm");
 }
 
+/**
+ * `isDatabaseSidecar`, or a `-wal` with nothing in it: the files a suite that
+ * means "nothing wrote" may skip, by path. An EMPTY `-wal` holds no commit, and
+ * whether one exists is the SQLite build's choice since `Db.close()` really
+ * closes (2026-10-11): bun's own SQLite on Linux and node:sqlite delete it at the
+ * last connection's close, Apple's keeps it, and any open makes it again. A
+ * `-wal` that vanished between the listing and this look counts as empty.
+ */
+export function holdsNoData(path: string): boolean {
+  if (isDatabaseSidecar(path)) return true;
+  if (!path.endsWith("-wal")) return false;
+  try {
+    return statSync(path).size === 0;
+  } catch {
+    return true;
+  }
+}
+
 export function classifyTopLevel(name: string): LayoutEntry | undefined {
   return LAYOUT.find((e) =>
     e.match === "exact" ? e.name === name : name.startsWith(e.name),

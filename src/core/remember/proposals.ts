@@ -127,6 +127,8 @@ export interface Proposal {
    * declaration stays a link (`revision.ts`).
    */
   how?: SettleHow;
+  /** True when the author SENT `how`; false when it was defaulted (2026-10-11, review 10 C6). Beside `how` only. */
+  howSent?: boolean;
   unresolved: boolean;
   /** The reminder date as the author wrote it (already read by `time.ts`), or null. */
   eventDate: string | null;
@@ -686,7 +688,7 @@ export async function submitProposal(
     aliases: [...(verdict.aliases ?? draft.aliases ?? [])],
     updates,
     // An AUTHORED `updates` settles: `changed` when the author did not say.
-    ...(draft.updates === undefined ? {} : { how: draft.how ?? "changed" }),
+    ...(draft.updates === undefined ? {} : { how: draft.how ?? "changed", howSent: draft.how !== undefined }),
     unresolved: draft.unresolved === true,
     eventDate: draft.eventDate ?? null,
     remind: draft.eventDate === undefined ? null : draft.remind ?? "quiet",
@@ -702,7 +704,10 @@ export async function submitProposal(
 
   // WHOSE words: the depositor's by default, another session's or none when
   // the caller says so (`SubmitContext.cover`). The own span is only ever the
-  // depositor's, so it rides only on the default claim.
+  // depositor's, so it rides only on the default claim. HOW MUCH (2026-10-11):
+  // a note written in the moment claims its own turn, never the session's
+  // backlog (`SpanBuffer.claimCoverage#ownTurn`); a session-end write-up
+  // claims everything still unclaimed, as it always has.
   const coverage =
     ctx.cover === false
       ? []
@@ -711,6 +716,7 @@ export async function submitProposal(
           session: ctx.cover === undefined ? ctx.session : ctx.cover.session,
           proposalId: proposal.id,
           ownSpanHash: ctx.cover === undefined ? proposal.ownSpanHash : null,
+          ...(ctx.source === "jot" && ctx.cover === undefined ? { ownTurn: true } : {}),
         });
   proposal.covers = coverage.map((c) => c.spanHash);
 

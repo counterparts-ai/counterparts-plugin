@@ -86,9 +86,12 @@ export const RULES: readonly Rule[] = [
   { name: 'dream.changed', mech: 'interference', word: 'merged in a dream', when: e => num(e, 'merge') > 0 },
   { name: 'dream.changed', mech: 'consolidation', word: 'merged in a dream', when: e => num(e, 'merge') > 0 },
   { name: 'contradiction.flagged', mech: 'interference', word: 'flagged' },
-  { name: 'contradiction.settled', mech: 'reconsolidation', word: 'settled' },
-  // Settled `changed`: the earlier memory fades under the one that holds.
-  { name: 'contradiction.settled', mech: 'interference', word: 'replaced', when: e => detail(e, 'how') === 'changed' },
+  // A new memory read as the newer state of an older one (Group 2, the slot detector).
+  { name: 'contradiction.proposed', mech: 'interference', word: 'noticed' },
+  // DECLARED settles are reconsolidation's; a confirmed slot (a detected door) is
+  // interference's; a dream merge's rows count as the merge (Group 2b, review 10 C6).
+  { name: 'contradiction.settled', mech: 'reconsolidation', word: 'settled', when: e => detail(e, 'source') !== 'slot' && detail(e, 'source') !== 'dream-merge' },
+  { name: 'contradiction.settled', mech: 'interference', word: 'replaced', when: e => detail(e, 'source') === 'slot' },
   { name: 'revision.pressure', mech: 'reconsolidation', word: 'weighed' },
 ];
 
@@ -340,11 +343,11 @@ export function mechFirings(events: readonly DashEvent[], mech: MechId, dreams: 
       }
       continue;
     }
-    if (e.name === 'contradiction.settled') {
+    if (e.name === 'contradiction.settled' || e.name === 'contradiction.proposed') {
       const holds = titled(detail(e, 'holds'));
       const over = titled(detail(e, 'over'));
       if (holds.id === null || over.id === null) continue;
-      push(e, rule.word, [holds, ' holds over ', over], holds.id);
+      push(e, rule.word, [holds, e.name === 'contradiction.proposed' ? ' may be the newer state of ' : ' holds over ', over], holds.id);
       continue;
     }
     if (e.name === 'revision.pressure') {

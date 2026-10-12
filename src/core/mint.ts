@@ -72,6 +72,8 @@ export interface FreezeSeam {
     source: ClaimChannel;
     direction: ClaimDirection;
     day?: number;
+    /** The session the claim came in (2026-10-11): written on the return it earns. */
+    session?: string | null;
   }): { frozen: boolean; reason: string; reinforced: boolean };
 }
 
@@ -319,6 +321,9 @@ export function mintProposal(store: Store, proposal: Proposal, opts: MintOptions
       source: channel,
       direction,
       day: proposal.day,
+      // The session it came in, as the new memory's origin says (review of
+      // #430): the core's recurrence lane counts sessions.
+      session: writeUp?.session ?? proposal.session,
     });
     claim = {
       elementId: resolved,

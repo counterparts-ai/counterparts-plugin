@@ -10,7 +10,7 @@
  * one table of what counts as having left, which the `status` census reads
  * too — so the home tile and the census cannot disagree.
  */
-import { CORRECTED_REASON } from "../../../../core/reconsolidation.js";
+import { CORRECTED_REASON, PRESSURE_UNDONE_REASON } from "../../../../core/reconsolidation.js";
 import { DREAM_MERGE_REASON, DREAM_UNDONE_REASON } from "../../../../core/dream/index.js";
 import { EPISODE_REGROWN_REASON, LEAVING, REMOVED_BY_OWNER, leftAs } from "../../../../core/leaving.js";
 import type { LeftAs } from "../../../../core/leaving.js";
@@ -49,6 +49,7 @@ export const ARCHIVE_WORDS: readonly ArchiveReasonWords[] = [
   { reason: SCHEMA_TUNABLES.REVISED_REASON, many: "revised", one: "revised — a newer version replaced it", group: groupOf(SCHEMA_TUNABLES.REVISED_REASON) },
   { reason: SCHEMA_TUNABLES.REPLACED_REASON, many: "replaced by a correction", one: "replaced by a correction", group: groupOf(SCHEMA_TUNABLES.REPLACED_REASON) },
   { reason: CORRECTED_REASON, many: "corrected by a newer memory", one: "corrected — a newer memory holds; this one stays readable", group: groupOf(CORRECTED_REASON) },
+  { reason: PRESSURE_UNDONE_REASON, many: "core changes undone", one: "a core change that was undone — the earlier one stands again", group: groupOf(PRESSURE_UNDONE_REASON) },
   { reason: "supersede", many: "replaced by a newer version", one: "replaced by a newer version", group: groupOf("supersede") },
   { reason: EPISODE_REGROWN_REASON, many: "rebuilt from the journal", one: "replaced by a newer version", group: groupOf(EPISODE_REGROWN_REASON) },
   { reason: SCHEMA_TUNABLES.FADE_REASON, many: "faded from use", one: "faded away — nothing mentions it any more", group: groupOf(SCHEMA_TUNABLES.FADE_REASON) },

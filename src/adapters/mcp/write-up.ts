@@ -72,7 +72,14 @@
  *   - `nothing-landed` — every entry of a non-empty batch was refused by the
  *     gate battery (a duplicate counts as landed: the store already holds it);
  *   - `io-failed` — the fetch could not record that it handed the part over,
- *     so it hands nothing (an answer would be refused `not-asked`).
+ *     so it hands nothing (an answer would be refused `not-asked`);
+ *   - `reason-required` (2026-10-11, the granted path only) — `[]` for a part
+ *     that holds words not yet written up, with no one-line `nothing` reason.
+ *
+ * **A part with nothing unwritten is passed over** (2026-10-11): a fetch skips
+ * every part whose words all carry `WRITE_UP_KEPT_MARK` — the session's own
+ * chapters or memories took them — and records them done; never the last part,
+ * which sets the mark (`sessions.ts#firstUnwrittenPart`).
  *
  * The first six are `sessions.ts#writeUpStanding` — the same function the
  * hook's pointer filters with, so the pointer never names a session the door
@@ -104,6 +111,7 @@ import {
   WRITE_UP_PART_BYTES,
   WRITE_UP_REPLY_MARK,
   claimWriteUpProgress,
+  firstUnwrittenPart,
   isSessionId,
   liveClaim,
   markWriteUpFetched,
@@ -113,7 +121,6 @@ import {
   sameScope,
   saveWriteUpProgress,
   writeUpEntries,
-  writeUpParts,
   writeUpPartsDated,
   writeUpPlan,
   writeUpStanding,
@@ -138,6 +145,7 @@ export const WRITE_UP_REFUSALS = [
   "claimed",
   "allowance-spent",
   "grant-expired",
+  "reason-required",
 ] as const;
 export type WriteUpRefusal = (typeof WRITE_UP_REFUSALS)[number];
 
@@ -355,11 +363,18 @@ async function handOver(
   }
   const current = st.granted && answered ? undefined : mine;
   const chunk = p?.chunk ?? WRITE_UP_PART_BYTES;
-  const parts = writeUpParts(writeUpEntries(counterpart.spans, { session: ended, scopes: [st.here] }), chunk);
+  const parts = writeUpPartsDated(writeUpEntries(counterpart.spans, { session: ended, scopes: [st.here] }), chunk);
   if (parts.length === 0) return refused("owes-nothing", { writeUp: ended, why: "no-text" });
   // The same part again when this session fetched and has not answered;
-  // otherwise the next one not yet written.
-  const part = current?.part ?? Math.min((p?.done ?? 0) + 1, parts.length);
+  // otherwise the next one not yet written — PASSING OVER every part that
+  // holds nothing unwritten (2026-10-11): the session's own chapters or
+  // memories took those words, and a reader handed only marked words writes
+  // nothing and spends the part. The first live `counterparts catch-up`
+  // (2026-10-11) was handed 16 such parts of 24, each closed with `[]` in
+  // about two seconds. The last part is never passed over (`firstUnwrittenPart`).
+  const nextUnwritten = Math.min((p?.done ?? 0) + 1, parts.length);
+  const part = current?.part ?? firstUnwrittenPart(parts, nextUnwritten);
+  const skipped = current === undefined ? part - nextUnwritten : 0;
   // THE NIGHT'S ALLOWANCE for this subject, set by the launcher: past it, the
   // rest is left owed — for a later night, or a session in its directory.
   const own = liveClaim(p, input.now);
@@ -376,7 +391,8 @@ async function handOver(
     ...(p ?? {}),
     chunk,
     parts: parts.length,
-    done: Math.min(p?.done ?? 0, parts.length),
+    // The parts passed over count as written: every word in them already was.
+    done: Math.min(skipped > 0 ? part - 1 : (p?.done ?? 0), parts.length),
     handedAt: input.now,
     // CLAIMED BY THIS SESSION, from the fetch until it is written (2026-10-01).
     claim: { by: input.session, at: input.now, ...(upTo === undefined ? {} : { upTo }) },
@@ -402,10 +418,16 @@ async function handOver(
       endedOn: calendarDate(st.held.clockFrom, counterpart.store.zone()),
       part,
       of: parts.length,
+      // Parts passed over on the way here, every word in them already written
+      // up (2026-10-11). Absent when none were.
+      ...(skipped > 0 ? { skipped } : {}),
       next:
         `Hand back what caught your attention in this part, one idea each, with session_end: session: ${input.session}, ` +
         `writeUp: ${ended}, part: ${String(part)}, memories: [...] — in your own words, as this session's. ` +
-        `memories: [] only if nothing in it held your attention. Anything marked ${WRITE_UP_KEPT_MARK} was written up before — by that session or an earlier write-up. ` +
+        (st.granted && (parts[part - 1]?.unwritten ?? 0) > 0
+          ? `If nothing in what is not yet written up is worth keeping, send memories: [] WITH nothing: "<one line: why>" — an empty answer without that line is refused, and the part stays owed. `
+          : `memories: [] only if nothing in it held your attention. `) +
+        `Anything marked ${WRITE_UP_KEPT_MARK} was written up before — by that session or an earlier write-up. ` +
         `Lines marked ${WRITE_UP_REPLY_MARK} are what that session said back — context for what was said to it; you are writing it up second-hand.` +
         (part < parts.length
           ? st.granted
@@ -414,12 +436,19 @@ async function handOver(
           : ""),
       // What was said to that session here, what it jotted, and its own
       // replies, labelled (2026-10-01).
-      text: parts[part - 1] as string,
+      text: parts[part - 1]?.text as string,
     },
   };
 }
 
 // ── ANSWER ──────────────────────────────────────────────────────────────────
+
+/** A `nothing` reason that says something: a string with a few words' worth
+ *  of letters in it. Its text is kept nowhere — it is the reader's own account
+ *  that it read, and may quote what it read. */
+function reasonGiven(v: unknown): boolean {
+  return typeof v === "string" && v.trim().length >= 8;
+}
 
 async function takeBack(
   input: WriteUpDoorInput,
@@ -461,6 +490,23 @@ async function takeBack(
   // store's zone — recorded as each memory's happened date, while its learned
   // date stays the day it is written.
   const dated = writeUpPartsDated(writeUpEntries(counterpart.spans, { session: ended, scopes: [st.here] }), p.chunk);
+  // AN EMPTY ANSWER FROM A CATCH-UP SAYS WHY (2026-10-11). On the granted path
+  // — a headless child nobody watches — `[]` for a part that holds words not
+  // yet written up closes it only beside a one-line `nothing` reason; without
+  // one it is refused, nothing is recorded, and the part stays fetched and
+  // owed: a re-fetch hands it back, and a batch that ends there leaves it for
+  // the next run. A part whose every word was already written up needs no
+  // reason, and a live session's `[]` stays the real answer it has been since
+  // 2026-09-23. No timer: an answer's pace measures what was written, not what
+  // was read — the first live catch-up's sixteen two-second `[]` answers were
+  // all right (docs/decisions.d/fix-catch-up-unread-parts.md).
+  if (st.granted && raw.length === 0 && (dated[part - 1]?.unwritten ?? 0) > 0 && !reasonGiven(args["nothing"])) {
+    return refused("reason-required", {
+      writeUp: ended,
+      part,
+      detail: `Part ${String(part)} holds words not yet written up. Hand back what is worth keeping in it, or send memories: [] with nothing: "<one line: why nothing in it is worth keeping>".`,
+    });
+  }
   const livedAt = dated[part - 1]?.lastAt ?? st.held.clockFrom;
   const happenedOn = livedAt > 0 ? calendarDate(livedAt, counterpart.store.zone()) : null;
   const deposits =

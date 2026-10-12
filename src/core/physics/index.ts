@@ -98,12 +98,11 @@ export const TUNABLES = {
    */
   ENGAGED_RETURN_WEIGHT: 0.5,
   /**
-   * What an engaged return will count for toward the core's RECURRENCE lane
-   * (b2+f8, 2026-10-10: half weight, and never alone). NOTHING READS IT YET:
-   * the recurrence lane is Group 3's (mechanisms synthesis, Group 3
-   * consolidation) and is not built — today's slow lane counts `awake` and
-   * `reflection` days only (`store#recomputeReturns`), so an engaged return
-   * buys no lane day at all. This is the hook that lane reads when it lands.
+   * What an engaged return counts for toward the core's RECURRENCE lane
+   * (b2+f8, 2026-10-10: half weight, and never alone): a recurrence day whose
+   * only evidence is an engaged use counts this much of a day, and engaged
+   * days alone never meet the lane — at least one day must be a full one
+   * (`sleep/consolidate.ts#coreRecurrence`, Group 3 part A, 2026-10-11).
    */
   ENGAGED_RECURRENCE_WEIGHT: 0.5,
   /**
@@ -125,6 +124,16 @@ export const TUNABLES = {
    * from birth, and below `THETA_SEM`. CAL.
    */
   DREAMED_CLAIM_CEILING: 0.3,
+  /**
+   * THE CEILING OF A FOLD'S START (2026-10-11, Group 3 part B; review 11 C4,
+   * D4): a fold — a dream's gist flagged `fold`, saying what several lived
+   * memories add up to — starts at its sources' strength (the strongest, read
+   * before they fade), never above this, and never below
+   * `DREAMED_CLAIM_CEILING` (an insight gist's start). It summarizes lived
+   * events; it concludes nothing new, so the insight's ceiling is not its.
+   * CAL.
+   */
+  FOLD_CLAIM_CEILING: 0.6,
 
   // --- §5.3 core lanes (owner decisions 2026-09-26 — WORKING DEFAULTS) ---
   /** Fast lane: strongly felt — `emotionalIntensity` at or above this, his
@@ -176,14 +185,31 @@ export const TUNABLES = {
    *  return at least this many lived days after the memory was made (2 = not
    *  the very next day). CAL. */
   CORE_FAST_GAP_DAYS: 2,
-  /** Slow lane: awake returns on at least this many distinct lived days… CAL. */
-  CORE_SLOW_DAYS: 5,
-  /** …spanning at least this many lived days, first return to last. CAL. */
-  CORE_SLOW_SPAN_DAYS: 21,
-  /** …and standing at least this strong (decayed) on the day it is promoted:
-   *  the semantic floor, so a faint memory does not become core on repetition
-   *  alone (working default 2026-09-26, review of #251). CAL. */
-  CORE_SLOW_FLOOR: 0.5,
+  /**
+   * THE SLOW LANE IS THE RECURRENCE LANE (2026-10-11, Group 3 part A; review
+   * 08 C1, item 14): the slow lane retuned, not a third lane. A RECURRENCE DAY
+   * is a lived day on which the memory or a member of its slot (the memories
+   * a settled `changed` pair ties it to — Group 2's "A over B" pairs) was
+   * used awake (an engaged use too), cited by a reflection, or re-encoded (a
+   * newer member of the slot was written that day). Dream replays never count.
+   * Read by the caller (`sleep/consolidate.ts#coreRecurrence`) into
+   * `CoreContext.recurrence`. The lane: at least this many recurrence days
+   * (an engaged-only day counts `ENGAGED_RECURRENCE_WEIGHT`)… Was 5 awake
+   * return days of the row alone (2026-09-26), which no memory ever reached:
+   * the most any row had was 3 (review 08 §3b). Decided by the group3a
+   * builder, 2026-10-11, lightly held; revisit after ~5 lived days. CAL.
+   */
+  CORE_SLOW_DAYS: 4,
+  /** …from at least this many distinct sessions (a reflection is its own;
+   *  a return recorded before sessions were (v13's column, written since
+   *  2026-10-11) counts one per lived day)… CAL. */
+  CORE_SLOW_SESSIONS: 3,
+  /** …spanning at least this many lived days, first to last (was 21, which
+   *  a store under three weeks old could not reach at all)… CAL. */
+  CORE_SLOW_SPAN_DAYS: 7,
+  /** …all inside a trailing window of this many lived days, so the lane is
+   *  age-fair: a memory made on day 15 qualifies as fast as one made on day 1. CAL. */
+  CORE_SLOW_WINDOW_DAYS: 30,
   /**
    * The salience-claim ceiling for a FALLBACK-minted memory (owner ruling
    * 2026-08-29, the authorship doctrine's salience half): the experiencer's own
@@ -1175,9 +1201,10 @@ export type CoreLane = "fast" | "slow";
 export type PromotionReason =
   | "eligible"
   | "already-identity"
-  /** Not a memory about me or about us: only `self`, and `person` memories
-   *  about the owner, may become core. Repetition alone makes nothing else
-   *  identity, however often it returns (guarantee 4). */
+  /** Not a memory about me or about us (since 2026-10-11: marked `me` or
+   *  `us`, of kind self, person or entity, and not a plan — not `planned`,
+   *  `proposed` or `asked`; `sleep/consolidate.ts#aboutMe`). Repetition alone
+   *  makes nothing else identity, however often it returns (guarantee 4). */
   | "not-about-me"
   /** The owner sent it back to ordinary fading; the lanes do not re-promote it. */
   | "demoted-by-owner"
@@ -1201,15 +1228,23 @@ export interface PromotionVerdict {
     readonly gap: number | null;
     readonly needGap: number;
   };
-  /** Slow lane: awake returns on several distinct lived days over weeks. */
+  /** Slow lane — the RECURRENCE lane since 2026-10-11: it, or its slot, kept
+   *  coming back on several lived days and in several sessions, inside the
+   *  trailing window, and the row itself was really used. */
   slow: {
     readonly met: boolean;
+    /** Recurrence days in the window (an engaged-only day counts `ENGAGED_RECURRENCE_WEIGHT`). */
     readonly days: number;
     readonly needDays: number;
-    /** Lived days from the first awake return to the last. */
+    /** Distinct sessions those days came from. */
+    readonly sessions: number;
+    readonly needSessions: number;
+    /** Lived days from the first recurrence day in the window to the last. */
     readonly span: number;
     readonly needSpan: number;
-    /** Decayed strength on `ctx.day` (null when no day was given) and the floor it must reach. */
+    /** The row itself has a real use of its own (an awake, reflection or engaged return). */
+    readonly anchored: boolean;
+    /** Decayed strength on `ctx.day` (null when no day was given) and the floor it must reach: within reach (`REACH`). */
     readonly strength: number | null;
     readonly needStrength: number;
   };
@@ -1219,11 +1254,62 @@ export interface PromotionVerdict {
   returnDays: number;
 }
 
+/**
+ * A memory's RECURRENCE, as the slow lane reads it (2026-10-11, Group 3 part
+ * A): counted by the caller over the memory's slot and the trailing window
+ * (`sleep/consolidate.ts#coreRecurrence`), because only the store can see the
+ * slot and the sessions. Numbers only.
+ */
+export interface Recurrence {
+  /** Recurrence days inside the window, an engaged-only day counted at `ENGAGED_RECURRENCE_WEIGHT`. */
+  readonly days: number;
+  /** Of those, the days with a full-weight piece of evidence (awake, reflection, re-encoded). Engaged days never meet the lane alone. */
+  readonly fullDays: number;
+  /** Distinct sessions inside the window. */
+  readonly sessions: number;
+  /** First and last recurrence day inside the window, or null. */
+  readonly first: number | null;
+  readonly last: number | null;
+  /** The row ITSELF has an awake, reflection or engaged return after its birth. */
+  readonly anchored: boolean;
+  /** The last recurrence day ever (no window), or null — the core's turnover reads it. */
+  readonly lastEver: number | null;
+  /**
+   * A later memory of its slot SETTLED OVER it (`changed`): it is an earlier
+   * state, and the slot's recurrence lifts the current one, not this. Absent: false.
+   */
+  readonly earlier?: boolean;
+}
+
+/**
+ * The recurrence a memory's own return columns give, when no caller counted
+ * its slot: its own awake-class return days, one session each, no window.
+ * What `promotionEligibility` reads without `CoreContext.recurrence`.
+ */
+export function rowRecurrence(m: Pick<MemoryPhysics, "returnDays" | "firstReturnDay" | "lastReturnDay">): Recurrence {
+  const days = m.returnDays ?? 0;
+  return {
+    days,
+    fullDays: days,
+    sessions: days,
+    first: m.firstReturnDay ?? null,
+    last: m.lastReturnDay ?? null,
+    anchored: days > 0,
+    lastEver: m.lastReturnDay ?? null,
+  };
+}
+
 /** Who a memory is about, as the core lanes need it — decided by the caller,
  *  which can read the words and the owner's names (sleep's consolidate phase). */
 export interface CoreContext {
-  /** Kind `self`, or a `person` memory about the owner. */
+  /** About me or about us (`sleep/consolidate.ts#aboutMe`). */
   readonly aboutMe: boolean;
+  /**
+   * The memory's recurrence over its slot and the trailing window
+   * (2026-10-11), counted by the caller. Absent: the row's own returns
+   * (`rowRecurrence`) — what a reader with no store sees.
+   */
+  readonly recurrence?: Recurrence;
   /** The owner demoted it (`counterparts core --demote`). */
   readonly demoted?: boolean;
   /**
@@ -1242,12 +1328,12 @@ export interface CoreContext {
   readonly organicReturnDay?: number | null;
   /**
    * The lived day the verdict is for. With it, the SLOW lane also asks the
-   * memory to stand in the semantic band on that day (decayed strength at or
-   * above `THETA_SEM`): coming back on many days is not by itself a reason to
-   * be part of who I am when the memory is faint (working default, 2026-09-26,
-   * after the review of #251 saw six zero-salience `self` rows cross on
-   * repetition alone). `promote` always passes it; a reader that only wants
-   * the lane progress may leave it out.
+   * memory to be within reach on that day (decayed strength at or above
+   * `REACH`, since 2026-10-11 — it was the semantic floor, 0.5, which fought
+   * the steeper curves (review 08 C1); the row anchor and the sessions now do
+   * the work the floor did after the review of #251 saw six zero-salience
+   * `self` rows cross on repetition alone). `promote` always passes it; a
+   * reader that only wants the lane progress may leave it out.
    */
   readonly day?: number;
   /**
@@ -1276,9 +1362,12 @@ export interface CoreContext {
  *   - FAST: strongly felt (`emotionalIntensity >= CORE_FAST_FEELING`, either
  *     person's feeling) AND it has come back awake at least once, at least
  *     `CORE_FAST_GAP_DAYS` after it was made;
- *   - SLOW: not strongly felt, but it kept coming back organically — awake
- *     returns on `>= CORE_SLOW_DAYS` distinct lived days spanning
- *     `>= CORE_SLOW_SPAN_DAYS`.
+ *   - SLOW, the recurrence lane (2026-10-11): it or its slot kept coming
+ *     back — `>= CORE_SLOW_DAYS` recurrence days from `>= CORE_SLOW_SESSIONS`
+ *     sessions spanning `>= CORE_SLOW_SPAN_DAYS`, inside the trailing
+ *     `CORE_SLOW_WINDOW_DAYS` (`ctx.recurrence`) — the row itself was really
+ *     used at least once, and it is within reach on the day (`REACH`; the
+ *     absolute 0.5 floor is gone: it fought the steeper curves).
  *
  * `base` is no longer read (the `promotionBase` stopgap of #244 is retired):
  * emotion counts toward core ON PURPOSE, through the fast lane, and a dream's
@@ -1292,10 +1381,8 @@ export function promotionEligibility(m: MemoryPhysics, ctx: CoreContext): Promot
   const accepts = ctx.acceptsReflectedFeeling ?? TUNABLES.CORE_FAST_ACCEPTS_REFLECTED_FEELING;
   const intensity = accepts || m.feelingPeakLived === undefined ? emotionalIntensity(m) : emotionalIntensity({ ...m, feelingPeak: m.feelingPeakLived });
   const days = m.returnDays ?? 0;
-  const first = m.firstReturnDay ?? null;
   const last = m.lastReturnDay ?? null;
   const gap = last === null ? null : last - m.birthDay;
-  const span = first === null || last === null ? 0 : last - first;
   // CLOSED means fully closed (owner ruling D1 on #256): the fast lane's
   // return must be an ordinary use, not a reflection's citation.
   const fastLast = !accepts && ctx.organicReturnDay !== undefined ? ctx.organicReturnDay : last;
@@ -1305,10 +1392,17 @@ export function promotionEligibility(m: MemoryPhysics, ctx: CoreContext): Promot
   const felt = intensity >= TUNABLES.CORE_FAST_FEELING || ctx.stronglyFelt === true;
   const fastMet = felt && fastGap !== null && fastGap >= TUNABLES.CORE_FAST_GAP_DAYS;
   const now = ctx.day === undefined ? null : strength(m, ctx.day);
+  // THE RECURRENCE LANE (2026-10-11): the slot's days, the row's anchor.
+  const rec = ctx.recurrence ?? rowRecurrence(m);
+  const span = rec.first === null || rec.last === null ? 0 : rec.last - rec.first;
   const slowMet =
-    days >= TUNABLES.CORE_SLOW_DAYS &&
+    rec.days >= TUNABLES.CORE_SLOW_DAYS - 1e-9 &&
+    rec.fullDays >= 1 &&
+    rec.sessions >= TUNABLES.CORE_SLOW_SESSIONS &&
     span >= TUNABLES.CORE_SLOW_SPAN_DAYS &&
-    (now === null || now >= TUNABLES.CORE_SLOW_FLOOR);
+    rec.anchored &&
+    rec.earlier !== true &&
+    (now === null || now >= TUNABLES.REACH);
   const blockedBy: PromotionReason[] = [];
   if (m.promotedIdentity) blockedBy.push("already-identity");
   // Recognising myself in it counts as about me, for the fast lane only, when
@@ -1330,12 +1424,15 @@ export function promotionEligibility(m: MemoryPhysics, ctx: CoreContext): Promot
     },
     slow: {
       met: slowMet,
-      days,
+      days: rec.days,
       needDays: TUNABLES.CORE_SLOW_DAYS,
+      sessions: rec.sessions,
+      needSessions: TUNABLES.CORE_SLOW_SESSIONS,
       span,
       needSpan: TUNABLES.CORE_SLOW_SPAN_DAYS,
+      anchored: rec.anchored,
       strength: now,
-      needStrength: TUNABLES.CORE_SLOW_FLOOR,
+      needStrength: TUNABLES.REACH,
     },
     base: base(m),
     returnDays: days,
@@ -1767,6 +1864,13 @@ export interface Challenge {
    *  inferred-revision path (guarantee 7). */
   declaredUpdates: string | null;
   physics: MemoryPhysics;
+  /**
+   * A FLOOR ON THE FORCE (2026-10-11, Group 2b; review 10 C4): the writer
+   * DECLARED a change at this memory, and the declaration is the evidence —
+   * a "done" memory's low salience says nothing about it. Still capped at
+   * `F_DAY_CAP_SLOW` for a slow kind, so the three-lived-day property holds.
+   */
+  floor?: number;
 }
 
 export type ChallengeReason =
@@ -1885,7 +1989,7 @@ export function applyChallenge(
   }
   if (target.lastChallengedDay !== null && d < target.lastChallengedDay) return refuse("stale-day");
 
-  const rawForce = challengeForce(challenge.physics, d, shape);
+  const rawForce = Math.max(challengeForce(challenge.physics, d, shape), challenge.floor ?? 0);
   const slow = kindPhysics(target.kind).iota >= TUNABLES.SLOW_KIND_IOTA;
   const force = slow ? Math.min(rawForce, TUNABLES.F_DAY_CAP_SLOW) : rawForce;
   const pressureAfter = pressureBefore + force;

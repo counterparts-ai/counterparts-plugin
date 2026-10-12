@@ -39,6 +39,9 @@ interface RawStatement {
   run(...p: SqlValue[]): unknown;
   get(...p: SqlValue[]): unknown;
   all(...p: SqlValue[]): unknown;
+  /** bun:sqlite only. node:sqlite's statements have none: its `close()`
+   *  finalizes every statement of the connection itself (measured, Node 22). */
+  finalize?(): unknown;
 }
 interface RawDb {
   exec(sql: string): unknown;
@@ -231,6 +234,9 @@ export function isUnreadableDatabase(err: unknown): boolean {
 /**
  * The journal mode a database file is in, on its own connection — opened, read,
  * closed, converting nothing. What `counterparts verify` and `doctor` print.
+ * (Closing is SQLite's own business: when this is the last connection on the
+ * file, SQLite folds any log left in the `-wal` as it closes — no row changes,
+ * but the file's bytes can.)
  *
  * An absent file answers `absent` rather than being CREATED by the question
  * (`openDb` opens with `create: true`). The handle is read-WRITE, like every
@@ -275,11 +281,13 @@ export interface WalFold {
  * (`Store.close`, cli INTERFACE-GAPS §13).
  *
  * WHY IT IS NEEDED: SQLite folds the log itself when the LAST connection closes,
- * but only if that close really happens. `openDb` prepares a statement per call
- * and never finalizes one, so bun's `close()` defers the real close and the
- * `-wal` stays at its high-water size until some later process folds it —
- * finding #26, a store whose size on disk depended on who touched it last. An
- * explicit checkpoint does not care about statement lifecycles or drivers.
+ * but only the last. Until 2026-10-11 no close here was a real one under bun
+ * (the statement cache was never finalized, so `close()` deferred to the
+ * garbage collector), and the `-wal` stayed at its high-water size until some
+ * later process folded it — finding #26, a store whose size on disk depended on
+ * who touched it last. `close()` is real now, but a hook still closes while the
+ * MCP server, the worker or the dashboard has the file open, and then nobody's
+ * close is the last. An explicit checkpoint folds the log either way.
  *
  * WHY IT NEVER WAITS: RESTART and TRUNCATE run the busy handler while they wait
  * for readers to leave the log, and this connection's handler waits
@@ -367,40 +375,75 @@ export function openDb(path: string, opts: OpenDbOptions = {}): Db {
   // of column". Every ALTER and DROP in the store runs through `exec`, at open.
   // A change made by ANOTHER connection is not seen here; the version checks
   // refuse a newer build's store before anything reads it.
+  //
+  // EVERY STATEMENT DROPPED FROM IT IS FINALIZED, and `close()` finalizes the
+  // rest (2026-10-11, after #434). bun:sqlite's `close()` only really closes a
+  // connection that has no statement left alive; with one, it returns and the
+  // connection stays open until garbage collection gets to the statements.
+  // Measured, bun 1.3: after such a close, another connection's `PRAGMA
+  // journal_mode = DELETE` fails "database is locked", the old statements still
+  // run, and SQLite's last-close checkpoint waits for the collector. node:sqlite
+  // finalizes a connection's statements in its own `close()` and has no
+  // `finalize` to call.
+  //
+  // So a `Statement` handed out by `prepare` holds its SQL, not a driver
+  // statement: each call looks it up here. A dropped statement can then be
+  // finalized at once without breaking a caller that kept the handle, and that
+  // caller's next call prepares it afresh against the table as it is now.
   const TABLE_CHANGE = /\b(?:ALTER|DROP)\s+TABLE\b/i;
   const STATEMENT_CACHE_MAX = 512;
   const statements = new Map<string, RawStatement>();
+  let closed = false;
+
+  const finalizeAll = (): void => {
+    for (const st of statements.values()) {
+      try {
+        st.finalize?.();
+      } catch {
+        // A statement that will not finalize is the close's to report (bun's
+        // `close()` then defers, as before); it must not stop the others.
+      }
+    }
+    statements.clear();
+  };
+
+  const open = (): void => {
+    if (closed) throw new StoreError("DB_CLOSED", { path });
+  };
 
   const exec = (sql: string): void => {
+    open();
     try {
       raw.exec(sql);
     } finally {
-      if (TABLE_CHANGE.test(sql)) statements.clear();
+      if (TABLE_CHANGE.test(sql)) finalizeAll();
     }
   };
 
   const statementFor = (sql: string): RawStatement => {
+    open();
     let st = statements.get(sql);
     if (st === undefined) {
       st = raw.prepare(sql);
-      if (statements.size >= STATEMENT_CACHE_MAX) statements.clear();
+      if (statements.size >= STATEMENT_CACHE_MAX) finalizeAll();
       statements.set(sql, st);
     }
     return st;
   };
 
   const prepare = (sql: string): Statement => {
-    const st = statementFor(sql);
+    // Prepared NOW, so SQL that does not compile throws here, where it did before.
+    statementFor(sql);
     return {
       run: (...p) => {
         try {
-          st.run(...norm(p));
+          statementFor(sql).run(...norm(p));
         } finally {
-          if (TABLE_CHANGE.test(sql)) statements.clear();
+          if (TABLE_CHANGE.test(sql)) finalizeAll();
         }
       },
-      get: <T>(...p: SqlParam[]) => (st.get(...norm(p)) ?? undefined) as T | undefined,
-      all: <T>(...p: SqlParam[]) => (st.all(...norm(p)) ?? []) as T[],
+      get: <T>(...p: SqlParam[]) => (statementFor(sql).get(...norm(p)) ?? undefined) as T | undefined,
+      all: <T>(...p: SqlParam[]) => (statementFor(sql).all(...norm(p)) ?? []) as T[],
     };
   };
 
@@ -436,8 +479,13 @@ export function openDb(path: string, opts: OpenDbOptions = {}): Db {
         depth -= 1;
       }
     },
+    // A REAL close: every statement finalized first, so the driver closes the
+    // connection now. A second call does nothing (node:sqlite throws on a double
+    // close); any statement after the first throws `DB_CLOSED`.
     close: () => {
-      statements.clear();
+      if (closed) return;
+      closed = true;
+      finalizeAll();
       raw.close();
     },
   };

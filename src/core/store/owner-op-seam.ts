@@ -44,6 +44,7 @@ import { StoreError } from "./errors.js";
 import { hashText } from "./prose.js";
 import { unfade } from "../physics/index.js";
 import type { Db } from "./db.js";
+import { CARD_TOMBSTONE_PREFIX } from "./operational.js";
 import type { MemoryRow } from "./operational.js";
 import type { RemovalNote, Store } from "./index.js";
 
@@ -150,6 +151,9 @@ export const REMOVED_REASON = "removed-by-owner";
  *   - a `removal_tombstone` row: what the memory WAS, in flags and counts, so a
  *     removed protected element still appears in the permanent enumeration as
  *     `[removed]` rather than vanishing (scar §2.19 from the other side);
+ *   - for a removed CARD, the ids of the memories it linked (meta
+ *     `removal.card.<id>`, review of #429): addresses, never its name, so the
+ *     night's name tally does not give the name a new card;
  *   - the memory's own row and its version rows, STRIPPED — because box 2's
  *     foreign keys make them the lineage: a survivor whose `superseded_by` or
  *     `successor_id` names this id must resolve to a named removal, never to a
@@ -176,6 +180,8 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
   let restoredFade = 0;
   let pairsGone = 0;
   const unarchived: string[] = [];
+  /** The ids a removed card linked, kept so its name is not born again (review of #429). */
+  let cardLinks = 0;
   const report = access.ownerMutate("chaseRemoved", (db) => {
     const row = access.rawRow(id);
     const already = db.get<{ n: number }>(
@@ -303,6 +309,21 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
     // without the columns or the table has nothing here.
     try {
       db.run("UPDATE versions SET occurred_on = NULL, said_by = NULL, status = NULL WHERE memory_id = ?", id);
+      // A REMOVED CARD STAYS REMOVED (2026-10-11, review of #429): the night's
+      // name tally would otherwise give its name a new card from the very
+      // memories that still say it. What is kept is the ids it linked — an
+      // address, like `superseded_by` — never its name or a hash of one (§16
+      // G9: a name is low-entropy). `Schemas#birthsFromNames` refuses a name
+      // whose memories cover those ids.
+      if (row?.type === "schema" && !noop) {
+        const linked = db
+          .all<{ memory_id: string }>("SELECT memory_id FROM memory_subjects WHERE subject_id = ? ORDER BY memory_id", id)
+          .map((r) => r.memory_id);
+        if (linked.length > 0) {
+          db.run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `${CARD_TOMBSTONE_PREFIX}${id}`, JSON.stringify(linked));
+          cardLinks = linked.length;
+        }
+      }
       db.run("DELETE FROM memory_subjects WHERE memory_id = ? OR subject_id = ?", id, id);
     } catch {
       /* a store from before v12 */
@@ -378,7 +399,7 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
         ...(pairsGone > 0 ? [{ surface: "operational.contradictions", count: pairsGone }] : []),
         ...(restoredFade + unarchived.length > 0 ? [{ surface: "operational.contradictions.restored", count: restoredFade + unarchived.length }] : []),
       ],
-      survives: ["removal_record", "deny-list", "removal_tombstone"],
+      survives: ["removal_record", "deny-list", "removal_tombstone", ...(cardLinks > 0 ? ["meta.removal.card"] : [])],
       noop,
     };
   });

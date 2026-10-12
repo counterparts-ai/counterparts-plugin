@@ -73,7 +73,9 @@ export function contestedBeliefs(src: DashboardSource): string[][] {
     let cursor: string | undefined = id;
     while (cursor !== undefined && !chain.includes(cursor)) {
       chain.push(cursor);
-      cursor = store.row(cursor)?.superseded_by ?? undefined;
+      // A crossing through the one door (2026-10-11) leaves no forwarding address: its pair is the step.
+      const r: { superseded_by: string | null } | undefined = store.row(cursor);
+      cursor = r === undefined ? undefined : (r.superseded_by ?? src.schemas.crossedTo(cursor));
     }
     const head = chain[chain.length - 1] ?? id;
     const group = groups.get(head) ?? [];

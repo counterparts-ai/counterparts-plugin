@@ -74,7 +74,7 @@ import { chaptersOf } from "../../core/handoff/last-here.js";
 import { UNRESOLVED_META_KEY } from "../../core/mint.js";
 import { softenedFeeling, strength } from "../../core/physics/index.js";
 import type { MemoryPhysics } from "../../core/physics/index.js";
-import { askedNames, feelingTokens, isFeelingFrameWord, readFeelingAsk, semanticTuning, stampCores } from "../../core/recall/index.js";
+import { askedNames, earlierMark, feelingTokens, headOf, isFeelingFrameWord, readFeelingAsk, semanticTuning, stampCores } from "../../core/recall/index.js";
 import type { FeelingWhose, SemanticSource } from "../../core/recall/index.js";
 import { chapterAddress, chapterAt, chapterTimesOf, findIdentityCore, identityCoreName } from "../../core/self/index.js";
 import type { ChapterTimes } from "../../core/self/index.js";
@@ -146,6 +146,14 @@ export interface MeaningMoment {
   readonly title: string;
   /** `YYYY-MM-DD`, local, when it was written. */
   readonly date: string;
+  /**
+   * `earlier (now mem_…)` when a later memory settled over this one
+   * (2026-10-11, Group 2b; review of #420 (c)): facts mode folds an earlier
+   * version under its current one and a by-id read labels it, and an arc
+   * showed it bare. "a later version" when this asker may not be shown that
+   * one. Absent: it stands.
+   */
+  readonly standing?: string;
 }
 
 export interface MeaningFeeling {
@@ -939,6 +947,13 @@ function showEntry(
       .map((x) => momentOf(x.r, opts.zone));
     shown = [...shown, ...extra];
   }
+  // AN EARLIER VERSION SAYS SO (2026-10-11, Group 2b): its head, by the rule
+  // every other surface reads (`recall/standing.ts#headOf`).
+  shown = shown.map((m) => {
+    const head = safe(() => headOf(store, m.id), null);
+    if (head === null) return m;
+    return { ...m, standing: opts.usable(head) === null ? "earlier (now a later version)" : earlierMark(head) };
+  });
   const ids = [...new Set([...span.map((r) => r.id), ...e.moments.map((h) => h.row.id)])];
   const fs = [...safe(() => store.feelingsOn(ids), new Map<string, (FeelingRow & { birth_day: number })[]>()).values()].flat();
   const ep = e.episode;
@@ -1281,7 +1296,7 @@ export function renderMeaning(r: MeaningResult): string {
         const sides = [mine.length > 0 ? `${r.whose.self}: ${mine}` : null, theirs.length > 0 ? `${r.whose.owner}: ${theirs}` : null].filter((x) => x !== null);
         out.push(`  feelings — ${sides.join(" | ")}`);
       }
-      for (const m of e.moments) out.push(`  ${m.id}  ${m.title}`);
+      for (const m of e.moments) out.push(`  ${m.id}  ${m.standing === undefined ? "" : `${m.standing}: `}${m.title}`);
       if (e.momentCount > e.moments.length) out.push(`  (+${String(e.momentCount - e.moments.length)} more of its moments hold it)`);
     }
   }

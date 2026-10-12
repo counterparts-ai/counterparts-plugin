@@ -63,7 +63,13 @@ export interface SleepStore {
   read(id: string): StoredMemory;
   /** v9: one memory's counted returns, OPTIONAL — a promotion's record names
    *  their sources where the port has it. */
-  returnsOf?(id: string): readonly { source: string; day?: number }[];
+  returnsOf?(id: string): readonly { source: string; day?: number; session?: string | null; at?: number }[];
+  /**
+   * The standing pairs that name these memories (v10, `core/reconsolidation.ts`),
+   * OPTIONAL: the core's recurrence lane walks a memory's SLOT along them
+   * (2026-10-11). Absent: a memory's slot is itself.
+   */
+  contradictionsOf?(ids: readonly string[]): Map<string, readonly { a: string; b: string; state: string; how: string | null; source: string; over: string | null }[]>;
   versions(id: string): VersionRow[];
   deniedIds(): string[];
 
@@ -147,7 +153,7 @@ export interface SleepStore {
    */
   appendCoreEvent?(input: {
     memoryId: string;
-    action: "promoted" | "demoted" | "nominated";
+    action: "promoted" | "demoted" | "nominated" | "reconsidering" | "reaffirmed";
     day: number;
     lane?: string | null;
     reason?: string | null;
@@ -155,6 +161,10 @@ export interface SleepStore {
     actor?: string | null;
   }): number;
   coreDemoted?(id: string): boolean;
+  /** A core memory's latest promotion, demotion, flag or reaffirmation (2026-10-11), OPTIONAL like the rest of the core's history. */
+  coreStanding?(id: string): { readonly action: string; readonly day: number; readonly reason: string | null; readonly actor: string | null } | undefined;
+  /** A memory's core history, newest first, OPTIONAL: whether a keep still stands reads it (2026-10-11). */
+  coreEvents?(filter: { memoryId?: string; limit?: number }): readonly { readonly action: string; readonly actor: string | null }[];
   /** A memory's feelings — whose, the word and its core, its strength and who
    *  recorded it are all this port reads (the recognition lane, wheel v2; the
    *  fast lane's "strongly felt", 2026-10-10). Absent: no
@@ -186,6 +196,9 @@ export interface SleepStore {
  *     `consolidate`, so it sees this boundary's own supersedes and promotions.
  *   - `fade` runs right after `prune`, so a card whose last beliefs were
  *     pruned tonight is free to fade tonight (its floors permitting).
+ *   - `births` runs right after `fade` (2026-10-11): a name whose card faded
+ *     tonight is a faded card's name, so the tally leaves it to come back the
+ *     way a faded card does — when a new memory names it.
  *   - `briefing` is the cycle's final CONTENT write. `log` runs after it and
  *     writes no content: it deletes telemetry rows past the retention window
  *     (§5 G16), and it is last so "what the cycle forgot" and "what the log
@@ -198,6 +211,7 @@ export const PHASES = [
   "consolidate",
   "prune",
   "fade",
+  "births",
   "dedup",
   "versions",
   "briefing",
@@ -217,6 +231,7 @@ export type PhaseReason =
   | "observer-report"
   | "no-render-fn"
   | "no-fade-fn"
+  | "no-births-fn"
   | "no-durable-event-log"
   | "failed";
 

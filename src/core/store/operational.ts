@@ -216,6 +216,11 @@ export const OBSERVER_READ_FLOOR = 11;
  *  debugging. `store/NOTES.md` carries what changed underneath the number. */
 export const DEFAULT_RETENTION_DAYS = 90;
 
+/** Box-2 meta key prefix: the memory ids a card the owner removed had linked,
+ *  written by the chase (`owner-op-seam.ts`), read by `Store#cardTombstoneLinks`.
+ *  Ids only, never the name (§16 G9). Review of #429, 2026-10-11. */
+export const CARD_TOMBSTONE_PREFIX = "removal.card.";
+
 /**
  * THE TOMBSTONE SHAPE — what a chased row looks like once the owner-op seam has
  * blanked it (`owner-op-seam.ts#chaseRemoved`).
@@ -914,7 +919,10 @@ export interface ReturnRow extends Row {
   gap: number;
   dream_id: string | null;
   at: number;
-  /** v13 (pre-provisioned for Group 3): the session it came back in. Nothing writes it yet. */
+  /** v13 (pre-provisioned for Group 3): the session it came back in — the
+   *  recall session for an awake or engaged use, the reflection's id for a
+   *  reflection's citation; written since 2026-10-11 (Group 3 part A), NULL
+   *  before that and for a dream's replay. The core's recurrence lane counts it. */
   session: string | null;
 }
 

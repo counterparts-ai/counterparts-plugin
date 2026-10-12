@@ -505,6 +505,7 @@ export class SpanBuffer {
     if (deduped > 0) {
       this.emit("remember.span.deduped", undefined, { scope: keyFor(input.scope), count: deduped });
     }
+    this.claimNotedTurn(input.scope, input.session, cursorBefore, fresh, typedAfterReply(kept));
     return {
       captured: fresh.length > 0,
       reason: fresh.length > 0 ? "APPENDED" : "DEDUPED",
@@ -514,6 +515,56 @@ export class SpanBuffer {
       cursorBefore,
       cursorAfter: input.turns.length,
     };
+  }
+
+  /**
+   * THE TURN A NOTE WAS WRITTEN IN, claimed when it is captured (2026-10-11).
+   * A note is written mid-turn, before the Stop that captures the prompt which
+   * started that turn; so the capture that begins at a note's own `from` hands
+   * its conversation to that note's claim — the first accepted note of the turn
+   * (its own span carries an `own` mark), under the same proposal id. A refused
+   * note has no such mark and claims nothing. Never throws: a turn this misses
+   * stays unwritten, which is the safe side.
+   *
+   * `later` (review of #437): the slice holds something the person typed AFTER
+   * a reply — the note's turn ended with no Stop (an interrupt; a session killed
+   * mid-turn and resumed), or a message was queued while the turn ran. The span
+   * is one joined text, so it would hand the note a turn it never saw: nothing
+   * is claimed and the whole slice stays for the write-up.
+   */
+  private claimNotedTurn(scope: string, session: string, from: number, fresh: readonly Span[], later: boolean): void {
+    try {
+      const turn = fresh.filter((s) => s.kind === "conversation");
+      if (turn.length === 0) return;
+      const notes = new Set(
+        this.readSpans(this.streamPath(scope, "jot"))
+          .filter((s) => s.session === session && s.from === from)
+          .map((s) => s.hash),
+      );
+      if (notes.size === 0) return;
+      const marks: Partial<CoverageMark>[] = this.coverage(scope);
+      const note = marks
+        .filter((m) => m.own === true && m.session === session && typeof m.spanHash === "string" && notes.has(m.spanHash))
+        .sort((a, b) => (a.at ?? 0) - (b.at ?? 0))[0];
+      if (note === undefined || typeof note.proposalId !== "string") return;
+      if (later) {
+        this.emit("remember.coverage.turn.skipped", note.proposalId, { reason: "more-than-one-turn" });
+        return;
+      }
+      const covered = new Set(marks.map((m) => m.spanHash));
+      const at = this.nowFn();
+      const proposalId = note.proposalId;
+      const taken: CoverageMark[] = turn
+        .filter((s) => !covered.has(s.hash))
+        .map((s) => ({ spanHash: s.hash, proposalId, session, at, own: false }));
+      if (taken.length === 0) return;
+      const out = this.mutate("coverage", () => {
+        appendFileSync(this.path(scope, "coverage.jsonl"), `${taken.map((m) => JSON.stringify(m)).join("\n")}\n`, "utf8");
+      });
+      if (out.ok) this.emit("remember.coverage.claimed", proposalId, { spans: taken.length, withheld: 0, turn: true });
+    } catch (err) {
+      this.emit("remember.coverage.turn.failed", undefined, { code: errCode(err) });
+    }
   }
 
   /**
@@ -1104,12 +1155,20 @@ export class SpanBuffer {
    * buffer (§5 G5). Claims are sequential: each accepted proposal takes the spans
    * still uncovered in its session, so successive proposals PARTITION a session
    * instead of each claiming the backlog (§4.1 G4).
+   *
+   * `ownTurn` (2026-10-11): a note written mid-session takes its OWN TURN only —
+   * its own span and the uncovered conversation of the turn it was written in
+   * (the spans whose `from` is the note's own `from`, the cursor at the write).
+   * That turn's prompt is normally captured at the Stop after the note, so
+   * `capture` claims it then (`claimNotedTurn`). Without an own span it claims
+   * nothing. Everything else the session said stays for its write-up.
    */
   claimCoverage(input: {
     scope: string;
     session: string;
     proposalId: string;
     ownSpanHash?: string | null;
+    ownTurn?: boolean;
   }): CoverageMark[] {
     if (this.observer) {
       // Checked before the scan, not only at the append: an instrument does not
@@ -1119,8 +1178,13 @@ export class SpanBuffer {
     }
     const covered = this.coveredHashes(input.scope);
     const at = this.nowFn();
-    const marks: CoverageMark[] = this.spans(input.scope)
-      .filter((s) => s.session === input.session && !covered.has(s.hash))
+    const live = this.spans(input.scope).filter((s) => s.session === input.session && !covered.has(s.hash));
+    let taken = live;
+    if (input.ownTurn === true) {
+      const own = live.find((s) => s.kind === "jot" && s.hash === input.ownSpanHash);
+      taken = own === undefined ? [] : live.filter((s) => s === own || (s.kind === "conversation" && s.from === own.from));
+    }
+    const marks: CoverageMark[] = taken
       .map((s) => ({
         spanHash: s.hash,
         proposalId: input.proposalId,
@@ -1343,6 +1407,22 @@ export function enters(turn: Turn): boolean {
   // is never a lived event (`dream/mark.ts`).
   if (source === "dream" || carriesDreamMark(turn.text)) return false;
   return source === "conversation" || source === "injected";
+}
+
+/**
+ * DID THE PERSON TYPE SOMETHING AFTER A REPLY in this slice of kept turns? Then
+ * it holds more than the one turn a note can claim (review of #437): the host
+ * runs no Stop after an interrupt, so the next Stop's slice carries the
+ * interrupted turn and the one after it. Host-injected text (`injected`: the
+ * interrupt's own marker, a peer's message) is not typed and does not count.
+ */
+function typedAfterReply(kept: readonly Turn[]): boolean {
+  let replied = false;
+  for (const t of kept) {
+    if (t.role === "assistant") replied = true;
+    else if (replied && (t.source ?? "conversation") === "conversation") return true;
+  }
+  return false;
 }
 
 /** A stable, path-safe directory key for an arbitrary scope or session string. */

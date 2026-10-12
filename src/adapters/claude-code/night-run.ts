@@ -92,7 +92,7 @@ import type { AdapterConfig } from "../config.js";
 import { DEFAULT_HOST_COMMAND, KILL_GRACE_MS, PERMISSION_MODE, REAP_GRACE_MS, startChild } from "./child.js";
 import { CATCH_UP_TOOLS, runCatchUp } from "./night-catch-up.js";
 import type { CatchUpReport } from "./night-catch-up.js";
-import { hostConfigDir, hostTranscriptPath, readToolSpills } from "./transcript.js";
+import { parseToolSpills } from "./transcript.js";
 import type { ToolSpills } from "./transcript.js";
 import type { ChildPlan, ChildResult } from "./child.js";
 import { DATA_DIR_ENV, NIGHT_CHILD_ENV, NIGHT_RUN_ENV, SCOPE_ENV, SESSION_ENV, WATCHDOG_ENV } from "../spawn.js";
@@ -373,11 +373,18 @@ export interface NightChildInput {
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
   /**
-   * The child's OWN session id, a fresh UUID (`--session-id`), so its
-   * transcript can be found by name once it exits (2026-10-09, U14 item 3).
+   * The child's OWN session id, a fresh UUID (`--session-id`, 2026-10-09).
    * Absent, the host mints one (the catch-up child).
    */
   readonly hostSession?: string;
+  /**
+   * Read the child's own output (2026-10-12): `--output-format stream-json
+   * --verbose`, kept by the starter (`ChildPlan.captureOutput`), so what the
+   * host cut is read from what the child said rather than from the host's
+   * transcript under `~/.claude/projects`. Absent, its output is ignored (the
+   * catch-up child).
+   */
+  readonly readOutput?: boolean;
 }
 
 /**
@@ -414,6 +421,8 @@ export function planNightChild(input: NightChildInput): NightChildPlan {
     "--strict-mcp-config",
     ...(model === undefined ? [] : ["--model", model]),
     ...(input.hostSession === undefined || input.hostSession.length === 0 ? [] : ["--session-id", input.hostSession]),
+    // `stream-json` with `-p` is refused without `--verbose` (measured on 2.1.296).
+    ...(input.readOutput === true ? ["--output-format", "stream-json", "--verbose"] : []),
   ];
   const plan = (ok: boolean, reason: NightChildRefusal | "ready"): NightChildPlan => ({
     ok,
@@ -423,6 +432,7 @@ export function planNightChild(input: NightChildInput): NightChildPlan {
     stdin: input.prompt,
     env,
     timeoutMs,
+    ...(input.readOutput === true ? { captureOutput: true } : {}),
     // A NEUTRAL DIRECTORY, the store's own (owner decision B): no project's
     // CLAUDE.md, hooks or MCP servers load in the child.
     ...(dataDir.trim().length === 0 ? {} : { cwd: dataDir }),
@@ -474,12 +484,6 @@ export interface NightRunInput {
   readonly start?: NightStarter;
   /** TESTS ONLY: the catch-up child's starter (`night-catch-up.ts`); absent, a real child. */
   readonly startCatchUp?: NightStarter;
-  /**
-   * Where the host keeps its sessions (`<dir>/projects/…`), for the read of
-   * the child's transcript; absent, the child's `CLAUDE_CONFIG_DIR` or
-   * `~/.claude` (`transcript.ts#hostConfigDir`).
-   */
-  readonly hostConfigDir?: string;
   readonly now?: () => number;
   /** The process log's (`adapters/log/`), for what the store does not write. */
   readonly onEvent?: (e: CounterpartEvent) => void;
@@ -489,11 +493,11 @@ export interface NightRunInput {
  * RUN THE NIGHT, headless: compose, start, wait, record. Never throws; the
  * record it returns is the one it wrote. What happened is read from the exit
  * and from the STORE (a dream journaled, a reflection finished) — never from
- * the child's output, which is prose nobody here should parse. One thing more
- * is read from the HOST's record of the child, its transcript (2026-10-09):
- * whether the host cut any of our tool results to a preview — markers the host
- * writes in place of a result, matched there and nowhere else
- * (`transcript.ts#readToolSpills`).
+ * the child's prose. One thing more is read from the child's own `stream-json`
+ * output (2026-10-09; from its output rather than the host's transcript since
+ * 2026-10-12): whether the host cut any of our tool results to a preview —
+ * markers the host writes in place of a result, matched there and nowhere else
+ * (`transcript.ts#parseToolSpills`). Nothing under `~/.claude` is read.
  */
 export async function runNight(input: NightRunInput): Promise<NightRun> {
   const now = input.now ?? ((): number => Date.now());
@@ -808,34 +812,34 @@ function childRunOf(child: NightChild, out: NightChildOutcome): NightChildRun {
 
 /**
  * ONE CHILD, STARTED AND WAITED ON (2026-10-11, from what `runNight` did for
- * its single child): under its own session id, so its transcript can be found
- * and read for the host's cut; retried once without the name when the host
- * refused it. Throws only what the starter throws.
+ * its single child): under its own session id, its `stream-json` output kept
+ * and read for the host's cut; retried once plain when the host refused those
+ * arguments. Throws only what the starter throws.
  */
 async function runNightChild(input: NightRunInput, childInput: NightChildInput, start: NightStarter, now: () => number): Promise<NightChildOutcome> {
-  // THE CHILD'S OWN SESSION, CHOSEN HERE (2026-10-09): so its transcript can
-  // be found by name once it exits, and read for the host's cut.
+  // THE CHILD'S OWN SESSION, CHOSEN HERE (2026-10-09). Its transcript was
+  // once looked up by this name; since 2026-10-12 the cut is read from the
+  // child's own output instead, and the name only keeps the children apart.
   const hostSession = randomUUID();
-  const plan = planNightChild({ ...childInput, hostSession });
-  const where = { configDir: input.hostConfigDir ?? hostConfigDir(plan.env), id: hostSession, ...(plan.cwd === undefined ? {} : { cwd: plan.cwd }) };
+  const plan = planNightChild({ ...childInput, hostSession, readOutput: true });
   const childAt = now();
   let result = await start(plan);
   // Whether the child that ran was the one named (review of #330, below).
   let named = true;
-  // A HOST THAT REFUSED THE NAME (review of #330): `--session-id` is read
-  // for telemetry only, and the night must not be lost to it. A host too
-  // old for the flag, or one that dropped it, exits at once on its argument
-  // list — nothing begun, no transcript under the name. Exactly that is
-  // retried ONCE without the flag, its cut left unchecked (`absent`). The
-  // child's output is discarded (`child.ts`), so the refusal is read from
-  // what it left: a quick non-zero exit, no transcript, nothing in the store.
+  // A HOST THAT REFUSED ITS ARGUMENTS (review of #330): `--session-id` and
+  // the `stream-json` output are for the cut only, and the night must not be
+  // lost to them. A host too old for a flag, or one that dropped it, exits at
+  // once on its argument list — nothing begun, nothing said on STDOUT (its
+  // complaint goes to STDERR, which is ignored). Exactly that is retried ONCE
+  // without them, its cut left unchecked (`absent`): a quick non-zero exit,
+  // no output, nothing in the store.
   if (
     result.spawnCode === undefined &&
     result.code !== null &&
     result.code !== 0 &&
     !result.timedOut &&
     now() - childAt < TUNABLES.NIGHT_QUICK_EXIT_MS &&
-    hostTranscriptPath(where) === null &&
+    (result.output ?? "").trim().length === 0 &&
     !begunSince(input.open, childAt, input.session)
   ) {
     named = false;
@@ -844,10 +848,9 @@ async function runNightChild(input: NightRunInput, childInput: NightChildInput, 
   const ms = now() - childAt;
   const neverStarted = result.spawnCode !== undefined || (result.code === null && !result.timedOut && result.error !== null);
   // WHAT THE HOST CUT (2026-10-09, U14 item 3), read from the child's own
-  // transcript — the host's record of what the model saw, not the child's
-  // prose. A child that never started left none; one started without its
-  // name left none this process can find.
-  const spill: ToolSpills | null = neverStarted ? null : named ? readNightSpills(where) : { reason: "absent", results: 0, spills: [], corrupt: 0, short: false };
+  // `stream-json` output — the messages the model saw, not the child's prose.
+  // A child that never started said nothing; one retried plain kept nothing.
+  const spill: ToolSpills | null = neverStarted ? null : readNightSpills(result);
   if (spill !== null) {
     input.onEvent?.({
       at: now(),
@@ -914,17 +917,25 @@ function errorCode(err: unknown): string {
 }
 
 /**
- * THE CHILD'S TRANSCRIPT, READ FOR THE HOST'S CUT (2026-10-09, U14 item 3):
- * found by the session id this process chose (`hostTranscriptPath`), judged by
- * `readToolSpills` — `absent` when the host did not write it where it keeps
- * sessions, said apart from a clean read. Never throws.
+ * THE CHILD'S OWN OUTPUT, READ FOR THE HOST'S CUT (2026-10-09, U14 item 3; from
+ * the child's `stream-json` since 2026-10-12, when the lookup of its transcript
+ * under `~/.claude/projects` was removed). Its `assistant` and `user` lines
+ * carry the same message blocks the transcript does, so `parseToolSpills`
+ * judges them unchanged. `absent` when the child said nothing (a host that
+ * refused its arguments, a starter that kept nothing), said apart from a clean
+ * read; a capped output is read to its last whole line and marked `short`.
+ * Only the counts leave this function. Never throws.
  */
-export function readNightSpills(input: { configDir: string; id: string; cwd?: string }): ToolSpills {
+export function readNightSpills(result: Pick<ChildResult, "output" | "outputShort">): ToolSpills {
+  const none = { results: 0, spills: [], corrupt: 0, short: false };
+  const out = result.output ?? "";
+  if (out.trim().length === 0) return { reason: "absent", ...none };
   try {
-    const path = hostTranscriptPath(input);
-    return readToolSpills(path);
+    const short = result.outputShort === true;
+    const text = short ? out.slice(0, Math.max(0, out.lastIndexOf("\n"))) : out;
+    return { reason: "read", ...parseToolSpills(text), short };
   } catch {
-    return { reason: "unreadable", results: 0, spills: [], corrupt: 0, short: false };
+    return { reason: "unreadable", ...none };
   }
 }
 

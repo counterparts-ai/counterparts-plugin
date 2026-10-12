@@ -140,6 +140,13 @@ export const TRIM_ORDER: readonly LaneName[] = [
  *   - `openFirst` — "Still open"'s first item and its count, when it would
  *     otherwise list nothing (review of #350);
  *   - `arrivingFirst` — "Arriving:"'s first line;
+ *   - `arrivingNear` — at session start only, "Arriving:"'s lines due from
+ *     the session's date through `ARRIVING_NEAR_DAYS` after it (`Ranked.near`;
+ *     2026-10-12, RANDOM's ruling, lightly held; not the grace days' "was
+ *     due" lines, RANDOM's ruling at review of #445): first claim on the room
+ *     the session-start lines would fill — "Last here", "Last said here",
+ *     "Today, elsewhere", the older handoffs — but not the newest handoff's
+ *     own (review of #445). The turn-end composition marks none;
  *   - `handoffsKept` — the room for the newest handoff's own block, with
  *     the margin (`handoffKeepBytes`, `counterpart.ts#handoffRoom`; review
  *     of #367): lent to `due` alone, so no ordinary line leaves the next
@@ -173,6 +180,7 @@ export const ROOM_ORDER = [
   "arriving",
   "openFirst",
   "arrivingFirst",
+  "arrivingNear",
   "handoffsKept",
   "pageBorrow",
   "due",
@@ -1060,6 +1068,28 @@ export function arrivingHead(horizon: readonly Pick<Ranked, "due">[]): number {
   return Math.min(horizon.length, Math.max(1, n));
 }
 
+/** How many days ahead a dated item counts as NEAR at session start
+ *  (`HorizonItem.near`; 2026-10-12, RANDOM's ruling, lightly held). */
+export const ARRIVING_NEAR_DAYS = 3;
+
+/** Whether a dated item due `due` is NEAR on `at`: from that day through
+ *  `ARRIVING_NEAR_DAYS` after it. A grace day's "was due" line, behind `at`,
+ *  is not (RANDOM's ruling at the review of #445, 2026-10-12, lightly held). */
+export function nearDue(due: string | undefined, at: string): boolean {
+  return due !== undefined && isDay(due) && isDay(at) && due >= at && due <= addDays(at, ARRIVING_NEAR_DAYS);
+}
+
+/**
+ * How many of Arriving's first lines are NEAR (2026-10-12): the head, then
+ * every line after it marked `near` (`Ranked.near`, set at session start
+ * only, and sorted to follow the head). Zero when none is.
+ */
+export function arrivingNear(horizon: readonly Pick<Ranked, "due" | "near">[]): number {
+  let n = 0;
+  while (horizon[n]?.due === true || horizon[n]?.near === true) n += 1;
+  return horizon.some((r) => r.near === true) ? n : 0;
+}
+
 /**
  * The "Today, elsewhere" line's forms the render may print, widest first:
  * each within `TODAY_ELSEWHERE_MAX_BYTES` (2026-10-10), each narrower than
@@ -1110,7 +1140,8 @@ function shorterThan(line: string | undefined, forms: readonly string[] | undefi
  *     (`target` `elsewhere`) before it steps the line down;
  *   - `handoffsKept` — the room held for the newest handoff's own block
  *     (`handoffKeepBytes`): reached only by `due`, the one lane above it
- *     that takes room here (review of #367).
+ *     that takes room here (review of #367; `arrivingNear` stops below it,
+ *     review of #445).
  *
  * The lanes below them are the trim loop's and are gone before any rescue
  * runs; `lastHere` is the delivery's, inside the room lent at `handoffs`; the
@@ -1256,9 +1287,14 @@ function keepArriving(
  * alone leaves the listed lines as they are: a listed date outranks it, and
  * doctor reads the trim. Null when the count is already in, there is nothing
  * to count, or no room is found.
+ *
+ * AND WHEN THE LANE LISTS NOTHING (2026-10-12): its one collapsed line takes
+ * room the same way. The owner's 10-12 bundles carried seven dated items and
+ * not a word about them — the page, borrowing "Work here", had spent the
+ * room, and the line was offered only what was left.
  */
 function keepArrivingCount(overflow: readonly string[], from: Rescued, ctx: RescueCtx): Rescued | null {
-  if ((from.pinned.horizon?.length ?? 0) > 0 || from.kept.horizon.length === 0) return null;
+  if ((from.pinned.horizon?.length ?? 0) > 0) return null;
   const rest = [...from.trimmed.filter((e) => e.lane === "horizon").map((e) => e.id).reverse(), ...overflow];
   if (rest.length === 0) return null;
   const pinned = { ...from.pinned, horizon: rest };
@@ -1534,6 +1570,9 @@ export function render(
       // titles, the room for "Last here" and the handoffs — never the page. A
       // rescue that finds no room leaves the render as it was.
       const dueHead = lanes.horizon[0]?.due === true;
+      const near = arrivingNear(lanes.horizon);
+      // No later rescue takes a near line back to pay for a count of the rest.
+      const nearCtx: RescueCtx = near > ctx.head ? { ...ctx, head: near } : ctx;
       const overflow = lanes.overflow;
       let state: Rescued = { kept, trimmed: [...trimmed], yesterday, elsewhere, pinned: {}, composed: c, lent: base - req.budgetBytes };
       let first: Rescued | null = null;
@@ -1541,8 +1580,12 @@ export function render(
         const steps: ((s: Rescued) => Rescued | null)[] = [
           (s) => keepArriving(lanes.horizon, overflow?.horizon ?? [], ctx.head, dueHead ? "due" : "arrivingFirst", s, ctx),
           (s) => keepFirstOpen(lanes.threads, overflow?.threads ?? [], lanes.horizon.length, s, ctx),
+          // At session start, the lines due within the next few days, down
+          // to, not into, the newest handoff's room (`arrivingNear`, 2026-10-12;
+          // its floor, review of #445).
+          (s) => (near > 0 ? keepArriving(lanes.horizon, overflow?.horizon ?? [], near, "arrivingNear", s, nearCtx) : null),
           (s) => keepArriving(lanes.horizon, overflow?.horizon ?? [], lanes.horizon.length, "arriving", s, ctx),
-          (s) => keepArrivingCount(overflow?.horizon ?? [], s, ctx),
+          (s) => keepArrivingCount(overflow?.horizon ?? [], s, nearCtx),
         ];
         for (const step of steps) {
           const next = step(state);

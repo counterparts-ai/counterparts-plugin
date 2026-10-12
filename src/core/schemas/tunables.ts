@@ -52,6 +52,24 @@ export const TUNABLES = {
     LIVED_DWELL_FACTOR_BY_KIND: { person: 2 } as Readonly<Partial<Record<Kind, number>>>,
   },
 
+  /**
+   * Card birth from the night's name tally (2026-10-11, Group 3 part D;
+   * `names.ts`, `Schemas#birthsFromNames`). A name becomes a card when at
+   * least `MIN_MEMORIES` live memories, written on at least `MIN_DAYS` lived
+   * days, name it — the bar from review 12 (D3), kept as given. CAL:
+   * `LOWER_CASE_SHARE`, measured once on a copy of the owner's store
+   * (2026-10-11, 1,009 live memories): with code and addresses not counted,
+   * the project and people names sat at or under 0.20, and the capitalized
+   * English words ("Code", "Job", "Health") from 0.25 up. How many are born a
+   * night is sleep's budget (`sleep/tunables.ts` BUDGETS.births), not a number
+   * here.
+   */
+  BIRTH_TALLY: {
+    MIN_MEMORIES: 3,
+    MIN_DAYS: 2,
+    LOWER_CASE_SHARE: 0.25,
+  },
+
   /** Box-2 meta key prefix for a card's calendar anchor (`{ day, date }`): a
    *  lived day and the calendar date the fade sweep saw it on. NOTES §14. */
   FADE_ANCHOR_PREFIX: "schemas.fade.anchor." as const,

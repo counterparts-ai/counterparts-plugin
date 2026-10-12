@@ -102,8 +102,9 @@ import {
   saveWriteUpPointer,
   updateWriteUpProgress,
   WRITE_UP_PART_BYTES,
+  firstUnwrittenPart,
   writeUpEntries,
-  writeUpParts,
+  writeUpPartsDated,
   writeUpPlan,
 } from "./sessions.js";
 import type { SessionPhase } from "./sessions.js";
@@ -958,16 +959,21 @@ export class Lifecycle implements HostLifecycle {
       // lengthen the text, and a recount could find a part that was never
       // served (re-review, m-B). The fetch finishes the mark.
       const finished = progress !== undefined && progress.answer !== undefined;
-      const cut = finished ? [] : writeUpParts(entries, chunk);
+      const cut = finished ? [] : writeUpPartsDated(entries, chunk);
       if (!finished && cut.length === 0) return "";
       const partsCount = finished ? progress.parts : cut.length;
       const done = finished ? progress.parts : Math.min(progress?.done ?? 0, partsCount);
+      // THE PART THE DOOR WILL HAND OVER (review of #435): it passes over parts
+      // with nothing unwritten (`firstUnwrittenPart`), so the pointer names that
+      // part and counts only what a reader will be handed.
+      const next = finished ? Math.min(done + 1, partsCount) : firstUnwrittenPart(cut, Math.min(done + 1, partsCount));
+      const left = cut.slice(next - 1).filter((p, i, rest) => p.unwritten > 0 || i === rest.length - 1);
       const text = writeUpPointer({
         waiting: owed.length,
         ended: held.session,
         endedOn: calendarDate(held.clockFrom, this.counterpart.store.zone()),
-        bytes: cut.slice(done).reduce((n, p) => n + Buffer.byteLength(p, "utf8"), 0),
-        part: Math.min(done + 1, partsCount),
+        bytes: left.reduce((n, p) => n + Buffer.byteLength(p.text, "utf8"), 0),
+        part: next,
         of: partsCount,
         live: input.sessionId,
         short,
@@ -1044,7 +1050,7 @@ export class Lifecycle implements HostLifecycle {
       outcome("pointed");
       this.emit("adapter.writeup.ask", {
         ended: held.session,
-        part: Math.min(done + 1, partsCount),
+        part: next,
         of: partsCount,
         bytes,
         owed: owed.length,

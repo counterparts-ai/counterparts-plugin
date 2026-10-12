@@ -54,19 +54,18 @@
  * Telemetry is content-by-reference throughout: ids, counts, tiers, reasons.
  * No body text, no question text, no note text ever reaches an event.
  */
-import { CLAIM_NOTHING_NEW, claimUnwritten } from "../../core/coverage/index.js";
-import { DREW_ON_MAX_PER_BOUNDARY, MCP_OVERSIZE_EVENT, MCP_PART_EVENT, MCP_RECALL_EVENT, RECALL_CREDIT_EVENT, boundedIds } from "../../core/counterpart.js";
+import { MCP_OVERSIZE_EVENT, MCP_PART_EVENT, MCP_RECALL_EVENT, boundedIds } from "../../core/counterpart.js";
 import { CONTRADICTION_TUNABLES, HELD_HINT, NEIGHBOURS_HINT, SLOT_HINT } from "../../core/reconsolidation.js";
 import type { Neighbour } from "../../core/reconsolidation.js";
-import { isRecurrence, localDate, occurrenceOnOrAfter, parseCalendarDate, readableRecurrence, todayIn } from "../../core/time.js";
+import { localDate, todayIn } from "../../core/time.js";
 import type { Recurrence } from "../../core/time.js";
-import type { ChapterResult, Counterpart, DepositResult, SentFacts } from "../../core/counterpart.js";
+import type { Counterpart, DepositResult } from "../../core/counterpart.js";
 import { LAST_EXCHANGE_HANDLE, lastExchangeAnswer } from "../../core/handoff/last-exchange.js";
 import { loadGateState } from "../../core/recall/index.js";
 import type { SemanticSource } from "../../core/recall/index.js";
 import { AUTHOR_DIMENSIONS } from "../../core/remember/index.js";
-import { ABOUT_MARKS, CACHE_SCHEMA_VERSION, CORE_ABOUT_MARKS, SAID_BY, SCHEMA_VERSION, STATUSES, StoreError, checkFeelings, checkTraits, isStoreError, paths, saidByOf, schemaAhead, statusOf } from "../../core/store/index.js";
-import type { AboutMark, FeelingInput, MemoryStatus, SaidBy, TraitInput } from "../../core/store/index.js";
+import { CACHE_SCHEMA_VERSION, CORE_ABOUT_MARKS, SCHEMA_VERSION, StoreError, paths, schemaAhead } from "../../core/store/index.js";
+import type { AboutMark, FeelingInput, TraitInput } from "../../core/store/index.js";
 import { isLocked } from "../../core/store/db.js";
 import type { Band, Kind } from "../../core/types.js";
 import { UNBOUND_SESSION, isKnownSession } from "../../core/types.js";
@@ -87,7 +86,6 @@ import {
 import type { ScopeCommandContext, ScopeMode, ScopeRegistry, ScopeVerdict } from "../scopes.js";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, dirname } from "node:path";
 
 import { CODE_TAB_ENTRYPOINT, DEFAULT_HOST, DESKTOP_HOST, DESKTOP_SCOPE, claudeCodeEnvMarker, hostOfClient, isPseudoScope, wordingFor } from "../hosts.js";
 import type { InstallRoute } from "../plugin.js";
@@ -129,7 +127,6 @@ import {
   latestLiveSession,
   listSessions,
   manifestVersionOnDisk,
-  markNothingNew,
   readSession,
   sessionOfHost,
   recordServerLaunch,
@@ -159,75 +156,90 @@ import {
   success,
 } from "./protocol.js";
 import type { Id, Request, Response } from "./protocol.js";
-import { DREAMING_SETTINGS, NIGHT_RUN_FINISHES, nightNext, nightOrder } from "../../core/dream/index.js";
-import type { DreamBundle, DreamingSetting, NightPart } from "../../core/dream/index.js";
 import { TOOL_RESULT_CEILING, clipWire, lineOf, noteLookups, wireChars } from "../../core/fit/index.js";
 import type { FitMechanism } from "../../core/fit/index.js";
-import { NIGHT_WRITER_TOOL, NO_PAGE_VERSION, WAKE_BUILD_KEY, pageRoomNote, pageSections, pageTooLargeDetail } from "../../core/self/index.js";
-import type { PageRevision, PageWriterMode } from "../../core/self/index.js";
+import { WAKE_BUILD_KEY } from "../../core/self/index.js";
+import type { PageWriterMode } from "../../core/self/index.js";
 import { canonicalToolName, toolDefinitions, toolSpec } from "./tools.js";
 import { writeUpDoor } from "./write-up.js";
 import type { ToolName } from "./tools.js";
 import { scriptArgs } from "../runtime.js";
+import {
+  OWNER_ENV_NAME,
+  OWNER_FALSE_NOTE,
+  SERVER_NAME,
+  SERVER_VERSION,
+  DESKTOP_INSTRUCTIONS,
+  START_PROMPT,
+  NO_DESKTOP_SESSION,
+  desktopBindNote,
+  desktopWriteUpAsk,
+  STORE_BUSY_REFUSAL,
+  schemaUnreadableRefusal,
+  staleServerRefusal,
+  cacheAheadRefusal,
+  uninstallRouteWords,
+  memoryHomeWords,
+  RECALL_MODE_WORDS,
+  DESKTOP_DREAM_NOTE,
+} from "./server-words.js";
+import { resolveScope, SEEN_SESSIONS, EVENT_RING } from "./server-options.js";
+import type {
+  ScopeSource,
+  QuestionEmbedder,
+  McpEvent,
+  SchemaVerdict,
+  McpServerOptions,
+  ToolResult,
+} from "./server-options.js";
+import {
+  readDimensions,
+  readReminder,
+  readFeelings,
+  readAbout,
+  readTraits,
+  readWriteFacts,
+  reminderEcho,
+  undatedReminderWarning,
+  factsEcho,
+  threadOf,
+  addressBlocked,
+  resolvedIdOf,
+} from "./server-args.js";
+import type { RecallRowFields } from "./server-args.js";
+import * as sessionEndPart from "./server-session-end.js";
+import * as selfTools from "./server-self-tools.js";
 
-export const SERVER_NAME = "counterparts";
-/**
- * What `initialize` tells the client it is talking to. It is the PACKAGE's
- * version, and `test/mcp.test.ts` reads `package.json` and asserts the two are
- * the same string — a literal here that drifted would make the one number a
- * client can see about this server a lie, and the handshake is exactly where a
- * host decides whether to trust what follows. Read from a constant rather than
- * from disk so the server opens no file to answer its first message.
- */
-export const SERVER_VERSION = "0.3.18";
-
-/**
- * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
- * of the code this process loaded — a newer build migrated it after this
- * server started (`call`'s schema gate). The same sentence for every tool,
- * ending in the same remedy the hook's update notice ends in.
- *
- * The remedy is the HOST's (`hosts.ts`, 2026-09-30): `/mcp` is Claude Code's
- * command, so the sentence a server hands back is built from the wording of
- * the host it serves (`McpServerOptions.host`). The constant is Claude Code's,
- * unchanged.
- */
-export function staleServerRefusal(host: string = DEFAULT_HOST): string {
-  return `Counterparts was updated and this server is still running the old version, so this tool did nothing. ${wordingFor(host).reconnect}`;
-}
-export const STALE_SERVER_REFUSAL = staleServerRefusal(DEFAULT_HOST);
-
-/**
- * THE SAME GATE WHEN ONLY THE CACHE IS AHEAD (2026-10-11): the search cache
- * (`cache/cache.sqlite`, box 3) carries a newer build's stamp while the store
- * does not. "Was updated … reconnect" is not true there — after a rollback
- * the installed build IS this one, and a reconnect loads the same code onto
- * the same cache. What is true: a newer build wrote the cache, and it is
- * rebuildable, so either that build comes back or the cache goes. The
- * reconnect after deleting it is real: this process holds the old file open.
- * `cacheFile` is the cache's path; the `*` takes its `-wal` and `-shm` too.
- *
- * BOTH WAYS IT HAPPENS (review of #382): an update whose new build moved the
- * cache and not the store reaches this gate too, while the old server still
- * runs — there the newer build IS installed, and the reconnect alone loads
- * it. So the sentence says both, and deleting is offered only for going back.
- */
-export function cacheAheadRefusal(cacheFile: string, host: string = DEFAULT_HOST): string {
-  const w = wordingFor(host);
-  const lower = (s: string): string => `${s.charAt(0).toLowerCase()}${s.slice(1)}`;
-  return `The search cache was written by a newer Counterparts build than this server runs, so this tool did nothing. If that newer build is installed, ${lower(w.reconnect)} If you went back to an older build, delete ${cacheFile}* (the search cache alone; no memory is kept there, and it is rebuilt), then ${lower(w.reconnectFirst)}.`;
-}
-
-/** The gate's refusal when the stamps could not be read at all — the same
- *  first step, in the host's words. */
-export function schemaUnreadableRefusal(host: string = DEFAULT_HOST): string {
-  return `This server could not read which version the memory store is at, so this tool did nothing. ${wordingFor(host).reconnectFirst}; if that does not help, run \`counterparts doctor\`.`;
-}
-export const SCHEMA_UNREADABLE_REFUSAL = schemaUnreadableRefusal(DEFAULT_HOST);
-
-/** And when the store was merely busy past the wait: a retry, not a reconnect. */
-export const STORE_BUSY_REFUSAL =
-  "The memory store was busy, so this tool did nothing. Try again in a moment.";
+// What moved to the server-*.ts parts, re-exported so every import of this file still resolves.
+export {
+  SERVER_NAME,
+  SERVER_VERSION,
+  staleServerRefusal,
+  STALE_SERVER_REFUSAL,
+  cacheAheadRefusal,
+  schemaUnreadableRefusal,
+  SCHEMA_UNREADABLE_REFUSAL,
+  STORE_BUSY_REFUSAL,
+  DESKTOP_INSTRUCTIONS,
+  START_PROMPT,
+  DESKTOP_DREAM_NOTE,
+  uninstallRouteWords,
+  memoryHomeWords,
+  desktopBindNote,
+  NO_DESKTOP_SESSION,
+  desktopWriteUpAsk,
+  OWNER_FALSE_NOTE,
+  dreamHow,
+  RECALL_MODE_WORDS,
+} from "./server-words.js";
+export { hostScope, resolveScope, SEEN_SESSIONS } from "./server-options.js";
+export type {
+  McpEvent,
+  McpServerOptions,
+  QuestionEmbedder,
+  ToolResult,
+  ScopeSource,
+} from "./server-options.js";
 
 /**
  * Is a stamp read off the disk AHEAD of the code? Only a plain integer above it
@@ -237,376 +249,6 @@ export const STORE_BUSY_REFUSAL =
  * this module's readers.
  */
 export { schemaAhead } from "../../core/store/index.js";
-
-/** What reading the two stamps said: fine, or one of the three refusals. */
-type SchemaVerdict =
-  | { readonly kind: "ok" }
-  | { readonly kind: "busy" }
-  | { readonly kind: "unreadable" }
-  | {
-      readonly kind: "ahead";
-      readonly store: string | null;
-      readonly cache: string | null;
-      readonly storeAhead: boolean;
-      readonly cacheAhead: boolean;
-    };
-
-/** Telemetry: ids, counts, reasons, flags. NEVER body text (store §5 G10). */
-export interface McpEvent {
-  at: number;
-  name: string;
-  ref?: string;
-  data?: Record<string, string | number | boolean | null>;
-}
-
-export interface McpServerOptions {
-  counterpart: Counterpart;
-  /**
-   * The ONE session this server may deposit under, when the host can say so at
-   * launch. Absent ⇒ the lazy bind (`requireBoundSession`) is the only way in.
-   */
-  session?: string;
-  /**
-   * The project this server's sessions belong to. Absent, it is what the host
-   * offered (`hostScope`): `CLAUDE_PROJECT_DIR` first — the variable the hooks
-   * file a session under — then `process.cwd()`, which is MEASURED to be the
-   * project directory on this host: `lsof` on four running servers, 2026-09-04,
-   * showed each one's cwd was the directory its session ran in. The store's dir
-   * is the last resort, and it is a bad scope —
-   * every memory authored through this server carried the store path as
-   * `origin_scope` for the whole run because it was the only default.
-   */
-  scope?: string;
-  /** Is this the owner's own session? Withholding is the safe direction. */
-  owner?: boolean;
-  /**
-   * WHAT DECIDED `owner` (2026-10-02), for `status` to say plainly: `env` —
-   * `COUNTERPARTS_OWNER` or `--owner`; `config` — nothing said, so the installed
-   * configuration's `owner: true` made a Claude Code launch the owner's;
-   * `off` — `COUNTERPARTS_OWNER` said no (`0`, or a value it could not
-   * read); `default` — nothing said and nothing made it so. Absent: `env`
-   * when `owner` is true, else `default`.
-   */
-  ownerFrom?: "env" | "config" | "default" | "off";
-  /**
-   * DESKTOP'S CODE TAB IS THE OWNER'S TOO (owner ruling 2026-10-02). Desktop's
-   * server opens as a guest for its chats; a call it serves as a Claude Code
-   * session (`callAs`) is that session, so with this set the call is the
-   * owner's — its reads and its thread close. Set by the entry point from the
-   * configuration's `owner: true` when `COUNTERPARTS_OWNER` said nothing.
-   */
-  codeTabOwner?: boolean;
-  /**
-   * The embedder, for ONE purpose: embedding a deliberate question in line.
-   *
-   * The ruling of 2026-09-04 splits the two paths — the ambient hot path may not
-   * embed (it has a 1200 ms budget and a person mid-sentence), the deliberate
-   * ask may (someone typed a question and is waiting). This is that half.
-   *
-   * The ENTRY POINT reads the configuration and hands over an opened embedder
-   * or null (`bin/serve.ts`), exactly as `bin/hook.ts` does for the hook
-   * adapter. Null degrades the ask to lexical-only and the result SAYS so.
-   */
-  embedder?: QuestionEmbedder | null;
-  /**
-   * Where the hooks' live-session registry lives. Defaults to the store's own
-   * data dir — the one path both adapters resolve independently and agree on.
-   */
-  registryDir?: string;
-  /** **CAL.** Liveness window for a lazily-bound claim (`adapters/sessions.ts`). */
-  sessionTtlMs?: number;
-  /**
-   * The most one tool result may measure, by `wireChars` of its serialized
-   * `structuredContent` (`withinCeiling`). Default `TOOL_RESULT_CEILING.CHARS`;
-   * a test passes a small one to reach the cut without a 40,000-character page.
-   */
-  resultCeilingChars?: number;
-  /**
-   * THE SCOPE REGISTRY this server consults — `<config dir>/scopes.json`,
-   * resolved by the entry point from the same `--config` rule everything else
-   * uses (`bin/serve.ts`). Absent means "nobody told us", which reads as `unset`
-   * and behaves exactly as this server always has.
-   *
-   * It is read PER CALL rather than pinned at construction, and deliberately:
-   * the file is a few hundred bytes, and a session whose directory was switched
-   * back on — from the console in another terminal, or by this server's own
-   * `scope` tool — must get its memory back without the host restarting the
-   * process. The launch stderr line is the one thing computed once.
-   */
-  scopesFile?: string;
-  /**
-   * What the console line a scope refusal names needs to work where it is
-   * typed (`scopes.ts#ScopeCommandContext`, 2026-10-10): the plugin's launcher
-   * when this is the plugin's server, and `--config` when `scopesFile` is not
-   * the default registry. Set by `bin/serve.ts`. Absent: the npm install's
-   * `counterparts`, with `--config` only when `lifecycle.configPath` names
-   * another registry.
-   */
-  scopeCommand?: ScopeCommandContext;
-  /**
-   * How this copy was installed (`plugin.ts#installRoute`), for the first
-   * meeting's close — how to remove Counterparts. Set by `bin/serve.ts`.
-   * Absent (a test, an embedder): not known, and the close names both routes.
-   */
-  install?: InstallRoute;
-  /**
-   * WHICH HOST THIS SERVER SERVES (`hosts.ts`, 2026-09-30), for the words a
-   * result says about the host — today, how to reconnect after an update.
-   * Absent: `DEFAULT_HOST`, Claude Code, which is every launch `bin/serve.ts`
-   * makes today.
-   *
-   * Since PR B (2026-09-30) the CLIENT decides as well: a client that names
-   * itself Claude Desktop's chat or Cowork at `initialize`
-   * (`hosts.ts#hostOfClient`) turns this server into Desktop's — the `wake`
-   * tool, the `claude-desktop:` place, per-call binding and the write-up ask.
-   * Any other client leaves it as this option set it. `DESKTOP_HOST` here does
-   * the same from construction (tests, an embedder that knows).
-   */
-  host?: string;
-  /**
-   * WHAT CLAUDE DESKTOP'S `wake` NEEDS TO RUN A SESSION START, handed in by the
-   * entry point (`bin/serve.ts`) and used only once a Desktop client is seen:
-   * the configuration this process read (the wake's budget, the worker's
-   * plan), which file that was, and how the worker is started. Absent — a test,
-   * an embedder — the wake runs on an empty configuration over this store, and
-   * the worker on this runtime and `spawn.ts#WORKER_RUNNER_PATH`.
-   */
-  lifecycle?: {
-    config?: AdapterConfig;
-    configPath?: string;
-    command?: string;
-    args?: readonly string[];
-    spawner?: Spawner;
-  };
-  /**
-   * THE DOCTOR NOTICE for Desktop's `wake` — `claude-code/doctor.ts`'s red-only
-   * line, which this library may not import, so the entry point hands over a
-   * closure (`bin/serve.ts`). Null or absent: nothing to say.
-   */
-  wakeNotice?: () => string | null;
-  /** The package version on disk now (`sessions.ts#manifestVersionOnDisk`),
-   *  injectable so the update line is provable without reinstalling. */
-  manifestVersion?: () => string | null;
-  /** This process's environment, read once at `initialize` for Claude Code's
-   *  markers (`hosts.ts#claudeCodeEnvMarker`). Injectable for a test; absent,
-   *  `process.env`. */
-  env?: Readonly<Record<string, string | undefined>>;
-  /**
-   * The launch directory's scope entry said `observer`, and the launch could not
-   * tell whether Claude Code started it (`bin/serve.ts`, review of #294 finding
-   * 2): the store was opened as a writer, and this server stands every tool
-   * down itself — unless a Claude Desktop client shows up, whose place is
-   * `claude-desktop:` and is read per call instead.
-   */
-  launchObserver?: boolean;
-  onEvent?: (e: McpEvent) => void;
-  now?: () => number;
-}
-
-/**
- * THE ONE LINE `initialize` CARRIES FOR A DESKTOP CLIENT (brief item 5): MCP's
- * `instructions` field. Desktop reportedly ignores it; it costs nothing, and
- * a host that reads it learns the one thing it needs to.
- */
-export const DESKTOP_INSTRUCTIONS =
-  "Counterparts is your memory. In every new chat, call its wake tool first — before answering anything about the person, the past, or work in progress — and once: it returns this chat's briefing, including what happened yesterday across every session, and a session id to pass on session_end, chapter, dream and reflect. Without a wake, what recall returns is a slice, not the whole record: never present it as complete. In a Claude Code session (Desktop's Code tab) the hook already woke you: do not call wake — pass your own session id, the one your wake or Stop ask names, as `session` on every call.";
-
-/** The MCP prompt a Desktop person can pick (brief item 6). */
-export const START_PROMPT = {
-  name: "start-with-counterparts",
-  title: "Start with Counterparts",
-  description: "Wake this chat's memory before we begin.",
-  text: "Before anything else, call the counterparts wake tool, read what it returns, and keep the session id it gives for this chat. Then say hello as yourself — briefly — with that memory in mind.",
-} as const;
-
-/**
- * THE ONE LINE THAT MAKES A DESKTOP DREAM LINE TRUE THERE. The day's dream line
- * is core's, and says the person was "shown … in the terminal" and that the
- * prompt goes to "a background agent (the Agent tool)". Desktop chat has
- * neither, so the wake adds this beside it rather than rewriting core's words.
- */
-export const DESKTOP_DREAM_NOTE =
-  "(Claude Desktop: there is no terminal here, so nobody has shown them that line — say it to them yourself, once, in your own words. And there is no background Agent tool: if they say dream, follow the prompt the launch returns yourself, here.)";
-
-/**
- * HOW TO REMOVE COUNTERPARTS, for the first meeting's close: the console's
- * `counterparts uninstall` for an npm install (and Desktop, which is wired by
- * it), the plugin's `/counterparts:uninstall` inside Claude Code; both when
- * this process cannot tell. Each asks before it deletes the memories.
- */
-export function uninstallRouteWords(install: InstallRoute, desktop: boolean): string {
-  if (install === "plugin" && !desktop) return "type /counterparts:uninstall in Claude Code";
-  if (install === "npm" || desktop) return "run counterparts uninstall in a terminal";
-  return "type /counterparts:uninstall in Claude Code (or, for an npm install, run counterparts uninstall in a terminal)";
-}
-
-/** Where the memory lives, as a person types it: the folder the configuration sits in (`~/.counterparts`), else the store's. */
-export function memoryHomeWords(storeDir: string, configPath: string | undefined, home: string = homedir()): string {
-  const base = configPath !== undefined && configPath.length > 0 ? dirname(configPath) : basename(storeDir) === "store" ? dirname(storeDir) : storeDir;
-  return base === home ? "~" : base.startsWith(`${home}/`) ? `~${base.slice(home.length)}` : base;
-}
-
-/**
- * WHAT A DESKTOP CALL THAT NAMED NO SESSION IS TOLD (2026-10-01: and a Claude
- * Code session in Desktop's Code tab, whose calls land here too and cannot be
- * told apart from a chat's, is told how to correct itself).
- */
-export function desktopBindNote(session: string): string {
-  return `No session was named, so this call was filed under the most recent Claude Desktop session — Desktop chat ${session}. Every tool takes "session" here: pass the id wake gave this chat, so its calls stay together — and no other chat's write-up ask reaches it. If you are a Claude Code session (Desktop's Code tab), pass your own session id — the one your wake or Stop ask names — and the call is filed under your session and its directory instead.`;
-}
-
-/** What a Desktop call that needs a session is told when none is live. */
-export const NO_DESKTOP_SESSION =
-  "No Claude Desktop session is live. Call the `wake` tool first: it starts this chat's session and returns its id. (In a Claude Code session — Desktop's Code tab — do not call wake: pass the session id your wake or Stop ask names.)";
-
-/** The write-up ask a Desktop tool result carries once the session is due one. */
-export function desktopWriteUpAsk(session: string): string {
-  return `Counterparts: this chat has gone on a while since it was last written up. At a natural pause, hand back what caught your attention, one idea each, with session_end (session: ${session}; memories: [] only if nothing held your attention; \`updates\` anything dated or open now done), and add a chapter with the chapter tool (session: ${session}) if the chat was about something.`;
-}
-
-/** What `status` says `owner: false` means — the confused Desktop chats' question (2026-09-30). */
-export const OWNER_FALSE_NOTE =
-  "owner: false — confidential memories are left out of this server's answers, and an open question written in another directory cannot be closed from here. It is the ordinary setting for a Claude Desktop chat; your Claude Code sessions run as the owner unless COUNTERPARTS_OWNER=0. Nothing is wrong.";
-
-/** The owner variable's name, for `status` (the entry point reads it, `stance-env.ts`). */
-const OWNER_ENV_NAME = "COUNTERPARTS_OWNER";
-
-/** The narrow face of `claude-code/embed-client.ts`'s `LiveEmbedder` this
- *  adapter needs — structural, so the server library imports no other adapter.
- *  (The entry point, `bin/serve.ts`, still opens the embedder through
- *  `claude-code/embed-client.ts`; its configuration comes from the shared
- *  `adapters/config.ts` since 2026-09-30.) */
-export interface QuestionEmbedder {
-  vector(text: string): Promise<number[] | null>;
-}
-
-/** MCP's tool-result shape. A refusal is a RESULT, never a JSON-RPC error. */
-export interface ToolResult {
-  content: { type: "text"; text: string }[];
-  structuredContent: Record<string, unknown>;
-  isError?: boolean;
-}
-
-const EVENT_RING = 200;
-
-/**
- * THE SCOPE THE HOST OFFERED, or null when it offered none.
- *
- * In order: what the launch declared (`--scope` / `COUNTERPARTS_SCOPE`), then
- * `CLAUDE_PROJECT_DIR`, then this process's working directory.
- *
- * **`CLAUDE_PROJECT_DIR` is second, and it is what makes the two adapters agree
- * without either one telling the other.** The host documents it as the project
- * root where the session started, exports it to hook processes AND to stdio MCP
- * servers, and keeps it put when the agent enters a worktree or runs `cd` — so
- * the hooks' `sessionScope` and this resolve the same string from the same
- * variable. What the server's own working directory is, this host does not
- * document at all: `lsof` on four running servers measured it as the session's
- * directory on 2026-09-04, and a measurement is what it remains. It stays as the
- * fallback it has always been.
- *
- * CANONICAL, because the scope is not only compared — it is the KEY. Span
- * streams, cursors and coverage files are named from a hash of this exact string
- * (`remember/spans.ts#keyFor`), so a deposit whose scope says `/tmp/x` claims
- * coverage in a different directory from spans captured under `/private/tmp/x`.
- * `sameScope` was already canonicalising for the BIND; this makes the filing
- * agree too.
- */
-export function hostScope(
-  declared: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): { scope: string; source: Exclude<ScopeSource, "store"> } | null {
-  if (declared !== undefined && declared.length > 0) {
-    return { scope: canonicalScope(declared), source: "flag" };
-  }
-  const projectDir = env["CLAUDE_PROJECT_DIR"];
-  if (typeof projectDir === "string" && projectDir.length > 0) {
-    return { scope: canonicalScope(projectDir), source: "project" };
-  }
-  try {
-    const cwd = process.cwd();
-    if (cwd.length > 0) return { scope: canonicalScope(cwd), source: "cwd" };
-  } catch {
-    /* no working directory — the caller falls through to the store's own dir */
-  }
-  return null;
-}
-
-/**
- * The scope default: whatever the host offered, and — only if it offered
- * nothing at all — the store's own dir.
- *
- * The last resort is a bad answer and is kept only because a server with no
- * scope at all cannot deposit: from 2026-09-03 it was the ONLY answer, so every
- * memory authored through this server was stamped with the store path instead of
- * the project. `process.cwd()` can throw (a deleted working directory), which is
- * the one case the fallback is actually for.
- */
-export function resolveScope(
-  declared: string | undefined,
-  storeDir: string,
-  env: NodeJS.ProcessEnv = process.env,
-): { scope: string; source: ScopeSource } {
-  return hostScope(declared, env) ?? { scope: storeDir, source: "store" };
-}
-
-/** How this server learned which project it is serving. Reported at startup.
- *  `host`: the host has no directory, and its place is a name (Claude
- *  Desktop's `claude-desktop:`, 2026-09-30). */
-export type ScopeSource = "flag" | "project" | "cwd" | "store" | "host";
-
-/** The kind enum, for a refusal that names it (session_end). Derived from
- *  `Kind` so that adding a kind without listing it here fails `tsc`. */
-/**
- * Why a page write did not land, in the words the model needs to do something
- * about it. The keys are `self/`'s own refusal vocabulary, so a reason it can
- * return and this map does not carry falls back to one plain sentence rather
- * than to silence.
- */
-const PAGE_REFUSAL_DETAIL: Record<string, string> = {
-  empty: "A page has to say something. Nothing worth writing is a real answer — leave the page alone instead.",
-  "too-large":
-    "That page is past the write ceiling (`limit` bytes, UTF-8; `bytes` is what was sent, `over` how much to take out) — a sanity bound far past the page's room. It was refused rather than cut: what gets cut at write time is the only copy. Say the same thing shorter — tighten, merge or drop what no longer holds — and send the whole page again.",
-  "short-not-needed":
-    "The page is within its room, so the wake shows it whole and a short version would never be read. Nothing was written.",
-  "short-refused":
-    "The short version was not kept (`short.reason`: past the room, the page's credential gate, or the wake's own markers), so nothing was written. Fix that and send it again.",
-  "gate-refused":
-    "The gate battery turned it away — most often because what was sent was nothing but a credential, or too short to be a page. Nothing was written.",
-  "forged-markers":
-    "That page contains the wake's own structural markers (`<!-- counterparts:wake`). Those lines are the bundle's bookkeeping, and a page carrying them reads to the next session as the end of its memory. Write the page in ordinary prose; headings are fine.",
-  "version-moved":
-    "Somebody else wrote the page after the version you read — another session, the owner, or the nightly writer. Nothing was written, and nothing of theirs was lost. `currentVersion` and `currentBody` here are what is actually there: fold your change into that and send it back with the new `ifVersion`.",
-  "no-page":
-    "You named a version and there is no page here at all — nobody wrote over you. Omit `ifVersion` to write the first page, or pass -1, which is the version a read of an empty store reports.",
-  "page-appeared":
-    "You wrote as if there were no page, and one has appeared since you looked. Nothing was written. `currentVersion` and `currentBody` are what is there: read it, fold your change into it, and send it back with that version.",
-};
-
-/**
- * WHAT A WRITE PAST THE PAGE'S ROOM IS TOLD (2026-10-10): the room, what
- * became of a short version, and — when none was kept — how to add one, in
- * `pageRoomNote`'s words. Nothing for a page within its room and no short
- * version sent.
- */
-function pageRoomAnswer(written: PageRevision, room: number): Record<string, unknown> {
-  const note = pageRoomNote(
-    written,
-    room,
-    `call self_page again with \`short\` alone and \`ifVersion: ${String(written.version ?? NO_PAGE_VERSION)}\``,
-  );
-  return {
-    ...(written.overRoom === null ? {} : { room: written.overRoom, overRoom: true }),
-    ...(written.short === null ? {} : { short: written.short }),
-    ...(note === null ? {} : { roomNote: note }),
-  };
-}
-
-const KIND_SET: Record<Kind, true> = { self: true, person: true, entity: true, skill: true, place: true, fact: true };
-const MEMORY_KINDS = Object.keys(KIND_SET) as readonly Kind[];
-
-/** Sessions whose "shown" a server keeps in memory for `feelingsNow` (Desktop serves many). */
-export const SEEN_SESSIONS = 32;
 
 export class McpServer {
   readonly counterpart: Counterpart;
@@ -1851,6 +1493,23 @@ export class McpServer {
    */
   private async rememberTool(args: Record<string, unknown>): Promise<ToolResult> {
     if (this.observer) return this.standDown("remember");
+    // CORE (2026-10-11, Group 3 part A): keep or retire a core memory, as me.
+    // Alone, or beside anything else the call does.
+    const coreArg = args["core"];
+    if (coreArg !== undefined) {
+      if (coreArg === null || typeof coreArg !== "object" || Array.isArray(coreArg)) {
+        return this.refuse("remember", "core-malformed", { detail: 'core is one object: {id, decision: "keep" | "retire", why}.' });
+      }
+      const rest = { ...args };
+      delete rest["core"];
+      const hasRest = (typeof rest["text"] === "string" && rest["text"].trim().length > 0) || rest["settle"] !== undefined || rest["feelingsNow"] !== undefined || rest["remark"] !== undefined;
+      const out = this.coreDecisionOutcome(coreArg as Record<string, unknown>);
+      if (!hasRest) return this.result({ stored: false, reason: "core-only", core: out }, out["ok"] !== true);
+      const done = await this.rememberTool(rest);
+      const body = (done as { structuredContent?: Record<string, unknown> }).structuredContent;
+      if (body === undefined) return done;
+      return this.result({ ...body, core: out }, (done as { isError?: boolean }).isError === true && out["ok"] !== true);
+    }
     // REMARK (2026-10-11, the about-marks lane): what an existing memory this
     // session was shown is about, changed in the moment, as me. Alone, or
     // beside anything else the call does.
@@ -1980,6 +1639,7 @@ export class McpServer {
       ...this.recordAbout(deposit, about.mark),
       ...this.recordTraits(deposit, traits.inputs, model),
       ...reminderEcho(deposit, dated, this.today()),
+      ...undatedReminderWarning(deposit, dated, args["title"], text),
       ...factsEcho(deposit, facts),
       ...this.settledOf(deposit, args["how"] !== undefined),
       ...threadOf(deposit),
@@ -2121,6 +1781,37 @@ export class McpServer {
       });
       this.emit("mcp.remember.remark", id, { ok: out.ok, reason: out.ok ? (out.changed ? "marked" : "unchanged") : out.reason });
       return { ...out };
+    } catch (err) {
+      return { ok: false, reason: "threw", detail: String((err as Error).message ?? err) };
+    }
+  }
+
+  /**
+   * One `core` decision through the core (2026-10-11, Group 3 part A): keep a
+   * core memory (`Counterpart.keepCore`) or retire it (`demoteCore`), by
+   * `self`, with the why. Any core memory: the owner's and my door alike, and
+   * a confidential one only in the owner's session. Never throws.
+   */
+  private coreDecisionOutcome(arg: Record<string, unknown>): Record<string, unknown> {
+    const id = typeof arg["id"] === "string" ? arg["id"].trim() : "";
+    const decision = arg["decision"];
+    const why = typeof arg["why"] === "string" ? arg["why"] : "";
+    try {
+      if (id.length === 0) return { ok: false, reason: "core-malformed", detail: 'core needs the memory\'s id: {id, decision, why}.' };
+      if (decision !== "keep" && decision !== "retire") return { ok: false, reason: "core-malformed", detail: 'decision is "keep" or "retire".' };
+      const row = this.counterpart.store.row(id);
+      if (row === undefined || (row.confidential === 1 && !this.owner)) return { ok: false, reason: "unknown-id", detail: `No memory ${id} in this store.` };
+      const out = decision === "keep" ? this.counterpart.keepCore(id, { why, actor: "self" }) : this.counterpart.demoteCore(id, { reason: why, actor: "self" });
+      const detail: Record<string, string> = {
+        "reason-required": "Say why: the decision is kept with its reason.",
+        "not-core": `${id} is not in the core.`,
+        "unknown-id": `No memory ${id} in this store.`,
+        observer: "This session is an observer: nothing was changed.",
+      };
+      this.emit("mcp.remember.core", id, { ok: out.ok, reason: out.reason, decision });
+      return out.ok
+        ? { ok: true, reason: out.reason, id, note: decision === "keep" ? "Kept in the core; it is no longer being reconsidered for what it is." : "Retired: it fades like any other memory from today, and the core's lanes will not promote it again." }
+        : { ok: false, reason: out.reason, detail: detail[out.reason] ?? out.reason };
     } catch (err) {
       return { ok: false, reason: "threw", detail: String((err as Error).message ?? err) };
     }
@@ -3128,1339 +2819,62 @@ export class McpServer {
     };
   }
 
-  /**
-   * `session_end` — the MEMORIES half of the Stop ask's return channel.
-   *
-   * Per-entry failure isolation (scar E1): one refused entry announces itself
-   * and its siblings still land. A single bad item failing the whole dump is
-   * how a session's memory becomes all-or-nothing at exactly the moment there
-   * is no second chance to write it.
-   */
-  private async sessionEndTool(args: Record<string, unknown>): Promise<ToolResult> {
-    if (this.observer) return this.standDown("session_end");
-    const bound = this.requireBoundSession(args["session"], "session_end");
-    if (bound !== null) return bound;
-
-    // THE WRITE-UP DOOR (roadmap C2) — diverted HERE, after the bind (the
-    // WRITING session is this one, bound exactly as always) and before anything
-    // else reads the call: a write-up never writes a handoff and never marks
-    // "nothing new". Everything it does and refuses is `write-up.ts`'s.
-    // ONLY A NON-EMPTY STRING diverts (PR #192 review, m1): a host or model that
-    // sends unused optional fields as `null` or `""` must not have every
-    // ordinary answer refused as a write-up of nobody.
-    //
-    // `drewOn` (2026-10-11) is read before the divert (review of #385), so a
-    // write-up that names what it drew on is credited as any other answer is:
-    // the writing session is this one, and so is the shown set the guard
-    // reads. It is credited whatever the rest of the call does, and its
-    // outcome rides out on every answer below.
-    const drewOn = this.drewOnField(args["drewOn"], "session_end");
-    if (typeof args["writeUp"] === "string" && args["writeUp"].length > 0) return this.writeUpField(args, drewOn);
-
-    // THE HANDOFF FIRST, and before the memories check on purpose (E1). It is a
-    // FIELD on this call and not one of the entries, so a dump whose `memories`
-    // array is malformed must not also throw away the one line telling the next
-    // session in this directory where the work stands. The outcome rides out on
-    // the refusal too, so nothing is lost silently either way.
-    //
-    // A DESKTOP CALL THAT NAMED NO SESSION leaves and retires no handoff
-    // (review of #295, MINOR-4, at the hosts session's ask). It was bound to
-    // the most recent live Desktop session, which may be another chat's — and
-    // a handoff is keyed by its session, so chat A's would revise or clear
-    // chat B's. Both fields are refused by name; the rest of the call, the
-    // memories included, goes through as it always did.
-    const unnamed = this.callBoundBy === "most-recent";
-    const handoff = unnamed ? this.unnamedHandoffField(args["handoff"]) : this.writeHandoffField(args["handoff"]);
-    // Retiring others' handoffs here by id (2026-09-30) rides the same rules:
-    // it lands before the memories check, it counts as landing something, and
-    // its outcomes ride out beside the answer.
-    const retiredRaw = args["retireHandoff"];
-    let retired: Record<string, unknown>[] | null = null;
-    if (!unnamed) {
-      retired = this.retireHandoffField(retiredRaw);
-    } else if (!(Array.isArray(retiredRaw) && retiredRaw.length === 0)) {
-      const refused = this.unnamedHandoffField(retiredRaw);
-      retired = refused === null ? null : [refused];
-    }
-
-    const raw = args["memories"];
-    // NOTHING WORTH KEEPING IS A REAL ANSWER — and until 2026-09-21 it was not
-    // one on this door (new-user finding #12). A session that learned nothing
-    // durable but is leaving work half-finished sends the handoff and an empty
-    // list, and got back an ERROR naming a missing field while the handoff it
-    // had just asked for was already on disk. A model that reads its own result
-    // learns from that to stop sending handoffs, or to invent a memory.
-    //
-    // Three cases, and only the first is new:
-    //
-    //   - A handoff LANDED (written or cleared) and there are no memories →
-    //     success, saying so. `deposited` is 0 and `isError` is false, because
-    //     something did land.
-    //   - A handoff was sent and REFUSED (`no-scope`, `too-large`, `not-text`,
-    //     `nothing-to-clear`) with no memories → nothing landed, so the refusal
-    //     stands and the handoff's own outcome rides out on it.
-    //   - Neither — no handoff and no memories → `memories-required`, as
-    //     before. So is a `memories` that is not an array: a caller who sent the
-    //     wrong TYPE wants to be told. (The published schema no longer marks
-    //     `memories` required — the write-up fetch leaves it out, PR #192 m2 —
-    //     so this refusal is where the rule is enforced.)
-    //
-    // AND A FOURTH, 2026-09-23 (B1, owner's decision 4): `memories: []` is
-    // "nothing new" WHATEVER happened to the handoff — accepted, minting
-    // nothing, and RECORDED, so an honest empty answer is no longer the same
-    // silence as no answer at all. Only an explicit empty ARRAY: a call that
-    // left the field out has not answered anything, and stays
-    // `memories-required`.
-    //
-    // A handoff that came with it rides out beside the answer, whatever its
-    // outcome (review M2: a refused handoff used to turn the whole call into
-    // `memories-required`, naming a field the caller HAD sent — new-user
-    // finding #12's mechanism, reopened). `nothing-to-clear` — `handoff: ""`
-    // where no pointer stands — is a no-op, not an error: the field's own
-    // description invites `""` exactly when the work is finished. Any other
-    // refusal (`too-large`, `not-text`, `no-scope`, …) sets `isError`, because
-    // something the caller sent did not land and resending it can fix that —
-    // but the reason stays `nothing-new` and the answer is recorded either way.
-    //
-    // The record is a mark on the session's registry entry (`nothingNewAt`),
-    // not a durable event row: a new durable event NAME is a core change
-    // (`AdapterDurableEventName`), and the registry is where "did this session
-    // answer" is already read from. Every success with no memories leaves it,
-    // handoff-only included. It does not move pacing and does not need to — the
-    // pacer advanced when the ask went out (`self/index.ts#openChapter`).
-    const session = this.session as string;
-    const landed =
-      (handoff !== null && handoff["written"] === true) ||
-      (retired !== null && retired.some((r) => r["written"] === true));
-    const noMemories = raw === undefined || (Array.isArray(raw) && raw.length === 0);
-    const emptyList = Array.isArray(raw) && raw.length === 0;
-    if ((landed && noMemories) || emptyList) {
-      const marked = markNothingNew(this.registryDir, session, this.nowFn()) !== null;
-      // "NOTHING NEW" WRITES THE STRETCH UP (2026-09-30): a claim with no
-      // proposal behind it, in `coverage.jsonl`, so the ledger reads one file —
-      // in THIS project only, as a memory's claim is. A handoff alone claims nothing.
-      if (emptyList) claimUnwritten(this.counterpart.spans, { session, scope: this.scope, by: CLAIM_NOTHING_NEW, ref: session });
-      const handoffFailed =
-        (handoff !== null && handoff["written"] !== true && handoff["reason"] !== "nothing-to-clear") ||
-        // `not-here` is the retire's `nothing-to-clear`: an id already
-        // retired (by its writer or another session) is not a failure to fix.
-        (retired !== null && retired.some((r) => r["written"] !== true && r["reason"] !== "not-here"));
-      this.emit("mcp.session_end", session, {
-        entries: 0,
-        deposited: 0,
-        refused: 0,
-        handoff: landed,
-        nothingNew: true,
-        recorded: marked,
-      });
-      return this.result(
-        {
-          session,
-          entries: 0,
-          deposited: 0,
-          refused: 0,
-          outcomes: [],
-          reason: landed ? "handoff-only" : "nothing-new",
-          // Whether the answer reached the session's record. `false` means the
-          // registry could not be written (or the record was pruned): the
-          // answer still stands, and the caller can see it was not kept.
-          recorded: marked,
-          ...(handoff === null ? {} : { handoff }),
-          ...(retired === null ? {} : { retired }),
-          ...(drewOn === null ? {} : { drewOn }),
-        },
-        handoffFailed,
-      );
-    }
-    if (!Array.isArray(raw) || raw.length === 0) {
-      return this.refuse("session_end", "memories-required", {
-        ...(handoff === null ? {} : { handoff }),
-        ...(retired === null ? {} : { retired }),
-        ...(drewOn === null ? {} : { drewOn }),
-      });
-    }
-    const { outcomes, deposited, entries } = await this.depositEntries(raw, session);
-    this.emit("mcp.session_end", session, {
-      entries: entries.length,
-      deposited,
-      refused: entries.length - deposited,
-      handoff: handoff === null ? false : handoff["written"] === true,
-    });
-    return this.result(
-      {
-        session,
-        entries: entries.length,
-        deposited,
-        refused: entries.length - deposited,
-        outcomes,
-        // One line for the whole dump, when any entry came back with neighbours.
-        ...(outcomes.some((o) => o["neighbours"] !== undefined) ? { neighboursHint: NEIGHBOURS_HINT } : {}),
-        ...(handoff === null ? {} : { handoff }),
-        ...(retired === null ? {} : { retired }),
-        ...(drewOn === null ? {} : { drewOn }),
-      },
-      deposited === 0,
-    );
+  private sessionEndTool(args: Record<string, unknown>): Promise<ToolResult> {
+    return sessionEndPart.sessionEndTool(this, args);
   }
 
-  /**
-   * THE ROAD EVERY `session_end` ENTRY TAKES — a write-up's included (C2):
-   * one draft per item, the gate battery through `submitSessionEnd`, and
-   * per-entry isolation (scar E1). Extracted, not changed, so the write-up
-   * door's memories cannot take a different road from an ordinary answer's —
-   * except WHOSE words they cover, which the door says (`cover`).
-   */
-  private async depositEntries(
+  private depositEntries(
     raw: readonly unknown[],
     session: string,
-    /** Whose words the entries cover (`SessionEndDepositContext.cover`). Absent: this
-     *  session's own — every caller but the write-up door. */
     cover?: false | { readonly session: string },
-    /** Where the memories are filed. Absent: this server's scope — every caller
-     *  but a GRANTED write-up (`sessions.ts#SessionRecord.mayWriteUp`), whose
-     *  memories go under the scope the subject was lived in. */
     scope?: string,
-    /** A WRITE-UP's memories (2026-10-01): whose stretch they write up and the
-     *  day it was lived — carried on each memory, marked second-hand. */
     writeUp?: { readonly session: string; readonly happenedOn: string | null },
   ): Promise<{ outcomes: Record<string, unknown>[]; deposited: number; duplicates: number; entries: Record<string, unknown>[] }> {
-    const entries: Record<string, unknown>[] = [];
-    const feelingsOf: FeelingsRead[] = [];
-    const datedOf: ReminderRead[] = [];
-    const aboutOf: AboutRead[] = [];
-    const traitsOf: TraitsRead[] = [];
-    const factsOf: FactsRead[] = [];
-    const today = this.today();
-    for (const item of raw) {
-      if (item === null || typeof item !== "object" || Array.isArray(item)) {
-        entries.push({ content: "" });
-        feelingsOf.push({ inputs: [] });
-        datedOf.push({ fields: {}, remindIgnored: false });
-        aboutOf.push({ mark: null });
-        traitsOf.push({ inputs: [] });
-        factsOf.push({ sent: {}, dropped: [], notes: [] });
-        continue;
-      }
-      const rec = item as Record<string, unknown>;
-      const draft: Record<string, unknown> = { content: rec["content"] };
-      if (typeof rec["kind"] === "string") draft["kind"] = rec["kind"];
-      if (typeof rec["title"] === "string") draft["title"] = rec["title"];
-      if (typeof rec["updates"] === "string") draft["updates"] = rec["updates"];
-      if (rec["how"] !== undefined) draft["how"] = rec["how"];
-      if (typeof rec["unresolved"] === "boolean") draft["unresolved"] = rec["unresolved"];
-      if (rec["salience"] !== undefined) draft["claimed"] = rec["salience"];
-      // A bad dimension does NOT fail the batch and is not silently dropped:
-      // the dimensions ride into the draft and `remember/intake` refuses that
-      // one entry as malformed, which is this tool's per-entry isolation rule.
-      const entryDims = readDimensions(rec) ?? pickDimensions(rec);
-      if (Object.keys(entryDims).length > 0) draft["salience"] = entryDims;
-      // The reminder date (2026-09-26), per entry: an unreadable one refuses
-      // THIS entry below, by name, and its siblings still land.
-      const dated = readReminder(rec);
-      if (!("refused" in dated)) Object.assign(draft, dated.fields);
-      datedOf.push(dated);
-      entries.push(draft);
-      feelingsOf.push(readFeelings(rec["feelings"]));
-      aboutOf.push(readAbout(rec["about"]));
-      traitsOf.push(readTraits(rec["traits"]));
-      factsOf.push(readWriteFacts(rec, today));
-    }
-
-    const outcomes: Record<string, unknown>[] = [];
-    let deposited = 0;
-    let duplicates = 0;
-    // The ids this call has written so far, and how many neighbours it listed (M1).
-    const batch: string[] = [];
-    let listed = 0;
-    const model = this.sessionModel();
-    for (const [n, draft] of entries.entries()) {
-      // Feelings that cannot be stored refuse THEIR entry before it mints, so
-      // no memory lands with its feelings silently dropped; siblings still run.
-      const feelings = feelingsOf[n] ?? { inputs: [] };
-      if ("refused" in feelings) {
-        outcomes.push({ stored: false, reason: "feelings-malformed", detail: feelings.refused });
-        continue;
-      }
-      const dated = datedOf[n] ?? { fields: {}, remindIgnored: false };
-      if ("refused" in dated) {
-        outcomes.push({ stored: false, reason: dated.refused, detail: dated.detail });
-        continue;
-      }
-      const about = aboutOf[n] ?? { mark: null };
-      if ("refused" in about) {
-        outcomes.push({ stored: false, reason: "about-malformed", detail: about.refused });
-        continue;
-      }
-      // Trait nudges refuse THEIR entry before it mints, like its feelings.
-      const traits = traitsOf[n] ?? { inputs: [] };
-      if ("refused" in traits) {
-        outcomes.push({ stored: false, reason: "traits-malformed", detail: traits.refused });
-        continue;
-      }
-      const facts = factsOf[n] ?? { sent: {}, dropped: [], notes: [] };
-      let result: DepositResult;
-      try {
-        result = await this.counterpart.submitSessionEnd(draft, {
-          session,
-          scope: scope ?? this.scope,
-          owner: this.owner,
-          facts: facts.sent,
-          // What it is about sets an unclaimed entry's default floor (2026-10-10).
-          about: about.mark,
-          // The dump's earlier entries: never read as an earlier state of this one.
-          siblings: [...batch],
-          ...(cover === undefined ? {} : { cover }),
-          ...(model === undefined ? {} : { model }),
-          ...(writeUp === undefined ? {} : { writeUp }),
-        });
-      } catch (err) {
-        // Isolation, not a lost dump: this entry failed, the rest still run.
-        outcomes.push({ stored: false, reason: "threw", detail: String((err as Error).message ?? err) });
-        continue;
-      }
-      if (result.deposited) deposited += 1;
-      if (result.reason === "duplicate-content") duplicates += 1;
-      // A refusal names what to fix. `malformed` alone sent the author back to
-      // guess (IMPROVEMENTS U11: a kind outside the enum came back as a bare
-      // "malformed"); intake's own reason rides out, and an unknown kind lists
-      // the kinds that exist.
-      const malformed = result.malformed ?? null;
-      // Bounded per dump (M1): a long dump shares NEIGHBOURS_PER_CALL between its entries.
-      const neighbours = this.neighboursOf(result, batch, Math.min(CONTRADICTION_TUNABLES.NEIGHBOURS, CONTRADICTION_TUNABLES.NEIGHBOURS_PER_CALL - listed), session);
-      listed += neighbours.length;
-      if (result.memoryId !== null) batch.push(result.memoryId);
-      outcomes.push({
-        stored: result.deposited,
-        reason: result.reason,
-        ...(result.memoryId === null ? {} : { id: result.memoryId }),
-        ...(result.gate === null ? {} : { gate: result.gate }),
-        ...(malformed === null ? {} : { malformed }),
-        ...(malformed === "KIND_UNKNOWN" ? { kinds: [...MEMORY_KINDS] } : {}),
-        ...this.recordFeelings(result, feelings.inputs, model),
-        ...this.recordAbout(result, about.mark),
-        ...this.recordTraits(result, traits.inputs, model),
-        ...reminderEcho(result, dated, this.today()),
-        ...factsEcho(result, facts),
-        ...this.settledOf(result, draft["how"] !== undefined),
-        ...threadOf(result),
-        ...(neighbours.length === 0 ? {} : { neighbours }),
-        ...this.slotOf(result),
-      });
-    }
-    return { outcomes, deposited, duplicates, entries };
+    return sessionEndPart.depositEntries(this, raw, session, cover, scope, writeUp);
   }
 
-  /**
-   * `session_end` with `writeUp` — the next-session write-up's door (C2). The
-   * decisions are `write-up.ts#writeUpDoor`'s; this only binds it to this
-   * server's store, scope, registry and bound session, and renders the answer.
-   */
-  private async writeUpField(args: Record<string, unknown>, drewOn: Record<string, unknown> | null): Promise<ToolResult> {
-    const session = this.session as string;
-    const out = await writeUpDoor({
-      counterpart: this.counterpart,
-      registryDir: this.registryDir,
-      scope: this.scope,
-      session,
-      now: this.nowFn(),
-      args,
-      deposit: (raw, cover, scope, writeUp) => this.depositEntries(raw, session, cover, scope, writeUp),
-    });
-    const body = out.body;
-    // The ref is the ENDED session's id only when it is one this registry
-    // knows: the argument is model-typed, and a word shaped like an id is
-    // still a word (store §5 G10; review of #286).
-    const ended = args["writeUp"];
-    const known = isSessionId(ended) && readSession(this.registryDir, ended) !== null;
-    this.emit("mcp.write_up", known ? ended : undefined, {
-      reason: out.reason,
-      part: typeof body["part"] === "number" ? body["part"] : null,
-      of: typeof body["of"] === "number" ? body["of"] : null,
-      deposited: typeof body["deposited"] === "number" ? body["deposited"] : 0,
-      marked: typeof body["marked"] === "boolean" ? body["marked"] : null,
-    });
-    if (out.isError && body["stored"] === false && out.reason !== "nothing-landed") {
-      this.emit("mcp.refused", undefined, { tool: "session_end", reason: out.reason });
-    }
-    return this.result(drewOn === null ? body : { ...body, drewOn }, out.isError);
+  private writeUpField(args: Record<string, unknown>, drewOn: Record<string, unknown> | null): Promise<ToolResult> {
+    return sessionEndPart.writeUpField(this, args, drewOn);
   }
 
-  /**
-   * THE `drewOn` FIELD on `session_end` and `chapter` (2026-10-11): the ids of
-   * memories this session was shown that shaped what it did or said, each
-   * credited at the engaged tier by `Counterpart#creditDrewOn`, which owns
-   * every rule (the shown-this-session guard, the refusals by name, the cap).
-   * Null when the field was not sent or sent empty. A value that is not a list
-   * of strings credits nothing and says so.
-   *
-   * One durable `recall.credit` row per call that named anything, beside the
-   * boundary's own: `source: "drewOn"`, `via` the tool, `how` aligned with
-   * `ids`, `refused` as counts by reason (what `fired.ts` reads) and the
-   * refused ids apart. The doctor's Credit line counts these rows.
-   */
   private drewOnField(raw: unknown, via: "session_end" | "chapter"): Record<string, unknown> | null {
-    if (raw === undefined || raw === null) return null;
-    if (!Array.isArray(raw) || !raw.every((id) => typeof id === "string")) {
-      return { credited: [], reason: "drewOn-malformed", detail: "drewOn is a list of memory ids, as strings." };
-    }
-    if (raw.length === 0) return null;
-    // A DESKTOP CALL THAT NAMED NO SESSION credits nothing (review of #385),
-    // as it leaves no handoff: it was bound to the most recent live Desktop
-    // session, which may be another chat's, and the guard would read THAT
-    // chat's shown set and spend its boundary's cap.
-    if (this.callBoundBy === "most-recent") {
-      return {
-        credited: [],
-        reason: "session-unnamed",
-        detail: `Name your session to say what you drew on: session: <the id wake gave this chat>. This call named none, so it was filed under the most recent Claude Desktop session (${this.session ?? "none"}), which may be another chat's.`,
-      };
-    }
-    const session = this.session as string;
-    let out: ReturnType<Counterpart["creditDrewOn"]>;
-    try {
-      // The calendar day, so a dated memory drawn on stops coming back as a
-      // footnote this window (`Prospective#actedOn`, 2026-10-11).
-      out = this.counterpart.creditDrewOn(session, raw as string[], { at: this.today() });
-    } catch (err) {
-      return { credited: [], reason: "threw", detail: String((err as Error).message ?? err) };
-    }
-    const byReason: Record<string, number> = {};
-    for (const r of out.refused) byReason[r.reason] = (byReason[r.reason] ?? 0) + 1;
-    if (out.capped.length > 0) byReason["capped"] = out.capped.length;
-    this.telemetry(() => {
-      this.counterpart.noteAdapterEvent(RECALL_CREDIT_EVENT, {
-        source: "drewOn",
-        via,
-        reason: out.credited.length > 0 ? "credited" : "nothing-to-credit",
-        session,
-        date: this.today(),
-        day: out.day,
-        considered: out.named,
-        credited: out.credited.length,
-        refused: byReason,
-        ids: out.credited.slice(0, 64),
-        how: out.credited.slice(0, 64).map(() => "drewOn"),
-        idsTotal: out.credited.length,
-        refusedIds: out.refused.slice(0, 64).map((r) => r.id),
-        capped: out.capped.slice(0, 64),
-        // Pairs of named memories sent to be linked as one co-use (Group 4 item 1).
-        linked: out.linked,
-      });
-    });
-    return {
-      credited: out.credited,
-      ...(out.refused.length === 0 ? {} : { refused: out.refused }),
-      ...(out.capped.length === 0
-        ? {}
-        : { capped: out.capped, cap: `At most ${String(DREW_ON_MAX_PER_BOUNDARY)} per boundary, the first named; these were not credited.` }),
-      ...(out.actedOn.length === 0
-        ? {}
-        : { actedOn: out.actedOn, actedOnNote: "Dated memories you acted on: they will not come back as footnotes around this date again." }),
-    };
+    return sessionEndPart.drewOnField(this, raw, via);
   }
 
-  /**
-   * The optional `handoff` field, written or refused, as the shape the tool
-   * result carries back. Null when the caller passed none — which is the
-   * ordinary case, and says nothing about this directory either way.
-   *
-   * **Three answers, and only the first is silence.**
-   *
-   *   - **Absent** — the ordinary case. Nothing is written and nothing is said:
-   *     leaving the field out means "leave what stands", which is right.
-   *   - **Present and blank** — `handoff: ""` or `"   "`. This is a CLEAR. It is
-   *     the shape a model reaches for when it means "the work here is finished",
-   *     and until 2026-09-20 it was total silence while the stale pointer stood
-   *     (adversarial review MAJOR-2b). It retires the directory's pointer and
-   *     leaves a durable row.
-   *   - **Present and not a string** — a named, durable refusal, because a
-   *     caller that sent the wrong type wants to know rather than to be ignored.
-   *
-   * The NO-SCOPE REFUSAL IS NOW DURABLE, which is what MAJOR-2a was: the
-   * short-circuit that used to live here emitted a ring-only event and wrote no
-   * row, so guarantee 3 was false on the only live door. The rule is asked in
-   * two places on purpose and they are not duplicates — `handoff/` refuses an
-   * empty scope and a scope that IS the store's directory, as a belt no caller
-   * can get past; this file asks `sameScope`, which canonicalises (`/var` →
-   * `/private/var` on this host), because it is the side that has the
-   * canonicaliser and knows what `scopeSource` said. Either way the durable row
-   * is written by `handoff/`, which owns guarantee 3.
-   */
   private writeHandoffField(raw: unknown): Record<string, unknown> | null {
-    if (raw === undefined || raw === null) return null;
-    let out: ReturnType<Counterpart["writeHandoff"]>;
-    try {
-      if (typeof raw !== "string") {
-        out = this.counterpart.refuseHandoff("not-text", { session: this.session });
-      } else if (
-        this.scopeSource === "store" ||
-        sameScope(this.scope, this.counterpart.store.dir)
-      ) {
-        out = this.counterpart.refuseHandoff("no-scope", { session: this.session });
-      } else if (raw.trim().length === 0) {
-        out = this.counterpart.clearHandoff({ scope: this.scope, session: this.session });
-      } else {
-        // The model rides from host state, as a chapter's does, so the wake
-        // can say which session — and which model — left it (2026-09-30).
-        out = this.counterpart.writeHandoff(raw, {
-          scope: this.scope,
-          session: this.session,
-          model: this.sessionModel() ?? null,
-          // The release this server is running (2026-10-01): the wake says
-          // "written before 0.3.10 was installed" once a newer one is.
-          build: this.identity?.build.version ?? installedVersion(),
-        });
-      }
-    } catch (err) {
-      return { written: false, reason: "threw", detail: String((err as Error).message ?? err) };
-    }
-    this.emit("mcp.handoff", out.id ?? undefined, {
-      written: out.written,
-      reason: out.reason,
-      bytes: out.bytes,
-    });
-    return {
-      written: out.written,
-      reason: out.reason,
-      ...(out.id === null ? {} : { id: out.id }),
-      bytes: out.bytes,
-      ...(out.version === null ? {} : { version: out.version }),
-      ...(out.gate === null ? {} : { gate: out.gate }),
-      ...(out.redacted === null ? {} : { redacted: true }),
-      ...(out.showsForDays === null ? {} : { showsForDays: out.showsForDays }),
-      // The other sessions' live handoffs here, so a finished one can be
-      // retired in the same call (`retireHandoff`).
-      ...(out.others === undefined || out.others.length === 0 ? {} : { others: out.others }),
-    };
+    return sessionEndPart.writeHandoffField(this, raw);
   }
 
-  /**
-   * A `handoff` or `retireHandoff` field on a Desktop call bound by the
-   * most-recent fallback: refused by name, durably (`handoff/` owns the row),
-   * with the words that fix it. Null when the field was not sent.
-   */
   private unnamedHandoffField(raw: unknown): Record<string, unknown> | null {
-    if (raw === undefined || raw === null) return null;
-    const detail = `Name your session to leave or retire a handoff: session: <the id wake gave this chat> — or, in a Claude Code session (Desktop's Code tab), the id your wake or Stop ask names. This call named none, so it was filed under the most recent Claude Desktop session (${this.session ?? "none"}), which may be another chat's.`;
-    try {
-      const out = this.counterpart.refuseHandoff("session-unnamed", { session: this.session });
-      this.emit("mcp.handoff", undefined, { written: false, reason: out.reason, bytes: 0 });
-      return { written: false, reason: out.reason, bytes: 0, detail };
-    } catch (err) {
-      return { written: false, reason: "threw", detail: String((err as Error).message ?? err) };
-    }
+    return sessionEndPart.unnamedHandoffField(this, raw);
   }
 
-  /**
-   * The optional `retireHandoff` field — ids of handoffs in THIS directory to
-   * retire, whoever wrote them (2026-09-30) — as the outcomes the tool result
-   * carries back, one per id. Null when the field is absent or an empty list.
-   * A lone string is read as a list of one; anything else is one `not-text`
-   * refusal. The directory rule is `writeHandoffField`'s, asked the same way.
-   */
   private retireHandoffField(raw: unknown): Record<string, unknown>[] | null {
-    if (raw === undefined || raw === null) return null;
-    const ids = typeof raw === "string" ? [raw] : raw;
-    if (Array.isArray(ids) && ids.length === 0) return null;
-    const outcome = (id: string | null, out: ReturnType<Counterpart["retireHandoff"]>): Record<string, unknown> => {
-      this.emit("mcp.handoff.retire", out.id ?? undefined, { written: out.written, reason: out.reason });
-      return { ...(id === null ? {} : { id }), written: out.written, reason: out.reason, bytes: out.bytes };
-    };
-    try {
-      if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
-        return [outcome(null, this.counterpart.refuseHandoff("not-text", { session: this.session }))];
-      }
-      if (this.scopeSource === "store" || sameScope(this.scope, this.counterpart.store.dir)) {
-        return [outcome(null, this.counterpart.refuseHandoff("no-scope", { session: this.session }))];
-      }
-      return [...new Set(ids as string[])].map((id) =>
-        outcome(id, this.counterpart.retireHandoff(id, { scope: this.scope, session: this.session })),
-      );
-    } catch (err) {
-      return [{ written: false, reason: "threw", detail: String((err as Error).message ?? err) }];
-    }
+    return sessionEndPart.retireHandoffField(this, raw);
   }
 
-  /**
-   * `chapter` — the journal's door (self/CONTRACT §3: *which door reaches this?*).
-   *
-   * It composes, like everything else here: `Counterpart.appendEpisode` runs the
-   * gate, `self/` decides whether this append opens a chapter or continues the
-   * one already open, and the number that comes back is the number the store
-   * WROTE. The ask reads the same counter, so the two sides cannot drift the way
-   * they did for a fortnight — the model wrote eleven chapters as notes while
-   * the hook's count said seven.
-   */
-  private async chapterTool(args: Record<string, unknown>): Promise<ToolResult> {
-    if (this.observer) return this.standDown("chapter");
-    const bound = this.requireBoundSession(args["session"], "chapter");
-    if (bound !== null) return bound;
-    // `drewOn` (2026-10-11): credited whatever the chapter does, and its
-    // outcome rides out on every answer below, as on `session_end`.
-    const drewOn = this.drewOnField(args["drewOn"], "chapter");
-    const withDrewOn = drewOn === null ? {} : { drewOn };
-
-    const text = args["text"];
-    if (typeof text !== "string" || text.trim().length === 0) {
-      return this.refuse("chapter", "text-required", {
-        detail: "A chapter has to say something. Nothing worth writing is a real answer — say nothing at all instead.",
-        ...withDrewOn,
-      });
-    }
-    const session = this.session as string;
-    const title = args["title"];
-    // WHAT THE SESSION WAS ABOUT (2026-10-01, lane 8), carried to the
-    // chapter's memory copy: a malformed one refuses the call before anything
-    // is written, as on `remember`.
-    const about = readAbout(args["about"]);
-    if ("refused" in about) return this.refuse("chapter", "about-malformed", { detail: about.refused, ...withDrewOn });
-    // The model the hooks last saw answer in this session. A Stop records it
-    // before its ask goes out, so the chapter that answers the ask has it.
-    const model = readSession(this.registryDir, session)?.model;
-    let written: ChapterResult;
-    try {
-      written = this.counterpart.appendEpisode(session, text, {
-        // The project the chapter was written in: what it writes up (`coverage/`).
-        scope: this.scope,
-        ...(typeof title === "string" && title.length > 0 ? { title } : {}),
-        ...(model === undefined ? {} : { model }),
-        ...(about.mark === null ? {} : { about: about.mark }),
-      });
-    } catch (err) {
-      // A journal that throws must not look like a journal that refused.
-      return this.refuse("chapter", "threw", { detail: String((err as Error).message ?? err), ...withDrewOn });
-    }
-    this.emit("mcp.chapter", written.episodeId ?? undefined, {
-      session,
-      stored: written.appended,
-      reason: written.reason,
-      chapter: written.chapter,
-      created: written.created,
-    });
-    return this.result(
-      {
-        stored: written.appended,
-        reason: written.reason,
-        session,
-        episodeId: written.episodeId,
-        // From the STORE, never from the ask count.
-        chapter: written.chapter,
-        created: written.created,
-        ...(written.gate === null ? {} : { gate: written.gate }),
-        ...(about.mark === null || !written.appended ? {} : { about: about.mark }),
-        ...withDrewOn,
-      },
-      !written.appended,
-    );
+  private chapterTool(args: Record<string, unknown>): Promise<ToolResult> {
+    return sessionEndPart.chapterTool(this, args);
   }
 
-  /**
-   * `dream` — dreaming, in phases (`core/dream/`, 2026-09-26). Every phase
-   * binds the session: the dreamer is a background agent the session launched,
-   * talking to this same server, and its writes belong to that session.
-   * `launch` writes nothing — it hands back the prompt for the dreamer — and is
-   * refused under observer stance with the rest, because a dream it launched
-   * could do nothing there.
-   */
   private dreamTool(args: Record<string, unknown>): ToolResult {
-    const phase = args["phase"];
-    if (this.observer) return this.standDown("dream");
-    const bound = this.requireBoundSession(args["session"], "dream");
-    if (bound !== null) return bound;
-    const session = this.session as string;
-    const dreams = this.counterpart.dreams;
-    const at = this.counterpart.store.today();
-    const refused = (reason: string, detail: string): ToolResult => this.refuse("dream", reason, { phase, detail });
-    // WHAT COMES NEXT in the nightly run, in its own order (`nightOrder`).
-    // The headless night's dream child stops before the reflection
-    // (2026-10-11): the reflection runs after it, in a child of its own.
-    const dreamChild = (this.env[NIGHT_CHILD_ENV] ?? "").trim() === "dream";
-    const nextAfter = (part: NightPart, dream: string | null): string | null => {
-      const next = nightNext(part);
-      if (dreamChild && next === "reflection") return null;
-      if (next === "writer") return `Next, the page writer: call the dream tool with phase "writer", session: ${session}${dream === null ? "" : `, dream: ${dream}`}.`;
-      if (next === "reflection") return `Now wake and reflect: call the reflect tool with phase "begin", session: ${session}, dream: ${dream ?? "<the dream id>"}. Your final message is the text its "finish" call returns.`;
-      if (next === "dream") return `Next, the dream: call the dream tool with phase "begin", session: ${session}.`;
-      return null;
-    };
-    try {
-      switch (phase) {
-        case "launch":
-          // The day's row becomes `launched` (claimed, or flipped from an
-          // accepted ask), so a run that dies before its dream begins is
-          // started again (review of #271).
-          dreams.launched({ at, session });
-          this.emit("mcp.dream", undefined, { phase: "launch", session });
-          return this.result(
-            {
-              phase,
-              session,
-              prompt: dreams.launchPrompt({ session }),
-              // The relay is the hand-back line AS IT IS: it carries the dream's
-              // mark, which keeps the dream out of what the sweep reads. A
-              // retelling in the session's own words would carry none, and the
-              // dream's title and changes would read as something that
-              // happened (adversarial review of #251).
-              how: "Hand `prompt` to a background agent (the Agent tool), unchanged, and carry on. When it finishes, show the owner its first line (the dream's) exactly as it came back — it carries the dream's mark, which keeps the dream out of lived memory. If a morning share follows, tell it to the owner in your own words, as a telling (\"While I slept I dreamed…\"), then call the reflect tool with phase \"told\" — never state what was dreamed as something that happened.",
-            },
-            false,
-          );
-        case "decline": {
-          dreams.decline({ at, session });
-          this.emit("mcp.dream", undefined, { phase: "decline", session });
-          return this.result({ phase, session, snoozed: at, said: "Not today — the line will not come back until tomorrow." }, false);
-        }
-        case "setting": {
-          // THE OWNER'S OFF SWITCH (2026-09-28): "no dreams" in conversation.
-          const value = args["value"];
-          if (typeof value !== "string") {
-            return refused("value-required", `Pass \`value\`: auto, ask or off. It is ${dreams.setting()} now.`);
-          }
-          const out = dreams.setSetting(value, { by: "session", session });
-          if (!out.ok) return refused(out.reason, `value is one of ${DREAMING_SETTINGS.join(", ")}. It is ${dreams.setting()} now.`);
-          this.emit("mcp.dream", undefined, { phase: "setting", setting: out.setting, before: out.before });
-          const said: Record<DreamingSetting, string> = {
-            auto: "Dreaming on its own: once a day, the first session starts the nightly run by itself, in a separate windowless session in the background, and says so in one line. Today's run is still yours to start, if the owner asked for it.",
-            ask: "Dreaming asks first: once a day, the first session shows the owner the question in the terminal and waits for their word.",
-            off: "No dreams: nothing starts the nightly run and nothing asks. It can be turned back on with this phase (value ask or auto) or with counterparts dream --setting ask.",
-          };
-          // "No dreams" does not stop a run already going (owner decision D): said.
-          const finishes = out.setting === "off" && dreams.nightRunUnderWay() ? ` ${NIGHT_RUN_FINISHES}` : "";
-          return this.result({ phase, setting: out.setting, before: out.before, said: `${said[out.setting]}${finishes}` }, false);
-        }
-        case "begin": {
-          const model = readSession(this.registryDir, session)?.model;
-          // THE RUN MOVED PAST THE WRITER (review of #271): an open claim this
-          // session still holds is answered `nothing-to-say` here, when the
-          // writer comes before the dream in the run.
-          if (nightOrder().indexOf("writer") < nightOrder().indexOf("dream")) this.counterpart.closeNightWriter({ session, phase: "the dream" });
-          const out = dreams.begin({ session, scope: this.scope, ...(model === undefined ? {} : { model }) });
-          if (!out.ok) {
-            return refused(
-              out.reason,
-              out.reason === "dreamed-today"
-                ? "A dream already ran today."
-                : out.reason === "dreaming-now"
-                  ? "Another session's dream is under way; it has the day."
-                  : out.reason === "nothing-new"
-                    ? "Nothing new has been lived since the last dream."
-                    : "The dream did not begin.",
-            );
-          }
-          this.emit("mcp.dream", out.bundle.dream, {
-            phase: "begin",
-            session,
-            shown: Object.keys(out.bundle.memories).length,
-            resumed: out.resumed,
-          });
-          const handed = this.result(
-            {
-              phase,
-              session,
-              dream: out.bundle.dream,
-              ...(out.resumed ? { resumed: true } : {}),
-              // IN PARTS (2026-09-28): said up front, never a silent cut.
-              ...(out.bundle.parts === null ? {} : { parts: out.bundle.parts }),
-              how: dreamHow(out.bundle),
-              bundle: out.text,
-            },
-            false,
-          );
-          // Part 1 is the begin: its row says how many parts the run owes.
-          this.notePart("dream", out.bundle.dream, 1, out.bundle.parts?.of ?? 1);
-          return handed;
-        }
-        case "part": {
-          const dream = args["dream"];
-          const n = args["part"];
-          if (typeof dream !== "string" || typeof n !== "number") {
-            return refused("dream-and-part-required", "Pass `dream` (the id `begin` returned) and `part` (2 and up).");
-          }
-          const out = dreams.part({ dream, session, part: n });
-          if (!out.ok) return refused(out.reason, out.detail ?? "That dream is not open for this session.");
-          this.emit("mcp.dream", dream, { phase: "part", part: out.part, of: out.of });
-          const handed = this.result(
-            {
-              phase,
-              dream,
-              part: out.part,
-              of: out.of,
-              bundle: out.text,
-              ...(out.part < out.of
-                ? { next: `Then part ${String(out.part + 1)}: the dream tool, phase "part", dream: ${dream}, part: ${String(out.part + 1)}.` }
-                : { next: "That was the last part. Now propose your changes." }),
-            },
-            false,
-          );
-          this.notePart("dream", dream, out.part, out.of);
-          return handed;
-        }
-        case "propose": {
-          const dream = args["dream"];
-          const changes = args["changes"];
-          if (typeof dream !== "string" || !Array.isArray(changes)) {
-            return refused("dream-and-changes-required", "Pass `dream` (the id `begin` returned) and `changes`, an array.");
-          }
-          const out = dreams.propose({ dream, session, changes: changes as never });
-          if (!out.ok) return refused(out.reason, "That dream is not open for this session.");
-          this.emit("mcp.dream", dream, { phase: "propose", applied: out.results.filter((r) => r.ok).length });
-          const refusedN = out.results.filter((r) => !r.ok).length;
-          return this.result(
-            {
-              phase,
-              dream,
-              results: out.results,
-              // Each refusal names what tripped it (`detail`); 2026-09-28.
-              ...(refusedN === 0
-                ? {}
-                : { again: `${String(refusedN)} change${refusedN === 1 ? " was" : "s were"} not applied (see each result's reason and detail). Fix those and propose just them again; the rest already landed.` }),
-            },
-            false,
-          );
-        }
-        case "journal": {
-          const dream = args["dream"];
-          const text = args["text"];
-          if (typeof dream !== "string" || typeof text !== "string") {
-            return refused("dream-and-text-required", "Pass `dream` and the journal `text`.");
-          }
-          const title = args["title"];
-          const out = dreams.journal({ dream, session, text, ...(typeof title === "string" ? { title } : {}) });
-          if (!out.ok) return refused(out.reason, "detail" in out && out.detail !== undefined ? out.detail : "The journal was not written.");
-          this.emit("mcp.dream", dream, { phase: "journal" });
-          const next = nextAfter("dream", dream);
-          return this.result(
-            {
-              phase,
-              dream,
-              handBack: out.handBack,
-              ...(out.note === undefined ? {} : { note: out.note }),
-              next: `${next ?? `Return \`handBack\` as your final message, unchanged.${dreamChild ? " The reflection runs after you, in a session of its own." : ""}`}${next === null ? "" : " If the rest of the run fails, return `handBack` unchanged as your final message instead."}`,
-            },
-            false,
-          );
-        }
-        case "writer": {
-          // THE NIGHTLY RUN'S PAGE WRITER (2026-09-28): the night's day to read,
-          // handed through this result rather than beside the wake — the page
-          // whole, no injection ceiling, no `no-room`. It is the run's FIRST
-          // part (the owner's order), so the night's claim is written here, for
-          // this session and this run; a claim this session already holds is
-          // reused (a run started again the same day claims nothing twice).
-          const dreamArg = typeof args["dream"] === "string" ? args["dream"] : null;
-          const claim = this.counterpart.claimNightWriter({ session, run: dreamArg ?? `night of ${at}` });
-          const out = this.counterpart.nightWriter({ session, tool: NIGHT_WRITER_TOOL });
-          const next = nextAfter("writer", dreamArg);
-          if (!out.ok) {
-            this.emit("mcp.dream", dreamArg ?? undefined, { phase: "writer", writer: claim.reason });
-            const why: Record<string, string> = {
-              off: "the owner has the page writer off",
-              "no-previous-day": "this store has no day before today yet",
-              "no-memories": `nothing was written down on ${claim.about}`,
-              "already-claimed": `${claim.about} was already written or answered`,
-              "asks-spent": `${claim.about} has been offered twice already`,
-            };
-            return this.result(
-              {
-                phase,
-                writer: false,
-                reason: claim.reason,
-                said: `No page writing tonight — ${why[claim.reason] ?? claim.reason}. Leave the page as it stands.`,
-                ...(next === null ? {} : { next }),
-              },
-              false,
-            );
-          }
-          this.emit("mcp.dream", dreamArg ?? undefined, { phase: "writer", about: out.about, considered: out.considered, dropped: out.dropped });
-          return this.result(
-            {
-              phase,
-              writer: true,
-              about: out.about,
-              ifVersion: out.version ?? NO_PAGE_VERSION,
-              read: out.text,
-              // THE SHORT VERSION, IN THE SAME CALL (2026-10-10; #358 had a
-              // tighten-and-resend retry here, for a limit that refused): a
-              // page past its room is kept, and the writer is asked for the
-              // short version sessions read on a day the wake cannot hold it.
-              how: `Read the block. If something about who you are moved on ${out.about}, call the self_page tool with the WHOLE page, reason, ifVersion: ${String(out.version ?? NO_PAGE_VERSION)} and session: ${session}; if nothing moved, write nothing — that is an answer too. Aim the page under ${String(this.counterpart.self.tunables.PAGE_ROOM_BYTES)} bytes; if it runs past that, send \`short\` with it in the same call — a short version under ${String(this.counterpart.self.tunables.PAGE_ROOM_BYTES)} bytes, the whole of it condensed. If the answer has a roomNote, do what it says before you go on.`,
-              ...(next === null ? {} : { next: `Then: ${next}` }),
-            },
-            false,
-          );
-        }
-        default:
-          return refused("phase-unknown", "phase is one of launch, begin, part, propose, journal, writer, decline, setting.");
-      }
-    } catch (err) {
-      return refused("threw", String((err as Error).message ?? err));
-    }
+    return selfTools.dreamTool(this, args);
   }
 
-  /**
-   * `reflect` — the waking self (`core/dream/reflect.ts`, 2026-09-27). Every
-   * phase binds the session, as `dream` does; `launch` writes nothing.
-   */
   private reflectTool(args: Record<string, unknown>): ToolResult {
-    const phase = args["phase"];
-    if (this.observer) return this.standDown("reflect");
-    const bound = this.requireBoundSession(args["session"], "reflect");
-    if (bound !== null) return bound;
-    const session = this.session as string;
-    const reflections = this.counterpart.reflections;
-    const refused = (reason: string, detail: string): ToolResult => this.refuse("reflect", reason, { phase, detail });
-    const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-    const part = (v: unknown): { text?: string; cites?: string[]; short?: string } | null => {
-      if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
-      const r = v as Record<string, unknown>;
-      return {
-        ...(typeof r["text"] === "string" ? { text: r["text"] } : {}),
-        cites: ids(r["cites"]),
-        // The page's short version (2026-10-10); the share has none.
-        ...(typeof r["short"] === "string" ? { short: r["short"] } : {}),
-      };
-    };
-    try {
-      switch (phase) {
-        case "launch":
-          this.emit("mcp.reflect", undefined, { phase: "launch", session });
-          return this.result(
-            {
-              phase,
-              session,
-              // After a dream whose run was cut off before it reflected
-              // (review of #271): the reflection alone, on that dream.
-              prompt: reflections.launchPrompt({ session, dream: typeof args["dream"] === "string" ? args["dream"] : null }),
-              how: "Hand `prompt` to a background agent (the Agent tool), unchanged, and carry on. When it finishes, if it left a morning share, tell it to the owner in your own words, then call this tool with phase \"told\".",
-            },
-            false,
-          );
-        case "begin": {
-          const model = readSession(this.registryDir, session)?.model;
-          const dream = typeof args["dream"] === "string" ? args["dream"] : null;
-          // The same at the reflection, when the writer comes before it.
-          if (nightOrder().indexOf("writer") < nightOrder().indexOf("reflection")) this.counterpart.closeNightWriter({ session, phase: "the reflection" });
-          const out = reflections.begin({ session, dream, scope: this.scope, ...(model === undefined ? {} : { model }) });
-          if (!out.ok) {
-            return refused(
-              out.reason,
-              out.reason === "reflected-today"
-                ? "A reflection already finished today."
-                : out.reason === "dream-not-journaled"
-                  ? "That dream has not written its journal yet."
-                  : "The reflection did not begin.",
-            );
-          }
-          this.emit("mcp.reflect", out.bundle.reflection, { phase: "begin", session, shown: Object.keys(out.bundle.memories).length });
-          const handed = this.result(
-            {
-              phase,
-              session,
-              reflection: out.bundle.reflection,
-              questions: out.bundle.questions,
-              // IN PARTS (2026-09-28): said up front, never a silent cut.
-              ...(out.bundle.parts === null ? {} : { parts: out.bundle.parts }),
-              // THE LOOKUP, with its number (2026-09-28; `PACK_MARGIN` holds room for it).
-              how: `${out.instructions}\nWhat is shown only in part (fidelity excerpt, line or id): read it whole with the recall tool, ids: [...] — up to ${String(RECALL_MAX_IDS)} at once.`,
-              bundle: out.text,
-            },
-            false,
-          );
-          this.notePart("reflection", out.bundle.reflection, 1, out.bundle.parts?.of ?? 1);
-          return handed;
-        }
-        case "part": {
-          const reflection = args["reflection"];
-          const n = args["part"];
-          if (typeof reflection !== "string" || typeof n !== "number") {
-            return refused("reflection-and-part-required", "Pass `reflection` (the id `begin` returned) and `part` (2 and up).");
-          }
-          const out = reflections.part({ reflection, session, part: n });
-          if (!out.ok) return refused(out.reason, out.detail ?? "That reflection is not open for this session.");
-          this.emit("mcp.reflect", reflection, { phase: "part", part: out.part, of: out.of });
-          const handed = this.result(
-            {
-              phase,
-              reflection,
-              part: out.part,
-              of: out.of,
-              bundle: out.text,
-              ...(out.part < out.of ? { next: `Then part ${String(out.part + 1)}: the reflect tool, phase "part", reflection: ${reflection}, part: ${String(out.part + 1)}.` } : { next: "That was the last part. Answer the questions, then call finish." }),
-            },
-            false,
-          );
-          this.notePart("reflection", reflection, out.part, out.of);
-          return handed;
-        }
-        case "finish": {
-          const reflection = args["reflection"];
-          const entry = args["entry"];
-          // `entry` is required the first time; a second finish of the same
-          // reflection (2026-09-28) may leave it out — the entry stands.
-          if (typeof reflection !== "string" || (entry !== undefined && typeof entry !== "string")) {
-            return refused("reflection-and-entry-required", "Pass `reflection` (the id `begin` returned) and your `entry`.");
-          }
-          const model = readSession(this.registryDir, session)?.model;
-          const out = reflections.finish({
-            reflection,
-            session,
-            ...(typeof entry === "string" ? { entry } : {}),
-            ...(typeof args["title"] === "string" ? { title: args["title"] } : {}),
-            cites: ids(args["cites"]),
-            share: part(args["share"]),
-            page: part(args["page"]),
-            feelings: Array.isArray(args["feelings"]) ? (args["feelings"] as never) : [],
-            about: Array.isArray(args["about"]) ? (args["about"] as never) : [],
-            traits: Array.isArray(args["traits"]) ? (args["traits"] as never) : [],
-            model: model ?? null,
-          });
-          if (!out.ok) {
-            return refused(
-              out.reason,
-              out.detail ??
-                (out.reason === "reflection-closed"
-                  ? "That reflection is closed: it is not today's, or a newer one followed it. Begin a new one tomorrow."
-                  : "The reflection was not written."),
-            );
-          }
-          const o = out.outcome;
-          this.emit("mcp.reflect", reflection, { phase: "finish", nothingMuch: o.nothingMuch, page: o.page.written, share: o.share.offered, again: o.again });
-          return this.result(
-            {
-              phase,
-              reflection,
-              handBack: o.handBack,
-              nothingMuch: o.nothingMuch,
-              entry: o.entryId,
-              entryNote: o.entry,
-              page: o.page,
-              share: o.share,
-              returned: o.returned,
-              feelings: o.feelings,
-              about: o.about,
-              ...(o.traits.length > 0 ? { traits: o.traits } : {}),
-              ...(o.refusedCites.length > 0 ? { refusedCites: o.refusedCites } : {}),
-              // WHAT WAS NOT WRITTEN, and that it can be sent again (2026-09-28).
-              ...(o.retry === null ? {} : { again: o.retry }),
-              say:
-                o.retry === null
-                  ? "Return `handBack` as your final message, unchanged."
-                  : "Some parts were not written (see `again`). You may fix them and call finish again with the same reflection and just those parts; then return the `handBack` of your last finish call as your final message, unchanged. Never say a part was written when it was not.",
-            },
-            false,
-          );
-        }
-        case "settle": {
-          // THE REFLECTION MAY SETTLE (2026-09-29): two memories it was shown,
-          // with a plain reason; the trail names the reflection.
-          const reflection = args["reflection"];
-          const holds = args["holds"];
-          const over = args["over"];
-          if (typeof reflection !== "string" || typeof holds !== "string" || typeof over !== "string") {
-            return refused("reflection-holds-over-required", "Pass `reflection`, `holds` and `over` (two ids it was shown), `how` and `why`.");
-          }
-          const out = reflections.settle({
-            reflection,
-            session,
-            holds,
-            over,
-            how: typeof args["how"] === "string" ? args["how"] : "",
-            why: typeof args["why"] === "string" ? args["why"] : "",
-          });
-          this.emit("mcp.reflect", reflection, { phase: "settle", ok: out.ok });
-          return this.result({ phase, reflection, settle: { ...out } }, !out.ok);
-        }
-        case "told": {
-          const reflection = args["reflection"];
-          if (typeof reflection !== "string") return refused("reflection-required", "Pass `reflection`, the id the share named.");
-          const out = reflections.told({ reflection, session });
-          if (!out.ok) return refused(out.reason, "Nothing to record: the share was already told, or there was none.");
-          this.emit("mcp.reflect", reflection, { phase: "told", cited: out.cited });
-          return this.result({ phase, reflection, told: true, cited: out.cited }, false);
-        }
-        default:
-          return refused("phase-unknown", "phase is one of launch, begin, part, finish, settle, told.");
-      }
-    } catch (err) {
-      return refused("threw", String((err as Error).message ?? err));
-    }
+    return selfTools.reflectTool(this, args);
   }
 
-  /**
-   * `self_page` — read the page, or write it whole.
-   *
-   * **It binds no session, exactly as `remember` does not.** The page is not one
-   * session's account of itself the way a chapter is; it is the standing one,
-   * and a session that can write a note about the world can write the page about
-   * itself. The `by` field on the row says `session` for everything that comes
-   * through here, and no argument can change it: the console writes `owner` and
-   * the nightly writer will write `writer`, from their own doors.
-   *
-   * READING is allowed in every stance the tool answers in at all, including
-   * observer — "what does my page say" must always be answerable — and the
-   * stand-down guards the WRITE alone, which is the shape `scope` already has.
-   */
   private selfPageTool(args: Record<string, unknown>): ToolResult {
-    const body = args["body"];
-    const short = args["short"];
-    if (short !== undefined && typeof short !== "string") {
-      return this.refuse("self_page", "short-not-text", {
-        detail: "`short` is the short version of the page, as text — or leave it out.",
-      });
-    }
-    if (body === undefined && short === undefined) return this.selfPageRead();
-    if (this.observer) return this.standDown("self_page");
-    // A NON-STRING body is a malformed call and stops here; an EMPTY one goes
-    // THROUGH the seam, because the seam is what writes the durable refusal row
-    // this tool's own description promises. The short-circuit that used to catch
-    // both left `self_page({ body: "   " })` as the one refusal on this path
-    // with no row behind it (adversarial review m4).
-    if (body !== undefined && typeof body !== "string") {
-      return this.refuse("self_page", "body-required", {
-        detail:
-          "A page has to say something. Pass the whole page as text; omit `body` entirely to read the one that is there.",
-      });
-    }
-    const reason = args["reason"];
-    const ifVersion = args["ifVersion"];
-    if (
-      ifVersion !== undefined &&
-      (typeof ifVersion !== "number" || !Number.isInteger(ifVersion) || ifVersion < NO_PAGE_VERSION)
-    ) {
-      return this.refuse("self_page", "if-version-not-a-number", {
-        detail:
-          "`ifVersion` is the whole number the read gave you as `version` (-1 when there was no page), or leave it out.",
-      });
-    }
-    // BIND FIRST, AND NON-FATALLY. This server is launched from a static host
-    // configuration and never learns which session it serves; it binds lazily,
-    // on the first tool call that carries an id (`requireBoundSession`). Every
-    // other tool that needs one REFUSES without it — but this one has always
-    // worked unbound, so a session claim here is honoured when it corroborates
-    // and simply not honoured when it does not. The page is never refused over
-    // it: what a bad claim costs is the `writer` label, and the ring says why.
-    //
-    // Without this, the page-writer ask could not work at all in session mode.
-    // A session answering it right after its wake has called nothing else, so
-    // `this.session` is null, so the registry mark is never read, so every
-    // night's revision was filed as an ordinary amendment and the night read
-    // as "nothing to say" — the exact inverse of the honesty this is for.
-    const claimedSession = this.bindForPageWriter(args["session"]);
-    // WHICH DOOR THIS IS. `by` is the door's and is not claimable from outside
-    // (`self/page.ts`), so the model's word for "I am the nightly writer" is
-    // worth nothing here. What the server reads instead is the mark the
-    // SessionStart hook left on this session's registry record when it handed
-    // over the page-writer ask, and it is a DATE: a session asked to write
-    // about 09-19 writes `writer` for that run and nothing else, and a stale
-    // mark cannot relabel a write made two days later (`adapters/sessions.ts`).
-    const writerFor = this.pageWriterMark(claimedSession);
-    const model = this.sessionModel();
-    const said = typeof reason === "string" && reason.trim().length > 0 ? reason.trim() : null;
-    const common = {
-      ...(model === undefined ? {} : { model }),
-      by: writerFor === null ? ("session" as const) : ("writer" as const),
-      // WHICH SESSION, when this server has one. `remember` resolves it the same
-      // way; null is recorded rather than a guess (adversarial review M3).
-      session: this.session,
-      ...(ifVersion === undefined ? {} : { ifVersion }),
-    };
-    // THE SHORT VERSION (2026-10-10): beside the page, or — with no `body` —
-    // added to the page as it stands, as a revision of the same text.
-    const written =
-      typeof body === "string"
-        ? this.counterpart.revisePage(body, { ...common, reason: said ?? "amended", ...(short === undefined ? {} : { short }) })
-        : this.counterpart.addPageShort(short ?? "", { ...common, ...(said === null ? {} : { reason: said }) });
-    this.emit("mcp.self_page", written.id ?? undefined, {
-      stored: written.written,
-      reason: written.reason,
-      bytes: written.bytes,
-      version: written.version,
-      writerFor: writerFor?.about ?? null,
-      writerMode: writerFor?.mode ?? null,
-    });
-    // THE NIGHT'S OWN ROW, closed here because this is where the answer arrives.
-    // Both arms are recorded: a refused revision is the writer having run and
-    // been turned away, which is a different fact from a night that never
-    // started, and only the row can tell them apart afterwards. A recording
-    // failure costs the row and never the write (§5 G7).
-    // A short version added on its own is not the night's page: the night's
-    // row was written with the page.
-    if (writerFor !== null && typeof body === "string") {
-      try {
-        this.counterpart.recordPageWriterRun({
-          about: writerFor.about,
-          mode: writerFor.mode,
-          outcome: written.written ? "revised" : "refused",
-          // A refusal for length carries its numbers (review of #358), so the
-          // row — and the night's close, if the run moves on without a
-          // shorter page — says how far over it was.
-          detail: written.written
-            ? ""
-            : written.reason === "too-large"
-              ? pageTooLargeDetail(written.bytes, this.counterpart.self.tunables.PAGE_MAX_BYTES)
-              : written.reason,
-          bytesAfter: written.written ? written.bytes : 0,
-        });
-      } catch {
-        /* the page is written; the bookkeeping is not worth the answer */
-      }
-    }
-    if (!written.written) {
-      // THE CEILING, IN NUMBERS (2026-10-09): a writer told only "past the
-      // limit" guesses how much to take out; told both numbers, it tightens
-      // once and sends the page again.
-      const limit = this.counterpart.self.tunables.PAGE_MAX_BYTES;
-      return this.refuse("self_page", written.reason, {
-        bytes: written.bytes,
-        ...(written.reason === "too-large" ? { limit, over: written.bytes - limit } : {}),
-        ...(written.short === null ? {} : { short: written.short }),
-        ...(written.gate === null ? {} : { gate: written.gate }),
-        // On a stale write, hand back what is actually there so the session can
-        // merge rather than guess — the whole point of the check.
-        ...(written.current === null
-          ? {}
-          : { currentVersion: written.current.version, currentBody: written.current.body }),
-        detail: PAGE_REFUSAL_DETAIL[written.reason] ?? "The page was not written.",
-      });
-    }
-    return this.result(
-      {
-        stored: true,
-        reason: written.reason,
-        id: written.id,
-        version: written.version,
-        bytes: written.bytes,
-        // THE GATE CHANGED IT. Accepted is not the same as unaltered, and a
-        // session told only `stored: true` would go on believing it wrote what
-        // it sent (m1).
-        ...(written.redacted === null
-          ? {}
-          : {
-              redacted: true,
-              redactedBy: written.redacted.gate,
-              bytesBeforeRedaction: written.redacted.bytesBefore,
-            }),
-        // PAST ITS ROOM, SAID (2026-10-10): kept whole, and what sessions read
-        // on a day the wake cannot hold it — its short version, or, without
-        // one, its outline, with the way to add one.
-        ...pageRoomAnswer(written, this.counterpart.self.tunables.PAGE_ROOM_BYTES),
-        // WHEN IT WILL BE READ, precisely. The bundle every session wakes with
-        // is composed by a worker and served unchanged until the next render,
-        // so "it is live now" would be false for as long as this session lasts.
-        // Since 2026-09-30 the write marks the wake behind and the next turn's
-        // end re-renders it (`self/behind.ts`).
-        appearsAtWake: "the next session's wake, once a turn has ended — the worker a turn's end starts re-renders it",
-      },
-      false,
-    );
+    return selfTools.selfPageTool(this, args);
   }
 
   private selfPageRead(): ToolResult {
-    const page = this.counterpart.selfPage();
-    if (page === null) {
-      return this.result(
-        {
-          present: false,
-          reason: "still-forming",
-          // THE VERSION OF "NOTHING", so a session that was told to pass the
-          // version back can do it on a first write too. Without a value here,
-          // the natural `0` was refused with a sentence saying somebody else had
-          // written the page, which was untrue (adversarial review MINOR-C).
-          version: NO_PAGE_VERSION,
-          detail:
-            "No page has been written here yet. Write one when you have something true to say about yourself; while there is nothing, the honest page says it is still forming. Pass this `version` back as `ifVersion` if you want the write refused should one appear meanwhile.",
-        },
-        false,
-      );
-    }
-    return this.result(
-      {
-        present: true,
-        body: page.body,
-        bytes: page.bytes,
-        // ITS ROOM AND ITS SHORT VERSION (2026-10-10): what the wake shows on a
-        // day it has no room for the whole page.
-        room: this.counterpart.self.tunables.PAGE_ROOM_BYTES,
-        ...(page.short === null ? {} : { short: page.short.body, shortBytes: page.short.bytes }),
-        revisedOn: page.revisedOn,
-        by: page.by,
-        version: page.version,
-        // EVERY SECTION'S HEADING, in order (2026-09-28): any `##`, not only
-        // Core and Lately.
-        sections: pageSections(page.body).sections.map((s) => s.heading),
-        stale: this.counterpart.self.pageStale(page),
-        // COUNTED, not read: `selfPageVersions().length` read every archived
-        // body off disk to print one number, on every read a session makes
-        // (adversarial review m9).
-        versions: this.counterpart.selfPageVersionCount(),
-      },
-      false,
-    );
+    return selfTools.selfPageRead(this);
   }
 
-  /**
-   * The bound-session refusal, and the ONE way a server binds itself.
-   *
-   * Three states, in order:
-   *
-   *   1. **The host said so at launch** (`--session`). Unchanged and preferred:
-   *      the registry is never consulted, and a claim for another id is refused.
-   *   2. **Already bound** — by launch or by an earlier claim. The bind is for
-   *      the process's lifetime, so a second, DIFFERENT id is refused with the
-   *      reason that says why.
-   *   3. **Unbound.** The claim must name an id (never inferred — see the
-   *      CONTRACT's residual risk: two live sessions in one directory are
-   *      distinguishable only by the id the ask named), and that id must be in
-   *      the hooks' registry, live, and in THIS server's scope. Every refusal
-   *      says which of the four it was, because a model that cannot tell
-   *      "unknown id" from "wrong project" cannot do anything about either.
-   */
-  /**
-   * IS THIS SESSION THE NIGHT'S WRITER, and for which day?
-   *
-   * `by` on a page revision is the DOOR's and is not claimable from outside
-   * (`self/page.ts`), so this server may not take a tool argument's word for it.
-   * The evidence, since 2026-09-28, is the NIGHTLY RUN's claim row in the
-   * store — written by the run's `writer` phase, naming this session, and
-   * counted only when the write names that session itself — and,
-   * kept readable for older records, the mark the SessionStart
-   * hook used to write (`pageWriterFor`, a DATE, on this session's registry
-   * record, `adapters/sessions.ts`; nothing writes it now). Either counts only
-   * while that night's claim is still open: a session that lives past
-   * midnight, or one whose night has already been answered, writes as an
-   * ordinary session again. Null on every other path, including an unbound
-   * server, which is the direction that never over-claims. The run's claim
-   * counts only for a write that names the session in its call (review of
-   * #271): the run's agent shares its session's id, and the session's own
-   * page edit, which names none, stays an ordinary amendment.
-   */
-  /**
-   * A session claim on the PAGE's door: corroborated if it can be, ignored if
-   * it cannot, and never a refusal.
-   *
-   * `requireBoundSession` is reused rather than reimplemented — it is the only
-   * place that knows what corroboration means (known to the hooks' registry,
-   * live, and in this server's scope) and it already emits the reason on every
-   * arm. Its refusal VALUE is discarded here, which is the whole difference
-   * between this door and `chapter`'s: a page amendment has never needed a
-   * session and must not start being refused for lack of one.
-   */
   private bindForPageWriter(claimed: unknown): string | null {
-    if (typeof claimed !== "string" || claimed.length === 0) return null;
-    if (this.session !== null) return this.session === claimed ? claimed : null;
-    // CORROBORATE WITHOUT BINDING (S2 review, MINOR-3). The first version called
-    // `requireBoundSession`, which sets `lazySession` and FREEZES it for the
-    // life of the process — so a page write naming another live in-scope
-    // session would have bound this server to that session, and every later
-    // `remember` and `chapter` from it would have been attributed there. The page's
-    // door needs one thing and one thing only: is this id a session I may
-    // label a write with. That is a question, not a binding.
-    const ok = this.corroborate(claimed);
-    if (!ok) {
-      this.emit("mcp.session.unbound", undefined, { reason: "page-writer-claim" });
-      return null;
-    }
-    return claimed;
+    return selfTools.bindForPageWriter(this, claimed);
   }
 
   /** The person's calendar day now, in the store's zone (docs/time.md rule 3),
@@ -4977,508 +3391,5 @@ export class McpServer {
   ready(): boolean {
     return this.initialized;
   }
-}
-
-/**
- * What one handle-path answer should leave in the resolution log, as a TOTAL
- * table over the reasons that path can produce:
- *
- *   an id       — it expanded, and this is what it reached
- *   `null`      — it was asked and answered with nothing (the shadow)
- *   `undefined` — not this path's outcome at all; record nothing
- *
- * Total on purpose. A new handle-path reason added without a line here records
- * nothing rather than guessing, which fails in the under-credit direction.
- */
-/**
- * THE LOOKUP, NAMED IN THE DREAM'S OWN RESULT (2026-09-28): what tonight's
- * room gave, what waits, and how to read the rest — with the number of ids
- * one recall takes. Kept short: `dreamResultChars`' margin holds room for it.
- */
-export function dreamHow(bundle: Pick<DreamBundle, "queue" | "shownAs">): string {
-  const q = bundle.queue;
-  const s = bundle.shownAs;
-  const waits = q.waiting > 0 ? ` ${String(q.waiting)} more new wait for the next night.` : "";
-  const aged = q.agedOut > 0 ? ` ${String(q.agedOut)} aged out of the queue since the last dream, never dreamed.` : "";
-  return (
-    `Tonight: ${String(q.tonight)} of ${String(q.new)} new memories.${waits}${aged} ` +
-    `Shown whole: ${String(s.whole)}; as an excerpt: ${String(s.excerpt)}; as a line: ${String(s.line)}${s.notShown > 0 ? `; related, not shown: ${String(s.notShown)}` : ""}. ` +
-    `To read any whole, call the recall tool with ids: [...] — up to ${String(RECALL_MAX_IDS)} at once.`
-  );
-}
-
-/**
- * THE TWO MODES, in the words a refusal teaches them with (Release B,
- * 2026-10-03). There is no default: the caller says which question it is
- * asking.
- */
-export const RECALL_MODE_WORDS =
-  'A question needs mode: "facts" — what happened, who said it, when, and whether it still holds (every match, ranked, with dates and speaker); or "meaning" — how something went, felt, and what it adds up to (a person, a project, us).';
-
-/** What one recall call's durable row says (`noteRecall`). Counts only. */
-interface RecallRowFields {
-  readonly path: "handle" | "question" | "none";
-  readonly reason: string;
-  readonly semantic: string;
-  readonly considered: number;
-  readonly storeSize: number;
-  readonly expanded: number;
-  readonly blockedBy: Readonly<Record<string, number>>;
-  readonly mode?: "facts" | "meaning";
-  readonly matched?: number;
-  readonly shown?: number;
-  readonly faded?: number;
-  readonly page?: number;
-  /** A question that named a time: `window`, `event` or `session`. */
-  readonly time?: string;
-  /** Meaning mode's own counts (`MeaningResult.counts`). */
-  readonly counts?: Readonly<Record<string, number>>;
-}
-
-/**
- * The address paths' refusals are their own `reason` — one per id on the
- * `ids` path, so three unknown ids read as three and not as one.
- */
-function addressBlocked(result: DeliberateResult): Record<string, number> {
-  const out: Record<string, number> = {};
-  const reasons =
-    result.path === "none"
-      ? [result.reason]
-      : result.perId === undefined
-        ? result.reason === "expanded"
-          ? []
-          : [result.reason]
-        : result.perId.filter((p) => p.reason !== "expanded").map((p) => p.reason);
-  for (const r of reasons) out[r] = (out[r] ?? 0) + 1;
-  return out;
-}
-
-function resolvedIdOf(result: DeliberateResult): string | null | undefined {
-  switch (result.reason) {
-    case "expanded":
-      return result.memories.length === 1 ? (result.memories[0]?.id ?? null) : undefined;
-    case "handle-unknown":
-    case "handle-ambiguous":
-    case "handle-confidential-withheld":
-      return null;
-    default:
-      return undefined;
-  }
-}
-
-/**
- * The three dimensions an author may claim, off the wire. `null` means "one of
- * them was present and unusable" — a refusal, not a silent drop, because a
- * dimension that quietly vanishes is worse than one that was never offered:
- * both leave a 0 in the row and only one of them tells anybody.
- *
- * `novelty` is deliberately not readable here. It is prediction error, computed
- * at encoding against the store's own context; an author claiming it is exactly
- * the door PR-3 closed in `remember/proposals.ts`.
- */
-function readDimensions(rec: Record<string, unknown>): Record<string, number> | null {
-  const out: Record<string, number> = {};
-  for (const dim of AUTHOR_DIMENSIONS) {
-    const v = rec[dim];
-    if (v === undefined) continue;
-    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) return null;
-    out[dim] = v;
-  }
-  return out;
-}
-
-/** The unvalidated read, used only where the refusal must be per-entry: the
- *  values ride to `remember/intake`, which refuses that entry by name. */
-function pickDimensions(rec: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const dim of AUTHOR_DIMENSIONS) {
-    if (rec[dim] !== undefined) out[dim] = rec[dim];
-  }
-  return out;
-}
-
-// ── a reminder date on a tool call (2026-09-26) ─────────────────────────────
-
-/** What `readReminder` hands back: the draft fields, and what to say about them. */
-type ReminderRead =
-  | {
-      /** `eventDate: null` is the explicit drop (a revision's cancel); `remind`
-       *  rides only when it was SENT, so a revision can tell a left-out mode
-       *  from a stated one (review N7). */
-      readonly fields: { eventDate?: string | null; remind?: "plain" | "quiet"; recurring?: Recurrence | null };
-      /** `remind` was sent with no `eventDate`: there is nothing for it to shape
-       *  — unless the memory it revises carries a date (`DepositResult.reminder`). */
-      readonly remindIgnored: boolean;
-      /** `recurring` was sent with no `eventDate` (2026-10-09): nothing to repeat
-       *  — unless the memory it revises carries a date. */
-      readonly recurringIgnored?: boolean;
-    }
-  | {
-      readonly refused: "event-date-unreadable" | "remind-unknown" | "recurring-unknown" | "recurring-needs-day";
-      readonly detail: string;
-    };
-
-const EVENT_DATE_SHAPES =
-  'A day "2026-10-15", a month "2026-10", a year "2026", or a range of two days "2026-10-20..2026-10-31" (first day first). Convert "late October" or "before the 15th" into one of those yourself.';
-
-const YEAR_ALONE_NOTE =
-  "A year alone names no day, so this will not come back on its own. Give a month, a day or a range if it should.";
-
-/** Review N8 (2026-09-26): a past date is accepted and kept, and SAID — so a
- *  wrong year can be caught by the model that wrote it. */
-const DATE_PASSED_NOTE = "That date has already passed — it won't come back as a reminder.";
-
-/**
- * `eventDate` and `remind` off a `remember` or a `session_end` entry, CHECKED
- * before anything mints: the date by `time.ts` (the one module that reads
- * dates), `remind` against its two words. Never a date parsed from prose — the
- * model writes the field (owner decision 2026-09-25/26).
- */
-function readReminder(rec: Record<string, unknown>): ReminderRead {
-  const rawDate = rec["eventDate"];
-  const rawRemind = rec["remind"];
-  const rawRule = rec["recurring"];
-  if (rawRemind !== undefined && rawRemind !== null && rawRemind !== "plain" && rawRemind !== "quiet") {
-    return { refused: "remind-unknown", detail: '`remind` is "plain" or "quiet".' };
-  }
-  // HOW OFTEN (2026-10-09): one of four words, refused by name like a date.
-  if (rawRule !== undefined && rawRule !== null && !isRecurrence(rawRule)) {
-    return { refused: "recurring-unknown", detail: RECURRING_WORDS };
-  }
-  const sent: { remind?: "plain" | "quiet"; recurring?: Recurrence | null } = {
-    ...(rawRemind === "plain" || rawRemind === "quiet" ? { remind: rawRemind } : {}),
-    // `null` rides as sent: a revision's "it no longer repeats".
-    ...(isRecurrence(rawRule) ? { recurring: rawRule } : rawRule === null ? { recurring: null } : {}),
-  };
-  if (rawDate === undefined || rawDate === null) {
-    return {
-      fields: { ...(rawDate === null ? { eventDate: null } : {}), ...sent },
-      remindIgnored: sent.remind !== undefined,
-      recurringIgnored: isRecurrence(sent.recurring),
-    };
-  }
-  const read = typeof rawDate === "string" ? parseCalendarDate(rawDate) : null;
-  if (read === null) {
-    return {
-      refused: "event-date-unreadable",
-      detail: `\`eventDate\` ${typeof rawDate === "string" ? `"${rawDate.slice(0, 64)}"` : "(not text)"} is not a date this can read. ${EVENT_DATE_SHAPES}`,
-    };
-  }
-  if (isRecurrence(sent.recurring) && read.precision !== "day") {
-    return { refused: "recurring-needs-day", detail: RECURRING_NEEDS_DAY };
-  }
-  return { fields: { eventDate: read.text, ...sent }, remindIgnored: false };
-}
-
-const RECURRING_WORDS =
-  '`recurring` is "daily", "weekly", "monthly" or "yearly", anchored on eventDate. Every other week, "the first Monday" and the like are not kept: leave it out.';
-
-const RECURRING_NEEDS_DAY =
-  '`recurring` repeats one day, so eventDate must be a day: the first one ("1990-05-14" for a birthday, any Monday for "every Monday").';
-
-const RECURRING_IGNORED_NOTE = "`recurring` repeats a date; with no `eventDate` there was nothing to repeat.";
-
-const RECURRING_DROPPED_NOTE = "Not repeating any more: only a day repeats, and this date is not one, so it comes once.";
-
-/** What to say about a recorded date: that it has already passed (its last day
- *  is before the person's today — `time.ts#todayIn` in the store's zone), or
- *  that a year alone never comes back. One note, the passed one first. */
-function dateNote(eventDate: string, today: string, recurring: Recurrence | null = null): Record<string, unknown> {
-  // A REPEATING date never "has passed" (2026-10-09): a birthday anchored in
-  // 1990 comes round every year. Said instead: how often, and when next.
-  if (recurring !== null) {
-    const every = readableRecurrence(eventDate, recurring);
-    const next = occurrenceOnOrAfter(eventDate, recurring, today);
-    return { ...(every === "" ? {} : { every }), ...(next === null ? {} : { next: next.date }) };
-  }
-  const read = parseCalendarDate(eventDate);
-  if (read === null) return {};
-  if (read.last < today) return { note: DATE_PASSED_NOTE };
-  return read.precision === "year" ? { note: YEAR_ALONE_NOTE } : {};
-}
-
-/** The reminder half of a deposit's answer: what was RECORDED — after a
- *  revision's carry-over, not merely what was sent — or why `remind` had
- *  nothing to shape. Nothing when neither field was sent or nothing minted. */
-function reminderEcho(deposit: DepositResult, dated: ReminderRead, today: string): Record<string, unknown> {
-  if ("refused" in dated || !deposit.deposited) return {};
-  const carried = deposit.reminder;
-  if (carried !== undefined) {
-    const unmoved = carried.moved ? {} : { unmoved: true };
-    if (carried.eventDate === null) {
-      return {
-        reminder: {
-          cleared: true,
-          from: carried.from,
-          ...unmoved,
-          note: "The date is dropped: neither this memory nor the one it revises will come back as a reminder.",
-        },
-      };
-    }
-    // A repeat — sent or carried — that the new date cannot take (a month or a
-    // range does not repeat) is SAID, never silently lost.
-    const ruleDropped = carried.recurringDropped === true;
-    return {
-      reminder: {
-        eventDate: carried.eventDate,
-        remind: carried.remind ?? "quiet",
-        ...(carried.recurring === null ? {} : { recurring: carried.recurring }),
-        from: carried.from,
-        ...(carried.inherited.length > 0 ? { carriedOver: [...carried.inherited] } : {}),
-        ...unmoved,
-        ...dateNote(carried.eventDate, today, carried.recurring),
-        ...(ruleDropped ? { note: RECURRING_DROPPED_NOTE } : {}),
-      },
-    };
-  }
-  const { eventDate, remind, recurring } = dated.fields;
-  if (typeof eventDate === "string") {
-    const rule = isRecurrence(recurring) ? recurring : null;
-    return {
-      reminder: {
-        eventDate,
-        remind: remind ?? "quiet",
-        ...(rule === null ? {} : { recurring: rule }),
-        ...dateNote(eventDate, today, rule),
-      },
-    };
-  }
-  // A cancel that found nothing to cancel is SAID (review of #247): silence
-  // here read as success while a reminder the model meant to drop kept coming.
-  if (eventDate === null && (deposit.proposal?.updates?.declared ?? null) !== null) {
-    return {
-      reminder: {
-        cleared: false,
-        note: "No date was dropped: `updates` did not reach a dated memory by its id, so nothing was cancelled.",
-      },
-    };
-  }
-  const remindNote = "`remind` shapes how a date comes back; with no `eventDate` there was nothing to shape.";
-  if (dated.remindIgnored && dated.recurringIgnored === true) {
-    return { reminder: { ignored: "remind, recurring", note: `${remindNote} ${RECURRING_IGNORED_NOTE}` } };
-  }
-  if (dated.recurringIgnored === true) return { reminder: { ignored: "recurring", note: RECURRING_IGNORED_NOTE } };
-  return dated.remindIgnored ? { reminder: { ignored: "remind", note: remindNote } } : {};
-}
-
-// ── feelings on a tool call (schema v7) ─────────────────────────────────────
-
-type FeelingsRead = { inputs: FeelingInput[] } | { refused: string };
-
-type AboutRead = { mark: AboutMark | null } | { refused: string };
-
-type TraitsRead = { inputs: TraitInput[] } | { refused: string };
-
-/**
- * `traits: [{ axis, toward, strength, carried_by? }]` off a `remember` or a
- * `session_end` entry (folded into v9), read and CHECKED before anything
- * mints (`store/traits.ts#checkTraits`, pure). Absent is none; an unknown
- * axis or pole is a refusal that names the item, the reason and what is
- * allowed. Any throw is this entry's refusal, never the call's.
- */
-function readTraits(raw: unknown): TraitsRead {
-  try {
-    if (raw === undefined || raw === null) return { inputs: [] };
-    if (!Array.isArray(raw)) return { refused: "`traits` is a list of objects." };
-    const inputs: TraitInput[] = [];
-    for (const [i, item] of raw.entries()) {
-      if (item === null || typeof item !== "object" || Array.isArray(item)) {
-        return { refused: `traits[${i}] is not an object.` };
-      }
-      const t = item as Record<string, unknown>;
-      for (const key of ["axis", "toward"] as const) {
-        if (typeof t[key] !== "string") return { refused: `traits[${i}].${key} is a word.` };
-      }
-      const carried = t["carried_by"];
-      if (carried !== undefined && typeof carried !== "string") return { refused: `traits[${i}].carried_by is text.` };
-      inputs.push({
-        axis: t["axis"] as string,
-        toward: t["toward"] as string,
-        strength: t["strength"] as number,
-        ...(carried === undefined ? {} : { carriedBy: carried }),
-      });
-    }
-    try {
-      checkTraits(inputs);
-    } catch (err) {
-      if (isStoreError(err, "TRAIT_INVALID")) {
-        const d = (err as { detail?: Record<string, unknown> }).detail ?? {};
-        const allowed = typeof d["allowed"] === "string" ? ` (one of ${d["allowed"]})` : "";
-        const pole = typeof d["axisOfPole"] === "string" ? `; that word belongs to ${d["axisOfPole"]}` : "";
-        return { refused: `traits[${String(d["index"])}]: ${String(d["reason"])}${allowed}${pole}.` };
-      }
-      throw err;
-    }
-    return { inputs };
-  } catch (err) {
-    return { refused: `traits could not be read: ${String((err as Error).message ?? err)}` };
-  }
-}
-
-/** `about` on a tool call (schema v9): absent, or one of the five marks. */
-/**
- * The open thread a deposit closed (`DepositResult.thread`, 2026-10-01), as a
- * result carries it: `thread: { closed: <the id it updates> }`, or the reason
- * the clear did not land. Nothing when no thread was closed.
- */
-function threadOf(deposit: DepositResult): Record<string, unknown> {
-  const t = deposit.thread;
-  if (t === undefined) return {};
-  return { thread: t.closed ? { closed: t.from } : { closed: null, from: t.from, reason: t.refused ?? "not-recorded" } };
-}
-
-/**
- * v12 (2026-10-03): THE WRITER'S THREE FIELDS off a `remember` or a
- * `session_end` entry — `occurredOn` (when it happened: read by `time.ts`,
- * the one module that reads dates), `saidBy` and `status` (against their
- * words). LOOSE FIRST: nothing here refuses the memory. What cannot be read
- * is dropped and said (`dropped`, with what to send instead); null is sent
- * as none (a revision carries nothing over for it); absent is not sent.
- * A date in the future is kept, and a note says that a date to be reminded
- * on is `eventDate`.
- */
-interface FactsRead {
-  readonly sent: SentFacts;
-  readonly dropped: readonly { readonly field: string; readonly note: string }[];
-  readonly notes: readonly string[];
-}
-
-const OCCURRED_ON_SHAPES =
-  'Send it as a day "2026-09-24", a month "2026-09", a year "2026" or a range "2026-09-21..2026-09-27" — resolve "last week" or "yesterday" to one of those while you know the date.';
-
-const OCCURRED_ON_FUTURE_NOTE =
-  "occurredOn is in the future. It is kept, but it means when this happened; a date to be reminded on is eventDate.";
-
-function readWriteFacts(rec: Record<string, unknown>, today: string): FactsRead {
-  const sent: { occurredOn?: string | null; saidBy?: SaidBy | null; status?: MemoryStatus | null } = {};
-  const dropped: { field: string; note: string }[] = [];
-  const notes: string[] = [];
-  const said = (v: unknown): string => (typeof v === "string" ? `"${v.slice(0, 64)}"` : "(not text)");
-  const date = rec["occurredOn"];
-  if (date === null) sent.occurredOn = null;
-  else if (date !== undefined) {
-    const read = parseCalendarDate(date);
-    if (read === null) {
-      dropped.push({ field: "occurredOn", note: `occurredOn ${said(date)} is not a date this can read, so the memory was kept without it. ${OCCURRED_ON_SHAPES}` });
-    } else {
-      sent.occurredOn = read.text;
-      if (read.first > today) notes.push(OCCURRED_ON_FUTURE_NOTE);
-    }
-  }
-  const by = rec["saidBy"];
-  if (by === null) sent.saidBy = null;
-  else if (by !== undefined) {
-    const v = saidByOf(by);
-    if (v === null) dropped.push({ field: "saidBy", note: `saidBy ${said(by)} is not one of ${SAID_BY.join(", ")}, so the memory was kept without it.` });
-    else sent.saidBy = v;
-  }
-  const st = rec["status"];
-  if (st === null) sent.status = null;
-  else if (st !== undefined) {
-    const v = statusOf(st);
-    if (v === null) dropped.push({ field: "status", note: `status ${said(st)} is not one of ${STATUSES.join(", ")}, so the memory was kept without it.` });
-    else sent.status = v;
-  }
-  return { sent, dropped, notes };
-}
-
-/** The three fields' half of a deposit's answer (v12): what was RECORDED —
- *  after a revision's carry-over — what was carried and from where, and what
- *  was dropped and why. Nothing when nothing was sent, dropped or carried. */
-function factsEcho(deposit: DepositResult, read: FactsRead): Record<string, unknown> {
-  const sentAny = Object.keys(read.sent).length > 0;
-  if (!sentAny && read.dropped.length === 0 && deposit.facts === undefined) return {};
-  const dropped = read.dropped.length === 0 ? {} : { dropped: read.dropped.map((d) => ({ field: d.field, note: d.note })) };
-  if (!deposit.deposited) return { facts: { stored: false, reason: "memory-not-stored", ...dropped } };
-  const f = deposit.facts;
-  return {
-    facts: {
-      stored: true,
-      ...((f?.occurredOn ?? null) === null || f === undefined ? {} : { occurredOn: f.occurredOn }),
-      ...((f?.saidBy ?? null) === null || f === undefined ? {} : { saidBy: f.saidBy }),
-      ...((f?.status ?? null) === null || f === undefined ? {} : { status: f.status }),
-      ...(f === undefined || f.inherited.length === 0 ? {} : { carriedOver: [...f.inherited], from: f.from }),
-      ...dropped,
-      ...(read.notes.length === 0 ? {} : { note: read.notes.join(" ") }),
-    },
-  };
-}
-
-function readAbout(raw: unknown): AboutRead {
-  if (raw === undefined || raw === null) return { mark: null };
-  if (typeof raw !== "string" || !(ABOUT_MARKS as readonly string[]).includes(raw)) {
-    return { refused: `\`about\` is one of ${ABOUT_MARKS.join(", ")}.` };
-  }
-  return { mark: raw as AboutMark };
-}
-
-/**
- * `feelings: [{ whose, core?, emotion, strength?, valence?, carried_by, beneath?, other_word? }]`
- * off a `remember` or a `session_end` entry, read and CHECKED before anything
- * mints (`store/feelings.ts#checkFeelings`, pure). `beneath` is another
- * feeling's index in the same list. Absent is no feelings; anything that will
- * not store is a refusal naming the item and the reason.
- */
-function readFeelings(raw: unknown): FeelingsRead {
-  // ANY throw is this entry's refusal, never the call's (review S2): a
-  // `session_end` carries siblings that must still land.
-  try {
-    return readFeelingsOrThrow(raw);
-  } catch (err) {
-    return { refused: `feelings could not be read: ${String((err as Error).message ?? err)}` };
-  }
-}
-
-function readFeelingsOrThrow(raw: unknown): FeelingsRead {
-  if (raw === undefined || raw === null) return { inputs: [] };
-  if (!Array.isArray(raw)) return { refused: "`feelings` is a list of objects." };
-  const inputs: FeelingInput[] = [];
-  for (const [i, item] of raw.entries()) {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      return { refused: `feelings[${i}] is not an object.` };
-    }
-    const f = item as Record<string, unknown>;
-    for (const key of ["whose", "emotion"] as const) {
-      if (typeof f[key] !== "string") return { refused: `feelings[${i}].${key} is a word.` };
-    }
-    // v11: `core` may be left out (the word's own core), and `strength` and
-    // `valence` too (the word's defaults).
-    const core = f["core"];
-    if (core !== undefined && core !== null && typeof core !== "string") return { refused: `feelings[${i}].core is a word.` };
-    const carried = f["carried_by"];
-    const other = f["other_word"];
-    const valence = f["valence"];
-    const strength = f["strength"];
-    if (carried !== undefined && typeof carried !== "string") return { refused: `feelings[${i}].carried_by is text.` };
-    if (other !== undefined && typeof other !== "string") return { refused: `feelings[${i}].other_word is a word.` };
-    // AT THE DOOR, `beneath` is an INDEX into this list and nothing else (review
-    // S3): an id would only be checked after the memory minted, so feelings
-    // would stop being all-or-nothing with their entry.
-    const beneath = f["beneath"];
-    if (beneath !== undefined && beneath !== null && !(typeof beneath === "number" && Number.isInteger(beneath))) {
-      return { refused: `feelings[${i}].beneath is the index of another feeling in this list.` };
-    }
-    inputs.push({
-      whose: f["whose"] as string,
-      ...(typeof core === "string" ? { core } : {}),
-      emotion: f["emotion"] as string,
-      ...(strength === undefined || strength === null ? {} : { strength: strength as number }),
-      ...(valence === undefined || valence === null ? {} : { valence: valence as number }),
-      ...(carried === undefined ? {} : { carriedBy: carried }),
-      ...(other === undefined ? {} : { otherWord: other }),
-      ...(beneath === undefined || beneath === null ? {} : { beneath: beneath as number }),
-    });
-  }
-  try {
-    checkFeelings(inputs);
-  } catch (err) {
-    if (isStoreError(err, "FEELING_INVALID")) {
-      const d = (err as { detail?: Record<string, unknown> }).detail ?? {};
-      const allowed = typeof d["allowed"] === "string" ? ` (one of ${d["allowed"]})` : "";
-      return { refused: `feelings[${String(d["index"])}]: ${String(d["reason"])}${allowed}.` };
-    }
-    throw err;
-  }
-  return { inputs };
 }
 

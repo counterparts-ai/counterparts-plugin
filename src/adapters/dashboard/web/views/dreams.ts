@@ -150,7 +150,10 @@ function changeView(src: DashboardSource, c: DreamChangeRow): DreamChangeView {
     case "gist":
       push(ref(src, c.ref));
       for (const s of idList(d["sources"])) push(ref(src, s));
-      said = "wrote down a pattern, in its own words (dreamed; it starts low)";
+      said =
+        d["fold"] === true
+          ? `folded ${String(idList(d["sources"]).length)} memories into what they add up to (${String(idList(d["faded"]).length)} faded under it)`
+          : "wrote down a pattern, in its own words (dreamed; it starts low)";
       break;
     case "contradiction":
       push(ref(src, c.ref));
@@ -176,7 +179,12 @@ function changeView(src: DashboardSource, c: DreamChangeRow): DreamChangeView {
 function dreamView(src: DashboardSource, row: DreamRow): DreamView {
   const changes = src.store.dreamChanges(row.id);
   const counts: Record<string, number> = {};
-  for (const c of changes) if (c.undone === 0) counts[c.action] = (counts[c.action] ?? 0) + 1;
+  // A fold is counted as a fold, not as a pattern (review of #432; `dream/index.ts#counts`).
+  for (const c of changes) {
+    if (c.undone !== 0) continue;
+    const key = c.action === "gist" && detailOf(c)["fold"] === true ? "fold" : c.action;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
   return {
     id: row.id,
     date: row.date,

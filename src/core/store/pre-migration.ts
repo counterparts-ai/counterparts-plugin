@@ -187,7 +187,8 @@ export function snapshotBeforeMigration(input: PreMigrationInput): PreMigrationC
  * so a migration that keeps failing AFTER its copy does not take a new full
  * copy at every open. Good enough means: its database is there, and either it
  * was taken today (UTC) or the live database has not been written since it was
- * taken (neither the file nor its `-wal` is newer than the copy's instant).
+ * taken (neither the file nor a `-wal` with anything in it is newer than the
+ * copy's instant).
  *
  * A copy only takes its final name after it verified, so the name is the proof.
  */
@@ -201,7 +202,13 @@ function reusableCopy(dir: string, dbPath: string, from: string, to: number, now
   const want = { from: stampForName(from), to: stampForName(String(to)) };
   // The folder names begin with a UTC instant, so "today" here is the UTC day.
   const today = utcDate(now);
-  const lastWrite = Math.max(mtimeOf(dbPath), mtimeOf(`${dbPath}-wal`));
+  // An EMPTY `-wal` says nothing about writes: SQLite makes one at every open
+  // where the last close deleted it (bun's own SQLite on Linux, node:sqlite),
+  // so its mtime is the open's, not a write's (2026-10-11, when `close()` began
+  // really closing). A checkpoint that emptied it wrote the database file, and
+  // that file's mtime is counted.
+  const wal = `${dbPath}-wal`;
+  const lastWrite = Math.max(mtimeOf(dbPath), sizeOf(wal) > 0 ? mtimeOf(wal) : 0);
   const candidates = names
     .filter((n) => {
       const v = preMigrationVersions(n);
@@ -225,6 +232,14 @@ function reusableCopy(dir: string, dbPath: string, from: string, to: number, now
 function mtimeOf(path: string): number {
   try {
     return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function sizeOf(path: string): number {
+  try {
+    return statSync(path).size;
   } catch {
     return 0;
   }

@@ -214,8 +214,8 @@ export function fit(candidates: readonly FitCandidate[], opts: FitOptions): FitO
  * whole. RESIDUAL RISK: the host can lower either line by a remote flag
  * (`tengu_velvet_ibis`); the nightly run pins the token line with the env var
  * (`night-run.ts`), and nothing pins the char line. What it does instead
- * (2026-10-09): the nightly run reads its child's transcript for the host's
- * marker on our results (`claude-code/transcript.ts#readToolSpills`), so a
+ * (2026-10-09): the nightly run reads its child's output for the host's
+ * marker on our results (`claude-code/night-run.ts#readNightSpills`), so a
  * lowered line shows up in doctor and in the morning, not in nothing. CAL.
  *
  * Re-measured on Claude Code 2.1.296, 2026-10-10: 25,000 tokens and 50,000

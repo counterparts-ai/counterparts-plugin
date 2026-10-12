@@ -19,7 +19,7 @@ import {
   readPageTooLargeDetail,
 } from "../../../../core/self/index.js";
 import type { PageVersion, PageWriterRun, PageWriterStatus } from "../../../../core/self/index.js";
-import { TUNABLES as SLEEP, coreContextFor, isJournal } from "../../../../core/sleep/index.js";
+import { TUNABLES as SLEEP, coreContextFor, isJournal, reconsiderWords } from "../../../../core/sleep/index.js";
 import type { Band, Kind } from "../../../../core/types.js";
 import { NEVER, NONE } from "../../layout.js";
 import { localDate } from "../../../../core/time.js";
@@ -265,6 +265,12 @@ export interface SettlingRow {
 export interface SettlingView {
   /** The identity band — the core. */
   readonly core: SettlingRow[];
+  /**
+   * Core memories BEING RECONSIDERED (2026-10-11, Group 3 part A): still in
+   * the core, waiting on a decision — mine, or the owner's (`counterparts core
+   * --reaffirm` / `--demote`). `why` is the reason in words.
+   */
+  readonly reconsidering: (SettlingRow & { readonly why: string; readonly day: number })[];
   /** Protected (permanent) rows. */
   readonly guarded: SettlingRow[];
   /** Beliefs under challenge, or already revised. */
@@ -294,9 +300,14 @@ export interface SettlingView {
     needFeeling: number;
     needGap: number;
     days: number;
+    /** The recurrence lane's sessions and trailing window (2026-10-11). */
+    sessions: number;
+    window: number;
     span: number;
     everyDays: number;
     cap: number;
+    /** Lived days without recurrence before a core memory is reconsidered. */
+    quietDays: number;
   };
   /** Two-word absences, for each list that is empty. */
   readonly coreAbsent: string | null;
@@ -1064,8 +1075,13 @@ function settlingView(
     confidential: el.confidential === true,
     kind: el.kind ?? "fact",
   });
+  const reconsidering = store.coreReconsidering().map((r) => {
+    const t = reveal(store, r.id, 110);
+    return { id: r.id, text: t.text ?? t.label, confidential: t.confidential, kind: (store.row(r.id)?.kind ?? "fact") as Kind, why: reconsiderWords(r.reason), day: r.day };
+  });
   return {
     core: x.core.map(row),
+    reconsidering,
     guarded: x.guarded.map(row),
     contested: x.stories.map((s) => ({
       id: s.id,
@@ -1088,9 +1104,12 @@ function settlingView(
       needFeeling: PHYSICS.CORE_FAST_FEELING,
       needGap: PHYSICS.CORE_FAST_GAP_DAYS,
       days: PHYSICS.CORE_SLOW_DAYS,
+      sessions: PHYSICS.CORE_SLOW_SESSIONS,
+      window: PHYSICS.CORE_SLOW_WINDOW_DAYS,
       span: PHYSICS.CORE_SLOW_SPAN_DAYS,
       everyDays: SLEEP.CADENCE.consolidate,
       cap: SLEEP.CORE_MAX_PER_SLEEP,
+      quietDays: SLEEP.CORE_QUIET_DAYS,
     },
     coreAbsent: x.core.length === 0 ? x.absent : null,
     guardedAbsent: x.guarded.length === 0 ? x.absent : null,

@@ -11,7 +11,7 @@
 import type { Counterpart } from "../../core/counterpart.js";
 import { dreamSkippedOf, nightPartsWords, nightRunWords } from "../../core/dream/index.js";
 import type { DreamingSetting, NightRun } from "../../core/dream/index.js";
-import { acceptsReflectedFeeling } from "../../core/sleep/index.js";
+import { acceptsReflectedFeeling, reconsiderWords } from "../../core/sleep/index.js";
 import type { DreamChangeRow, ReflectionRow, Store } from "../../core/store/index.js";
 
 /** How a memory id reads in a list: its first line, or why it is not shown.
@@ -229,7 +229,7 @@ export function dreamShowLines(counterpart: Counterpart, id: string): string[] |
 
 /** `counterparts core --list`: the core with lanes, then nominations and demotions. */
 export function coreListLines(counterpart: Counterpart): string[] {
-  const { core, nominated, demoted } = counterpart.coreList();
+  const { core, nominated, demoted, reconsidering } = counterpart.coreList();
   const out = [
     core.length === 0
       ? "The core is empty: nothing has become part of who I am yet."
@@ -242,10 +242,11 @@ export function coreListLines(counterpart: Counterpart): string[] {
   }
   out.push(
     "",
-    "Only a memory about me, about us or about the owner becomes core — what it is about is marked by",
-    "meaning, by the writer or by a reflection (work and world are not candidates). Then: strongly felt",
-    "and back after a gap (fast lane), or back on several separate days over weeks (slow lane). A",
-    "reflection that cites a memory counts as it coming back. At most a few a night.",
+    "Only a memory about me or about us becomes core — what it is about is marked by meaning, by the",
+    "writer or by a reflection (owner, work and world are not candidates, nor a fact, a skill or a plan).",
+    "Then: strongly felt and back after a gap (fast lane), or it and its earlier and later states kept",
+    "coming back — on several days, in several sessions, over a week or more inside a month (slow lane).",
+    "A reflection that cites a memory counts as it coming back. At most a few a night.",
     acceptsReflectedFeeling(counterpart.store)
       ? "Open to reflection alone: a feeling a reflection records later and a reflection citing a memory count toward the fast lane, and a reflection may re-label either way (counterparts core --reflected-feeling off to close it)."
       : "Closed to reflection alone: the fast lane needs a feeling felt at the time and an ordinary use after a gap, and a reflection may only move a memory toward work or world (counterparts core --reflected-feeling on to open it).",
@@ -256,8 +257,13 @@ export function coreListLines(counterpart: Counterpart): string[] {
       out.push(`  ${n.id}  lived day ${String(n.day)}${n.reason === null ? "" : ` — ${n.reason}`}${n.dream === null ? "" : ` (${n.dream})`}`);
     }
   }
+  if (reconsidering.length > 0) {
+    out.push("", "Being reconsidered — still core; nothing leaves without a decision, yours or mine:");
+    for (const r of reconsidering) out.push(`  ${r.id}  since lived day ${String(r.day)} — ${reconsiderWords(r.reason)}`);
+    out.push('  Keep one: counterparts core --reaffirm <id> --reason "..."  ·  send one back: --demote <id> --reason "..."');
+  }
   if (demoted.length > 0) {
-    out.push("", "Sent back to ordinary fading by you:");
+    out.push("", "Sent back to ordinary fading:");
     for (const d of demoted.slice(0, 20)) out.push(`  ${d.id}  lived day ${String(d.day)}${d.reason === null ? "" : ` — ${d.reason}`}`);
   }
   if (core.length > 0) out.push("", 'Send one back: counterparts core --demote <id> --reason "..."');

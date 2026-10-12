@@ -75,6 +75,8 @@ export {
   aboutMe,
   acceptsReflectedFeeling,
   coreContextFor,
+  coreRecurrence,
+  identityBlock,
   laterFeelingCarriers,
   laterFeelingWasAwake,
   laterFeelingWasReflections,
@@ -83,7 +85,11 @@ export {
   promotionRecordKey,
   runConsolidate,
   selfRelevantFeeling,
+  slotOf,
 } from "./consolidate.js";
+export type { IdentityBlock } from "./consolidate.js";
+export { CORE_RECONSIDER_REASONS, keepCore, reconsiderWords, retireCore, weighCore } from "./core-standing.js";
+export type { CoreDecision, CoreDecisionActor, CoreReconsiderReason, CoreWeighing } from "./core-standing.js";
 export { V8_CENSUS_EVENT, V8_CENSUS_KEY, V8_UPGRADE_KEY, censusDue, preV8, projectedPruneDay, upgradeCensus, v7WouldPromote } from "./upgrade.js";
 export type { UpgradeCensus } from "./upgrade.js";
 export type { ReadsCoreContext, ReadsDocs } from "./consolidate.js";
@@ -104,6 +110,8 @@ export type { DedupCandidateInput, DedupCandidateSource, DedupPair, DedupResult 
 
 export { runFade } from "./fade.js";
 export type { FadeFn, FadeInput, FadeResult, FadeSweepOutcome } from "./fade.js";
+export { runBirths } from "./births.js";
+export type { BirthsFn, BirthsInput, BirthsResult, BirthsSweepOutcome } from "./births.js";
 
 export { runBriefing } from "./briefing.js";
 export type { BriefingContext, BriefingOutcome, BriefingResult, RenderFn } from "./briefing.js";

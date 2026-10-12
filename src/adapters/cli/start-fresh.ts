@@ -392,15 +392,20 @@ export interface Liveness {
  *      boundary is inside the window is a session whose hooks — and whose MCP
  *      server — are very likely still attached. **This is the refusal.**
  *
- *   2. **A fresh `-shm`.** Measured on this build, 2026-09-20: under `bun:sqlite`
- *      the `-wal` and the `-shm` SURVIVE a clean close — a store that nothing has
- *      open still has both, with the mtime of whatever last wrote. So a fresh
- *      `-shm` does NOT mean a connection is open; it means something wrote
- *      recently, and on this command line the likeliest something is the
- *      owner's own `doctor` a minute ago. Refusing on it made `start-fresh`
+ *   2. **A fresh `-shm`.** Whether the `-wal` and the `-shm` outlive the last
+ *      connection is the SQLite build's choice, not ours. Measured 2026-10-11,
+ *      with `close()` really closing (`store/db.ts`): bun on macOS (Apple's
+ *      SQLite) keeps both, the `-wal` emptied, with the mtime of the last close; bun on
+ *      Linux and node:sqlite anywhere delete them. (The 2026-09-20 measurement
+ *      here said they "survive a clean close" under bun:sqlite; that was macOS,
+ *      and on Linux it was also the close not really happening.) So a fresh
+ *      `-shm` does NOT mean a connection is open; it means something touched
+ *      the store recently, and on this command line the likeliest something is
+ *      the owner's own `doctor` a minute ago. Refusing on it made `start-fresh`
  *      refuse itself in testing. It is reported, in the sentence above the
- *      confirmation, and it is not a refusal. Matched by SUFFIX, never by
- *      database name, because the name changes with the floor.
+ *      confirmation, and it is not a refusal. Its absence proves nothing either.
+ *      Matched by SUFFIX, never by database name, because the name changes with
+ *      the floor.
  *
  * What neither can see is said out loud wherever they are printed: an idle open
  * session writes nothing at all.

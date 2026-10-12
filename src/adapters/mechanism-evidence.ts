@@ -183,16 +183,20 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
   {
     // PARTLY (2026-09-29, after the review of #284): similar memories meet
     // now — a dream merges near-copies into one, a dream flags two that
-    // disagree, and a memory settled `changed` fades once under the one that
-    // holds (physics §5.12). Not built: similar memories competing when they
-    // are recalled (retrieval-induced forgetting).
+    // disagree, and the slot detector reads a new memory as the newer state of
+    // an older one, which fades once the dream confirms it. Not built:
+    // similar memories competing when they are recalled (retrieval-induced
+    // forgetting). THE DETECTED DOORS ONLY (2026-10-11, Group 2b; review 10
+    // C6): what nobody declared. A declared change is Reconsolidation's, so no
+    // settle counts under both.
     id: "interference",
     family: "storage",
     build: "partly",
     proofs: [
       { key: "dreamMerged", event: "dream.changed", sum: "merge", stands: dreamStands, says: ["near-copy merged in a dream", "near-copies merged in a dream"] },
       { key: "flagged", event: "contradiction.flagged", says: ["pair that disagrees flagged", "pairs that disagree flagged"] },
-      { key: "faded", event: "contradiction.settled", where: (p) => p["how"] === "changed", stands: settleStands, says: ["earlier memory faded under a newer one", "earlier memories faded under newer ones"] },
+      { key: "proposed", event: "contradiction.proposed", says: ["memory read as the newer state of an older one", "memories read as the newer state of older ones"] },
+      { key: "faded", event: "contradiction.settled", where: (p) => detectedDoor(p), stands: settleStands, says: ["earlier memory faded under a newer one", "earlier memories faded under newer ones"] },
     ],
   },
   // ── Retrieval ──
@@ -326,7 +330,10 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
     build: "built",
     proofs: [
       { key: "pressure", event: "revision.pressure", says: ["correction weighed against an old memory", "corrections weighed against old memories"] },
-      { key: "settled", event: "contradiction.settled", stands: settleStands, says: ["contradiction settled", "contradictions settled"] },
+      // DECLARED settles only (2026-10-11, Group 2b): a write's `updates`, a
+      // settle, the core's pressure. A settle from before the door said its
+      // source reads as declared, as nearly all of them were.
+      { key: "settled", event: "contradiction.settled", where: (p) => !detectedDoor(p) && p["source"] !== "dream-merge", stands: settleStands, says: ["contradiction settled", "contradictions settled"] },
     ],
   },
   {
@@ -453,6 +460,15 @@ export function counted(proof: Proof, row: EventRow, store: ReadOnlyStore): numb
 }
 
 /** A settle's row counts while its pair is still settled — an undo takes it back. */
+/**
+ * A settle a DETECTED door made (2026-10-11, Group 2b; review 10 C6): a slot
+ * proposal confirmed. A dream merge's rows are counted once, as merges
+ * (`dreamMerged`), under neither settle proof.
+ */
+function detectedDoor(p: Payload): boolean {
+  return p["source"] === "slot";
+}
+
 function settleStands(store: ReadOnlyStore, row: EventRow): boolean {
   return row.ref === null || store.contradiction(row.ref)?.state === "settled";
 }

@@ -161,6 +161,13 @@ export type StoreErrorCode =
    */
   | "STORE_ROLLED_BACK"
   | "SQLITE_UNAVAILABLE"
+  /**
+   * A statement was run on a database handle after its `close()` (`db.ts`).
+   * Refused by the handle itself, so it never reaches a driver that would
+   * either crash on a finalized statement or prepare it on a closed handle.
+   * `detail` carries `{ path }`.
+   */
+  | "DB_CLOSED"
   | "LAYOUT_UNCLASSIFIED";
 
 export class StoreError extends Error {

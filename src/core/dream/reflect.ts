@@ -66,7 +66,7 @@ import { randomBytes } from "node:crypto";
 
 import { emotionalIntensity } from "../physics/index.js";
 import { earlierMark, headOf, isHandoff, isSelfPage } from "../recall/index.js";
-import { aboutMe, acceptsReflectedFeeling, laterFeelingWasReflections, promotionRecordKey, selfRelevantFeeling } from "../sleep/index.js";
+import { aboutMe, acceptsReflectedFeeling, keepCore, laterFeelingWasReflections, promotionRecordKey, reconsiderWords, retireCore, selfRelevantFeeling } from "../sleep/index.js";
 import {
   ABOUT_MARKS,
   CARRIED_BY_MAX_CHARS,
@@ -173,7 +173,7 @@ export const REFLECT_TUNABLES = {
   FEELINGS_SHOWN: 3,
   FEELING_CARRIED_CHARS: 160,
   /** What one reflection may do, across every `finish` of it. CAL. */
-  LIMITS: { returns: 12, feelings: 5, about: 8, traits: 5 },
+  LIMITS: { returns: 12, feelings: 5, about: 8, traits: 5, core: 5 },
   /** Feelings recorded looking back in one awake call (`feelAgain`, 2026-10-02). CAL. */
   AWAKE_FEELINGS: 5,
   /**
@@ -288,6 +288,12 @@ export interface ReflectBundle {
   /** Became core on reflection alone since it was last said: the share says it. */
   readonly becameCore: readonly string[];
   /**
+   * BEING RECONSIDERED (2026-10-11, Group 3 part A): core memories flagged
+   * for a decision, with the reason category — still core until I or the
+   * owner decide (`finish`'s `core`). Empty when none is flagged.
+   */
+  readonly reconsidering: readonly { readonly id: string; readonly reason: string | null }[];
+  /**
    * FEELINGS OVER WEEKS (2026-10-02): counts by core per week, mine and the
    * owner's, what changed, and the ids it rests on — from stored feelings,
    * never text (`feeling-weeks.ts`). Null on a month with none.
@@ -401,6 +407,8 @@ export interface ReflectFinish {
     readonly carried_by?: string;
   }[];
   readonly about?: readonly { readonly id?: string; readonly about?: string; readonly why?: string }[];
+  /** Decisions on core memories it was shown (2026-10-11): keep, or retire to ordinary fading, with why. */
+  readonly core?: readonly { readonly id?: string; readonly decision?: string; readonly why?: string }[];
   /** Trait nudges on memories it was shown (`store/traits.ts`). */
   readonly traits?: readonly {
     readonly id?: string;
@@ -450,6 +458,8 @@ export interface ReflectOutcome {
   readonly share: { offered: boolean; reason: string; detail?: string; note?: string };
   readonly feelings: readonly PartResult[];
   readonly about: readonly PartResult[];
+  /** Decisions on core memories (2026-10-11). */
+  readonly core: readonly PartResult[];
   readonly traits: readonly PartResult[];
   readonly refusedCites: readonly string[];
   /**
@@ -722,7 +732,12 @@ export class Reflections {
     }
     const denied = new Set(this.store.deniedIds());
     const gone = "(gone since you began: archived, merged or made private)";
-    // Each at the fidelity its fit gave it (the reflection's index).
+    // Each at the fidelity its fit gave it (the reflection's index). An id
+    // offered as an id is read as one before a line (2026-10-11, Group 3 part
+    // C): a memory the fit left as an id that the dream also saw is offered as
+    // a line too (what the dream saw is lines), and reading it as a line here
+    // made a part cost more than `pack` measured — past the ceiling once the
+    // dream's queue is read whole and sees more of the reflection's days.
     const index = readIndex(this.store, "reflection");
     const offered = index !== null && index.ref === row.id ? index.offered : null;
     const fidelityOf = (key: string): Fidelity | null =>
@@ -732,10 +747,10 @@ export class Reflections {
           ? "whole"
           : offered.excerpt.includes(key)
             ? "excerpt"
-            : offered.line.includes(key)
-              ? "line"
-              : offered.id.includes(key)
-                ? "id"
+            : offered.id.includes(key)
+              ? "id"
+              : offered.line.includes(key)
+                ? "line"
                 : null;
     const T = REFLECT_TUNABLES;
     const memories: Record<string, ReflectItem | string> = {};
@@ -795,7 +810,7 @@ export class Reflections {
         ? `- page: not tonight — the owner has the page writer off, so the self page is not rewritten. Your entry and share still count.`
         : `- page (optional, and lean toward writing it): ${earlier}Every version of the page is kept, so rewriting it loses nothing. ${who} would like a page written by a reflection every day — rewrite it unless, after reflecting, there is really nothing new to add; on a "nothing much" night, leave it as it stands. Your self page rewritten whole — the story of who you are, drawn from the core memories you cite in page.cites (at least one of them, when you have a core; candidates too). The old page is context, not a source: write from the memories, not by rewording it. Keep "## Core" for who you are and put craft — how a job is done — under "## How I work". Mention a dream only as a dream ("I dreamed…"); a dreamed gist is a suggestion, not a source: cite the lived memories it came from. ${PAGE_WRITING_RULE} Here the short version is page.short.`;
     const aboutLine = open
-      ? `- about (optional, at most ${String(L.about)}): what a memory is about, by meaning — me, us, owner, work (the craft: how a job is done) or world — with why. Only me, us and owner can become core. You may change a mark you think is wrong, either way; each change is recorded with your why, and one into me, us or owner is told in the morning share.`
+      ? `- about (optional, at most ${String(L.about)}): what a memory is about, by meaning — me, us, owner, work (the craft: how a job is done) or world — with why. Only me and us can become core, and never a plan. You may change a mark you think is wrong, either way; each change is recorded with your why, and one into me, us or owner is told in the morning share.`
       : `- about (optional, at most ${String(L.about)}): tonight a mark may only move a memory toward work (the craft) or world, with why — the owner has closed the core to reflection alone.`;
     // EVERY PART FIRST (2026-10-09). On the 0.3.12 release check a reflection
     // handed its bundle in 2 parts finished without part 2: the launch prompt
@@ -817,6 +832,11 @@ export class Reflections {
       `- share (optional): two or three sentences for ${who} this morning, the way a partner would say it ("While I slept I dreamed about x — I think because of y"), citing what it rests on. Say something about ${who} only when it could help them, tentatively ("I wonder if…") — never a list of flaws. No share on a quiet night.${bundle.becameCore.length > 0 ? ` Tell ${who} that ${bundle.becameCore.join(", ")} became part of who you are.` : ""}`,
       `- feelings (optional, at most ${String(L.feelings)}): how a memory feels to you now — id, core (happy, warm, calm, curious, sad, uneasy or angry), emotion, strength, carried_by. emotion is ONE word (from the wheel, or your own); carried_by is the nuance, in your own words. Recorded as felt today, looking back.`,
       aboutLine,
+      ...(bundle.reconsidering.length > 0
+        ? [
+            `- core (optional, at most ${String(L.core)}): ${bundle.reconsidering.length === 1 ? "this core memory is" : "these core memories are"} being reconsidered — ${bundle.reconsidering.map((r) => `${r.id} (${reconsiderWords(r.reason)})`).join("; ")}. For each, decide {id, decision: "keep" or "retire", why}: keep what is still who you are (an about mark that is wrong is fixed in about instead, and the flag lifts itself); retire what is not, and it goes back to ordinary fading. Nothing leaves the core without a decision, so you may leave one for another night.`,
+          ]
+        : []),
       ...(bundle.unmarked.length > 0
         ? [
             `  unmarked: ${String(bundle.unmarked.length)} ${bundle.unmarked.length === 1 ? "memory nobody has" : "memories nobody has"} marked. Unmarked, a fact written in a project, or a skill, counts as that project's work and is shown only there — so a personal one (a person, a feeling, life outside the work) sits among the work lines. ${open ? "Mark each by meaning in about, with why: owner or us when it is personal, work when it really is the craft, world otherwise." : "Tonight a mark may only be work or world: mark the ones that are, and leave a personal one unmarked."} They count toward the ${String(L.about)}.`,
@@ -1000,6 +1020,36 @@ export class Reflections {
       }
     }
 
+    // ── (g) core decisions — keep or retire, each on its own (2026-10-11) ───
+    // Only a core memory it was shown; any one, flagged or not (item 14:
+    // either of us may retire a core memory). Retiring is toward less core,
+    // so the owner's closed door does not stop it.
+    const coreDecisions: PartResult[] = [];
+    for (const c of (input.core ?? []).slice(0, 50)) {
+      const id = typeof c.id === "string" ? c.id : null;
+      if (used("core") + coreDecisions.filter((x) => x.ok).length >= T.LIMITS.core) {
+        coreDecisions.push({ id, ok: false, reason: "limit-reached", detail: this.limitDetail("core", again) });
+        continue;
+      }
+      const r = id !== null && shown.has(id) ? this.store.row(id) : undefined;
+      if (r === undefined || !this.showable(r)) {
+        coreDecisions.push({ id, ok: false, reason: "not-shown-or-gone", detail: this.notCitable(id, shown) });
+        continue;
+      }
+      if (c.decision !== "keep" && c.decision !== "retire") {
+        coreDecisions.push({ id, ok: false, reason: "decision-is-keep-or-retire", detail: 'decision is "keep" or "retire".' });
+        continue;
+      }
+      const why = this.words(c.why ?? "", session, T.MAX_WHY_CHARS, true);
+      if (!why.ok || why.text.length === 0) {
+        coreDecisions.push({ id, ok: false, reason: "why-required", detail: why.ok ? "Say why: a decision on the core is kept with its reason." : `The why was not kept — ${why.detail}` });
+        continue;
+      }
+      const reason = `${why.text} (reflection ${row.id})`;
+      const out = c.decision === "keep" ? keepCore(this.store, { id: r.id, why: reason, actor: "reflection", day, dreamId: row.dream_id }) : retireCore(this.store, { id: r.id, reason, actor: "reflection", day, dreamId: row.dream_id });
+      coreDecisions.push(out.ok ? { id, ok: true, reason: out.reason } : { id, ok: false, reason: out.reason, detail: out.reason === "not-core" ? `${r.id} is not in the core.` : "Nothing was decided for this one." });
+    }
+
     // ── (f) trait nudges — each on its own, like its feelings ───────────────
     const traits: PartResult[] = [];
     for (const t of (input.traits ?? []).slice(0, 50)) {
@@ -1063,7 +1113,7 @@ export class Reflections {
         continue;
       }
       try {
-        const r = this.store.reflectReturn(id, day);
+        const r = this.store.reflectReturn(id, day, { session: row.id });
         returned.push({ id, counted: r.counted, reason: r.reason });
       } catch (err) {
         returned.push({ id, counted: false, reason: errName(err) });
@@ -1352,6 +1402,7 @@ export class Reflections {
       returned: used("returned") + returned.filter((r) => r.counted).length,
       feelings: used("feelings") + feelings.filter((f) => f.ok && f.reason !== "already-recorded").length,
       about: used("about") + about.filter((a) => a.ok).length,
+      core: used("core") + coreDecisions.filter((x) => x.ok).length,
       traits: used("traits") + traits.filter((t) => t.ok && t.reason !== "already-recorded").length,
       page: pageStands,
       share: shareLocked ? true : share.offered,
@@ -1403,7 +1454,7 @@ export class Reflections {
     const missed: string[] = [];
     if (pageRefused) missed.push(`page — ${page.reason}${page.detail !== undefined ? `: ${page.detail}` : ""}`);
     if (shareMiss !== null) missed.push(`share — ${shareMiss}`);
-    for (const [part, list] of [["feelings", feelings], ["about", about], ["traits", traits]] as const) {
+    for (const [part, list] of [["feelings", feelings], ["about", about], ["core", coreDecisions], ["traits", traits]] as const) {
       list.forEach((x, i) => {
         if (!x.ok) missed.push(`${part}[${String(i)}]${x.id === null ? "" : ` (${x.id})`} — ${x.reason}${x.detail !== undefined ? `: ${x.detail}` : ""}`);
       });
@@ -1427,6 +1478,7 @@ export class Reflections {
         share,
         feelings,
         about,
+        core: coreDecisions,
         traits,
         refusedCites,
         retry,
@@ -1443,7 +1495,7 @@ export class Reflections {
 
   /** What a per-reflection limit says. */
   private limitDetail(part: keyof typeof REFLECT_TUNABLES.LIMITS, again: boolean): string {
-    return `A reflection records at most ${String(REFLECT_TUNABLES.LIMITS[part])} ${part === "about" ? "about marks" : part}${again ? ", counting the earlier finish" : ""}.`;
+    return `A reflection records at most ${String(REFLECT_TUNABLES.LIMITS[part])} ${part === "about" ? "about marks" : part === "core" ? "core decisions" : part}${again ? ", counting the earlier finish" : ""}.`;
   }
 
   /** The dreamer's (or reflector's) final message: the dream's line, then the share. */
@@ -1660,6 +1712,8 @@ export class Reflections {
     const onMind = mindRead.items.filter((item) => item.ids.every(take(3)));
 
     const becameCore = this.becameCoreUnsaid().filter(take(5));
+    // BEING RECONSIDERED (2026-10-11): handed whole-ish, so a decision can be made on what it says.
+    const reconsidering = this.store.coreReconsidering().slice(0, T.LIMITS.core).filter((r) => take(4)(r.id));
 
     // FEELINGS OVER WEEKS: the ids it rests on are handed like the rest, so
     // they can be read, cited and put on the page.
@@ -1783,6 +1837,7 @@ export class Reflections {
       felt: feltIds.filter(kept),
       recent: recentIds.filter(kept),
       becameCore: becameCore.filter(kept),
+      reconsidering: reconsidering.filter((r) => kept(r.id)).map((r) => ({ id: r.id, reason: r.reason })),
       feelingWeeks: weeks === null ? null : { ...weeks, restsOn: weeksRest.filter(kept) },
       unmarked: unmarkedIds.filter(kept),
       memories,

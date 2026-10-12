@@ -12,7 +12,9 @@
  *   **§2 G11 — injected context is kept in capture and excluded from pacing.**
  *   Host-injected material is user-role but is not the user speaking, so it is
  *   tagged `injected` rather than discarded: `enters()` keeps it, `substanceOf`
- *   does not count it.
+ *   does not count it. EXCEPT the host's own lines (2026-10-12, `hostRecord`):
+ *   a compaction summary and every `isMeta` line but a peer's message enter
+ *   no turn at all.
  *
  * And three more this host's shapes force:
  *
@@ -88,14 +90,10 @@ import {
   existsSync,
   fstatSync,
   openSync,
-  readdirSync,
   readFileSync,
   readSync,
-  realpathSync,
   statSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 
 import { carriesDreamMark } from "../../core/dream/mark.js";
 import type { Turn, TurnSource } from "../../core/remember/index.js";
@@ -270,6 +268,21 @@ function hostFramed(text: string): boolean {
 }
 
 /**
+ * A TURN NO PERSON STARTED, read from its prompt text alone (2026-10-12): the
+ * reading `pieceOf` gives a user-role block with no metadata — a host frame
+ * at its start (a subagent's hand-back, a `<task-notification>`, "Another
+ * Claude session sent a message:"), or nothing but peer messages. The prompt
+ * hook has the text and no metadata, so this is its one signal. A person who
+ * pastes such a frame first is read as the host and loses one turn: what
+ * waits for a person is said at their next prompt.
+ */
+export function startedByHost(text: string): boolean {
+  if (hostFramed(text)) return true;
+  const attributed = attributePeers(text);
+  return attributed.peers > 0 && !attributed.ownerText;
+}
+
+/**
  * WHO WROTE A LINE, AS THE TRANSCRIPT ENTRY ITSELF SAYS (2026-09-23, B1).
  *
  * Measured on Claude Code 2.1.28x, across every transcript on the owner's
@@ -294,6 +307,28 @@ function hostFramed(text: string): boolean {
  * `!`-command's output), and there the text markers decide, as they always did.
  */
 export type EntryAuthor = "human" | "host" | "unknown";
+
+/**
+ * A LINE THE HOST WROTE FOR ITSELF, NOT KEPT (2026-10-12): the compaction
+ * summary (`isCompactSummary`) and every other `isMeta` user line — hook
+ * feedback, `/context` output, image captions, skill bodies, the
+ * local-command caveat, the idle notice. They were kept as `injected` until
+ * then. A compaction summary is a conversation summary in the plain sense of
+ * the plugin directory's policy, and it repeats turns each Stop already
+ * captured; the rest is the host's own bookkeeping, not the conversation. Both
+ * now stay in the transcript: their text enters no turn. ONE `isMeta` line is
+ * still kept — a message another session SENT here (`origin.kind: "peer"`),
+ * which is addressed to this conversation like a task notification (no
+ * `isMeta`, kept) and is labelled by `attributePeers`. Refusals (`foreign`,
+ * `ritual`, `dream`) are still read from these lines and counted.
+ */
+export function hostRecord(entry: Record<string, unknown>): boolean {
+  if (entry["isCompactSummary"] === true) return true;
+  if (entry["isMeta"] !== true) return false;
+  const origin = entry["origin"];
+  const kind = origin !== null && typeof origin === "object" && !Array.isArray(origin) ? (origin as Record<string, unknown>)["kind"] : undefined;
+  return kind !== "peer";
+}
 
 export function entryAuthor(entry: Record<string, unknown>, role: "user" | "assistant"): EntryAuthor {
   if (role === "assistant") {
@@ -481,7 +516,10 @@ export function parseTranscript(raw: string): TranscriptRead {
       const said = message?.["model"];
       if (typeof said === "string" && said.length > 0) model = said;
     }
-    const pieces = blocksOf(content, role, author);
+    // The host's own lines keep only what is refused (and so counted); their
+    // text enters no turn (`hostRecord`).
+    const all = blocksOf(content, role, author);
+    const pieces = role === "user" && hostRecord(entry) ? all.filter((p) => p.source !== "injected") : all;
     // A twin, if the host ever writes one, is the person's NEXT sent entry: the
     // same words, marked queued. Anything else the person sends closes the
     // window. Assistant lines do not: the turn goes on after the attachment.
@@ -1035,9 +1073,10 @@ export interface ToolSpills {
 export const COUNTERPARTS_TOOL = /^mcp__counterparts__/;
 
 /**
- * **CAL.** How much of a transcript the pass reads. A night's run is a few
- * bundles of under 40,000 characters each, each recorded more than once — a
- * megabyte or two. 64 MiB is far past any night and still a bound.
+ * **CAL.** How much of a child's output the pass reads (`child.ts`'s
+ * `OUTPUT_MAX_BYTES` is the same number). A night's run is a few bundles of
+ * under 40,000 characters each, each said more than once — a megabyte or two.
+ * 64 MiB is far past any night and still a bound.
  */
 export const SPILL_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -1161,72 +1200,8 @@ export function parseToolSpills(raw: string, opts: { readonly tool?: RegExp } = 
   return { results: answered.size, spills, whole, corrupt };
 }
 
-/** Read one transcript and judge it. `absent` and `unreadable` are said apart from a clean read. Never throws. */
-export function readToolSpills(path: string | null | undefined, opts: { readonly maxBytes?: number; readonly tool?: RegExp } = {}): ToolSpills {
-  const none = { results: 0, spills: [], corrupt: 0, short: false };
-  if (path === null || path === undefined || path.trim().length === 0 || !existsSync(path)) return { reason: "absent", ...none };
-  const maxBytes = opts.maxBytes ?? SPILL_MAX_BYTES;
-  let size: number;
-  try {
-    size = statSync(path).size;
-  } catch {
-    return { reason: "unreadable", ...none };
-  }
-  const short = size > maxBytes;
-  const head = readHead(path, Math.max(1, Math.min(maxBytes, size)));
-  if (head === null) return { reason: "unreadable", ...none };
-  // A short read is cut mid-line by construction: its last line is dropped.
-  const text = short ? head.text.slice(0, Math.max(0, head.text.lastIndexOf("\n"))) : head.text;
-  return { reason: "read", ...parseToolSpills(text, opts.tool === undefined ? {} : { tool: opts.tool }), short };
-}
-
-// ── where the host keeps a session's transcript ─────────────────────────────
-
-/** The host's own directory: `CLAUDE_CONFIG_DIR` when set, else `~/.claude`. */
-export function hostConfigDir(env: Readonly<Record<string, string | undefined>>): string {
-  const moved = (env["CLAUDE_CONFIG_DIR"] ?? "").trim();
-  return moved.length > 0 ? moved : join(homedir(), ".claude");
-}
-
-/** **CAL.** Project directories the lookup asks before it gives up. */
-export const TRANSCRIPT_DIRS_MAX = 5_000;
-
-/**
- * WHERE THE HOST WROTE A SESSION WHOSE ID WE CHOSE (`claude --session-id`):
- * `<config>/projects/<its directory, spelled as a name>/<id>.jsonl`. The
- * host's spelling turns every character but a letter or a digit into "-" —
- * read from 2.1.295, which also shortens a long one with a hash of its own and
- * may start from a git worktree's root — so that spelling is tried first (the
- * directory as given, then with its links resolved), and failing it every
- * project directory is asked for the file by name. The id is a fresh UUID, so
- * only one file can answer. Null when none does. Never throws.
- */
-export function hostTranscriptPath(input: { readonly configDir: string; readonly id: string; readonly cwd?: string }): string | null {
-  const projects = join(input.configDir, "projects");
-  const file = `${input.id}.jsonl`;
-  const spell = (dir: string): string => dir.replace(/[^a-zA-Z0-9]/g, "-");
-  const guesses: string[] = [];
-  if (input.cwd !== undefined && input.cwd.length > 0) {
-    guesses.push(spell(input.cwd));
-    try {
-      guesses.push(spell(realpathSync(input.cwd)));
-    } catch {
-      /* a directory gone since: the guess as given stands */
-    }
-  }
-  for (const g of new Set(guesses)) {
-    const p = join(projects, g, file);
-    if (existsSync(p)) return p;
-  }
-  let dirs: string[];
-  try {
-    dirs = readdirSync(projects);
-  } catch {
-    return null;
-  }
-  for (const d of dirs.slice(0, TRANSCRIPT_DIRS_MAX)) {
-    const p = join(projects, d, file);
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
+// The nightly run once found its child's transcript under the host's
+// `projects/` directory and read it here (`readToolSpills`,
+// `hostTranscriptPath`, 2026-10-09). Removed 2026-10-12: the run reads the
+// child's own `stream-json` output instead (`night-run.ts#readNightSpills`),
+// so nothing under `~/.claude/projects` is listed or opened by this package.

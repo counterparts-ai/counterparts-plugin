@@ -25,6 +25,18 @@ export const TUNABLES = {
   CORE_MAX_PER_SLEEP: 3,
 
   /**
+   * THE CORE'S TURNOVER (2026-10-11, Group 3 part A; item 14, which keeps
+   * review 08 C4's horizon and drops its automatic demotion): a core memory
+   * with no recurrence day — itself or its slot, used awake, cited by a
+   * reflection, re-encoded — for this many lived days (counted from its last
+   * recurrence, its promotion or its last reaffirmation, whichever is latest)
+   * is FLAGGED "being reconsidered" at the next consolidation. It stays in the
+   * core, still decay-exempt; only a decision demotes it — mine, awake or in
+   * a reflection, or the owner's (`demoteCore`). CAL.
+   */
+  CORE_QUIET_DAYS: 60,
+
+  /**
    * Below this change in cached strength, the row is left alone — CALM BY
    * DEFAULT (§3, v1 §11 G8). Exponential decay moves a floor memory by ~1e-9 a
    * day; without a quantum every quiet day would rewrite the whole cache and
@@ -40,6 +52,13 @@ export const TUNABLES = {
     prune: 1_000,
     /** Entity cards examined per fade sweep. Sized so a personal store's cards all fit in one pass. */
     fade: 5_000,
+    /**
+     * Cards born a night at most (2026-10-11, Group 3 part D). CAL, chosen not
+     * measured: a copy of the owner's store had ~100 names over the bar on the
+     * first night, and ten a night, most-named first, gives the people and
+     * projects said most their cards first; the rest wait, counted.
+     */
+    births: 10,
     dedup: 1_000,
     versions: 1,
     briefing: 1,
@@ -66,6 +85,8 @@ export const TUNABLES = {
     /** Every third lived day: the fade floors are months long, so a card that
      *  fades a day or two late costs nothing, and the sweep reads every card. */
     fade: 3,
+    /** Every lived day: the tally is one read of the live memories. */
+    births: 1,
     dedup: 1,
     versions: 1,
     briefing: 1,

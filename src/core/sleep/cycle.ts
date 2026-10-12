@@ -37,6 +37,8 @@ import { runDecay } from "./decay.js";
 import { runDedup } from "./dedup.js";
 import { runFade } from "./fade.js";
 import type { FadeFn } from "./fade.js";
+import { runBirths } from "./births.js";
+import type { BirthsFn } from "./births.js";
 import type { DedupCandidateSource } from "./dedup.js";
 import { runLogSweep } from "./log.js";
 import { advanceMarker, budgetFor, cadenceFor, markerDue, readMarker } from "./markers.js";
@@ -84,6 +86,11 @@ export interface SleepOptions {
    * stay where they are: the floor prune does not take them either.
    */
   fade?: FadeFn;
+  /**
+   * `schemas/`' card births from the name tally, injected like `fade`. Absent ⇒
+   * the births phase reports `no-births-fn`, and no card is born.
+   */
+  births?: BirthsFn;
   /** Injected ranking cache. Absent ⇒ the box-3 SQLite one, opened lazily. */
   strengthCache?: StrengthCache;
   /** Extra dedup candidates (embeddings). Isolated: a throw degrades to lexical. */
@@ -307,6 +314,14 @@ export function runCycle(opts: SleepOptions): CycleReport {
         faded.push(...r.faded);
       },
       () => (opts.fade === undefined ? "no-fade-fn" : null),
+    );
+
+    // ── phase 4c: the card births (`schemas/`' name tally) ────────────────
+    runPhase(
+      "births",
+      (ctx) => runBirths(ctx, opts.births),
+      () => {},
+      () => (opts.births === undefined ? "no-births-fn" : null),
     );
 
     // ── phase 5: dedup ────────────────────────────────────────────────────

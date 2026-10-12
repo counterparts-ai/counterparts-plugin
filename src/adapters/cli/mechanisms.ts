@@ -172,15 +172,17 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
     read: (v) => {
       const merged = part(v, "dreamMerged");
       const flagged = part(v, "flagged");
+      const proposed = part(v, "proposed");
       const faded = part(v, "faded");
       const said = [
         ...(merged > 0 ? [`${plural(merged, "near-copy", "near-copies")} merged in a dream`] : []),
         ...(flagged > 0 ? [`${plural(flagged, "pair")} that disagree flagged`] : []),
+        ...(proposed > 0 ? [`${plural(proposed, "memory", "memories")} read as the newer state of an older one`] : []),
         ...(faded > 0 ? [`${plural(faded, "earlier memory", "earlier memories")} faded under a newer one`] : []),
       ];
       return v.fired && said.length > 0
         ? { light: LIGHT.working, says: `partly built: ${said.join("; ")}` }
-        : { light: LIGHT.idle, says: "partly built, not firing this week: similar memories meet in a dream and when one is settled changed; they do not compete at recall yet" };
+        : { light: LIGHT.idle, says: "partly built, not firing this week: similar memories meet in a dream and when a new one reads as the newer state of an older one; they do not compete at recall yet" };
     },
   },
   // ── Retrieval ──

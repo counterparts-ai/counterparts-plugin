@@ -40,28 +40,24 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import type { Band, Kind, MemoryPhysics, MemorySource, Salience } from "../types.js";
+import type { Band, Kind, MemoryPhysics, Salience } from "../types.js";
 import { isModelId } from "../types.js";
 import {
-  calendarOverlaps,
-  compareCalendarDates,
   daysBetween,
   isCalendarDate,
   isDay,
-  isRecurrence,
   isoInstant,
   localDate,
-  parseCalendarDate,
   resolveZone,
   utcDate,
 } from "../time.js";
 import type { Recurrence } from "../time.js";
-import { LATER_FEELING_SOURCES, checkFeelings } from "./feelings.js";
+import { checkFeelings } from "./feelings.js";
 import type { AddFeelingsResult, FeelingInput, FeelingRow, FeelingSource } from "./feelings.js";
 import { checkTraitsRepaired } from "./traits.js";
 import type { TraitRepair } from "./traits.js";
 import type { TraitInput, TraitRead, TraitRow, TraitSource } from "./traits.js";
-import { TUNABLES as PHYSICS_TUNABLES, USE_TIER_WEIGHT, creditReturn, creditUse } from "../physics/index.js";
+import { USE_TIER_WEIGHT, creditReturn, creditUse } from "../physics/index.js";
 import type { CreditOutcome, ReturnOutcome, UseTier } from "../physics/index.js";
 import type { Db, Statement, WalFold } from "./db.js";
 import { foldWal, isLocked, wroteOn } from "./db.js";
@@ -72,13 +68,10 @@ import {
   CLAIMS_ERA_CUTOFF_KEY,
   CLAIMS_ERA_RECORDED_KEY,
   DEFAULT_RETENTION_DAYS,
-  ERA_WRITTEN_AT_META,
   RECURRING_META,
   SCHEMA_VERSION,
-  eraCarriedFrom,
   olderFirst,
   openOperational,
-  reachExempt,
   rowToPhysics,
   rowTombstoned,
 } from "./operational.js";
@@ -99,7 +92,6 @@ import type {
   RemovalRow,
   ReturnRow,
   SettleRow,
-  TombstoneRow,
   VersionRow,
   WakeDisplayRow,
 } from "./operational.js";
@@ -128,9 +120,6 @@ import type { ProseDoc, ProseType } from "./prose.js";
 import {
   DEFAULT_LENGTH_NORM,
   NEIGHBOURS_KEPT,
-  allVectors,
-  rankAgainst,
-  readNeighbours,
   writeNeighbours,
   decodeVector,
   deindexDoc,
@@ -151,6 +140,115 @@ import {
   setEmbedding,
 } from "./cache.js";
 import type { EmbedderIdentity, EmbedderVerdict, Hit, LengthNorm, VectorRefusal } from "./cache.js";
+import {
+  occurredOnOf,
+  saidByOf,
+  statusOf,
+  confidentialByMeta,
+  carryAboutMark,
+  carryWriteFacts,
+  ABOUT_MARKS,
+  aboutMarkOf,
+} from "./marks.js";
+import type { SaidBy, MemoryStatus, AboutMark, AboutSetter } from "./marks.js";
+import { memoryWhere } from "./shapes.js";
+import type {
+  Embedder,
+  StoreEvent,
+  StoreOptions,
+  SchemaVersions,
+  PutInput,
+  EdgeInput,
+  ProspectiveInput,
+  GateRecordInput,
+  PruneReport,
+  EventInput,
+  EventPruneReport,
+  RankingRow,
+  RemovalNote,
+  RebuildOptions,
+  RebuildReport,
+  MemoryFilter,
+  SubjectLinkVia,
+  StoredMemory,
+  DatedMemory,
+  RecurringMemory,
+  RecallRow,
+  Tombstone,
+  DreamShownRow,
+  EventLogFilter,
+  EventCount,
+  EventLogCensus,
+} from "./shapes.js";
+import {
+  indexTextOf,
+  EMBED_FAILED_PREFIX,
+  noVector,
+  indexText,
+  EMBED_SKIP_AFTER,
+  notForEmbedding,
+} from "./index-text.js";
+import * as memoryReads from "./reads-memories.js";
+import * as markReads from "./reads-marks.js";
+import * as historyReads from "./reads-history.js";
+
+// What moved to marks.ts, shapes.ts and index-text.ts (2026-10-11), re-exported so every import of the store still resolves.
+export {
+  SAID_BY,
+  STATUSES,
+  saidByOf,
+  statusOf,
+  occurredOnOf,
+  confidentialByMeta,
+  ABOUT_MARKS,
+  CORE_ABOUT_MARKS,
+  IDENTITY_ABOUT_MARKS,
+  IDENTITY_KINDS,
+  PLAN_STATUSES,
+  ABOUT_SETTERS,
+  aboutMarkOf,
+  inheritFrom,
+  foldMarkFrom,
+} from "./marks.js";
+export type {
+  SaidBy,
+  MemoryStatus,
+  WriteFacts,
+  AboutMark,
+  AboutSetter,
+  InheritSource,
+  Inherited,
+} from "./marks.js";
+export { recurrenceOfRow } from "./shapes.js";
+export type {
+  StoreEvent,
+  Embedder,
+  StoreOptions,
+  PutInput,
+  SubjectLinkVia,
+  StoredMemory,
+  DatedMemory,
+  RecurringMemory,
+  RecallRow,
+  PruneReport,
+  EventPruneReport,
+  DreamShownRow,
+  EventLogFilter,
+  EventCount,
+  EventLogCensus,
+  RebuildReport,
+  RebuildOptions,
+  EdgeInput,
+  ProspectiveInput,
+  GateRecordInput,
+  EventInput,
+  SchemaVersions,
+  RankingRow,
+  Tombstone,
+  RemovalNote,
+  MemoryFilter,
+} from "./shapes.js";
+export { EMBED_FAILED_PREFIX, EMBED_SKIP_AFTER, indexTextOf, noVector } from "./index-text.js";
 
 export * from "./errors.js";
 export * from "../observer.js";
@@ -158,11 +256,6 @@ export * from "./paths.js";
 export * from "./prose.js";
 export * from "./render.js";
 export * from "./feelings.js";
-
-/** `LATER_FEELING_SOURCES` as a SQL list — the sources `feeling_peak_lived` leaves out. Constants only, never input. */
-const LATER_SQL = LATER_FEELING_SOURCES.map((x) => `'${x}'`).join(", ");
-/** The sources of a feeling recorded after the memory was written — what `feeling_peak` reads as how it sits now (2026-10-11). Constants only. */
-const RECORDED_LATER_SQL = ["dream", ...LATER_FEELING_SOURCES].map((x) => `'${x}'`).join(", ");
 export * from "./traits.js";
 export type { Db, Statement, WalFold } from "./db.js";
 export type {
@@ -269,329 +362,6 @@ export type {
   OwnerRemovalRequest,
 } from "./owner-op-seam.js";
 
-/** Telemetry: ids, hashes, counts, kinds, tiers. Never body text (§5 G10). */
-export interface StoreEvent {
-  at: number;
-  name: string;
-  ref?: string;
-  data?: Record<string, string | number | boolean | null>;
-}
-
-/**
- * Text in, vector out — or NULL when this embedder has no vector for this text.
- *
- * The null arm is load-bearing and was added when the first real embedder was
- * built (`adapters/claude-code/embed-client.ts`). Every production embedder is a
- * network client behind a cache, and `put`/`rebuildCache` are synchronous: a
- * lookup that misses has nothing to return. The two dishonest alternatives are
- * both worse — throwing fails a write over a rebuildable cache, and returning
- * `[]` writes a dim-0 row that `cosine` reads as 0.0 similarity, which is a lie
- * with a number on it. A miss is counted (`unrecomputed`), exactly as a
- * missing embedder already was, and `tools/replay/INTERFACE-GAPS §4` asks for
- * the same shape ("a cache miss must be a counted `not-exercised`").
- */
-export interface Embedder {
-  (text: string): number[] | null;
-  /**
-   * WHICH vectors this embedder produces (cache v5, roadmap C1). Optional, so a
-   * plain function is still an embedder — a test stub, a replay harness — and
-   * such an embedder is never checked against the cache's tag. A production
-   * embedder carries one, and `Store.open` reconciles it with
-   * `cache_meta.embedder` once, at open (`cache.ts#reconcileEmbedder`).
-   */
-  readonly identity?: EmbedderIdentity;
-}
-
-export interface StoreOptions extends Stance {
-  /** Defaults to `dataDir()` — resolved at call time, so tests redirect via env. */
-  dir?: string;
-  /** Retention for superseded-version rows, in LIVED days. TUNABLE; default 90. */
-  retentionDays?: number;
-  /** Optional; without it, embeddings are declared un-recomputed at rebuild. */
-  embed?: Embedder;
-  /**
-   * THE PROVENANCE CLOCK (LAUNCH-STATUS §I7, `NOTES.md` 2026-09-05).
-   *
-   * The session's wall clock, injected. Everything this store records about
-   * WHEN IN THE WORLD something happened — `learnedOn`, event `at`, a version's
-   * `archived_at`, a removal record's `at` — reads THIS and never the ambient
-   * `Date.now`. The PHYSICS clock is a different clock and stays where it is:
-   * `livedDay()` counts days the owner actually lived, advanced by
-   * `advanceClock()`, and no wall-clock instant moves it.
-   *
-   * Defaults to `Date.now`, so a host that injects nothing behaves exactly as
-   * before. A seeder, a replay harness and a migration pass one.
-   */
-  now?: () => number;
-  /**
-   * The zone a moment is read in when this store names a person's day —
-   * `learned_on`, `today()`, the day the store began (docs/time.md, 2026-09-25).
-   * An IANA name from the host's config (`timeZone`); absent or unknown, the
-   * machine's CURRENT zone, resolved at every call so a laptop that moves shows
-   * where it is now (`time.ts#resolveZone`).
-   */
-  timeZone?: string;
-  onEvent?: (event: StoreEvent) => void;
-  /**
-   * Where the copy taken before a schema migration goes. Absent ⇒ beside the
-   * store (`<base>/snapshots`); a store outside that layout with none named
-   * refuses to migrate (`MIGRATION_SNAPSHOT_FAILED`).
-   */
-  snapshotsDir?: string;
-  /**
-   * Open past a rollback's hold (`rollback-hold.ts`) and, if the store is
-   * behind, upgrade it from a NEW pre-migration copy. Only
-   * `counterparts rollback --upgrade-again` sets it; it clears the hold after.
-   */
-  releaseRollbackHold?: boolean;
-}
-
-export interface PutInput {
-  /** Optional; generated when absent. Never reused — a taken id is a hard error. */
-  id?: string;
-  type: ProseType;
-  kind: Kind;
-  body: string;
-  title?: string;
-  happenedOn?: string;
-  learnedOn?: string;
-  /**
-   * The calendar date this memory is ABOUT, as the person said it — `2026-10-15`,
-   * `2026-10`, `2026`, or `2026-10-20..2026-10-31` (`time.ts#parseCalendarDate`).
-   * A reminder's date. Refused by name when it is not one (`EVENT_DATE_INVALID`):
-   * a date that cannot be read is a reminder that will never come up.
-   */
-  eventDate?: string;
-  /**
-   * The model id that wrote these words, as the host reported it (schema v7).
-   * Screened with `isModelId`; anything else — or absent — writes NULL, which
-   * reads "not a named model" (the sweep, the owner, an unknown host).
-   */
-  model?: string;
-  meta?: Record<string, unknown>;
-  band?: Band;
-  salience?: Partial<Salience>;
-  physics?: Partial<Omit<MemoryPhysics, "kind" | "salience">>;
-  /** Who is minting (engine-set upstream; see `types.MemorySource`). Absent
-   *  writes NULL — "unrecorded" — never a defaulted claim of authorship. */
-  source?: MemorySource;
-  /** Light provenance: ids only, never text (F9, owner ruling 2026-08-29).
-   *  Mirrored into the prose doc's meta so the document is self-describing.
-   *
-   *  `spanHash` is the buffer's own hash of the span this memory WAS — a jot's
-   *  own words — and it is here so removal can chase that line by identity
-   *  rather than by re-deriving it from the body (cli/INTERFACE-GAPS §9). It
-   *  lives in the prose meta and NOWHERE ELSE on purpose: a hash of low-entropy
-   *  content is brute-forceable (§16 G9), and the prose document is the one
-   *  carrier a removal destroys, so the pointer dies with the thing it points
-   *  at instead of outliving it in a box-2 column. */
-  origin?: { session?: string; scope?: string; ref?: string; spanHash?: string };
-  /**
-   * v9: what the memory is about (`ABOUT_MARKS`), and who said so. Absent
-   * writes NULL — unmarked. A mark set later goes through `setAbout`, which
-   * also records it in the core's history; one given at birth does not.
-   */
-  about?: AboutMark;
-  aboutBy?: AboutSetter;
-  /**
-   * v12: THE WRITER'S THREE FIELDS (`WriteFacts`) — when the thing happened
-   * (a day, month, year or range, `time.ts#parseCalendarDate`), who said it,
-   * and what kind of thing it is. Absent writes NULL. A belt, not the check:
-   * an unreadable date or an unknown word writes NULL here rather than
-   * refusing the memory (the doors drop them with a note before this).
-   */
-  occurredOn?: string;
-  saidBy?: SaidBy;
-  status?: MemoryStatus;
-}
-
-/**
- * v12 (2026-10-03): WHO SAID IT — the owner, me (`self`), or my inference
- * (`inferred`). Not which channel wrote the row (`source` says that): a note
- * I write can record something the owner said.
- */
-export const SAID_BY = ["owner", "self", "inferred"] as const;
-export type SaidBy = (typeof SAID_BY)[number];
-/**
- * v12 (2026-10-03): WHAT KIND OF THING IT IS — `done` (it happened),
- * `planned` (decided, not yet done), `proposed` (put forward, not decided),
- * `asked` (a question or request still open). `kind` is taken (physics kind).
- */
-export const STATUSES = ["done", "planned", "proposed", "asked"] as const;
-export type MemoryStatus = (typeof STATUSES)[number];
-
-/** The writer's three fields, as one value (v12). Each one optional. */
-export interface WriteFacts {
-  readonly occurredOn?: string;
-  readonly saidBy?: SaidBy;
-  readonly status?: MemoryStatus;
-}
-
-/** A value read as who-said-it: anything else is unknown (null). */
-export function saidByOf(v: unknown): SaidBy | null {
-  return typeof v === "string" && (SAID_BY as readonly string[]).includes(v) ? (v as SaidBy) : null;
-}
-
-/** A value read as a status: anything else is unknown (null). */
-export function statusOf(v: unknown): MemoryStatus | null {
-  return typeof v === "string" && (STATUSES as readonly string[]).includes(v) ? (v as MemoryStatus) : null;
-}
-
-/** An occurred-on date as stored — the `time.ts` reading's text — or null when unreadable. */
-export function occurredOnOf(v: unknown): string | null {
-  return parseCalendarDate(v)?.text ?? null;
-}
-
-/** How a subject link was found (`memory_subjects.via`, v12). */
-export type SubjectLinkVia = "write" | "birth" | "backfill";
-
-/**
- * A memory's confidentiality class, from its `meta`.
- *
- * The truth table lives HERE, beside the writes that carry it, because it is a
- * gate: `recall/activate.ts#isConfidential` is the same answer by the same
- * function, so the surfacing boundary and `StoredMemory.confidential` can never
- * disagree. Since the floor it is also evaluated ONCE PER WRITE and stored in
- * `memories.confidential`, so the gate no longer parses JSON on every read —
- * a gate that re-parses at every call site is a gate that will one day fail
- * open. The function stays the single definition both the column and the
- * boundary are computed from.
- */
-export function confidentialByMeta(meta: Readonly<Record<string, unknown>>): boolean {
-  if (meta["confidential"] === true) return true;
-  const klass = meta["confidentiality"];
-  return typeof klass === "string" && klass !== "" && klass !== "open" && klass !== "normal";
-}
-
-export interface StoredMemory {
-  doc: ProseDoc;
-  physics: MemoryPhysics;
-  band: Band;
-  bandDay: number;
-  archived: boolean;
-  archivedReason: string | null;
-  supersededBy: string | null;
-  revision: number;
-  contentHash: string;
-  /** The confidentiality class, read off the ROW's column (written from
-   *  `confidentialByMeta` at every write). Carried on the read so a caller gates
-   *  on a boolean rather than on JSON it had to re-interpret. */
-  confidential: boolean;
-  /** v7 moments, UTC ms (docs/time.md). Null on a row written before v7. */
-  createdAt: number | null;
-  updatedAt: number | null;
-  /** v7: the model that wrote the current words; null = not a named model. */
-  model: string | null;
-  /** v9: what the memory is about, or null when unmarked. */
-  about: AboutMark | null;
-  /** v9: who set it (`writer`, `reflection`, `owner`, `upgrade`), or null. */
-  aboutBy: string | null;
-}
-
-/**
- * v9 (2026-09-27): WHAT A MEMORY IS ABOUT — a neutral, descriptive mark, so a
- * writer is not nudged toward "core-eligible": `me` (who I am), `us` (the
- * owner and me together), `owner` (the owner himself), `work` (the craft: how
- * a job is done), `world` (anything else). Set by an awake model that read the
- * words — the writer at `note` / `session_end`, or the reflection — or by the
- * v9 upgrade carrying the old kind rule. It is not a topic (a separate axis,
- * later). Only `me`, `us` and `owner` are core candidates
- * (`CORE_ABOUT_MARKS`, `sleep/consolidate.ts#aboutMe`).
- */
-export const ABOUT_MARKS = ["me", "us", "owner", "work", "world"] as const;
-export type AboutMark = (typeof ABOUT_MARKS)[number];
-/** The marks that make a memory a core candidate. */
-export const CORE_ABOUT_MARKS: readonly AboutMark[] = ["me", "us", "owner"];
-/**
- * Who set a mark. `self` (2026-10-11): the counterpart awake, re-marking an
- * existing memory in a session (`remember`'s `remark`) — `writer` is the mark
- * given at birth; `owner` is the owner's door (`counterparts about`, and the
- * dashboard through it).
- */
-export const ABOUT_SETTERS = ["writer", "reflection", "owner", "upgrade", "self"] as const;
-export type AboutSetter = (typeof ABOUT_SETTERS)[number];
-
-/** A column value read as a mark: anything else is unmarked. */
-export function aboutMarkOf(v: unknown): AboutMark | null {
-  return typeof v === "string" && (ABOUT_MARKS as readonly string[]).includes(v) ? (v as AboutMark) : null;
-}
-
-/** What `inheritFrom` reads of a source: its mark, and — for `era` — its moment and meta. */
-export type InheritSource = Pick<MemoryRow, "id" | "about" | "about_by"> & Partial<Pick<MemoryRow, "created_at" | "meta">>;
-
-/** What a new row takes from the rows it is made from (`inheritFrom`). */
-export interface Inherited {
-  /**
-   * What it is about, who set that mark (`about_by`), and which source gave
-   * it. Null: no source was marked.
-   */
-  readonly about: { readonly about: AboutMark; readonly aboutBy: AboutSetter | null; readonly from: string } | null;
-  /**
-   * The best source's era standing, as meta keys (`operational.ts
-   * #eraCarriedFrom`) — for a row that takes the best source's STORED claim
-   * (a dream merge) and only for one: a row with a claim of its own (a
-   * revision, a gist) is new, and the era reads it as new. Empty without a
-   * `cutoff`.
-   */
-  readonly era: Record<string, unknown>;
-}
-
-/**
- * WHAT A NEW ROW MADE FROM EXISTING ONES INHERITS (2026-10-11; decided by
- * random-06, 2026-10-11, lightly held): one model for "this replaces that",
- * so each path that makes a row out of others reads it the same way — the
- * dream's merge and gist (D6 closed by Mike, 2026-10-11, lightly held), a
- * revision by `updates:` (its one source, the memory it revises). `best` is
- * the source whose words and claim the new row takes; absent, the first in
- * order.
- *
- * WHAT IT IS ABOUT: the best source's mark unless that is not personal and
- * another source is (`CORE_ABOUT_MARKS`: me, us, owner): a personal mark is
- * never lost to a work one, or to none. Of several personal marks, the best
- * source's when it is one, else the first in order. An unmarked best source
- * with only work or world marks beside it takes the first of those — what
- * `Store#supersedeInto`'s fill-if-unmarked carry would give it anyway, named
- * here so a caller's note says what lands. The mark keeps who set it.
- *
- * The caller with no explicit claim reads its default BY THAT mark
- * (`physics.defaultClaimFor`), with its own row's status, said-by and kind:
- * the revision's door hands the mark to `mint.ts`, which already asks.
- */
-export function inheritFrom(
-  sources: readonly InheritSource[],
-  opts: {
-    best?: InheritSource;
-    /** The era's cutoff (or its first recorded moment), for `era`. */
-    cutoff?: string | number | null;
-  } = {},
-): Inherited {
-  const best = opts.best ?? sources[0];
-  if (best === undefined) return { about: null, era: {} };
-  const personal = (r: Pick<MemoryRow, "about">): boolean => {
-    const m = aboutMarkOf(r.about);
-    return m !== null && CORE_ABOUT_MARKS.includes(m);
-  };
-  const marked = (r: Pick<MemoryRow, "about">): boolean => aboutMarkOf(r.about) !== null;
-  const chosen = personal(best) ? best : (sources.find(personal) ?? (marked(best) ? best : (sources.find(marked) ?? best)));
-  const mark = aboutMarkOf(chosen.about);
-  const by = chosen.about_by;
-  const about =
-    mark === null
-      ? null
-      : { about: mark, aboutBy: typeof by === "string" && (ABOUT_SETTERS as readonly string[]).includes(by) ? (by as AboutSetter) : null, from: chosen.id };
-  return {
-    about,
-    era: opts.cutoff === undefined ? {} : eraCarriedFrom({ created_at: best.created_at ?? null, meta: best.meta ?? "" }, opts.cutoff),
-  };
-}
-
-/** One memory with a reminder date, as `Store.datedMemories` returns it. */
-export interface DatedMemory {
-  readonly id: string;
-  /** As stated — never widened, never narrowed. */
-  readonly eventDate: string;
-}
-
 /**
  * HOW OFTEN A REMINDER DATE COMES ROUND (2026-10-09, the owner's design, held
  * lightly): `daily`, `weekly`, `monthly` or `yearly` (`time.ts#RECURRENCES`),
@@ -602,308 +372,6 @@ export interface DatedMemory {
  * range or a year the key is inert. `prospective/` is its reader.
  */
 export { RECURRING_META };
-
-/**
- * The repeat a ROW carries, or null: a day `event_date` and a recurrence word
- * in its meta — the one predicate `recurringMemories` and the prune's
- * `recurring` gate (`sleep/prune.ts`, 2026-10-09) both read. Unreadable meta,
- * a month or a range, or `recurring` dropped: null, the date is once.
- */
-export function recurrenceOfRow(row: { readonly event_date: string | null; readonly meta: string }): Recurrence | null {
-  if (!isDay(row.event_date)) return null;
-  if (!row.meta.includes(`"${RECURRING_META}"`)) return null;
-  let rule: unknown;
-  try {
-    rule = (JSON.parse(row.meta) as Record<string, unknown>)[RECURRING_META];
-  } catch {
-    return null;
-  }
-  return isRecurrence(rule) ? rule : null;
-}
-
-/** One memory whose reminder date repeats, as `Store.recurringMemories` returns it. */
-export interface RecurringMemory {
-  readonly id: string;
-  /** The day as stated — the anchor every occurrence is counted from. */
-  readonly eventDate: string;
-  readonly recurring: Recurrence;
-}
-
-/**
- * ONE LIVE ROW as deliberate recall's facts mode ranks and labels it (Release
- * B, 2026-10-03): the columns, never the body (`Store#recallRows`). The
- * writer's three fields are null on a row from before v12, and on a file
- * that has not been upgraded.
- */
-export interface RecallRow {
-  readonly id: string;
-  readonly type: string;
-  readonly kind: string;
-  readonly title: string | null;
-  readonly learned_on: string;
-  readonly created_at: number | null;
-  readonly updated_at: number | null;
-  readonly occurred_on: string | null;
-  readonly said_by: string | null;
-  readonly status: string | null;
-  readonly source: string | null;
-  readonly origin_session: string | null;
-  readonly origin_scope: string | null;
-  readonly origin_ref: string | null;
-  readonly confidential: number;
-  /** `meta` for a schema or an episode row (a role, a session); null for a memory. */
-  readonly meta: string | null;
-}
-
-export interface PruneReport {
-  pruned: number;
-  cutoffDay: number;
-  retentionDays: number;
-}
-
-/**
- * What one bounded sweep of the durable event log did, and what it left. The
- * sweep is capped per pass, so `pruned` and `eligible` are different numbers
- * and both are reported: a report that said only how many rows went could not
- * tell "the backlog is cleared" from "the cap was hit" (scar §2.4).
- */
-export interface EventPruneReport extends PruneReport {
-  /** Unlatched rows older than the window when the sweep began. */
-  eligible: number;
-  /** Eligible rows the cap left for the next pass. Zero means the window is clean. */
-  remaining: number;
-  /** The per-pass cap in force, or null when the caller set none. */
-  limit: number | null;
-}
-
-/** What `eventLog` selects on. `order` defaults to `"asc"` (oldest first). */
-export interface EventLogFilter {
-  name?: string;
-  ref?: string;
-  sinceDay?: number;
-  limit?: number;
-  order?: "asc" | "desc";
-}
-
-/**
- * One row of `eventCounts`: a name, how many rows of it the window holds, and
- * the newest of them — by wall clock (`newestAt`, epoch ms), by lived day
- * (`newestDay`) and by `seq` (`newestSeq`, the one to fetch it by). Each is the
- * MAX of its own column, so they need not come from the same row if a clock
- * was ever set back; `newestSeq` is the one that is always the last appended.
- */
-export interface EventCount {
-  name: string;
-  count: number;
-  newestAt: number;
-  newestDay: number;
-  newestSeq: number;
-}
-
-/**
- * The durable event log, counted without being touched — what `verify` prints
- * and what an observer's cycle report is computed from. Every number here is a
- * read; nothing in it crosses the write seam.
- */
-export interface EventLogCensus {
-  /** Rows held, latched and unlatched. */
-  rows: number;
-  /** Rows carrying a `dedup_key` — records, kept at any age. */
-  latched: number;
-  /** The oldest row's lived day and wall-clock instant, or null on an empty log. */
-  oldestDay: number | null;
-  oldestAt: number | null;
-  newestDay: number | null;
-  /** `livedDay - retentionDays`: rows with `day` strictly below it are past the window. */
-  cutoffDay: number;
-  retentionDays: number;
-  /** Unlatched rows past the window — what the next sweep would delete, before its cap. */
-  eligible: number;
-  /** Latched rows past the window — kept by kind, and counted so "kept" is a number. */
-  latchedPastCutoff: number;
-}
-
-export interface RebuildReport {
-  indexed: number;
-  skippedDenied: number;
-  /**
-   * Rows that are canonical but not live — archived, or a superseded head. The
-   * text index is the index OF THE LIVE STORE (`cache.ts#deindexDoc`), so a
-   * rebuild reproduces exactly what `archive`/`supersede` maintain. COUNTED,
-   * not silent: `counterparts verify --rebuild` accounts for every canonical
-   * row, and a skip that did not appear in the arithmetic would read as a
-   * mismatch (I13).
-   */
-  skippedArchived: number;
-  unrecomputed: number;
-  /** Contract §5 G8: what rebuild cannot recompute is DECLARED, with owner + repair. */
-  declared: { what: string; owner: string; repair: string }[];
-  /** Vectors kept across the rebuild (`keepVectors`), and vectors dropped as
-   *  no longer canonical — removed ids and orphans. Both zero by default. */
-  keptVectors: number;
-  droppedVectors: number;
-}
-
-export interface RebuildOptions {
-  /**
-   * Re-index the TOKEN side without dropping `embeddings`.
-   *
-   * Off by default, because the default is the older and louder claim: box 3 is
-   * rebuildable and a rebuild rebuilds it. It exists because that claim prices
-   * the four tables the same when they are not — a vector costs a paid network
-   * call and a console with no embedder cannot replace one at any price
-   * (`adapters/cli/NOTES.md`, 2026-09-04, the follow-up filed by PR #43's
-   * review). With it on, a vector whose memory is still canonical survives, a
-   * vector for a removed or orphaned id is deleted, and a row whose embedder
-   * misses keeps the vector it had instead of counting as `unrecomputed`.
-   *
-   * **A row that already has a vector is not re-embedded**, even when an
-   * embedder is wired: keep means keep, and the caller that wants fresh vectors
-   * wants a plain `rebuildCache()`. Rows with NO vector are embedded as usual.
-   */
-  keepVectors?: boolean;
-}
-
-export interface EdgeInput {
-  src: string;
-  dst: string;
-  weight: number;
-  day: number;
-}
-
-export interface ProspectiveInput {
-  memoryId: string;
-  windowKey: string;
-  eventDate: string;
-  /** `range` since 2026-09-26 (prospective windows.ts) — the column is TEXT, so
-   *  this widens the type and nothing on disk. */
-  precision: "day" | "month" | "year" | "range";
-  state: "armed" | "fired" | "suppressed" | "expired";
-  fires?: number;
-  lastFiredDay?: number | null;
-}
-
-/**
- * One per-session gate record (SEAMS item B). A ROW, never a re-serialized
- * document: two writers on one session each insert their own record, so a late
- * `resolveUse()` can no longer drop a turn's `recall()` records (scar §2.1).
- */
-export interface GateRecordInput {
-  sessionId: string;
-  /** `surfaced` / `credited` (recall), `window` (prospective), `scalar` (row state). */
-  kind: string;
-  /** Memory id, window key, or — for `scalar` — the field name. */
-  ref: string;
-  turn: number;
-  lastDay: number;
-  tier?: string | null;
-  /** False when the memory arrived only through ambiguous handles (recall §9 G5). */
-  trains?: boolean | null;
-  /** JSON for `scalar` records. Never body text (§5 G10). */
-  value?: string | null;
-}
-
-/**
- * One durable event (SEAMS item K). Content-BY-REFERENCE: ids, hashes, counts,
- * scores, kinds, tiers — never body text, never a user turn.
- *
- * `dedupKey` is the replay latch: an event carrying one lands AT MOST ONCE, ever
- * (sleep §5 G3 — "every day-gated concern is idempotent under replay"), and
- * `appendEvent` returns 0 when the latch held. Telemetry omits it and accumulates.
- */
-export interface EventInput {
-  name: string;
-  day: number;
-  ref?: string | null;
-  dedupKey?: string | null;
-  payload?: Record<string, unknown> | null;
-}
-
-/**
- * THE TWO SCHEMA STAMPS AS THEY STAND ON DISK RIGHT NOW — box 2's
- * `meta.schemaVersion` and box 3's `cache_meta.schemaVersion`, each exactly as
- * written (a string), or null when the row is not there.
- *
- * Read by `Store.schemaVersions()`, which exists for ONE caller shape: a process
- * that opened this store long ago and has to ask, before it touches anything,
- * whether a newer build has migrated it since. That is the MCP server — the one
- * long-lived process a host starts once per session and never restarts on its
- * own (the MCP adapter's schema gate; LAUNCH-STATUS I36). The core names no
- * adapter, so the pointer is in words.
- */
-export interface SchemaVersions {
-  readonly store: string | null;
-  readonly cache: string | null;
-}
-
-export interface RankingRow {
-  id: string;
-  strength: number;
-  band: Band;
-  day: number;
-}
-
-/**
- * One removed memory, as it survives: an address, what family it belonged to,
- * what it WAS (protected? identity band?), and counts of what the chase took.
- * No title, no body, no content hash — the same rule as the record (§16 G9).
- */
-export interface Tombstone {
-  readonly id: string;
-  readonly type: ProseType;
-  readonly kind: Kind;
-  readonly band: Band;
-  /** Permanent ink at the moment it was removed — why it still shows in the list. */
-  readonly wasProtected: boolean;
-  readonly wasPromotedIdentity: boolean;
-  readonly supersededBy: string | null;
-  readonly stage: RemovalNote["stage"];
-  readonly at: number;
-  /** True while a stripped skeleton row survives to carry lineage pointers. */
-  readonly rowSurvives: boolean;
-  readonly chased: {
-    readonly versions: number;
-    readonly edges: number;
-    readonly prospective: number;
-    readonly gateRows: number;
-  };
-}
-
-/** No body, no content hash — hashing low-entropy content leaks it (§16 G9). */
-export interface RemovalNote {
-  memoryId: string;
-  stage: "requested" | "dark" | "chased" | "complete";
-  actor: string;
-  reason?: string;
-}
-
-/**
- * Every method that can change durable state. The totality test asserts this list
- * equals the set of sites that consult the observer predicate, and that each one
- * refuses under observer (observer-mode.md G6: every stand-down is observable).
- */
-/**
- * The backfill's give-up counter: `embed.failed.<id>` in box 2's meta, and the
- * number of ITEM-ATTRIBUTABLE failures after which `missingVectors` stops
- * offering that id.
- *
- * **Only the failures the provider blamed on the item itself may move it** — a
- * 400 the bisector narrowed down to one input (`ChunkFailure.item`). A 429, a
- * 5xx, a dropped socket, an aborted watchdog or a malformed body says nothing
- * about WHICH input is bad, and counting those was I33 inverted: three bad
- * boundaries in a row would retire a whole healthy window and `unembeddedCount`
- * — the coverage watch — would then read COMPLETE while those memories stayed
- * blind. Three rather than one because even a 400 can be answered for a reason
- * that is not the text.
- *
- * Written by whoever runs the backfill (`adapters/claude-code/vectors.ts`),
- * cleared the moment an id embeds, and cleared wholesale by
- * `counterparts verify --retry-skipped` — which is the remedy a repaired title
- * needs, because a skipped id is never offered again and so can never clear
- * itself. Meta keys only — no schema bump (precedent: `sleep.pruned.<id>`).
- */
-export const EMBED_FAILED_PREFIX = "embed.failed.";
-export const EMBED_SKIP_AFTER = 3;
 
 /**
  * THE DAY THIS STORE CAME INTO EXISTENCE — one meta row, written once.
@@ -937,6 +405,7 @@ export const WRITE_METHODS = [
   "updatePhysics",
   "reinforce",
   "setBand",
+  "carryInto",
   "link",
   "linkMany",
   "setProspective",
@@ -1023,8 +492,6 @@ export type WriteMethod = (typeof WRITE_METHODS)[number];
  * round it. The stance (`observer: true`) is still what the seam refuses on.
  */
 export type ReadOnlyStore = Omit<Store, WriteMethod | "close" | "guardWrites" | "findSubjectsWith">;
-
-const MAX_CHAIN = 32;
 const EVENT_RING = 500;
 
 /**
@@ -1066,102 +533,6 @@ function verdictData(v: EmbedderVerdict): Record<string, string | number | boole
       return { kind: v.kind, reason: v.reason };
   }
 }
-
-/** What `list()` and `countMemories()` both select on — one filter, one WHERE. */
-export interface MemoryFilter {
-  type?: ProseType;
-  kind?: Kind;
-  band?: Band;
-  archived?: boolean;
-  /**
-   * WHO WROTE IT — the mint-source doctrine's column (`authored`, `fallback`,
-   * `episode`, `migrated`). Nullable in the schema on purpose, so a filter on a
-   * source never matches a row that predates the doctrine, which is what a
-   * caller asking "how many did the author write" wants.
-   */
-  source?: string;
-  /**
-   * BORN ON OR AFTER this calendar date, `YYYY-MM-DD` — a string comparison,
-   * which is exact for that spelling. Undated rows carry `learned_on = ''`
-   * (`self/briefing.ts`) and are excluded by the same comparison, which is
-   * right: a row with no date is not a row born in a window.
-   */
-  learnedOnFrom?: string;
-  /**
-   * MINTED FROM THIS id — the `origin_ref` column (a proposal, a trace, or a
-   * journal chapter's `epi_` id for its copy). Exact match. Added 2026-09-30 so
-   * recall can credit a chapter's copy without reading every prose file.
-   */
-  originRef?: string;
-  /**
-   * BORN ON OR AFTER this LIVED day — the `birth_day` column. Added 2026-09-30
-   * so the wake's "Last here" walk reads only the episodes inside its window.
-   */
-  bornFromDay?: number;
-  /**
-   * WRITTEN BY THIS SESSION — the `origin_session` column. Exact match. Added
-   * 2026-09-30 so a recall asked about "the last session" can find what that
-   * session wrote without reading every row.
-   */
-  originSession?: string;
-  /**
-   * MARKED ABOUT THIS — v9's `about` column (`ABOUT_MARKS`). Exact match; an
-   * unmarked row never matches. Added 2026-10-03 for recall's meaning mode,
-   * where "us" is the memories marked `us`.
-   */
-  about?: AboutMark;
-}
-
-function memoryWhere(filter: MemoryFilter): { clause: string; args: (string | number)[] } {
-  const where: string[] = [];
-  const args: (string | number)[] = [];
-  if (filter.type) {
-    where.push("type = ?");
-    args.push(filter.type);
-  }
-  if (filter.kind) {
-    where.push("kind = ?");
-    args.push(filter.kind);
-  }
-  if (filter.band) {
-    where.push("band = ?");
-    args.push(filter.band);
-  }
-  if (filter.archived !== undefined) {
-    where.push("archived = ?");
-    args.push(filter.archived ? 1 : 0);
-  }
-  if (filter.source !== undefined) {
-    where.push("source = ?");
-    args.push(filter.source);
-  }
-  if (filter.learnedOnFrom !== undefined) {
-    where.push("learned_on >= ?");
-    args.push(filter.learnedOnFrom);
-  }
-  if (filter.originRef !== undefined) {
-    where.push("origin_ref = ?");
-    args.push(filter.originRef);
-  }
-  if (filter.bornFromDay !== undefined) {
-    where.push("birth_day >= ?");
-    args.push(filter.bornFromDay);
-  }
-  if (filter.originSession !== undefined) {
-    where.push("origin_session = ?");
-    args.push(filter.originSession);
-  }
-  if (filter.about !== undefined) {
-    where.push("about = ?");
-    args.push(filter.about);
-  }
-  return { clause: where.length ? `WHERE ${where.join(" AND ")}` : "", args };
-}
-
-/** A memory row the NIGHTLY RUN wrote — a dream's gist or merge, a reflection's
- *  entry — as SQL (temporal contiguity's reads, review of #281 finding 1). */
-const NIGHTLY_SQL = `(COALESCE(source, '') IN ('dreamed', 'reflection')
-  OR COALESCE(origin_ref, '') LIKE 'dream:%' OR COALESCE(origin_ref, '') LIKE 'reflection:%')`;
 
 export class Store {
   readonly dir: string;
@@ -1551,7 +922,11 @@ export class Store {
    * into the database file — bytes of the canonical box change even though no
    * row does — and the byte-identity suites hash the file WITH its `-wal`
    * around an instrument's open and close to prove it wrote nothing (NOTES §8).
-   * An instrument leaves the log for the next writer.
+   * An instrument does not ASK for a fold. But its close is a real one
+   * (`db.ts`, since 2026-10-11), and when it is the LAST connection on a file,
+   * SQLite itself folds whatever log is left as it closes: no row changes, the
+   * database file's bytes can. Under node:sqlite that was always so; under bun
+   * it was hidden because no close here really closed.
    *
    * **Never waits, never throws.** A reader holding an older snapshot (the MCP
    * server, the worker, the dashboard) makes the fold partial: whatever could be
@@ -1561,7 +936,8 @@ export class Store {
    * back into a log that was just folded.
    *
    * A second call returns at once: nothing folds and neither handle is closed
-   * again (`node:sqlite` throws on a double close).
+   * again. (A `Db` ignores a second close itself since 2026-10-11, and refuses
+   * any statement after the first with `DB_CLOSED`.)
    */
   close(): void {
     if (this.closed) return;
@@ -2074,6 +1450,12 @@ export class Store {
        */
       cued?: boolean;
       /**
+       * The session the use came in (2026-10-11, Group 3 part A): written on
+       * the return it earns (`returns.session`), so the core's recurrence
+       * lane can count sessions. Absent: NULL, as every return before.
+       */
+      session?: string | null;
+      /**
        * A lower tier this memory was credited at earlier THIS lived day, which
        * this use lifts (`physics.creditUse`, 2026-10-11). The caller that
        * recorded the earlier credit knows it (recall's gate state, for its own
@@ -2117,7 +1499,7 @@ export class Store {
                 onDisplay: opts.cued !== true && this.shownInHints(id, day),
                 since: this.spacingSince(id),
               });
-        if (ret.counted) this.writeReturn(id, day, ret, null);
+        if (ret.counted) this.writeReturn(id, day, ret, null, opts.session ?? null);
       }
       return { ...verdict, ret };
     });
@@ -2161,7 +1543,7 @@ export class Store {
    * and `lastUsedDay` are untouched. No dream id: undoing the dream does not
    * take back what was lived awake after it.
    */
-  reflectReturn(id: string, day: number): ReturnOutcome {
+  reflectReturn(id: string, day: number, opts: { session?: string | null } = {}): ReturnOutcome {
     const outcome = this.mutate("reflectReturn", () => {
       const row = this.requireRow(id);
       const last =
@@ -2172,7 +1554,8 @@ export class Store {
         since: this.spacingSince(id),
         lastReflectionDay: last,
       });
-      if (ret.counted) this.writeReturn(id, day, ret, null);
+      // The reflection's id is its session (2026-10-11, the recurrence lane).
+      if (ret.counted) this.writeReturn(id, day, ret, null, opts.session ?? null);
       return ret;
     });
     this.emit("store.reflect", id, { counted: outcome.counted, reason: outcome.reason, day });
@@ -2214,10 +1597,10 @@ export class Store {
   }
 
   /** Insert one `returns` row and bring the aggregate columns in line with the table. */
-  private writeReturn(id: string, day: number, ret: ReturnOutcome, dreamId: string | null): void {
+  private writeReturn(id: string, day: number, ret: ReturnOutcome, dreamId: string | null, session: string | null = null): void {
     this.ops.run(
-      `INSERT OR IGNORE INTO returns (memory_id, day, source, weight, gap, dream_id, at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO returns (memory_id, day, source, weight, gap, dream_id, at, session)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       day,
       ret.source,
@@ -2225,6 +1608,7 @@ export class Store {
       Number.isFinite(ret.gap) ? ret.gap : 0,
       dreamId,
       this.nowFn(),
+      session,
     );
     this.recomputeReturns(id);
   }
@@ -2278,23 +1662,16 @@ export class Store {
    * Returns counted since a moment (UTC ms) or a lived day, by source — for
    * `fired`, the mechanism lights and the dashboard. With neither, all of them.
    */
-  returnCounts(filter: { sinceAt?: number; sinceDay?: number } = {}): {
+  returnCounts(
+    filter?: { sinceAt?: number; sinceDay?: number },
+  ): {
     awake: number;
     dream: number;
     /** v9: returns a reflection counted (also lane returns, beside `awake`). */
     reflection: number;
     memories: number;
   } {
-    const r = this.ops.get<{ awake: number | null; dream: number | null; reflection: number | null; memories: number | null }>(
-      `SELECT SUM(CASE WHEN source = 'awake' THEN 1 ELSE 0 END) AS awake,
-              SUM(CASE WHEN source = 'dream' THEN 1 ELSE 0 END) AS dream,
-              SUM(CASE WHEN source = 'reflection' THEN 1 ELSE 0 END) AS reflection,
-              COUNT(DISTINCT CASE WHEN source != 'legacy' THEN memory_id END) AS memories
-         FROM returns WHERE at >= ? AND day >= ? AND source != 'legacy'`,
-      filter.sinceAt ?? 0,
-      filter.sinceDay ?? -2_147_483_648,
-    );
-    return { awake: r?.awake ?? 0, dream: r?.dream ?? 0, reflection: r?.reflection ?? 0, memories: r?.memories ?? 0 };
+    return memoryReads.returnCounts(this, filter);
   }
 
   // ── what the wake's hints lane showed (v8) ─────────────────────────────────
@@ -2414,18 +1791,39 @@ export class Store {
       // v9: the about-me mark travels too (the first original that has one).
       carryAboutMark(this.ops, oldId, successorId);
       carryWriteFacts(this.ops, oldId, successorId);
-      if (opts.carryReturns === true) {
-        this.ops.run(
-          `INSERT OR IGNORE INTO returns (memory_id, day, source, weight, gap, dream_id, at)
-           SELECT ?, day, source, weight, gap, dream_id, at FROM returns WHERE memory_id = ?`,
-          successorId,
-          oldId,
-        );
-        this.recomputeReturns(successorId);
-      }
+      if (opts.carryReturns === true) this.copyReturnsRaw(oldId, successorId);
     });
     deindexDoc(this.cache, oldId);
     this.emit("store.supersede", oldId, { successor: successorId, reason });
+  }
+
+  /**
+   * What `supersedeInto` carries, WITHOUT the archive (2026-10-11, review of
+   * #427): the return history copied (a return day both had is kept once),
+   * the about-me mark and the writer's three fields where `toId` has none —
+   * the original keeping all of its own. A dream merge's originals stay live,
+   * settled `changed` under the merged memory, which is still at least as
+   * durable as what it was made from. `returns: false` for a pressure
+   * crossing's successor, which `supersede` never gave the old one's returns.
+   */
+  carryInto(fromId: string, toId: string, opts: { returns?: boolean } = {}): void {
+    this.mutate("carryInto", () => {
+      this.requireRow(fromId);
+      this.requireRow(toId);
+      carryAboutMark(this.ops, fromId, toId);
+      carryWriteFacts(this.ops, fromId, toId);
+      if (opts.returns !== false) this.copyReturnsRaw(fromId, toId);
+    });
+  }
+
+  private copyReturnsRaw(fromId: string, toId: string): void {
+    this.ops.run(
+      `INSERT OR IGNORE INTO returns (memory_id, day, source, weight, gap, dream_id, at)
+       SELECT ?, day, source, weight, gap, dream_id, at FROM returns WHERE memory_id = ?`,
+      toId,
+      fromId,
+    );
+    this.recomputeReturns(toId);
   }
 
   /**
@@ -2510,8 +1908,11 @@ export class Store {
   appendCoreEvent(input: {
     memoryId: string;
     /** v9 adds `about` (a mark set; `reason` is the mark and why) and `told`
-     *  (a morning share that cited it was told to the owner). */
-    action: "promoted" | "demoted" | "nominated" | "about" | "told";
+     *  (a morning share that cited it was told to the owner). 2026-10-11
+     *  (Group 3 part A) adds `reconsidering` (a core memory flagged for a
+     *  decision; `reason` is the category) and `reaffirmed` (kept: by a
+     *  decision, or because the cause went away). */
+    action: "promoted" | "demoted" | "nominated" | "about" | "told" | "reconsidering" | "reaffirmed";
     day: number;
     lane?: string | null;
     reason?: string | null;
@@ -2538,24 +1939,8 @@ export class Store {
   }
 
   /** Core events, newest first, optionally for one memory / one action / since a moment. */
-  coreEvents(filter: { memoryId?: string; action?: string; sinceAt?: number; limit?: number } = {}): CoreEventRow[] {
-    const where: string[] = [];
-    const args: (string | number)[] = [];
-    if (filter.memoryId !== undefined) {
-      where.push("memory_id = ?");
-      args.push(filter.memoryId);
-    }
-    if (filter.action !== undefined) {
-      where.push("action = ?");
-      args.push(filter.action);
-    }
-    if (filter.sinceAt !== undefined) {
-      where.push("at >= ?");
-      args.push(filter.sinceAt);
-    }
-    const sql = `SELECT * FROM core_events${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY seq DESC LIMIT ?`;
-    args.push(filter.limit ?? 1_000);
-    return this.ops.all<CoreEventRow>(sql, ...args);
+  coreEvents(filter?: { memoryId?: string; action?: string; sinceAt?: number; limit?: number }): CoreEventRow[] {
+    return historyReads.coreEvents(this, filter);
   }
 
   /** Delete a dream's nominations (the undo of its `nominate-core` changes). */
@@ -2703,19 +2088,35 @@ export class Store {
   }
 
   /** Reflections, newest first; optionally only one dream's. */
-  reflections(filter: { limit?: number; dreamId?: string } = {}): ReflectionRow[] {
-    return filter.dreamId === undefined
-      ? this.ops.all<ReflectionRow>("SELECT * FROM reflections ORDER BY started_at DESC, rowid DESC LIMIT ?", filter.limit ?? 100)
-      : this.ops.all<ReflectionRow>(
-          "SELECT * FROM reflections WHERE dream_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?",
-          filter.dreamId,
-          filter.limit ?? 100,
-        );
+  reflections(filter?: { limit?: number; dreamId?: string }): ReflectionRow[] {
+    return historyReads.reflections(this, filter);
   }
 
   /** How many reflections the store holds, counted in SQL — so a caller that wants every one (`export --markdown`) can ask for exactly that many. */
   reflectionCount(): number {
     return this.ops.get<{ n: number }>("SELECT COUNT(*) AS n FROM reflections")?.n ?? 0;
+  }
+
+  /**
+   * A core memory's STANDING (2026-10-11, Group 3 part A): its latest
+   * promotion, demotion, flag or reaffirmation — `reconsidering` while it is
+   * being reconsidered — or undefined when none was ever written. A read.
+   */
+  coreStanding(id: string): CoreEventRow | undefined {
+    return this.ops.get<CoreEventRow>(
+      "SELECT * FROM core_events WHERE memory_id = ? AND action IN ('promoted', 'demoted', 'reconsidering', 'reaffirmed') ORDER BY seq DESC LIMIT 1",
+      id,
+    );
+  }
+
+  /**
+   * THE CORE MEMORIES BEING RECONSIDERED (2026-10-11): every live
+   * identity-band memory whose standing is a `reconsidering` flag, oldest
+   * flag first, with the flag's day and reason. One read; the wake, the
+   * dashboard and the reflection list it.
+   */
+  coreReconsidering(): { id: string; day: number; reason: string | null; at: number }[] {
+    return historyReads.coreReconsidering(this);
   }
 
   /** True when the owner's latest word on this memory's core membership is a demotion. */
@@ -2737,16 +2138,7 @@ export class Store {
 
   /** The standing pair between two memories, either order (not withdrawn), newest first. */
   contradictionBetween(x: string, y: string): ContradictionRow | undefined {
-    if (!this.hasTable("contradictions")) return undefined;
-    return this.ops.get<ContradictionRow>(
-      `SELECT * FROM contradictions
-        WHERE state != 'withdrawn' AND ((a = ? AND b = ?) OR (a = ? AND b = ?))
-        ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-      x,
-      y,
-      y,
-      x,
-    );
+    return historyReads.contradictionBetween(this, x, y);
   }
 
   /**
@@ -2754,58 +2146,17 @@ export class Store {
    * keyed by memory — one indexed read per id. What recall's labels read.
    */
   contradictionsOf(ids: readonly string[]): Map<string, ContradictionRow[]> {
-    const out = new Map<string, ContradictionRow[]>();
-    if (ids.length === 0 || !this.hasTable("contradictions")) return out;
-    const stmt = this.ops.prepare(
-      `SELECT * FROM contradictions WHERE state != 'withdrawn' AND (a = ? OR b = ?)
-        ORDER BY created_at DESC, rowid DESC`,
-    );
-    for (const id of new Set(ids)) {
-      const rows = stmt.all<ContradictionRow>(id, id);
-      if (rows.length > 0) out.set(id, rows);
-    }
-    return out;
+    return historyReads.contradictionsOf(this, ids);
   }
 
   /** Pairs, newest first — by state, since a moment (created or changed). */
-  contradictions(filter: { state?: string; sinceAt?: number; limit?: number } = {}): ContradictionRow[] {
-    if (!this.hasTable("contradictions")) return [];
-    const where: string[] = [];
-    const args: (string | number)[] = [];
-    if (filter.state !== undefined) {
-      where.push("state = ?");
-      args.push(filter.state);
-    }
-    if (filter.sinceAt !== undefined) {
-      where.push("updated_at >= ?");
-      args.push(filter.sinceAt);
-    }
-    args.push(filter.limit ?? 1_000);
-    return this.ops.all<ContradictionRow>(
-      `SELECT * FROM contradictions${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""}
-        ORDER BY created_at DESC, rowid DESC LIMIT ?`,
-      ...args,
-    );
+  contradictions(filter?: { state?: string; sinceAt?: number; limit?: number }): ContradictionRow[] {
+    return historyReads.contradictions(this, filter);
   }
 
   /** The trail, in order: one pair's, or everything since a moment. */
-  contradictionSettles(filter: { pairId?: string; sinceAt?: number; limit?: number } = {}): SettleRow[] {
-    if (!this.hasTable("contradiction_settles")) return [];
-    const where: string[] = [];
-    const args: (string | number)[] = [];
-    if (filter.pairId !== undefined) {
-      where.push("pair_id = ?");
-      args.push(filter.pairId);
-    }
-    if (filter.sinceAt !== undefined) {
-      where.push("at >= ?");
-      args.push(filter.sinceAt);
-    }
-    args.push(filter.limit ?? 1_000);
-    return this.ops.all<SettleRow>(
-      `SELECT * FROM contradiction_settles${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY seq LIMIT ?`,
-      ...args,
-    );
+  contradictionSettles(filter?: { pairId?: string; sinceAt?: number; limit?: number }): SettleRow[] {
+    return historyReads.contradictionSettles(this, filter);
   }
 
   /**
@@ -2856,6 +2207,27 @@ export class Store {
       id,
     );
     return { id, birth_day: r?.birth_day ?? 0, created_at: r?.created_at ?? null, rid: r?.rid ?? 0 };
+  }
+
+  /**
+   * Live memory ids whose meta bag names `key` (2026-10-11, Group 2b): a text
+   * prefilter on the stored JSON, so the caller reads the value itself. One
+   * scan; for once-only passes, not for a hot path.
+   */
+  idsWithMetaKey(key: string): string[] {
+    return this.ops
+      .all<{ id: string }>("SELECT id FROM memories WHERE archived = 0 AND superseded_by IS NULL AND meta LIKE ?", `%"${key}"%`)
+      .map((r) => r.id);
+  }
+
+  /**
+   * THE LIVE FOLDS MADE FROM `id` (2026-10-11, Group 3 part B; item 15): the
+   * reverse of a fold's `meta.sources` — "which folds came from X" — as a
+   * query over the dream's own rows, no derivations table. A text prefilter
+   * on the stored JSON, confirmed by reading the bag. Oldest first.
+   */
+  foldsCiting(id: string): string[] {
+    return historyReads.foldsCiting(this, id);
   }
 
   /** Has any pair EVER named these two memories, withdrawn ones included (a slot the dream said was two things)? */
@@ -3035,6 +2407,20 @@ export class Store {
     closes?: readonly string[];
     /** 2026-10-11: provisional cuts this settle LIFTS (a slot proposal's, on the pair or one it closes) — final fades, applied before `fade`. */
     lifts?: readonly { id: string; fade: number }[];
+    /**
+     * 2026-10-11 (Group 2b, the core path): the memory it is over LEAVES THE
+     * CORE in this transaction — the promotion flag off, its fading restarted
+     * on `lastUsedDay`, the band column set to `band` — before `fade` (a core
+     * memory has nothing to cut). Not the owner's demotion: no core event, so
+     * nothing is made sticky.
+     */
+    leaveCore?: { id: string; band: Band; lastUsedDay: number } | null;
+    /**
+     * 2026-10-11 (Group 2b): a pending reminder carried from the memory the
+     * settle is over to the one that holds — two in-place revisions, the meta
+     * patches computed by the caller (`prospective/`'s keys), in this transaction.
+     */
+    reminder?: { from: string; fromMeta: Record<string, unknown>; to: string | null; eventDate: string; toMeta: Record<string, unknown> } | null;
     detail?: Record<string, unknown>;
   }): { pairId: string; seq: number } {
     const out = this.mutate("settleContradiction", () => {
@@ -3105,8 +2491,19 @@ export class Store {
       // What it does to the memory it is over, LAST, so a refusal above has
       // staged nothing on the memory itself.
       for (const l of input.lifts ?? []) this.updatePhysics(l.id, { fade: l.fade });
+      if (input.leaveCore !== undefined && input.leaveCore !== null) {
+        const c = input.leaveCore;
+        this.updatePhysics(c.id, { promotedIdentity: false, lastUsedDay: c.lastUsedDay });
+        this.ops.run("UPDATE memories SET band = ?, band_day = ? WHERE id = ?", c.band, input.day, c.id);
+      }
       if (input.fade !== undefined && input.fade !== null) {
         this.updatePhysics(input.fade.id, { fade: input.fade.fade });
+      }
+      // The reminder first, while the memory it leaves is still live.
+      if (input.reminder !== undefined && input.reminder !== null) {
+        const m = input.reminder;
+        if (m.to !== null) this.revise(m.to, { eventDate: m.eventDate, meta: m.toMeta, reason: "reminder-carried" });
+        this.revise(m.from, { eventDate: null, meta: m.fromMeta, reason: m.to === null ? "reminder-spent" : "reminder-moved" });
       }
       if (input.archive !== undefined && input.archive !== null) {
         this.archive(input.archive.id, input.archive.reason);
@@ -3138,6 +2535,10 @@ export class Store {
     reopen?: readonly string[];
     /** 2026-10-11: provisional cuts the settle had lifted, put back on (final fades), before `restore`. */
     reapply?: readonly { id: string; fade: number }[];
+    /** 2026-10-11 (Group 2b): a memory the settle took out of the core, put back as it was (`settleContradiction`'s `leaveCore`, reversed). */
+    rejoinCore?: { id: string; band: Band; bandDay: number | null; lastUsedDay: number; promoted: boolean } | null;
+    /** 2026-10-11 (Group 2b): a reminder the settle carried, carried back (`settleContradiction`'s `reminder`, reversed). */
+    reminderBack?: { to: string | null; toMeta: Record<string, unknown>; from: string; eventDate: string; fromMeta: Record<string, unknown> } | null;
     detail?: Record<string, unknown>;
   }): { seq: number; unarchived: boolean } {
     const out = this.mutate("undoContradictionSettle", () => {
@@ -3174,9 +2575,19 @@ export class Store {
       if (input.restore !== undefined && input.restore !== null) {
         this.updatePhysics(input.restore.id, { fade: input.restore.fade });
       }
+      if (input.rejoinCore !== undefined && input.rejoinCore !== null) {
+        const c = input.rejoinCore;
+        this.updatePhysics(c.id, { promotedIdentity: c.promoted, lastUsedDay: c.lastUsedDay });
+        this.ops.run("UPDATE memories SET band = ?, band_day = ? WHERE id = ?", c.band, c.bandDay, c.id);
+      }
       let unarchived = false;
       if (input.unarchive !== undefined && input.unarchive !== null) {
         unarchived = this.restoreSuperseded(input.unarchive.id, input.unarchive.reason);
+      }
+      if (input.reminderBack !== undefined && input.reminderBack !== null) {
+        const m = input.reminderBack;
+        if (m.to !== null) this.revise(m.to, { eventDate: null, meta: m.toMeta, reason: "reminder-carried-back" });
+        this.revise(m.from, { eventDate: m.eventDate, meta: m.fromMeta, reason: "reminder-carried-back" });
       }
       return { seq, unarchived };
     });
@@ -3347,29 +2758,11 @@ export class Store {
    * birth day), else since a lived day. Newest first. Only the columns decide:
    * `type` memory, not archived, not superseded, not protected, not a dream's
    * own words. The caller applies the rest of recall's gates (the deny-list,
-   * confidentiality) to what comes back.
+   * confidentiality) to what comes back. Without a `limit`, every row: the
+   * dream's queue reads the whole store (2026-10-11, Group 3 part C).
    */
-  newMemoryIds(filter: { sinceAt: number | null; sinceDay: number; limit: number; beforeDay?: number }): string[] {
-    // Nor a dream's own MERGES (origin `dream:<id>`): a merged memory is a
-    // rewording of what a dream already saw, and counting it as new would let
-    // one dream's output raise the next day's ask by itself (review of #251).
-    const base = `SELECT id FROM memories
-                   WHERE type = 'memory' AND archived = 0 AND superseded_by IS NULL AND protected = 0
-                     AND (source IS NULL OR source != 'dreamed')
-                     AND (origin_ref IS NULL OR origin_ref NOT LIKE 'dream:%')`;
-    const order = "ORDER BY COALESCE(created_at, 0) DESC, birth_day DESC, id LIMIT ?";
-    const rows =
-      filter.sinceAt === null
-        ? filter.beforeDay === undefined
-          ? this.ops.all<{ id: string }>(`${base} AND birth_day >= ? ${order}`, filter.sinceDay, filter.limit)
-          : this.ops.all<{ id: string }>(`${base} AND birth_day >= ? AND birth_day < ? ${order}`, filter.sinceDay, filter.beforeDay, filter.limit)
-        : this.ops.all<{ id: string }>(
-            `${base} AND (created_at > ? OR (created_at IS NULL AND birth_day > ?)) ${order}`,
-            filter.sinceAt,
-            filter.sinceDay,
-            filter.limit,
-          );
-    return rows.map((r) => r.id);
+  newMemoryIds(filter: { sinceAt: number | null; sinceDay: number; limit?: number; beforeDay?: number }): string[] {
+    return memoryReads.newMemoryIds(this, filter);
   }
 
   /** One dream's row. */
@@ -3378,14 +2771,22 @@ export class Store {
   }
 
   /** Dreams, newest first. */
-  dreams(filter: { limit?: number; sinceAt?: number } = {}): DreamRow[] {
-    return filter.sinceAt === undefined
-      ? this.ops.all<DreamRow>("SELECT * FROM dreams ORDER BY started_at DESC, id DESC LIMIT ?", filter.limit ?? 100)
-      : this.ops.all<DreamRow>(
-          "SELECT * FROM dreams WHERE started_at >= ? ORDER BY started_at DESC, id DESC LIMIT ?",
-          filter.sinceAt,
-          filter.limit ?? 100,
-        );
+  dreams(filter?: { limit?: number; sinceAt?: number }): DreamRow[] {
+    return historyReads.dreams(this, filter);
+  }
+
+  /**
+   * WHAT THE DREAMS WERE SHOWN, oldest first (2026-10-11, review of #436): the
+   * dream queue's read — only the columns it needs (no journal), every dream,
+   * or those begun on `sinceDay` or later (the per-prompt gate reads a week).
+   */
+  dreamsShown(filter?: { sinceDay?: number }): DreamShownRow[] {
+    return historyReads.dreamsShown(this, filter);
+  }
+
+  /** The lived day of the first dream that stands (not undone), or null before any. */
+  firstDreamDay(): number | null {
+    return this.ops.get<{ d: number | null }>("SELECT MIN(day) AS d FROM dreams WHERE state != 'undone'")?.d ?? null;
   }
 
   /** How many dreams the store holds, counted in SQL — the "of N" beside a list of the newest. */
@@ -3846,16 +3247,7 @@ export class Store {
   }
 
   gateRecords(sessionId: string, kind?: string): GateSessionRow[] {
-    return kind === undefined
-      ? this.ops.all<GateSessionRow>(
-          "SELECT * FROM gate_session WHERE session_id = ? ORDER BY kind, ref",
-          sessionId,
-        )
-      : this.ops.all<GateSessionRow>(
-          "SELECT * FROM gate_session WHERE session_id = ? AND kind = ? ORDER BY ref",
-          sessionId,
-          kind,
-        );
+    return historyReads.gateRecords(this, sessionId, kind);
   }
 
   /**
@@ -3922,26 +3314,8 @@ export class Store {
    * week. `eventLog({ name, order: "desc", limit: 1 })` is that row, exactly.
    * Rows come back in the order asked for; nothing is re-sorted after the LIMIT.
    */
-  eventLog(filter: EventLogFilter = {}): EventRow[] {
-    const where: string[] = [];
-    const args: (string | number)[] = [];
-    if (filter.name !== undefined) {
-      where.push("name = ?");
-      args.push(filter.name);
-    }
-    if (filter.ref !== undefined) {
-      where.push("ref = ?");
-      args.push(filter.ref);
-    }
-    if (filter.sinceDay !== undefined) {
-      where.push("day >= ?");
-      args.push(filter.sinceDay);
-    }
-    const sql =
-      "SELECT * FROM events" +
-      (where.length === 0 ? "" : ` WHERE ${where.join(" AND ")}`) +
-      ` ORDER BY seq ${filter.order === "desc" ? "DESC" : "ASC"} LIMIT ?`;
-    return this.ops.all<EventRow>(sql, ...args, filter.limit ?? 500);
+  eventLog(filter?: EventLogFilter): EventRow[] {
+    return historyReads.eventLog(this, filter);
   }
 
   /**
@@ -3962,31 +3336,8 @@ export class Store {
    *
    * READ-ONLY: never enters `mutate`, so an observer may ask it.
    */
-  eventCounts(filter: { sinceDay?: number; sinceAt?: number } = {}): EventCount[] {
-    const where: string[] = [];
-    const args: number[] = [];
-    if (filter.sinceDay !== undefined) {
-      where.push("day >= ?");
-      args.push(filter.sinceDay);
-    }
-    if (filter.sinceAt !== undefined) {
-      where.push("at >= ?");
-      args.push(filter.sinceAt);
-    }
-    const rows = this.ops.all<{ name: string; n: number; newest_at: number; newest_day: number; newest_seq: number }>(
-      "SELECT name, COUNT(*) AS n, MAX(at) AS newest_at, MAX(day) AS newest_day, MAX(seq) AS newest_seq" +
-        " FROM events" +
-        (where.length === 0 ? "" : ` WHERE ${where.join(" AND ")}`) +
-        " GROUP BY name ORDER BY name",
-      ...args,
-    );
-    return rows.map((r) => ({
-      name: r.name,
-      count: r.n,
-      newestAt: r.newest_at,
-      newestDay: r.newest_day,
-      newestSeq: r.newest_seq,
-    }));
+  eventCounts(filter?: { sinceDay?: number; sinceAt?: number }): EventCount[] {
+    return historyReads.eventCounts(this, filter);
   }
 
   /** Every event name the log holds, sorted. `eventCounts()` without the counts. */
@@ -4056,38 +3407,7 @@ export class Store {
    * `counterparts verify` prints it without opening a writable store.
    */
   eventLogCensus(): EventLogCensus {
-    const cutoffDay = this.livedDay() - this.retentionDays;
-    const totals = this.ops.get<{
-      total: number;
-      latched: number;
-      oldest_day: number | null;
-      oldest_at: number | null;
-      newest_day: number | null;
-    }>(
-      `SELECT COUNT(*) AS total,
-              COUNT(dedup_key) AS latched,
-              MIN(day) AS oldest_day,
-              MIN(at) AS oldest_at,
-              MAX(day) AS newest_day
-         FROM events`,
-    );
-    const past = this.ops.get<{ eligible: number; latched: number }>(
-      `SELECT COUNT(*) - COUNT(dedup_key) AS eligible,
-              COUNT(dedup_key) AS latched
-         FROM events WHERE day < ?`,
-      cutoffDay,
-    );
-    return {
-      rows: totals?.total ?? 0,
-      latched: totals?.latched ?? 0,
-      oldestDay: totals?.oldest_day ?? null,
-      oldestAt: totals?.oldest_at ?? null,
-      newestDay: totals?.newest_day ?? null,
-      cutoffDay,
-      retentionDays: this.retentionDays,
-      eligible: past?.eligible ?? 0,
-      latchedPastCutoff: past?.latched ?? 0,
-    };
+    return historyReads.eventLogCensus(this);
   }
 
   // ── box 3: the ranking cache (SEAMS item J) ────────────────────────────────
@@ -4175,14 +3495,7 @@ export class Store {
    * counted. Exited (archived) rows are counted by the prune's own records.
    */
   belowReachCount(): number {
-    const ranking = this.rankingAll();
-    let n = 0;
-    for (const r of this.ops.all<MemoryRow>("SELECT * FROM memories WHERE archived = 0 AND type != 'episode'")) {
-      if (reachExempt(r)) continue;
-      const rk = ranking.get(r.id);
-      if (rk !== undefined && rk.band !== "identity" && rk.strength < PHYSICS_TUNABLES.REACH) n += 1;
-    }
-    return n;
+    return memoryReads.belowReachCount(this);
   }
 
   /**
@@ -4198,29 +3511,7 @@ export class Store {
    * whatever its own `created_at`; `eraClaimOf` decides.
    */
   claimsEra(): { cutoff: number | null; recorded: number | null; affected: number; down: number; up: number } {
-    const num = (v: string | undefined): number | null => {
-      const n = v === undefined || v === "" ? Number.NaN : Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-    const cutoff = num(this.getMeta(CLAIMS_ERA_CUTOFF_KEY));
-    const recorded = num(this.getMeta(CLAIMS_ERA_RECORDED_KEY));
-    let down = 0;
-    let up = 0;
-    if (cutoff !== null) {
-      for (const { id } of this.ops.all<{ id: string }>(
-        `SELECT id FROM memories WHERE archived = 0 AND type = 'memory' AND claimed IS NOT NULL
-           AND (created_at IS NULL OR created_at < ? OR meta LIKE '%"${ERA_WRITTEN_AT_META}"%')`,
-        cutoff,
-      )) {
-        const row = this.row(id);
-        if (row === undefined || reachExempt(row) || row.claimed === null) continue;
-        const era = rowToPhysics(row).eraClaim;
-        if (typeof era !== "number") continue;
-        if (era < row.claimed) down += 1;
-        else up += 1;
-      }
-    }
-    return { cutoff, recorded, affected: down + up, down, up };
+    return memoryReads.claimsEra(this);
   }
 
   /** Every row's next-change day forgotten (a new curve: the turn-down looks at all of them once). */
@@ -4240,21 +3531,7 @@ export class Store {
   }
 
   rankingAll(): Map<string, RankingRow> {
-    const out = new Map<string, RankingRow>();
-    for (const row of this.cache.all<{
-      memory_id: string;
-      strength: number;
-      band: string;
-      day: number;
-    }>("SELECT * FROM ranking")) {
-      out.set(row.memory_id, {
-        id: row.memory_id,
-        strength: row.strength,
-        band: row.band as Band,
-        day: row.day,
-      });
-    }
-    return out;
+    return historyReads.rankingAll(this);
   }
 
   /**
@@ -4679,67 +3956,11 @@ export class Store {
    * indexed, so it is one index probe per row.
    */
   row(id: string): (MemoryRow & FeelingPeak) | undefined {
-    // v9: `feeling_peak_lived` is the same peak WITHOUT the feelings a
-    // reflection recorded later — the one the core's fast lane reads unless
-    // `CORE_FAST_ACCEPTS_REFLECTED_FEELING` is set (physics §5.3). Since
-    // 2026-10-02 an awake feeling-now (`awake`) is left out the same way
-    // (`LATER_FEELING_SOURCES`).
-    // v13 (2026-10-10): `today_date`, the store's calendar today, so the
-    // dated hold (`operational.ts#datedHold`) reads off this one statement.
-    // The old-claims era's cutoff rides the same way (`eraClaimOf`).
-    // 2026-10-11 (Group 2, Mike): `feeling_peak` is the LATEST recording's —
-    // the strongest feeling of the newest moment a feeling was recorded
-    // LATER at (a feeling-now, a dream's or a reflection's: `RECORDED_LATER_SQL`;
-    // a recording's feelings share one moment, so a lone strong one is not
-    // averaged down by quieter ones beside it). That is how the memory sits
-    // now: an apology, new information, the sting turned to clarity lowers
-    // its weight. With none recorded later, the strongest felt at the time —
-    // so a merge, which carries each original's feelings at their own
-    // moments, reads its strongest, not its newest original's (review of
-    // #420). The first is never rewritten; recall by feeling still reads every
-    // one. The fast lane's `feeling_peak_lived` stays the strongest felt at
-    // the time.
-    return this.ops.get<MemoryRow & FeelingPeak>(
-      `SELECT m.*,
-              (SELECT value FROM meta WHERE key = 'lastActiveDate') AS today_date,
-              (SELECT value FROM meta WHERE key = '${CLAIMS_ERA_CUTOFF_KEY}') AS claims_era_cutoff,
-              COALESCE(
-                (SELECT MAX(f.strength) FROM feelings f
-                  WHERE f.memory_id = m.id AND f.source IN (${RECORDED_LATER_SQL})
-                    AND f.created_at = (SELECT MAX(g.created_at) FROM feelings g WHERE g.memory_id = m.id AND g.source IN (${RECORDED_LATER_SQL}))),
-                (SELECT MAX(f.strength) FROM feelings f WHERE f.memory_id = m.id)) AS feeling_peak,
-              (SELECT MAX(f.strength) FROM feelings f
-                WHERE f.memory_id = m.id AND (f.source IS NULL OR f.source NOT IN (${LATER_SQL}))) AS feeling_peak_lived
-         FROM memories m WHERE m.id = ?`,
-      id,
-    );
+    return memoryReads.row(this, id);
   }
 
   read(id: string): StoredMemory {
-    const row = this.requireRow(id);
-    const doc = this.docOf(row);
-    if (row.archived === 1) {
-      // §5 G13: a read-back of archived content is an event, so "did the archival
-      // mechanisms ever pay for themselves" is an answerable question in v2.
-      this.emit("store.archived.read", id, { reason: row.archived_reason });
-    }
-    return {
-      doc,
-      physics: rowToPhysics(row),
-      band: row.band,
-      bandDay: row.band_day,
-      archived: row.archived === 1,
-      archivedReason: row.archived_reason,
-      supersededBy: row.superseded_by,
-      revision: row.revision,
-      contentHash: row.content_hash,
-      confidential: row.confidential === 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      model: row.model,
-      about: aboutMarkOf(row.about),
-      aboutBy: row.about_by ?? null,
-    };
+    return memoryReads.read(this, id);
   }
 
   readProse(id: string): ProseDoc {
@@ -4762,20 +3983,7 @@ export class Store {
    * chase has stripped the row to a skeleton.
    */
   resolve(id: string): string {
-    let current = id;
-    const seen = new Set<string>();
-    for (let depth = 0; depth <= MAX_CHAIN; depth++) {
-      if (seen.has(current)) throw new StoreError("ID_CYCLE", { id, at: current });
-      seen.add(current);
-      if (this.isDenied(current)) return current;
-      const row = this.row(current);
-      if (row === undefined) {
-        throw new StoreError(current === id ? "ID_UNKNOWN" : "ID_DANGLING", { id, at: current });
-      }
-      if (row.superseded_by === null) return current;
-      current = row.superseded_by;
-    }
-    throw new StoreError("ID_CHAIN_TOO_DEEP", { id, max: MAX_CHAIN });
+    return memoryReads.resolve(this, id);
   }
 
   list(filter: MemoryFilter = {}): string[] {
@@ -4794,24 +4002,7 @@ export class Store {
    * No schema change. Never returns a removed row's words; ids and flags only.
    */
   copiesOf(refs: readonly string[]): Map<string, { id: string; confidential: boolean; about: string | null }[]> {
-    const out = new Map<string, { id: string; confidential: boolean; about: string | null }[]>();
-    const unique = [...new Set(refs)];
-    const CHUNK = 500;
-    for (let i = 0; i < unique.length; i += CHUNK) {
-      const part = unique.slice(i, i + CHUNK);
-      const rows = this.ops.all<{ id: string; origin_ref: string; confidential: number; about: string | null }>(
-        `SELECT id, origin_ref, confidential, about FROM memories
-          WHERE type = 'memory' AND archived = 0 AND origin_ref IN (${part.map(() => "?").join(", ")})
-          ORDER BY id`,
-        ...part,
-      );
-      for (const r of rows) {
-        const held = out.get(r.origin_ref) ?? [];
-        held.push({ id: r.id, confidential: r.confidential === 1, about: r.about });
-        out.set(r.origin_ref, held);
-      }
-    }
-    return out;
+    return memoryReads.copiesOf(this, refs);
   }
 
   /**
@@ -4824,18 +4015,7 @@ export class Store {
    * (a session start read every row's text, 370 ms at 3,000 rows).
    */
   workCandidates(scope: string, limit: number): string[] {
-    return this.ops
-      .all<{ id: string }>(
-        `SELECT id FROM memories
-          WHERE type = 'memory' AND archived = 0 AND origin_scope = ?
-            AND band != 'identity' AND event_date IS NULL AND confidential = 0 AND body != ''
-            AND (about = 'work' OR (about IS NULL AND kind IN ('skill', 'fact', 'entity', 'place')))
-          ORDER BY MAX(birth_day, last_used_day) DESC, id
-          LIMIT ?`,
-        scope,
-        Math.max(0, Math.floor(limit)),
-      )
-      .map((r) => r.id);
+    return memoryReads.workCandidates(this, scope, limit);
   }
 
   /**
@@ -4849,33 +4029,16 @@ export class Store {
    * `limit`. The columns only, as `workCandidates`. A store without the v12
    * column throws; the caller wraps it.
    */
-  planCandidates(input: {
+  planCandidates(
+    input: {
     readonly scopes: readonly string[];
     readonly after: number;
     readonly statuses: readonly MemoryStatus[];
     readonly limit: number;
     readonly confidential?: boolean;
-  }): string[] {
-    const scopes = input.scopes.filter((s) => s.length > 0);
-    const statuses = input.statuses.filter((s) => (STATUSES as readonly string[]).includes(s));
-    if (scopes.length === 0 || input.limit <= 0) return [];
-    const marks = (n: number): string => Array.from({ length: n }, () => "?").join(", ");
-    const status = statuses.length === 0 ? "" : `status IN (${marks(statuses.length)}) OR `;
-    return this.ops
-      .all<{ id: string }>(
-        `SELECT id FROM memories
-          WHERE type = 'memory' AND archived = 0 AND superseded_by IS NULL AND body != ''
-            AND source = 'authored' AND origin_scope IN (${marks(scopes.length)}) AND created_at > ?
-            ${input.confidential === true ? "" : "AND confidential = 0"}
-            AND (${status}meta LIKE '%"unresolved":true%')
-          ORDER BY created_at DESC, id
-          LIMIT ?`,
-        ...scopes,
-        input.after,
-        ...statuses,
-        Math.max(0, Math.floor(input.limit)),
-      )
-      .map((r) => r.id);
+  },
+  ): string[] {
+    return memoryReads.planCandidates(this, input);
   }
 
   /**
@@ -4907,16 +4070,8 @@ export class Store {
    * accounting, where a dated memory archived before its window is the `faded`
    * exit and has to be found to be counted.
    */
-  datedMemories(from: string, to: string, opts: { archived?: boolean } = {}): DatedMemory[] {
-    const rows = this.ops.all<{ id: string; event_date: string }>(
-      `SELECT id, event_date FROM memories
-        WHERE event_date IS NOT NULL AND event_date <= ?${opts.archived === true ? "" : " AND archived = 0"}`,
-      `${to}~`,
-    );
-    return rows
-      .filter((r) => calendarOverlaps(r.event_date, from, to))
-      .sort((a, b) => compareCalendarDates(a.event_date, b.event_date) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-      .map((r) => ({ id: r.id, eventDate: r.event_date }));
+  datedMemories(from: string, to: string, opts?: { archived?: boolean }): DatedMemory[] {
+    return memoryReads.datedMemories(this, from, to, opts);
   }
 
   /**
@@ -4928,18 +4083,8 @@ export class Store {
    * loose (a text match on the meta, as `planCandidates` does for
    * `unresolved`) and the parsed meta decides. Ordered by id.
    */
-  recurringMemories(opts: { archived?: boolean } = {}): RecurringMemory[] {
-    const rows = this.ops.all<{ id: string; event_date: string; meta: string }>(
-      `SELECT id, event_date, meta FROM memories
-        WHERE event_date IS NOT NULL AND meta LIKE '%"${RECURRING_META}":"%'${opts.archived === true ? "" : " AND archived = 0"}
-        ORDER BY id`,
-    );
-    const out: RecurringMemory[] = [];
-    for (const r of rows) {
-      const rule = recurrenceOfRow(r);
-      if (rule !== null) out.push({ id: r.id, eventDate: r.event_date, recurring: rule });
-    }
-    return out;
+  recurringMemories(opts?: { archived?: boolean }): RecurringMemory[] {
+    return memoryReads.recurringMemories(this, opts);
   }
 
   /** A memory's feelings, oldest first (then in the order written). A removed memory has none. */
@@ -4959,7 +4104,7 @@ export class Store {
   feelingsSince(sinceMs: number): FeelingRow[] {
     return this.ops.all<FeelingRow>(
       `SELECT f.* FROM feelings f JOIN memories m ON m.id = f.memory_id
-        WHERE f.created_at >= ? AND m.archived = 0 AND m.superseded_by IS NULL
+        WHERE f.created_at >= ? AND m.archived = 0 AND m.superseded_by IS NULL${this.notMergedAway("m")}
         ORDER BY f.created_at DESC, f.rowid DESC`,
       sinceMs,
     );
@@ -4975,9 +4120,22 @@ export class Store {
   feelingsLive(): (FeelingRow & { birth_day: number })[] {
     return this.ops.all<FeelingRow & { birth_day: number }>(
       `SELECT f.*, m.birth_day AS birth_day FROM feelings f JOIN memories m ON m.id = f.memory_id
-        WHERE m.archived = 0 AND m.superseded_by IS NULL
+        WHERE m.archived = 0 AND m.superseded_by IS NULL${this.notMergedAway("m")}
         ORDER BY f.created_at, f.rowid`,
     );
+  }
+
+  /**
+   * A dream merge's ORIGINALS stay live since 2026-10-11 (Group 2b; random-06's
+   * ruling: a merge is a plain `changed`), and their feelings and nudges were
+   * copied onto the merged memory, so the store-wide reads that used to see
+   * only the merged copy leave the originals out — a moment counted once, as
+   * when the originals were archived. A SQL fragment on alias `m`; empty for
+   * a file without the contradictions table.
+   */
+  private notMergedAway(m: string): string {
+    if (!this.hasTable("contradictions")) return "";
+    return ` AND ${m}.id NOT IN (SELECT over FROM contradictions WHERE state = 'settled' AND source = 'dream-merge' AND over IS NOT NULL)`;
   }
 
   /**
@@ -4987,26 +4145,7 @@ export class Store {
    * inside its latency budget. Ids with no feelings are simply absent.
    */
   feelingsOn(ids: readonly string[]): Map<string, (FeelingRow & { birth_day: number })[]> {
-    const out = new Map<string, (FeelingRow & { birth_day: number })[]>();
-    if (ids.length === 0) return out;
-    const unique = [...new Set(ids)];
-    // SQLite's default bound-variable ceiling is far above recall's candidate
-    // cap; chunk anyway so no caller can walk into it.
-    for (let at = 0; at < unique.length; at += 500) {
-      const part = unique.slice(at, at + 500);
-      const rows = this.ops.all<FeelingRow & { birth_day: number }>(
-        `SELECT f.*, m.birth_day AS birth_day FROM feelings f JOIN memories m ON m.id = f.memory_id
-          WHERE f.memory_id IN (${part.map(() => "?").join(",")})
-          ORDER BY f.created_at, f.rowid`,
-        ...part,
-      );
-      for (const r of rows) {
-        const list = out.get(r.memory_id) ?? [];
-        list.push(r);
-        out.set(r.memory_id, list);
-      }
-    }
-    return out;
+    return markReads.feelingsOn(this, ids);
   }
 
   /**
@@ -5015,19 +4154,8 @@ export class Store {
    * and fading slower, physics §5.10). `sinceDay` narrows both to memories born
    * on or after that lived day. Counts only; no word of any feeling leaves.
    */
-  emotionCensus(opts: { sinceDay?: number } = {}): { withFeelings: number; weighted: number } {
-    const since = opts.sinceDay ?? Number.MIN_SAFE_INTEGER;
-    const row = this.ops.get<{ with_feelings: number | null; weighted: number | null }>(
-      `SELECT
-         SUM(CASE WHEN EXISTS (SELECT 1 FROM feelings f WHERE f.memory_id = m.id) THEN 1 ELSE 0 END) AS with_feelings,
-         SUM(CASE WHEN m.emotional > 0
-                    OR EXISTS (SELECT 1 FROM feelings f WHERE f.memory_id = m.id AND f.strength > 0)
-                  THEN 1 ELSE 0 END) AS weighted
-         FROM memories m
-        WHERE m.archived = 0 AND m.superseded_by IS NULL AND m.birth_day >= ?`,
-      since,
-    );
-    return { withFeelings: row?.with_feelings ?? 0, weighted: row?.weighted ?? 0 };
+  emotionCensus(opts?: { sinceDay?: number }): { withFeelings: number; weighted: number } {
+    return markReads.emotionCensus(this, opts);
   }
 
   /**
@@ -5039,25 +4167,7 @@ export class Store {
   feelingCounts(
     opts: { by: "core" | "emotion"; whose?: string; from?: string; to?: string },
   ): { whose: string; key: string; count: number }[] {
-    const col = opts.by === "core" ? "core" : "emotion";
-    const rows = this.ops.all<{ whose: string; key: string; created_at: number }>(
-      `SELECT whose, ${col} AS key, created_at FROM feelings ${opts.whose === undefined ? "" : "WHERE whose = ?"}`,
-      ...(opts.whose === undefined ? [] : [opts.whose]),
-    );
-    const zone = this.zone();
-    const tally = new Map<string, { whose: string; key: string; count: number }>();
-    for (const r of rows) {
-      if (opts.from !== undefined || opts.to !== undefined) {
-        const day = localDate(r.created_at, zone);
-        if (opts.from !== undefined && day < opts.from) continue;
-        if (opts.to !== undefined && day > opts.to) continue;
-      }
-      const k = `${r.whose}\u0000${r.key}`;
-      const t = tally.get(k) ?? { whose: r.whose, key: r.key, count: 0 };
-      t.count += 1;
-      tally.set(k, t);
-    }
-    return [...tally.values()].sort((a, b) => b.count - a.count || (a.whose + a.key < b.whose + b.key ? -1 : 1));
+    return markReads.feelingCounts(this, opts);
   }
 
   // ── traits (folded into v9): READ-ONLY, for the dashboard ────────────────
@@ -5185,13 +4295,7 @@ export class Store {
 
   /** Every link a memory has, with how it was found (v12). */
   subjectLinksOf(memoryId: string): { subjectId: string; via: string; createdAt: number }[] {
-    if (!this.hasTable("memory_subjects")) return [];
-    return this.ops
-      .all<{ subject_id: string; via: string; created_at: number }>(
-        "SELECT subject_id, via, created_at FROM memory_subjects WHERE memory_id = ? ORDER BY subject_id",
-        memoryId,
-      )
-      .map((r) => ({ subjectId: r.subject_id, via: r.via, createdAt: r.created_at }));
+    return markReads.subjectLinksOf(this, memoryId);
   }
 
   /**
@@ -5199,16 +4303,8 @@ export class Store {
    * `archived` is true; a removed memory has no links (the owner-op seam
    * deletes them).
    */
-  memoriesNaming(subjectId: string, opts: { archived?: boolean } = {}): string[] {
-    if (!this.hasTable("memory_subjects")) return [];
-    return this.ops
-      .all<{ memory_id: string }>(
-        `SELECT s.memory_id FROM memory_subjects s JOIN memories m ON m.id = s.memory_id
-          WHERE s.subject_id = ?${opts.archived === true ? "" : " AND m.archived = 0"}
-          ORDER BY s.memory_id`,
-        subjectId,
-      )
-      .map((r) => r.memory_id);
+  memoriesNaming(subjectId: string, opts?: { archived?: boolean }): string[] {
+    return markReads.memoriesNaming(this, subjectId, opts);
   }
 
   /**
@@ -5220,16 +4316,7 @@ export class Store {
    * candidate. A read; nothing here crosses the write seam.
    */
   recallRows(): RecallRow[] {
-    const v12 = this.hasColumn("memories", "occurred_on");
-    return this.ops.all<RecallRow>(
-      `SELECT id, type, kind, title, learned_on, created_at, updated_at,
-              ${v12 ? "occurred_on, said_by, status" : "NULL AS occurred_on, NULL AS said_by, NULL AS status"},
-              source, origin_session, origin_scope, origin_ref, confidential,
-              CASE WHEN type = 'memory' THEN NULL ELSE meta END AS meta
-         FROM memories
-        WHERE archived = 0 AND superseded_by IS NULL AND NOT (body = '' AND content_hash = '')
-        ORDER BY id`,
-    );
+    return memoryReads.recallRows(this);
   }
 
   /**
@@ -5243,13 +4330,31 @@ export class Store {
     );
   }
 
+  /**
+   * The LIVE memories with words, with the lived day each was written on and
+   * its kind — the night's name tally reads these (`schemas/names.ts`,
+   * 2026-10-11). A chased removal is archived and blank, so it is not here; one
+   * still dark is, and the caller drops it by `deniedIds()`.
+   */
+  liveMemoryTexts(): { id: string; title: string | null; body: string; day: number; kind: string }[] {
+    return this.ops.all<{ id: string; title: string | null; body: string; day: number; kind: string }>(
+      "SELECT id, title, body, birth_day AS day, kind FROM memories WHERE type = 'memory' AND archived = 0 AND body != '' ORDER BY id",
+    );
+  }
+
+  /**
+   * The memory ids each card the owner removed had linked, one list per card
+   * (2026-10-11, review of #429). Written by the chase before it drops the
+   * card's subject links; ids only, never the name (§16 G9). The name tally
+   * reads it so a removed card is not born again from the same memories.
+   */
+  cardTombstoneLinks(): string[][] {
+    return markReads.cardTombstoneLinks(this);
+  }
+
   /** How many subject links there are, and on how many memories (v12). Null without the table. */
   subjectLinkCount(): { links: number; memories: number; subjects: number } | null {
-    if (!this.hasTable("memory_subjects")) return null;
-    const row = this.ops.get<{ links: number; memories: number; subjects: number }>(
-      "SELECT COUNT(*) AS links, COUNT(DISTINCT memory_id) AS memories, COUNT(DISTINCT subject_id) AS subjects FROM memory_subjects",
-    );
-    return { links: row?.links ?? 0, memories: row?.memories ?? 0, subjects: row?.subjects ?? 0 };
+    return markReads.subjectLinkCount(this);
   }
 
   /**
@@ -5261,28 +4366,10 @@ export class Store {
    * chapter copies, the sweep and reflection entries. Null when this file has
    * no v12 columns yet.
    */
-  writeFieldShare(since: number | null): { written: number; occurredOn: number; saidBy: number; status: number; all: number } | null {
-    if (!this.hasColumn("memories", "occurred_on")) return null;
-    const row = this.ops.get<{ written: number; occurred_on: number; said_by: number; status: number; all_three: number }>(
-      `SELECT COUNT(*) AS written,
-              COALESCE(SUM(occurred_on IS NOT NULL), 0) AS occurred_on,
-              COALESCE(SUM(said_by IS NOT NULL), 0) AS said_by,
-              COALESCE(SUM(status IS NOT NULL), 0) AS status,
-              COALESCE(SUM(occurred_on IS NOT NULL AND said_by IS NOT NULL AND status IS NOT NULL), 0) AS all_three
-         FROM memories
-        WHERE type = 'memory' AND body != ''
-          AND (source = 'dreamed' OR (source = 'authored' AND (origin_ref IS NULL OR origin_ref NOT LIKE 'dream:%')))
-          AND (? IS NULL OR created_at >= ?)`,
-      since,
-      since,
-    );
-    return {
-      written: row?.written ?? 0,
-      occurredOn: row?.occurred_on ?? 0,
-      saidBy: row?.said_by ?? 0,
-      status: row?.status ?? 0,
-      all: row?.all_three ?? 0,
-    };
+  writeFieldShare(
+    since: number | null,
+  ): { written: number; occurredOn: number; saidBy: number; status: number; all: number } | null {
+    return memoryReads.writeFieldShare(this, since);
   }
 
   private readonly tablesSeen = new Set<string>();
@@ -5312,39 +4399,16 @@ export class Store {
    * A memory's trait nudges, oldest first (then in the order written). A
    * removed memory has none. Works under observer. Confidentiality: above.
    */
-  traitsFor(memoryId: string, opts: { includeConfidential?: boolean } = {}): TraitRead[] {
-    if (!this.hasTable("traits")) return [];
-    const rows = this.ops.all<TraitRow & { confidential: number }>(
-      `SELECT t.*, m.confidential AS confidential FROM traits t JOIN memories m ON m.id = t.memory_id
-        WHERE t.memory_id = ? ORDER BY t.created_at, t.rowid`,
-      memoryId,
-    );
-    return this.traitReads(rows, opts.includeConfidential === true);
+  traitsFor(memoryId: string, opts?: { includeConfidential?: boolean }): TraitRead[] {
+    return markReads.traitsFor(this, memoryId, opts);
   }
 
   /**
    * The nudges on several memories in ONE query, keyed by memory id; ids with
    * none are simply absent. Works under observer. Confidentiality: above.
    */
-  traitsOn(ids: readonly string[], opts: { includeConfidential?: boolean } = {}): Map<string, TraitRead[]> {
-    const out = new Map<string, TraitRead[]>();
-    if (ids.length === 0 || !this.hasTable("traits")) return out;
-    const unique = [...new Set(ids)];
-    for (let at = 0; at < unique.length; at += 500) {
-      const part = unique.slice(at, at + 500);
-      const rows = this.ops.all<TraitRow & { confidential: number }>(
-        `SELECT t.*, m.confidential AS confidential FROM traits t JOIN memories m ON m.id = t.memory_id
-          WHERE t.memory_id IN (${part.map(() => "?").join(",")})
-          ORDER BY t.created_at, t.rowid`,
-        ...part,
-      );
-      for (const r of this.traitReads(rows, opts.includeConfidential === true)) {
-        const list = out.get(r.memory_id) ?? [];
-        list.push(r);
-        out.set(r.memory_id, list);
-      }
-    }
-    return out;
+  traitsOn(ids: readonly string[], opts?: { includeConfidential?: boolean }): Map<string, TraitRead[]> {
+    return markReads.traitsOn(this, ids, opts);
   }
 
   /**
@@ -5356,16 +4420,8 @@ export class Store {
    * `sinceMs` (the store's clock, UTC ms) narrows to nudges recorded since.
    * Oldest first. Works under observer. Confidentiality: above.
    */
-  traitsAll(opts: { includeConfidential?: boolean; live?: boolean; sinceMs?: number } = {}): TraitRead[] {
-    if (!this.hasTable("traits")) return [];
-    const live = opts.live !== false;
-    const rows = this.ops.all<TraitRow & { confidential: number }>(
-      `SELECT t.*, m.confidential AS confidential FROM traits t JOIN memories m ON m.id = t.memory_id
-        WHERE t.created_at >= ?${live ? " AND m.archived = 0 AND m.superseded_by IS NULL" : ""}
-        ORDER BY t.created_at, t.rowid`,
-      opts.sinceMs ?? Number.MIN_SAFE_INTEGER,
-    );
-    return this.traitReads(rows, opts.includeConfidential === true);
+  traitsAll(opts?: { includeConfidential?: boolean; live?: boolean; sinceMs?: number }): TraitRead[] {
+    return markReads.traitsAll(this, opts);
   }
 
   /**
@@ -5373,15 +4429,8 @@ export class Store {
    * nudge, and the nudges on them — both narrowed to nudges recorded at or
    * after `sinceMs` when it is given. No word and no axis leaves here.
    */
-  traitCensus(opts: { sinceMs?: number } = {}): { memories: number; nudges: number } {
-    if (!this.hasTable("traits")) return { memories: 0, nudges: 0 };
-    const row = this.ops.get<{ memories: number | null; nudges: number | null }>(
-      `SELECT COUNT(DISTINCT t.memory_id) AS memories, COUNT(*) AS nudges
-         FROM traits t JOIN memories m ON m.id = t.memory_id
-        WHERE t.created_at >= ? AND m.archived = 0 AND m.superseded_by IS NULL`,
-      opts.sinceMs ?? Number.MIN_SAFE_INTEGER,
-    );
-    return { memories: row?.memories ?? 0, nudges: row?.nudges ?? 0 };
+  traitCensus(opts?: { sinceMs?: number }): { memories: number; nudges: number } {
+    return markReads.traitCensus(this, opts);
   }
 
   versions(id: string): VersionRow[] {
@@ -5393,17 +4442,7 @@ export class Store {
 
   /** Reading a superseded/archived version is an event (§5 G13). */
   readVersion(id: string, seq: number): ProseDoc {
-    // The version row survives a removal as a lineage pointer with its content
-    // pointers blanked; reading it is refused by name, never by ENOENT.
-    this.refuseIfDenied(id);
-    const row = this.ops.get<VersionRow>(
-      "SELECT * FROM versions WHERE memory_id = ? AND seq = ?",
-      id,
-      seq,
-    );
-    if (row === undefined) throw new StoreError("VERSION_UNKNOWN", { id, seq });
-    this.emit("store.version.read", id, { seq, reason: row.reason });
-    return this.versionDoc(id, row);
+    return memoryReads.readVersion(this, id, seq);
   }
 
   /**
@@ -5454,15 +4493,7 @@ export class Store {
    * not the other.
    */
   memoriesWrittenSince(at: number): { id: string; session: string; at: number; bornDay: number; nightly: boolean }[] {
-    return this.ops
-      .all<{ id: string; origin_session: string; created_at: number; birth_day: number; nightly: number }>(
-        `SELECT id, origin_session, created_at, birth_day, ${NIGHTLY_SQL} AS nightly FROM memories
-          WHERE type = 'memory' AND created_at >= ? AND origin_session IS NOT NULL
-            AND archived = 0 AND superseded_by IS NULL
-          ORDER BY created_at, rowid`,
-        at,
-      )
-      .map((r) => ({ id: r.id, session: r.origin_session, at: r.created_at, bornDay: r.birth_day, nightly: r.nightly === 1 }));
+    return memoryReads.memoriesWrittenSince(this, at);
   }
 
   /**
@@ -5472,18 +4503,8 @@ export class Store {
    * confidential unless `confidential`. Numbers only — no id, no title, no
    * word of any memory leaves this read. Largest first, then the scope.
    */
-  memoryCountsByScopeSince(at: number, opts: { confidential?: boolean } = {}): { scope: string; count: number }[] {
-    return this.ops
-      .all<{ origin_scope: string; n: number }>(
-        `SELECT origin_scope, COUNT(*) AS n FROM memories
-          WHERE type = 'memory' AND created_at IS NOT NULL AND created_at >= ? AND origin_scope IS NOT NULL AND origin_scope != ''
-            AND archived = 0 AND superseded_by IS NULL AND NOT ${NIGHTLY_SQL}
-            ${opts.confidential === true ? "" : "AND confidential = 0"}
-          GROUP BY origin_scope
-          ORDER BY n DESC, origin_scope`,
-        at,
-      )
-      .map((r) => ({ scope: r.origin_scope, count: r.n }));
+  memoryCountsByScopeSince(at: number, opts?: { confidential?: boolean }): { scope: string; count: number }[] {
+    return memoryReads.memoryCountsByScopeSince(this, at, opts);
   }
 
   /**
@@ -5510,15 +4531,7 @@ export class Store {
    *  out, so a note made after the dream sits next to the note made before
    *  it (finding 1 of the review of #281). */
   memoriesOfSession(session: string): { id: string; session: string; at: number; bornDay: number }[] {
-    return this.ops
-      .all<{ id: string; origin_session: string; created_at: number; birth_day: number }>(
-        `SELECT id, origin_session, created_at, birth_day FROM memories
-          WHERE type = 'memory' AND origin_session = ? AND created_at IS NOT NULL
-            AND archived = 0 AND superseded_by IS NULL AND NOT ${NIGHTLY_SQL}
-          ORDER BY created_at, rowid`,
-        session,
-      )
-      .map((r) => ({ id: r.id, session: r.origin_session, at: r.created_at, bornDay: r.birth_day }));
+    return memoryReads.memoriesOfSession(this, session);
   }
 
   prospectiveFor(id: string): ProspectiveRow[] {
@@ -5541,15 +4554,7 @@ export class Store {
   }
 
   removalRecord(id?: string): RemovalRow[] {
-    const rows =
-      id === undefined
-        ? this.ops.all<RemovalRow>("SELECT * FROM removal_record ORDER BY seq")
-        : this.ops.all<RemovalRow>(
-            "SELECT * FROM removal_record WHERE memory_id = ? ORDER BY seq",
-            id,
-          );
-    this.emit("store.removalRecord.read", id, { rows: rows.length });
-    return rows;
+    return memoryReads.removalRecord(this, id);
   }
 
   /**
@@ -5567,34 +4572,7 @@ export class Store {
    * (§14.1 G8).
    */
   tombstones(): Tombstone[] {
-    const rows = this.ops.all<
-      TombstoneRow & { last_stage: string | null; row_survives: number }
-    >(
-      `SELECT t.*,
-              (SELECT r.stage FROM removal_record r
-                WHERE r.memory_id = t.memory_id ORDER BY r.seq DESC LIMIT 1) AS last_stage,
-              (SELECT COUNT(*) FROM memories m WHERE m.id = t.memory_id) AS row_survives
-         FROM removal_tombstone t
-        ORDER BY t.memory_id`,
-    );
-    return rows.map((r) => ({
-      id: r.memory_id,
-      type: r.type,
-      kind: r.kind,
-      band: r.band,
-      wasProtected: r.protected === 1,
-      wasPromotedIdentity: r.promoted_identity === 1,
-      supersededBy: r.superseded_by,
-      stage: (r.last_stage ?? "dark") as RemovalNote["stage"],
-      at: r.at,
-      rowSurvives: r.row_survives > 0,
-      chased: {
-        versions: r.versions,
-        edges: r.edges,
-        prospective: r.prospective,
-        gateRows: r.gate_rows,
-      },
-    }));
+    return memoryReads.tombstones(this);
   }
 
   /** Ids a removal has taken dark: consulted at load and at rebuild (§16 G12). */
@@ -5651,30 +4629,7 @@ export class Store {
    * per queued memory: 299 ms at today's size, 22 s at 10x (13-scale.md).
    */
   neighbourReader(): (id: string, limit: number) => string[] | null {
-    let table: { id: string; vec: Float32Array | number[] }[] | null = null;
-    return (id, limit) => {
-      const vec = this.vectorOf(id);
-      if (vec === null) return null;
-      // A vector this handle may not rank against ranks nothing — as
-      // `nearestTo` answered here before: an empty list, not the word fallback.
-      if (!this.rankable(vec.length, "neighbourReader")) return [];
-      const stored = readNeighbours(this.cache, id, limit);
-      // A stored list shorter than asked is still the whole list when the
-      // table was that small; a short list from a store that has grown since
-      // is not wrong either — what it lacks is NEWER than the memory, which
-      // the dream does not show as a neighbour.
-      if (stored !== null) return stored.map((h) => h.id);
-      table ??= allVectors(this.cache);
-      const hits = rankAgainst(table, vec, NEIGHBOURS_KEPT + 1).filter((h) => h.id !== id);
-      if (!this.observer) {
-        try {
-          writeNeighbours(this.cache, id, hits);
-        } catch {
-          /* box 3 is best-effort: the list is recomputed next time */
-        }
-      }
-      return hits.slice(0, limit).map((h) => h.id);
-    };
+    return memoryReads.neighbourReader(this);
   }
 
   /**
@@ -6054,27 +5009,6 @@ export class Store {
 }
 
 /**
- * The string box 3 indexes for a document — and therefore the string a CALLER
- * must embed if it wants its vector to be the one this store looks up at `put`
- * time. Exported for exactly that: `counterpart.ts` composes it from a
- * proposal's title and its GATED content before the memory exists, so one live
- * call serves both the novelty seam and box 3.
- *
- * The word gated is the whole contract. This function is a pure join, so it
- * cannot enforce which content it is handed — a caller that composes it from the
- * author's raw draft will cache under a key `indexOne` never asks for, and every
- * redaction or hedge silently costs the deposit its vector. The ordering that
- * makes it true lives in `bridge.batteryGate`, and a test asserts it.
- */
-export function indexTextOf(title: string | null | undefined, body: string): string {
-  return [title ?? "", body].join("\n");
-}
-
-function indexText(doc: ProseDoc): string {
-  return indexTextOf(doc.title, doc.body);
-}
-
-/**
  * What to TELL somebody whose directory holds pre-rows names — and, when it is
  * ambiguous, what not to tell them.
  *
@@ -6133,64 +5067,6 @@ function preRowsRemedy(
   };
 }
 
-/**
- * THE TWO ROWS THAT NEVER GET A VECTOR, and why the rule is one function.
- *
- * Both are `type: "schema"` rows that are DELIVERED AT THE WAKE and are skipped
- * by `recall/activate.ts`, so neither can reach a turn through the semantic
- * channel however good its vector is. Embedding either buys retrieval nothing
- * and costs three things that were measured rather than argued:
- *
- *   1. **The most sensitive prose in the store goes out to an embedding API for
- *      no use.** The self page is up to 16 KB of first-person identity; the
- *      handoff is the prose E1's own CONTRACT calls the likeliest to carry a
- *      token. Data leaves the machine only by the owner's choice (constitution
- *      6), and "because the indexer indexes everything" is not a choice.
- *   2. **They put a permanent floor under `unembeddedCount()`** — the number
- *      `doctor` and the parallel run watch, whose whole job is to say what is
- *      ACTIONABLE. On a keyless store that floor never falls.
- *   3. **A vector for a superseded body can displace a live neighbour** on the
- *      semantic slate (`cache.ts#deindexDoc`'s note: `nearestTo` scans
- *      `embeddings` with no liveness filter). Fewer rows in that table that
- *      nothing can deliver is strictly better.
- *
- *   - **`role: "page"`** — the self page (S1). Raised by E1's adversarial review
- *     as "worth checking whether the page is in the same position"; it was, and
- *     the coordinating session asked for the exclusion on 2026-09-20. **A
- *     WORKING DEFAULT, not a ruling — the owner has not been asked, and this is
- *     revisable without ceremony** (CLAUDE.md). The three reasons above are the
- *     whole of the argument for it; if any of them stops being true, so does
- *     this line.
- *   - **`role: "handoff"`** — the per-directory handoff (E1).
- *
- * Read STRUCTURALLY, for the reason `recall/` reads these roles structurally:
- * `store/` depends on no module above it, and a parse that fails reads as
- * "embed it", which is the direction that only ever costs a vector nobody asks
- * for. The strings' owners are `core/self/page.ts#SELF_PAGE_ROLE` and
- * `core/handoff/index.ts#HANDOFF_ROLE`.
- *
- * **What is NOT excluded, checked by the same test and left alone:**
- * the JOURNAL (`type: "episode"`) is a real recall candidate — `activate` does
- * not skip it, `expandHandle` returns it with `journal: true`, and the backfill
- * puts episodes in the FIRST group on purpose — so a vector buys it something
- * and it keeps one. Beliefs and entities (`role: "belief"`, `"entity"`) are
- * candidates too. S2's nightly writer mints no row of its own: it revises the
- * PAGE row and writes events, so excluding the page covers it whole.
- */
-export function noVector(type: string, role: unknown): boolean {
-  return type === "schema" && (role === "handoff" || role === "page");
-}
-
-/** The same rule for a caller holding box 2's columns rather than a document. */
-function notForEmbedding(row: { type: string; meta: string }): boolean {
-  if (row.type !== "schema") return false;
-  try {
-    return noVector(row.type, (JSON.parse(row.meta) as Record<string, unknown>)["role"]);
-  } catch {
-    return false;
-  }
-}
-
 export function newId(type: ProseType): string {
   return `${ID_PREFIX[type]}_${randomBytes(6).toString("hex")}`;
 }
@@ -6215,49 +5091,6 @@ export function dateOf(at: number): string {
 /** The ambient UTC date (see `dateOf`). A store's person's day is `store.today()`. */
 export function today(): string {
   return utcDate(Date.now());
-}
-
-/** The v7 column's screen: a model id the host reported, or NULL. */
-/**
- * v9: a successor takes its predecessor's about-mark (and who set it) when it
- * has none of its own — a revision or a merge is still the same memory, and a
- * mark that fell off at a supersede would quietly take it out of the core's
- * candidates. Inside the caller's transaction.
- */
-function carryAboutMark(ops: Db, fromId: string, toId: string): void {
-  ops.run(
-    `UPDATE memories
-        SET about = (SELECT about FROM memories WHERE id = ?),
-            about_by = (SELECT about_by FROM memories WHERE id = ?)
-      WHERE id = ? AND about IS NULL AND (SELECT about FROM memories WHERE id = ?) IS NOT NULL`,
-    fromId,
-    fromId,
-    toId,
-    fromId,
-  );
-}
-
-/**
- * v12: a successor takes each of the writer's three fields its predecessor
- * had and it was not given — a revision or a merge is still the same memory
- * (as `carryAboutMark`). Of several originals merged, the first that has one
- * gives it. Inside the caller's transaction; a file without the columns is
- * left alone.
- */
-function carryWriteFacts(ops: Db, fromId: string, toId: string): void {
-  for (const col of ["occurred_on", "said_by", "status"] as const) {
-    try {
-      ops.run(
-        `UPDATE memories SET ${col} = (SELECT ${col} FROM memories WHERE id = ?)
-          WHERE id = ? AND ${col} IS NULL AND (SELECT ${col} FROM memories WHERE id = ?) IS NOT NULL`,
-        fromId,
-        toId,
-        fromId,
-      );
-    } catch {
-      return;
-    }
-  }
 }
 
 function modelOrNull(model: string | undefined): string | null {

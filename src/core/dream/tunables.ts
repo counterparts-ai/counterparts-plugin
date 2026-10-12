@@ -8,7 +8,7 @@ import { TOOL_RESULT_CEILING } from "../fit/index.js";
 export const DREAM_TUNABLES = {
   // ── when to ask ───────────────────────────────────────────────────────────
   /** The ask is due only when at least this many memories wait in the queue
-   *  (undreamed, within `QUEUE_DAYS`) — a dream with nothing to replay is not
+   *  (undreamed, within reach) — a dream with nothing to replay is not
    *  worth his minutes. CAL. */
   MIN_NEW: 3,
   /** A store that has never dreamed reads its journal this many lived days back. */
@@ -45,17 +45,33 @@ export const DREAM_TUNABLES = {
 
   // ── the bundle ────────────────────────────────────────────────────────────
   /**
-   * THE QUEUE (2026-09-28, build B; held lightly). What the dream replays is
-   * every memory not yet shown to a dream that stands — "undreamed", read
-   * from the dreams' own `shown`, no table of its own — born within this many
-   * lived days. Ranked by replay priority, not by age; what tonight's room
-   * cannot take WAITS for the next night, with a count. Past the window a
-   * memory leaves the queue for ordinary fading, and the count of those that
-   * aged out is said. The same span as the look-back. CAL.
+   * THE QUEUE (2026-09-28, build B; read whole and ranked by value ×
+   * fragility since 2026-10-11, Group 3 part C; held lightly). What the dream
+   * replays is every memory not yet shown to a dream that stands —
+   * "undreamed", read from the dreams' own `shown`, no table of its own —
+   * that is still within reach (`physics.REACH`). The whole queue is read and
+   * ranked; what tonight's room cannot take WAITS for the next night, with a
+   * count. A memory leaves the queue when its own curve takes it below reach
+   * (the count of those that did since the last dream is said, `agedOut`),
+   * not after a fixed number of days: the queue and the forgetting share one
+   * clock. The core never falls below reach; it waits for its turn.
+   *
+   * The per-prompt ASK reads only this many lived days back, newest first, and
+   * stops at `MIN_NEW` (a floor, said as one): the ask runs on every prompt, and
+   * an older memory still waiting is counted by the night's full read. CAL.
    */
-  QUEUE_DAYS: 7,
-  /** The queue is read at most this many rows deep (said when reached). CAL. */
-  QUEUE_READ: 2_000,
+  ASK_QUEUE_DAYS: 7,
+  /**
+   * THE LEAST FRAGILITY A QUEUED MEMORY IS RANKED WITH (Group 3 part C,
+   * 2026-10-11): replay priority is value × fragility, and a strongly held
+   * memory — the most charged and the most salient — is barely fragile, so
+   * without a floor it would rank last every night while staying queued (it
+   * is far from falling below reach), shut out of the look-back and the
+   * neighbours that skip queued memories. At this floor its value still
+   * counts: a strongly felt memory ranks beside an ordinary one on its first
+   * night. CAL.
+   */
+  FRAGILITY_FLOOR: 0.1,
   /**
    * TONIGHT'S ROOM, in characters of shown text (plus a fixed cost per item):
    * the whole bundle across its parts. Sized from the dreamer's context (the
@@ -132,6 +148,22 @@ export const DREAM_TUNABLES = {
     "feeling-now": 10,
     "nominate-core": 3,
   },
+  /**
+   * FOLDS A NIGHT (2026-10-11, Group 3 part B; review 11 D5): a fold is a
+   * `gist` flagged `fold: true` — not an action of its own — so it has its own
+   * ceiling beside `LIMITS`, and the insight gists keep their 3. A fold past it
+   * is refused, counted on the night's `dream.changed` row (`foldOverflow`)
+   * and said in the hand-back; since Group 3 part C its foldable parts are
+   * carried to the next night's queue, together (`foldCarried`). CAL.
+   */
+  FOLDS: 5,
+  /**
+   * A FELT PART A FOLD KEEPS AT ITS OWN WEIGHT (2026-10-11, review of #432;
+   * review 11 C3/D3): a `self` or `person` memory whose recorded feeling peaks
+   * at or above this. A mild feeling on a routine work memory does not keep it
+   * out of the fold it belongs to. CAL.
+   */
+  FOLD_FELT_FLOOR: 0.5,
   /**
    * The weight a dream PROPOSES for a link or a gist's tie, both ways — about
    * one co-activation (`associate` `HEBB_RATE`, 0.1). Was 0.3, three full

@@ -14,7 +14,10 @@
  * typed in a terminal was not started from any project, and a directory set
  * `off` must not be where its child's tools are pinned.
  */
-import { CATCH_UP_TOOLS, catchUpWords, newCatchUpRunId, plannedParts, runCatchUp } from "../claude-code/night-catch-up.js";
+import { CATCH_UP_RUN_PREFIX, CATCH_UP_TOOLS, catchUpWords, newCatchUpRunId, plannedParts, runCatchUp } from "../claude-code/night-catch-up.js";
+import { applyReowe, reoweLine, reowePlan } from "../claude-code/reowe.js";
+import type { Io } from "./commands.js";
+import { typed } from "./ui.js";
 import type { CatchUpPlan, CatchUpReport } from "../claude-code/night-catch-up.js";
 import { openNightCounterpart, planNightChild } from "../claude-code/night-run.js";
 import { startChild } from "../claude-code/child.js";
@@ -107,6 +110,81 @@ export async function catchUpCommand(input: CatchUpCommandInput): Promise<number
       : "It stopped before the rest — a usage limit, its watchdog, or an error. What is left stays owed: run this again later, or the nightly run takes it.",
   );
   return 3;
+}
+
+export interface ReoweCommandInput {
+  readonly config: AdapterConfig & { readonly dataDir: string };
+  readonly io: Io;
+  readonly now: () => number;
+  /** The run named on `--reowe`; a bare flag parses as `true`. */
+  readonly run: unknown;
+  readonly dryRun: boolean;
+  readonly yes: boolean;
+}
+
+/**
+ * `counterparts catch-up --reowe <run>` (2026-10-11, `claude-code/reowe.ts`):
+ * the plan first, always; then, with something to owe again, the run's id
+ * typed back (or `--yes`) before progress moves. `--dry-run` stops after the
+ * plan. Exit codes are the CLI's (`EXIT`, review of #435): 0 when it did what
+ * it could or there was nothing to do, 2 (refused) when a session was refused,
+ * the run could not be found or nothing was confirmed, 1 on a usage mistake.
+ */
+export async function reoweCommand(input: ReoweCommandInput): Promise<number> {
+  const { io } = input;
+  const run = input.run;
+  if (typeof run !== "string" || (!run.startsWith(CATCH_UP_RUN_PREFIX) && !run.startsWith("nrn_"))) {
+    io.err(`usage: counterparts catch-up --reowe <run> — a run's id, cup_… (counterparts catch-up) or nrn_… (the nightly run), as doctor and the log name it.`);
+    return 1;
+  }
+  const c = openNightCounterpart(input.config);
+  try {
+    const plan = reowePlan(c, run, input.now());
+    if (!plan.found) {
+      io.err(`refused: the log holds no write-up answers of ${run}. It keeps a week (sessions/log/), so a run older than that, one that wrote nothing, or another store's run cannot be re-owed from here.`);
+      return 2;
+    }
+    if (plan.subjects.length === 0) {
+      io.out(`${run}: every part it closed brought memories back. Nothing to re-owe.`);
+      return 0;
+    }
+    io.out(`${run}, which began ${new Date(plan.startedAt ?? 0).toISOString()}:`);
+    for (const s of plan.subjects) io.out(reoweLine(s));
+    const todo = plan.subjects.filter((s) => s.status === "reowe");
+    const refused = plan.subjects.some((s) => s.status !== "reowe" && s.status !== "nothing-to-reowe");
+    if (todo.length === 0) {
+      io.out(refused ? "Nothing was changed." : "Nothing to re-owe: every part it closed with nothing kept was written up before the run began.");
+      return refused ? 2 : 0;
+    }
+    if (input.dryRun) {
+      io.out("Dry run: nothing was changed.");
+      return 0;
+    }
+    if (!input.yes) {
+      if (io.prompt === undefined) {
+        io.err("refused: this is not an interactive console and nothing was confirmed. Pass --yes if that is what you mean.");
+        return 2;
+      }
+      const said = await typed(io, run, `Type the run's id to owe those parts again [${run}] — Esc or "cancel" to stop: `);
+      if (said === "cancelled") {
+        io.out("Cancelled. Nothing was changed.");
+        return 0;
+      }
+      if (said !== "typed") {
+        io.err("refused: the confirmation did not match. Nothing was changed.");
+        return 2;
+      }
+    }
+    const moved = applyReowe(c, plan, input.now());
+    io.out(
+      moved.length === 0
+        ? "Nothing moved: a writer took those sessions, or moved past them, since the plan was read."
+        : `Owed again: ${moved.join(", ")}. The next catch-up (this command, or the nightly run) reads those parts.`,
+    );
+    return refused || moved.length < todo.length ? 2 : 0;
+  } finally {
+    c.close();
+  }
 }
 
 /** "batch 1: 4 sessions, 12 parts (~180 KB)". */

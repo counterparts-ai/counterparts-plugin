@@ -63,6 +63,13 @@ export interface SelfTunables {
   /** Most open threads considered. CAL. [v1 threads lane: count-capped at 12;
    *  5 since 2026-10-01, when a session could first set the flag — kept small] */
   THREADS_MAX: number;
+  /**
+   * Of those, at most this many are core memories BEING RECONSIDERED
+   * (2026-10-11, Group 3 part A), first; the rest are counted with "more
+   * still open", so a night that flags several does not push the open
+   * questions out. CAL.
+   */
+  RECONSIDERING_MAX: number;
   /** Most warm-shelf hints considered. CAL. */
   HINTS_MAX: number;
   /** Most arriving occasions considered. CAL. */
@@ -223,6 +230,7 @@ export const SELF_TUNABLES: SelfTunables = {
   WORK_HERE_POOL: 8,
   WORK_HERE_EXCERPT: 60,
   THREADS_MAX: 5,
+  RECONSIDERING_MAX: 1,
   HINTS_MAX: 8,
   HORIZON_MAX: 6,
   WARM_FLOOR: 0.35,

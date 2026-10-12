@@ -57,6 +57,7 @@ import {
   rankedAs,
   scanActive,
   scanOne,
+  reconsideringIds,
   schemaBytes,
 } from "./identity.js";
 import { coveredByPage } from "./covered.js";
@@ -177,7 +178,7 @@ import { withTunables } from "./tunables.js";
 import type { SelfTunables } from "./tunables.js";
 import { calendarDate } from "./calendar.js";
 import { markWakeBehind } from "./behind.js";
-import { standingOf } from "../recall/standing.js";
+import { pairOrder, standingOf } from "../recall/standing.js";
 
 export * from "./behind.js";
 export * from "./briefing.js";
@@ -392,6 +393,15 @@ export interface HorizonItem {
    * its borrowing back for it (`briefing.ts#ROOM_ORDER`'s `due`).
    */
   readonly plainDue?: boolean;
+  /**
+   * AT SESSION START, DUE WITHIN THE NEXT FEW DAYS (2026-10-12): `due` no
+   * later than `ARRIVING_NEAR_DAYS` after the session's date and not behind
+   * it (a grace day's "was due" line is not near; review of #445). Set only by the session-start assembly
+   * (`Counterpart#assembleWake`). Such lines come before the other dated
+   * lines and take room down to, not into, the newest handoff's own (`briefing.ts
+   * #ROOM_ORDER`'s `arrivingNear`).
+   */
+  readonly near?: boolean;
 }
 
 export interface BoundaryRequest extends BriefingRequest {
@@ -491,6 +501,8 @@ export interface ClaimOccasion {
   readonly direction: ClaimDirection;
   readonly tier?: UseTier;
   readonly day?: number;
+  /** The session it came in (2026-10-11): written on the return a confirmation earns (`returns.session`). */
+  readonly session?: string | null;
 }
 
 export type ClaimReason = FreezeReason | "unresolved" | "observer";
@@ -834,7 +846,13 @@ export class Self {
     // the rest in the order supplied: the lane trims from its end, and its
     // head is what no lane below it may take (`briefing.ts#arrivingHead`).
     const supplied: Ranked[] = (req.horizon ?? []).map((h) => this.horizonRank(h, req.day));
-    const horizon: Ranked[] = [...supplied.filter((r) => r.due === true), ...supplied.filter((r) => r.due !== true)];
+    // Then, at session start, the ones due within the next few days
+    // (`HorizonItem.near`, 2026-10-12): first claim on its room.
+    const horizon: Ranked[] = [
+      ...supplied.filter((r) => r.due === true),
+      ...supplied.filter((r) => r.due !== true && r.near === true),
+      ...supplied.filter((r) => r.due !== true && r.near !== true),
+    ];
     const lanes: Lanes = rankLanes(scanned, horizon, this.tunables, {
       settledOver: settledOver(this.store),
       coveredByPage: this.pageCovers(scanned),
@@ -899,13 +917,23 @@ export class Self {
     // Arriving, as the turn-end ranks it: a due-day plain reminder first, an
     // identity element left to its own lane.
     const supplied = (req.horizon ?? []).filter((h) => bandOf(h.id) !== "identity").map((h) => this.horizonRank(h, day));
-    const horizon: Ranked[] = [...supplied.filter((r) => r.due === true), ...supplied.filter((r) => r.due !== true)];
-    // Still open, from the open memories alone.
-    const openIds = this.store.openThreadIds();
+    // Then, at session start, the ones due within the next few days
+    // (`HorizonItem.near`, 2026-10-12): first claim on its room.
+    const horizon: Ranked[] = [
+      ...supplied.filter((r) => r.due === true),
+      ...supplied.filter((r) => r.due !== true && r.near === true),
+      ...supplied.filter((r) => r.due !== true && r.near !== true),
+    ];
+    // Still open, from the open memories — and the core memories being
+    // reconsidered, which wait on a decision (2026-10-11).
+    const flagged = reconsideringIds(this.store);
+    const openIds = [...new Set([...this.store.openThreadIds(), ...flagged])];
     const open: Scanned[] = [];
     for (const id of openIds) {
       const s = scanOne(this.store, id, day);
-      if (s !== null && s.unresolved && s.band !== "identity") open.push(note(s));
+      if (s === null) continue;
+      if (s.band === "identity" && flagged.has(id)) open.push(note({ ...s, reconsidering: true }));
+      else if (s.unresolved && s.band !== "identity") open.push(note(s));
     }
     const fresh = rankLanes(open, horizon, this.tunables, {
       settledOver: settled,
@@ -919,6 +947,7 @@ export class Self {
       const out: Scanned[] = [];
       for (const id of ids) {
         if (lane !== "identity" && (opened.has(id) || arriving.has(id) || settled.has(id))) continue;
+        if (lane === "identity" && flagged.has(id)) continue;
         const s = scanOne(this.store, id, day);
         if (s === null || s.doc.body.trim().length === 0) continue;
         if ((lane === "identity") !== (s.band === "identity")) continue;
@@ -2363,7 +2392,7 @@ export class Self {
     const wouldMove = occasion.direction === "confirm";
     const credit =
       !verdict.frozen && wouldMove && !this.observer
-        ? this.store.reinforce(resolvedId, day, tier)
+        ? this.store.reinforce(resolvedId, day, tier, { session: occasion.session ?? null })
         : null;
 
     const after = this.store.physicsOf(resolvedId);
@@ -2969,6 +2998,7 @@ export class Self {
       personScoped: false,
       lastRendered: -1,
       ...(item.plainDue === true ? { due: true } : {}),
+      ...(item.near === true ? { near: true } : {}),
     };
   }
 
@@ -3011,6 +3041,15 @@ export class Self {
       if (st !== null) out.standing = { prefix: st.prefix, suffix: st.suffix };
     } catch {
       /* no standing */
+    }
+    // A CORE MEMORY BEING RECONSIDERED (2026-10-11, Group 3 part A) says so,
+    // and how to answer: `remember` with `core`.
+    try {
+      if (out.standing === undefined && this.store.coreStanding(id)?.action === "reconsidering" && this.store.row(id)?.promoted_identity === 1) {
+        out.standing = { prefix: `Core, being reconsidered — keep or retire it (remember core) [${id}]: `, suffix: "" };
+      }
+    } catch {
+      /* no flag read: shown as it is */
     }
     // Blank is how a chased row reads (`owner-op-seam`), and blank is not a date.
     if (doc.learnedOn.trim() !== "") out.learnedOn = doc.learnedOn;
@@ -3149,11 +3188,12 @@ function shownRecord(briefing: BriefingResult, lanes: Lanes, req: BoundaryReques
  * them out of every lane but identity, so an answered question is not shown
  * alone as still open.
  *
- * ONLY WHILE SOMETHING LIVE HOLDS (review of #311). A memory is hidden when, in
- * the NEWEST settled pair that names it, it is the `over` — so one re-affirmed
- * by a later pair (holds there) is not hidden by the older one — and that
- * pair's `holds` leads to a live memory: followed through its own newer
- * settles and through `superseded_by` to the live end.
+ * ONLY WHILE SOMETHING LIVE HOLDS (review of #311). A memory is hidden when it
+ * is the `over` of a standing settled pair (the newest such, when there are
+ * several) and that pair's `holds` leads to a live memory: followed through
+ * its own settles and through `superseded_by` to the live end. A later pair in
+ * which it HOLDS does not re-affirm it (2026-10-11, Group 3 part B: a settle
+ * reorders only the pair it names; it re-affirmed it from #311 until then).
  * A `holds` that is archived, removed, or superseded with no live successor
  * hides nothing, and the `over` stays visible. Never throws — a store that
  * will not answer has settled nothing.
@@ -3167,12 +3207,13 @@ export function settledOver(store: Pick<Store, "contradictions" | "row">): Set<s
     const pairs = [...store.contradictions({ state: "settled", limit: 100_000 })]
       .reverse()
       .filter((p) => p.via === null && p.over !== null && p.holds !== null && (p.how === "changed" || p.how === "corrected"))
-      .sort((a, b) => a.updated_at - b.updated_at || a.created_at - b.created_at);
-    const newest = new Map<string, { role: "over" | "holds"; holds: string }>();
-    for (const p of pairs) {
-      newest.set(p.over as string, { role: "over", holds: p.holds as string });
-      newest.set(p.holds as string, { role: "holds", holds: p.holds as string });
-    }
+      // Raised order, not answered order (`recall/standing.ts#pairOrder`, Group 2b).
+      .sort(pairOrder);
+    // A settle speaks only about the pair it names (2026-10-11, Group 3 part
+    // B; random-06, lightly held): the newest pair in which a memory is the
+    // `over` decides; one in which it holds no longer re-affirms it.
+    const newest = new Map<string, { role: "over"; holds: string }>();
+    for (const p of pairs) newest.set(p.over as string, { role: "over", holds: p.holds as string });
     const live = (id: string): boolean => {
       const r = store.row(id);
       return r !== undefined && r.archived === 0 && r.superseded_by === null && !(r.body === "" && r.content_hash === "");

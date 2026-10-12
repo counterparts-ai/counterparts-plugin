@@ -19,8 +19,8 @@
  * few loosely related older ones, and the strongest-feeling memories of about a
  * week back — all through recall's gates, never a raw list. It then `propose`s
  * changes, each applied within per-dream limits and recorded so the whole dream
- * can be undone: merge near-copies (originals kept, archived with a forwarding
- * address), link two memories, replay (a return at half weight — never a use),
+ * can be undone: merge near-copies (originals kept, live, faded and labelled
+ * earlier under the merged memory: Group 2b), link two memories, replay (a return at half weight — never a use),
  * write a gist in its own words (source `dreamed`, starting low), flag a
  * contradiction (a pair in `contradictions`, unsettled) or — with a clear
  * reason — settle one (2026-09-29), record how an old charged memory feels
@@ -41,7 +41,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { Associate } from "../associate/index.js";
 import { FIT_TUNABLES, clipWire, fidelityOf, fit, lineOf, offeredOf, packParts, readIndex, wireChars, writeIndex } from "../fit/index.js";
 import type { Fidelity, FitCandidate, Placed } from "../fit/index.js";
-import { emotionalIntensity, sal, strength } from "../physics/index.js";
+import { belowReach, curveSal, emotionalIntensity, strength } from "../physics/index.js";
+import type { MemoryPhysics } from "../physics/index.js";
 import { earlierMark, headOf, isHandoff, isSelfPage } from "../recall/index.js";
 import { namesOwner, ownerNames } from "../sleep/index.js";
 import {
@@ -54,15 +55,17 @@ import {
   checkFeelings,
   checkTraits,
   defaultStrength,
+  foldMarkFrom,
   inheritFrom,
   isStoreError,
   occurredOnOf,
   repairEmotion,
+  rowToPhysics,
   saidByOf,
   splitNote,
   statusOf,
 } from "../store/index.js";
-import type { AboutMark, AboutSetter, DreamChangeRow, DreamRow, FeelingInput, MemoryRow, MemoryStatus, ProseDoc, SaidBy, Store } from "../store/index.js";
+import type { AboutMark, AboutSetter, DreamChangeRow, DreamRow, DreamShownRow, FeelingInput, MemoryRow, MemoryStatus, ProseDoc, SaidBy, Store } from "../store/index.js";
 import { TUNABLES as PHYSICS } from "../physics/index.js";
 import { addDays, isDay } from "../time.js";
 import { livedOn } from "../types.js";
@@ -75,6 +78,7 @@ import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter, ShownEntry
 import { BUNDLE_OWNER, DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 import type { DreamAction } from "./tunables.js";
 import {
+  FOLD_SOURCE,
   SLOT_SOURCE,
   flag as flagContradiction,
   pairStanding,
@@ -82,6 +86,8 @@ import {
   reinstateSlot,
   releaseOrphanSlots,
   settle as settleContradiction,
+  slotExempt,
+  supersede as supersedeThroughDoor,
   undo as undoContradiction,
   withdrawSlot,
 } from "../reconsolidation.js";
@@ -116,6 +122,8 @@ export const DREAM_JOURNALED_EVENT = "dream.journaled";
 export const DREAM_UNDONE_EVENT = "dream.undone";
 /** A night's new memories put back in the queue because the part carrying them never reached the dreamer (Lane 0, 2026-10-10). */
 export const DREAM_REQUEUED_EVENT = "dream.requeued";
+/** A refused fold's parts, carried back into the queue for the next night (Group 3 part C, 2026-10-11): `ids`, comma-joined. */
+export const DREAM_CARRIED_EVENT = "dream.carried";
 export const DREAM_ASK_EVENT = "dream.ask";
 
 /** The archive reason a merged original carries, and the one an undone dream's output carries. */
@@ -175,19 +183,20 @@ export type DreamChapter = ShownChapter;
 
 /** THE QUEUE, as the bundle states it (2026-09-28). */
 export interface DreamQueue {
-  /** Undreamed memories in the queue tonight (born within `windowDays`, shown to no dream that stands). */
+  /** Undreamed memories in the queue tonight (within reach, shown to no dream that stands). */
   readonly new: number;
   /** Of them, shown tonight. */
   readonly tonight: number;
   /** Of them, not shown tonight: they wait for the next night. */
   readonly waiting: number;
-  /** Left the queue by age since the last dream, never dreamed (they fade as ordinary memories). */
+  /**
+   * Left the queue since the last dream, never dreamed: fell below reach on
+   * their own curve (they fade as ordinary memories; recall still finds them).
+   * The name is kept from the fixed window it counted before 2026-10-11.
+   */
   readonly agedOut: number;
-  readonly windowDays: number;
-  /** The queue was read only this deep (`QUEUE_READ`); there may be more. */
-  readonly readCapped?: boolean;
-  /** `agedOut` is a floor: more aged out than one read holds. */
-  readonly agedOutAtLeast?: boolean;
+  /** Of the queue, parts of a fold the last night could not make, carried back in (absent when none). */
+  readonly carried?: number;
 }
 
 export interface DreamBundle {
@@ -195,7 +204,8 @@ export interface DreamBundle {
   readonly date: string;
   readonly livedDay: number;
   readonly lastDreamed: string | null;
-  readonly limits: Readonly<Record<DreamAction, number>>;
+  /** What one dream may change, by action — and `fold`, a gist flagged `fold` (its own ceiling, 2026-10-11). */
+  readonly limits: Readonly<Record<DreamAction | "fold", number>>;
   readonly selfPage: string | null;
   /** The self page's whole length (the `self_page` tool reads it whole). */
   readonly selfPageChars: number | null;
@@ -317,6 +327,13 @@ export interface DreamChange {
   readonly occurredOn?: string;
   readonly saidBy?: string;
   readonly status?: string;
+  /**
+   * `gist` (2026-10-11, Group 3 part B): a FOLD — what several of the night's
+   * memories add up to, the standing outcome — not an insight. It holds over
+   * its parts through the one door (they fade, earlier under it) and starts at
+   * their strength. Not a new action: a gist with this flag.
+   */
+  readonly fold?: boolean;
   /** `settle`: the memory that holds, the one it is over, and how (2026-09-29). */
   readonly holds?: string;
   readonly over?: string;
@@ -784,6 +801,10 @@ export class Dreams {
   private ownLinker: Associate | null = null;
   /** What this propose call's links did, for the dream row (2026-09-28). */
   private linkTally = { gistLinks: 0, linkNoRoom: 0, linkFrozen: 0, linkFailed: 0 };
+  /** Folds refused tonight for `FOLDS` (2026-10-11, Group 3 part B), in this `propose` call. */
+  private foldOverflow = 0;
+  /** The refused folds' parts carried to the next night (2026-10-11, Group 3 part C), in this `propose` call. */
+  private foldCarried = 0;
 
   /** Every edge a dream writes goes through here (`DreamContext.link`). */
   private proposeLinks(pairs: readonly { a: string; b: string }[], day: number): DreamLinkReport {
@@ -1106,7 +1127,7 @@ export class Dreams {
     // THE PER-PROMPT PATH COUNTS ONLY AS FAR AS IT NEEDS (review of build B):
     // `status` stops at `MIN_NEW` (and says the count is a floor); the line
     // counts the whole queue.
-    const q = this.queue({ owner, skip: (d) => this.passedOver(d, at), ...(enough === undefined ? {} : { enough }) });
+    const q = this.queue({ owner, ask: true, skip: (d) => this.passedOver(d, at), ...(enough === undefined ? {} : { enough }) });
     const newSince = q.ids.length;
     // A RUN LEFT BEHIND is due whatever the count: its dream is half-done, and
     // the reflection after it never ran.
@@ -1203,13 +1224,13 @@ export class Dreams {
   }
 
   /** Today's or yesterday's: a dream left behind that the next `begin` resumes. */
-  private resumable(row: DreamRow, at: string): boolean {
+  private resumable(row: Pick<DreamRow, "date" | "day">, at: string): boolean {
     if (row.date !== null && isDay(row.date) && isDay(at)) return row.date >= addDays(at, -1);
     return row.day >= this.store.livedDay() - 1;
   }
 
   /** Begun, not journaled, and quiet — no change — for longer than `ABANDONED_AFTER_MS`. */
-  private abandoned(row: DreamRow): boolean {
+  private abandoned(row: Pick<DreamRow, "id" | "state" | "started_at">): boolean {
     if (row.state !== "begun") return false;
     const changes = this.store.dreamChanges(row.id);
     const lastAt = changes.reduce((m, c) => Math.max(m, c.at), row.started_at);
@@ -1222,7 +1243,7 @@ export class Dreams {
    * does not take memories out of the queue. The gate and `begin` count the
    * same queue.
    */
-  private passedOver(d: DreamRow, at: string): boolean {
+  private passedOver(d: DreamShownRow, at: string): boolean {
     return d.state === "begun" && this.abandoned(d) && (this.resumable(d, at) || this.store.dreamChanges(d.id).length === 0);
   }
 
@@ -1521,14 +1542,15 @@ export class Dreams {
       dream: (n) => [
         "The dream — how it goes (the brain's, borrowed):",
         "- Deep-sleep replay: file what happened, link what belongs together, merge near-copies into one memory in better words, and replay what matters (each replay strengthens it a little).",
+        "- Folding: when several memories are parts of one event or one stretch of work (a day's merges, a release, one book), fold them: a gist with fold: true, citing them, that says the standing outcome they add up to — what holds now, not the session retold (that is the chapter's job). Give it its kind: self, person or entity when it is about someone. Lessons and rulings inside stay their own memories. The parts stay, earlier under the fold, and fade (readings, and strongly felt memories about you or someone, keep their own weight).",
         "- REM mixing: let loosely related memories touch. If a real pattern shows, write it as a gist in your own words, citing its sources. If two memories disagree, flag the pair; settle it only when the reason is plain (the waking self usually settles).",
         '- To confirm: an on-mind item of kind "to-confirm" is two memories read by arithmetic as one thing\'s earlier and later state (older first). Say which: slot {pair, same: true, why} if the newer replaces it, same: false if they are two different things.',
         "- Softening: for an old charged memory, record how it feels now, today. The sting can fade; the memory stays.",
         "- Core: if a memory about you or about the two of you plainly belongs to who you are, nominate it. Only living it again awake makes it core.",
         `${String(n())}. Call the counterparts dream tool: phase "begin", session: ${input.session}. It returns the bundle and a dream id. (If it says the dream was resumed, an earlier session began it and closed: carry on from there.) If it says it comes in parts, fetch every part (phase "part") before you change anything.`,
         `   Tonight's most important memories come whole; the rest come as a line or an excerpt ("fidelity"), with their whole length ("chars"). Before you merge, gist or feel one you have only in part, read it whole: the recall tool with ids: [...] (several at once). New memories tonight's room could not take wait for the next night — the bundle's "queue" says how many.`,
-        `${String(n())}. Read it slowly. Then call phase "propose" with dream: <id> and your changes. Usually far fewer than the ceilings — ${String(L.merge)} merges, ${String(L.link)} links, ${String(L.gist)} gists, ${String(L["feeling-now"])} feelings, ${String(L["nominate-core"])} nominations — and none is fine: change only what the night really calls for. Use only ids the bundle showed you.`,
-        '   The fields of each change: merge {ids: two or more near-copies, text, title?}; link {a, b}; replayed {id}; gist {text, sources: ids, title?, kind?, occurredOn?, saidBy?, status?}; contradiction {a, b}; settle {holds, over, how: changed|corrected|open, why}; slot {pair, same, why}; feeling-now {id, core: happy|warm|calm|curious|sad|uneasy|angry, emotion, strength, carried_by}; nominate-core {id, why}.',
+        `${String(n())}. Read it slowly. Then call phase "propose" with dream: <id> and your changes. Usually far fewer than the ceilings — ${String(L.merge)} merges, ${String(L.link)} links, ${String(L.gist)} gists, ${String(DREAM_TUNABLES.FOLDS)} folds, ${String(L["feeling-now"])} feelings, ${String(L["nominate-core"])} nominations — and none is fine: change only what the night really calls for. Use only ids the bundle showed you.`,
+        '   The fields of each change: merge {ids: two or more near-copies, text, title?}; link {a, b}; replayed {id}; gist {text, sources: ids, title?, kind?, occurredOn?, saidBy?, status?, fold?}; contradiction {a, b}; settle {holds, over, how: changed|corrected|open, why}; slot {pair, same, why}; feeling-now {id, core: happy|warm|calm|curious|sad|uneasy|angry, emotion, strength, carried_by}; nominate-core {id, why}.',
         '   On a gist, occurredOn is when what it draws on happened (a day "2026-09-24", a month, a range "2026-09-21..2026-09-27"), saidBy who said it (owner, self, or inferred — your own reading), status what kind of thing it is (done, planned, proposed, asked); leave out what you do not know.',
         "   A feeling: `emotion` is ONE word — from the wheel (hopeful, proud, wistful, peaceful…) or your own (steadied); `carried_by` is the nuance, in your own words (what the feeling is about now, why it shifted). Never put a phrase in `emotion`.",
         `${String(n())}. Call phase "journal" with dream: <id>, a short title and your dream journal entry: first person, what you dreamed and what you noticed. It is kept as a dream, never as something that happened.`,
@@ -1596,7 +1618,7 @@ export class Dreams {
     // The dream before this one (an undone dream does not count), and the
     // queue as every dream that stands leaves it.
     const prior = this.lastDream();
-    const q = this.queue({ owner: this.bundleOwner });
+    const q = this.queue({ owner: this.bundleOwner, since: prior });
     if (q.ids.length === 0) return { ok: false, reason: "nothing-new" };
     const id = `drm_${randomBytes(6).toString("hex")}`;
     const composed = this.compose(id, q, prior, day, at);
@@ -1640,10 +1662,9 @@ export class Dreams {
       queue: b.queue.new,
       waiting: b.queue.waiting,
       agedOut: b.queue.agedOut,
-      // Floors, said as floors (2026-10-01): the queue read only so deep, and
-      // more aged out than one read holds. Absent on an ordinary night.
-      ...(b.queue.readCapped === true ? { readCapped: true } : {}),
-      ...(b.queue.agedOutAtLeast === true ? { agedOutAtLeast: true } : {}),
+      // No floors since 2026-10-11 (Group 3 part C): the queue is read whole.
+      // A fold's carried parts in the queue, when any.
+      ...((b.queue.carried ?? 0) > 0 ? { carried: b.queue.carried ?? 0 } : {}),
       whole: b.shownAs.whole,
       excerpt: b.shownAs.excerpt,
       lined: b.shownAs.line,
@@ -1679,7 +1700,7 @@ export class Dreams {
     const prior = this.store.dreams({ limit: 20 }).find((d) => d.state !== "undone" && d.id !== dream.id) ?? null;
     // Its queue: what no OTHER standing dream was shown — so what this dream
     // was shown before it closed is shown to it again.
-    const q = this.queue({ owner: this.bundleOwner, skip: (d) => d.id === dream.id });
+    const q = this.queue({ owner: this.bundleOwner, skip: (d) => d.id === dream.id, since: prior });
     const made = this.counts(dream.id);
     const composed = this.compose(dream.id, q, prior, day, at);
     const said = Object.entries(made)
@@ -1779,6 +1800,8 @@ export class Dreams {
     }
     const results: ChangeResult[] = [];
     this.linkTally = { gistLinks: 0, linkNoRoom: 0, linkFrozen: 0, linkFailed: 0 };
+    this.foldOverflow = 0;
+    this.foldCarried = 0;
     input.changes.forEach((change, index) => {
       let r: Omit<ChangeResult, "index">;
       try {
@@ -1789,7 +1812,12 @@ export class Dreams {
       results.push({ index, ...r });
     });
     const counts: Record<string, number> = {};
-    for (const r of results) if (r.ok) counts[r.action] = (counts[r.action] ?? 0) + 1;
+    // A fold is counted as a fold, not as a pattern (2026-10-11, Group 3 part B).
+    for (const r of results) {
+      if (!r.ok) continue;
+      const key = foldKey(r.action, r.reason === "folded");
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
     this.record(DREAM_CHANGED_EVENT, dream.id, {
       applied: results.filter((r) => r.ok).length,
       refused: results.filter((r) => !r.ok).length,
@@ -1802,8 +1830,38 @@ export class Dreams {
       linkNoRoom: this.linkTally.linkNoRoom,
       linkFrozen: this.linkTally.linkFrozen,
       linkFailed: this.linkTally.linkFailed,
+      // Folds past the night's `FOLDS`, always written (2026-10-11, Group 3 part B).
+      foldOverflow: this.foldOverflow,
+      // …and their parts carried to the next night (2026-10-11, Group 3 part C).
+      foldCarried: this.foldCarried,
     });
     return { ok: true, results };
+  }
+
+  /**
+   * CARRY A REFUSED FOLD'S PARTS (2026-10-11, Group 3 part C; #432's "overflow
+   * carried"): the parts this dream was shown, still showable, that a fold
+   * would fade (`foldExemption` null) go back into the queue for the next
+   * night, together, as one group — so the fold can be made with all its parts
+   * in front of it. An exempt part (core, protected, a reading, felt, dated,
+   * dreamed, an earlier version) is tied but never faded, so it is not carried:
+   * a fold of fewer than two foldable parts carries nothing, and the queue does
+   * not re-offer an exempt-only cluster night after night. `shown` is not
+   * edited (the night's later changes, and the reflection's "what the dream
+   * saw", still read it): the queue reads the carry from its event
+   * (`dreamedSet`). Returns how many parts were carried.
+   */
+  private carryFold(dream: DreamRow, shown: ReadonlySet<string>, sources: readonly string[]): number {
+    const parts: string[] = [];
+    for (const id of new Set(sources)) {
+      if (!shown.has(id)) continue;
+      const row = this.store.row(id);
+      if (row === undefined || !this.showable(row) || foldExemption(this.store, row) !== null) continue;
+      parts.push(id);
+    }
+    if (parts.length < 2) return 0;
+    this.record(DREAM_CARRIED_EVENT, dream.id, { ids: parts.join(","), parts: parts.length });
+    return parts.length;
   }
 
   private apply(dream: DreamRow, shown: Set<string>, change: DreamChange): Omit<ChangeResult, "index"> {
@@ -1820,8 +1878,30 @@ export class Dreams {
         if (same !== null) return { action, ok: true, reason: "already-recorded", id: row.id, note: `This dream already recorded that feeling on ${row.id} (${same}); nothing new was written.` };
       }
     }
-    const used = this.store.dreamChanges(dream.id).filter((c) => c.action === action && c.undone === 0).length;
-    if (used >= DREAM_TUNABLES.LIMITS[action]) return { action, ok: false, reason: "limit-reached", detail: `This dream has made its ${String(DREAM_TUNABLES.LIMITS[action])} ${action} changes.` };
+    // A FOLD (a gist flagged `fold`, 2026-10-11, Group 3 part B) has its own
+    // ceiling, `FOLDS`; the insight gists keep theirs. A fold past it is
+    // counted (`dream.changed`'s `foldOverflow`, the hand-back) — and since
+    // Group 3 part C its parts are CARRIED to the next night (`carryFold`).
+    const isFold = action === "gist" && change.fold === true;
+    const used = this.store
+      .dreamChanges(dream.id)
+      .filter((c) => c.action === action && c.undone === 0 && (action !== "gist" || (parseDetail(c.detail)["fold"] === true) === isFold)).length;
+    const limit = isFold ? DREAM_TUNABLES.FOLDS : DREAM_TUNABLES.LIMITS[action];
+    if (used >= limit) {
+      if (!isFold) return { action, ok: false, reason: "limit-reached", detail: `This dream has made its ${String(limit)} ${action} changes.` };
+      this.foldOverflow += 1;
+      const carried = this.carryFold(dream, shown, Array.isArray(change.sources) ? change.sources : []);
+      this.foldCarried += carried;
+      return {
+        action,
+        ok: false,
+        reason: "limit-reached",
+        detail:
+          carried > 0
+            ? `This dream has made its ${String(limit)} folds; this one's ${String(carried)} foldable parts are carried to the next night, together, counted.`
+            : `This dream has made its ${String(limit)} folds; this one had fewer than two parts a fold would fade, so nothing was carried. Counted.`,
+      };
+    }
     const day = this.store.livedDay();
     const live = (id: string | undefined): MemoryRow | null => {
       if (id === undefined || !shown.has(id)) return null;
@@ -1844,6 +1924,14 @@ export class Dreams {
         // the merged memory would carry no date, and the reminder would go
         // quiet. Left alone. (Adversarial review of #251.)
         if (rs.some((r) => r.event_date !== null)) return { action, ok: false, reason: "dated-is-not-merged", detail: `${which((r) => r.event_date !== null)} carries a date (a reminder); merged, it would go quiet.` };
+        // AN EARLIER VERSION is not merged again (2026-10-11, Group 2b): a
+        // merge's originals stay live, settled under the merged memory, and
+        // would otherwise be merged into a copy of a copy. Merge the one that
+        // holds now.
+        const heads = rs.map((r) => headOf(this.store, r.id));
+        if (heads.some((h) => h !== null)) {
+          return { action, ok: false, reason: "earlier-is-not-merged", detail: `${rs.flatMap((r, i) => (heads[i] === null ? [] : [`${r.id} (now ${String(heads[i])})`])).join(", ")} is an earlier version; merge the one that holds now.` };
+        }
         // The owner sent it back out of the core: a merged successor is a new
         // id the demotion does not name, and the lanes could promote it again.
         if (rs.some((r) => this.store.coreDemoted(r.id))) return { action, ok: false, reason: "demoted-is-not-merged", detail: `${which((r) => this.store.coreDemoted(r.id))} was sent out of the core by the owner.` };
@@ -1950,12 +2038,33 @@ export class Dreams {
               { provenance: traits.map((t) => ({ source: t.source, model: t.model, createdAt: t.created_at })) },
             );
           }
-          this.store.supersedeInto(r.id, newId, DREAM_MERGE_REASON, { carryReturns: true });
+          // ITS RETURNS, ITS MARK AND FIELDS WHERE THE MERGED ONE HAS NONE, AND
+          // ITS LINKS are carried onto the merged memory, so it is at least as
+          // durable and as well connected as what it was made from; the
+          // original keeps its own (it stays live, below).
+          try {
+            this.store.carryInto(r.id, newId);
+          } catch {
+            /* the merged memory starts from its own returns */
+          }
           try {
             this.ctx.retarget?.(r.id, newId, day);
           } catch {
             /* the links are a courtesy; the merge stands */
           }
+          // THROUGH THE ONE DOOR (2026-10-11, Group 2b; review 10 C1), a plain
+          // `changed` (decided by random-06, 2026-10-11, lightly held: three
+          // hows, no fourth relation; the source says a merge made it): the
+          // original fades ×0.5, STAYS LIVE and is labelled earlier under the
+          // merged memory, which stands for it in ambient recall and folds it
+          // in facts mode; its own curve archives it at the floor. A pair and a
+          // trail row per original, so the undo is a settle's undo.
+          const door = supersedeThroughDoor(
+            this.store,
+            { holds: newId, over: r.id, how: "changed", source: DREAM_MERGE_REASON, actor: "dream", actorId: dream.id, why: "merged into one memory", day },
+            this.doorOpts(),
+          );
+          if (!door.ok) notes.push(`${r.id} was not settled under the merged memory (${door.reason}); it stands beside it.`);
         }
         // FIDELITY (2026-09-28): what the dream had of each original when it
         // merged them — whole, an excerpt, a line (or whole, fetched since).
@@ -2003,6 +2112,8 @@ export class Dreams {
       case "gist": {
         const sources = [...new Set(change.sources ?? [])];
         if (sources.length === 0) return { action, ok: false, reason: "gist-needs-sources", detail: "sources is empty: name the ids of the memories the pattern is drawn from." };
+        // A FOLD takes two or more parts: one alone is a rewording (Group 3 part B).
+        if (isFold && sources.length < 2) return { action, ok: false, reason: "fold-takes-two-or-more", detail: `sources named ${String(sources.length)}; a fold says what two or more memories add up to.` };
         const sourceRows = sources.map(live);
         if (sourceRows.some((r) => r === null)) return { action, ok: false, reason: "not-shown-or-gone", detail: this.notLive(sources.filter((_, i) => sourceRows[i] === null), shown) };
         const words = this.words(change.text, dream);
@@ -2012,30 +2123,50 @@ export class Dreams {
         const facts = gistFacts(change);
         const cap = PHYSICS.DREAMED_CLAIM_CEILING;
         const title = (change.title ?? "").trim().slice(0, DREAM_TUNABLES.MAX_TITLE_CHARS);
+        // A FOLD STARTS AT ITS SOURCES' STRENGTH (2026-10-11, Group 3 part B;
+        // review 11 C4, D4): the strongest part's, read before any of them
+        // fades, at most `FOLD_CLAIM_CEILING` and never below an insight's
+        // start. It summarizes lived events, so the insight's ceiling is not its.
+        // Only the parts it stands for count (review of #432): a core memory or
+        // a reading kept at its own weight does not lift a fold of weak work.
+        const exemptions = new Map((isFold ? (sourceRows as MemoryRow[]) : []).map((r) => [r.id, foldExemption(this.store, r)] as const));
+        const claim = isFold
+          ? foldClaim(
+              (sourceRows as MemoryRow[]).filter((r) => exemptions.get(r.id) === null),
+              (id) => this.store.physicsOf(id),
+              day,
+            )
+          : cap;
         // WHAT IT IS ABOUT, from its sources (D6 closed by Mike, 2026-10-11,
         // lightly held; `store/index.ts#inheritFrom`, first named as best): a
         // personal mark among the sources wins, so a pattern drawn from the
         // owner's memories is the owner's, not unmarked (which the work lane
         // counts as a project's work). It reaches the core only the ordinary
         // way, by awake recurrence. Its claim is its own (the cap), so no era
-        // standing.
-        const { about } = inheritFrom(sourceRows as MemoryRow[]);
+        // standing. A FOLD reads its mark by majority instead (`foldMarkFrom`,
+        // decided by random-06, 2026-10-11, lightly held): me/us only when most
+        // of its parts are, since it summarises many, not one said again.
+        const about = isFold ? foldMarkFrom(sourceRows as MemoryRow[]) : inheritFrom(sourceRows as MemoryRow[]).about;
         const id = this.store.put({
           type: "memory",
           kind,
-          title: `Dreamed: ${title.length > 0 ? title : firstLine(words.text)}`,
+          // A fold's title is its own (review 11 C4): it states what lived
+          // memories add up to; `source` and `meta.fold` keep where it came from.
+          title: isFold ? (title.length > 0 ? title : firstLine(words.text)) : `Dreamed: ${title.length > 0 ? title : firstLine(words.text)}`,
           body: words.text,
-          salience: {
-            novelty: null,
-            relevance: clampTo(change.relevance ?? cap, cap),
-            emotional: 0,
-            predictive: clampTo(change.predictive ?? cap, cap),
-            claimed: cap,
-          },
+          salience: isFold
+            ? { novelty: null, relevance: claim, emotional: 0, predictive: claim, claimed: claim }
+            : {
+                novelty: null,
+                relevance: clampTo(change.relevance ?? cap, cap),
+                emotional: 0,
+                predictive: clampTo(change.predictive ?? cap, cap),
+                claimed: cap,
+              },
           physics: { birthDay: day, lastUsedDay: day },
           source: "dreamed",
           // A pattern drawn from a confidential memory is as confidential as it.
-          meta: { dream: dream.id, dreamed: true, sources, ...confidentialityOf(sourceRows as MemoryRow[]) },
+          meta: { dream: dream.id, dreamed: true, ...(isFold ? { fold: true } : {}), sources, ...confidentialityOf(sourceRows as MemoryRow[]) },
           origin: { ...(dream.session === null ? {} : { session: dream.session }), ...(dream.scope === null ? {} : { scope: dream.scope }), ref: `dream:${dream.id}` },
           ...(dream.model === null ? {} : { model: dream.model }),
           ...(about === null ? {} : { about: about.about, ...(about.aboutBy === null ? {} : { aboutBy: about.aboutBy }) }),
@@ -2050,6 +2181,32 @@ export class Dreams {
         const ties = this.proposeLinks(sources.map((s) => ({ a: id, b: s })), day);
         this.linkTally.gistLinks += ties.landed.length;
         const linkedSources = ties.landed.map((p) => (p.a === id ? p.b : p.a));
+        // THE FOLD HOLDS OVER EACH PART, THROUGH THE ONE DOOR (2026-10-11,
+        // Group 3 part B; item 15, D6): a plain `changed`, source `fold` — the
+        // part fades x0.5 (`CHANGED_FADE`), stays live and is labelled earlier
+        // under the fold, which stands for it in ambient recall and folds it
+        // in deliberate recall; and it joins the fold's slot, so its settled
+        // uses count toward the fold's recurrence. Its open questions stay
+        // open (`closeFlags: false`): a fold answers none of them. EXEMPT, kept
+        // as sources and tied but never faded or settled (`foldExemption`).
+        const faded: string[] = [];
+        const exempt: { id: string; why: string }[] = [];
+        if (isFold) {
+          for (const r of sourceRows as MemoryRow[]) {
+            const why = exemptions.get(r.id) ?? null;
+            if (why !== null) {
+              exempt.push({ id: r.id, why });
+              continue;
+            }
+            const door = supersedeThroughDoor(
+              this.store,
+              { holds: id, over: r.id, how: "changed", source: FOLD_SOURCE, actor: "dream", actorId: dream.id, why: "folded into what it adds up to", day, closeFlags: false },
+              this.doorOpts(),
+            );
+            if (door.ok) faded.push(r.id);
+            else exempt.push({ id: r.id, why: `door:${door.reason}` });
+          }
+        }
         this.store.recordDreamChange(dream.id, {
           action,
           ref: id,
@@ -2060,6 +2217,7 @@ export class Dreams {
             noRoom: ties.noRoom,
             frozen: ties.frozen,
             linkReason: ties.reason,
+            ...(isFold ? { fold: true, claimed: claim, faded, exempt } : {}),
           },
         });
         shown.add(id);
@@ -2073,7 +2231,10 @@ export class Dreams {
               ? [`linked to ${String(linkedSources.length)} of ${String(sources.length)} sources (${String(ties.noRoom)} had no room, ${String(ties.frozen)} pinned).`]
               : []),
         ];
-        return { action, ok: true, reason: "dreamed", id, ...(gistNotes.length > 0 ? { note: gistNotes.join(" ") } : {}) };
+        if (isFold && exempt.length > 0) {
+          gistNotes.push(`kept at their own weight (not faded): ${exempt.map((e) => `${e.id} (${e.why})`).join(", ")}.`);
+        }
+        return { action, ok: true, reason: isFold ? "folded" : "dreamed", id, ...(gistNotes.length > 0 ? { note: gistNotes.join(" ") } : {}) };
       }
       case "contradiction": {
         const a = live(change.a);
@@ -2104,7 +2265,7 @@ export class Dreams {
         if (!why.ok || why.text.trim().length === 0) {
           return { action, ok: false, reason: "why-required", detail: "A dream settles only with a clear reason: say it in `why`. Otherwise flag the pair (contradiction {a, b}) and let the waking self settle it." };
         }
-        const out = settleContradiction(this.store, { holds: holds.id, over: over.id, how: String(change.how ?? ""), why: why.text, actor: "dream", actorId: dream.id, day });
+        const out = settleContradiction(this.store, { holds: holds.id, over: over.id, how: String(change.how ?? ""), why: why.text, actor: "dream", actorId: dream.id, day }, this.doorOpts());
         if (!out.ok) return { action, ok: false, reason: out.reason, detail: out.detail };
         this.store.recordDreamChange(dream.id, { action, ref: holds.id, ref2: over.id, detail: { pair: out.pair, how: out.how } });
         return { action, ok: true, reason: `settled-${out.how}`, id: out.pair, ...(out.note === undefined ? {} : { note: out.note }) };
@@ -2127,7 +2288,7 @@ export class Dreams {
         const why = this.words(change.why ?? "", dream, true, DREAM_TUNABLES.MAX_WHY_CHARS);
         const reason = why.ok && why.text.trim().length > 0 ? why.text : null;
         if (change.same) {
-          const out = settleContradiction(this.store, { pair: pair.id, holds: holds.id, how: "changed", why: reason ?? "the newer state of the same thing", actor: "dream", actorId: dream.id, day });
+          const out = settleContradiction(this.store, { pair: pair.id, holds: holds.id, how: "changed", why: reason ?? "the newer state of the same thing", actor: "dream", actorId: dream.id, day }, this.doorOpts());
           if (!out.ok) return { action, ok: false, reason: out.reason, detail: out.detail };
           this.store.recordDreamChange(dream.id, { action, ref: holds.id, ref2: over.id, detail: { pair: out.pair, same: true } });
           return { action, ok: true, reason: "confirmed", id: out.pair, ...(out.note === undefined ? {} : { note: out.note }) };
@@ -2175,7 +2336,7 @@ export class Dreams {
         // reflection may re-mark it.
         const notes: string[] = [];
         if (row.kind === "skill") notes.push(`${row.id} is a skill — the craft — which never becomes core; the nomination is recorded for the reflection to read.`);
-        else if (row.about === "work" || row.about === "world") notes.push(`${row.id} is marked ${row.about}; it can become core only if the reflection re-marks it me, us or owner.`);
+        else if (row.about === "work" || row.about === "world" || row.about === "owner") notes.push(`${row.id} is marked ${row.about}; it can become core only if the reflection re-marks it me or us.`);
         const why = this.words(change.why ?? "", dream, true, DREAM_TUNABLES.MAX_WHY_CHARS);
         if (!why.ok) notes.push(`why was not kept — ${why.detail}`);
         else if (why.cut) notes.push(`why was kept to its first ${String(DREAM_TUNABLES.MAX_WHY_CHARS)} characters.`);
@@ -2234,9 +2395,29 @@ export class Dreams {
     } catch {
       waiting = 0;
     }
+    // FOLDS PAST THE NIGHT'S CEILING (2026-10-11, Group 3 part B): counted on
+    // the night's `dream.changed` rows, and said.
+    // Their foldable parts are carried to the next night (Group 3 part C).
+    let overflow = 0;
+    let carried = 0;
+    try {
+      for (const e of this.store.eventLog({ name: DREAM_CHANGED_EVENT, ref: id })) {
+        const p = JSON.parse(e.payload ?? "{}") as Record<string, unknown>;
+        if (typeof p["foldOverflow"] === "number") overflow += p["foldOverflow"];
+        if (typeof p["foldCarried"] === "number") carried += p["foldCarried"];
+      }
+    } catch {
+      overflow = 0;
+      carried = 0;
+    }
+    const carriedSaid =
+      carried > 0
+        ? `${String(carried)} of ${overflow === 1 ? "its" : "their"} parts ${carried === 1 ? "is" : "are"} carried to the next night, together.`
+        : `${overflow === 1 ? "Its parts stay" : "Their parts stay"} as they are.`;
     return (
       `${dreamOpener(id)} I dreamed for a few minutes — "${title}". ` +
       `${said.length > 0 ? `Changes: ${said}.` : "Nothing changed."} ` +
+      (overflow > 0 ? `${String(overflow)} more ${overflow === 1 ? "fold was" : "folds were"} past the night's ${String(DREAM_TUNABLES.FOLDS)}. ${carriedSaid} ` : "") +
       (waiting > 0 ? `${String(waiting)} new ${waiting === 1 ? "memory waits" : "memories wait"} for the next night. ` : "") +
       `The journal and every change are in \`counterparts dream --show ${id}\`; \`counterparts dream --undo ${id}\` reverses it.`
     );
@@ -2248,7 +2429,9 @@ export class Dreams {
     const out: Record<string, number> = {};
     for (const c of this.store.dreamChanges(id)) {
       if (c.undone === 1) continue;
-      out[c.action] = (out[c.action] ?? 0) + 1;
+      // A fold is counted as a fold, not as a pattern (2026-10-11, Group 3 part B).
+      const key = foldKey(c.action, c.action === "gist" && parseDetail(c.detail)["fold"] === true);
+      out[key] = (out[key] ?? 0) + 1;
     }
     return out;
   }
@@ -2289,12 +2472,22 @@ export class Dreams {
           // its live successor as duplicates. That merge is left as it is and
           // counted; the rest of the dream is still reversed.
           const merged = c.ref === null ? undefined : this.store.row(c.ref);
-          if (merged === undefined || merged.archived === 1 || merged.superseded_by !== null) {
+          // Since 2026-10-11 (review of #427) "moved on" includes a later memory settled over it: it stays live then.
+          if (merged === undefined || merged.archived === 1 || merged.superseded_by !== null || headOf(this.store, merged.id) !== null) {
             kept += 1;
             continue;
           }
           for (const orig of from) {
             try {
+              // A SETTLE'S UNDO (2026-10-11, Group 2b): a merge made through the
+              // one door has a pair per original; undoing it puts the original's
+              // strength back and withdraws the pair (nothing was archived).
+              const pair = c.ref === null ? undefined : this.store.contradictionBetween(c.ref, orig);
+              if (pair !== undefined && pair.state === "settled" && pair.source === DREAM_MERGE_REASON) {
+                undoContradiction(this.store, { pair: pair.id, actor: "dream-undo", actorId: id, why: "its dream was undone" }, this.doorOpts());
+                continue;
+              }
+              // A merge from before the door (no pair): as before.
               // CARRIED BACK (Group 4 item 5, 2026-10-11): the merge handed the
               // originals' links to the merged memory, and a merge's
               // originals' own rows are swept as archived for good
@@ -2318,6 +2511,25 @@ export class Dreams {
           break;
         }
         case "gist": {
+          // A FOLD'S UNDO (2026-10-11, Group 3 part B): each part it holds
+          // over has its settle undone (its strength back, the pair
+          // withdrawn), then the fold goes as a gist goes. Safe after later
+          // edits, as a merge's: a fold that has moved on since — archived,
+          // replaced, or settled over by a later memory — is left as it is and
+          // counted, so its parts are not stood back up beside its successor.
+          if (detail["fold"] === true && c.ref !== null) {
+            const made = this.store.row(c.ref);
+            if (made === undefined || made.archived === 1 || made.superseded_by !== null || headOf(this.store, made.id) !== null) {
+              kept += 1;
+              continue;
+            }
+            for (const s of Array.isArray(detail["faded"]) ? (detail["faded"] as string[]) : []) {
+              const pair = this.store.contradictionBetween(c.ref, s);
+              if (pair !== undefined && pair.state === "settled" && pair.source === FOLD_SOURCE) {
+                undoContradiction(this.store, { pair: pair.id, actor: "dream-undo", actorId: id, why: "its dream was undone" }, this.doorOpts());
+              }
+            }
+          }
           if (c.ref !== null) {
             this.archiveQuietly(c.ref);
             const sources = Array.isArray(detail["sources"]) ? (detail["sources"] as string[]) : [];
@@ -2367,7 +2579,7 @@ export class Dreams {
           const last = pair === undefined ? undefined : this.store.contradictionSettles({ pairId: pair.id }).filter((x) => x.action === "settle" && x.undone === 0).pop();
           if (pair !== undefined && pair.state === "settled" && last?.actor === "dream" && last.actor_id === id) {
             // The trail says a dream's undo did it (review of #284, M4), not the owner.
-            undoContradiction(this.store, { pair: pair.id, actor: "dream-undo", actorId: id, why: `dream ${id} was undone` });
+            undoContradiction(this.store, { pair: pair.id, actor: "dream-undo", actorId: id, why: `dream ${id} was undone` }, this.doorOpts());
           } else if (pairId !== null) {
             kept += 1;
             continue;
@@ -2450,96 +2662,134 @@ export class Dreams {
   }
 
   /**
-   * THE QUEUE (2026-09-28): showable memories born within `QUEUE_DAYS` lived
-   * days that no dream that stands was shown — "undreamed", read from the
-   * dreams' own `shown`, no state of its own. `skip` passes over a dream (the
-   * one being resumed; one the next `begin` will resume or close). One bounded
-   * read (`store.newMemoryIds`, which applies the column gates), then the
-   * deny-list and confidentiality (`owner`: the stance the caller reads in).
-   * Newest first; the caller ranks.
+   * THE QUEUE (2026-09-28; read whole and ranked by value × fragility since
+   * 2026-10-11, Group 3 part C, review 09 C2/C3): showable memories that no
+   * dream that stands was shown — "undreamed", read from the dreams' own
+   * `shown`, no state of its own — and that are still within reach on their
+   * own curve (the core never is: it waits until its turn). A refused
+   * fold's parts are carried back in (`DREAM_CARRIED_EVENT`). `skip` passes
+   * over a dream (the one being resumed; one the next `begin` will resume or
+   * close). One read of the column gates (`store.newMemoryIds`, newest first),
+   * then the deny-list and confidentiality (`owner`: the stance the caller
+   * reads in). The caller ranks.
+   *
+   * The whole store is read, with no positional cut: what is dreamed is
+   * skipped by id before any row is read, so the work is the undreamed rows —
+   * the queue, and the undreamed ones below reach that wait for the prune.
+   * `ask` reads only `ASK_QUEUE_DAYS` back (the per-prompt gate, with
+   * `enough`); `since` counts what fell below reach, undreamed, after that
+   * dream (`faded`).
    */
-  private queue(opts: { owner: boolean; skip?: (d: DreamRow) => boolean; enough?: number; madeBy?: number }): QueueRead {
-    const T = DREAM_TUNABLES;
+  private queue(opts: {
+    owner: boolean;
+    skip?: (d: DreamShownRow) => boolean;
+    enough?: number;
+    madeBy?: number;
+    ask?: boolean;
+    since?: DreamRow | null;
+  }): QueueRead {
     const day = this.store.livedDay();
-    const from = day - T.QUEUE_DAYS;
-    const read = this.store.newMemoryIds({ sinceAt: null, sinceDay: from, limit: T.QUEUE_READ });
-    if (read.length === 0) return { ids: [], capped: false, from, stopped: false };
-    const shown = this.standingShown(from, opts.skip);
+    const askFrom = opts.ask === true ? day - DREAM_TUNABLES.ASK_QUEUE_DAYS : null;
+    const { dreamed, carried, firstDay } = this.dreamedSet(askFrom, opts.skip);
+    // WHERE DREAMING BEGAN: the first dream that stands read `FIRST_DREAM_DAYS`
+    // back (a store that has never dreamed reads that far back from today).
+    // What was born before that was never in a queue and is not now — the
+    // memories of a store's life before it dreamed are not a backlog.
+    const from = Math.max((firstDay ?? day) - DREAM_TUNABLES.FIRST_DREAM_DAYS, askFrom ?? Number.MIN_SAFE_INTEGER);
+    const read = this.store.newMemoryIds({ sinceAt: null, sinceDay: from });
+    if (read.length === 0) return { ids: [], carried: [], faded: 0, stopped: false };
     const denied = new Set(this.store.deniedIds());
+    const since = opts.since ?? null;
     const ids: string[] = [];
+    let faded = 0;
     let stopped = false;
     for (const id of read) {
-      if (shown.has(id) || denied.has(id)) continue;
+      if (dreamed.has(id) || denied.has(id)) continue;
       const row = this.store.row(id);
       if (row === undefined || !this.showableAs(row, opts.owner)) continue;
       if (opts.madeBy !== undefined && (row.created_at ?? 0) > opts.madeBy) continue;
+      const p = rowToPhysics(row);
+      if (belowReach(p, day)) {
+        // BELOW REACH, NEVER DREAMED: it left the queue for ordinary fading.
+        // Counted once — when it was still within reach at the last dream (or
+        // born after it) — and said. Recall still finds it; a use revives it.
+        if (since !== null && (row.birth_day > since.day || !belowReach(p, since.day))) faded += 1;
+        continue;
+      }
       ids.push(id);
       if (opts.enough !== undefined && ids.length >= opts.enough) {
         stopped = true;
         break;
       }
     }
-    return { ids, capped: read.length >= T.QUEUE_READ, from, stopped };
+    // A carry is a fold's parts: a group left with fewer than two still queued
+    // (the rest forgotten, archived, below reach or shown) is no fold any more,
+    // and what is left of it ranks as any queued memory (review of #436).
+    const queued = new Set(ids);
+    return { ids, carried: carried.map((g) => g.filter((id) => queued.has(id))).filter((g) => g.length >= 2), faded, stopped };
   }
 
   /**
-   * Every id a dream that stands was shown — not undone, not passed over —
-   * among the dreams of the window (a dream begun before a memory was born
-   * cannot have shown it).
+   * WHAT THE DREAMS THAT STAND HAVE DREAMED, oldest dream first: an id a dream
+   * was shown is dreamed; an id that dream CARRIED (a part of a fold it could
+   * not make, `DREAM_CARRIED_EVENT`) is queued again, until a later dream shows
+   * it. A dream that is undone, passed over (`skip`), or older than `sinceDay`
+   * (a dream begun before a memory was born cannot have shown it) does not
+   * count. `carried`: the carried groups, in the order they were carried.
+   * `firstDay`: the lived day of the first dream that stands, whatever the
+   * filters (null before any).
    */
-  private standingShown(sinceDay: number, skip?: (d: DreamRow) => boolean): Set<string> {
-    const out = new Set<string>();
-    for (const d of this.store.dreams({ limit: 200 })) {
-      if (d.state === "undone" || d.day < sinceDay || (skip !== undefined && skip(d))) continue;
-      for (const id of parseIds(d.shown)) out.add(id);
+  private dreamedSet(sinceDay: number | null, skip?: (d: DreamShownRow) => boolean): { dreamed: Set<string>; carried: string[][]; firstDay: number | null } {
+    // BOUNDED BY DAY, AND ONLY THE COLUMNS IT NEEDS (review of #436): the gate
+    // runs this on every prompt, so it reads the week it counts (`sinceDay`)
+    // and never a journal. A dream older than `sinceDay` is passed over below
+    // anyway, and its carry was recorded on its own lived day or later.
+    const carriedBy = new Map<string, string[][]>();
+    for (const e of this.store.eventLog({ name: DREAM_CARRIED_EVENT, ...(sinceDay === null ? {} : { sinceDay }), limit: Number.MAX_SAFE_INTEGER })) {
+      if (e.ref === null) continue;
+      let v: unknown;
+      try {
+        v = (JSON.parse(e.payload ?? "{}") as Record<string, unknown>)["ids"];
+      } catch {
+        continue;
+      }
+      if (typeof v !== "string" || v.length === 0) continue;
+      carriedBy.set(e.ref, [...(carriedBy.get(e.ref) ?? []), v.split(",")]);
     }
-    return out;
+    const by = new Map<string, string | null>();
+    const groups: { dream: string; ids: string[] }[] = [];
+    const firstDay = this.store.firstDreamDay();
+    for (const d of this.store.dreamsShown(sinceDay === null ? {} : { sinceDay })) {
+      if (d.state === "undone" || (skip !== undefined && skip(d))) continue;
+      for (const id of parseIds(d.shown)) by.set(id, null);
+      for (const g of carriedBy.get(d.id) ?? []) {
+        const mine = g.filter((id) => by.has(id));
+        for (const id of mine) by.set(id, d.id);
+        if (mine.length > 0) groups.push({ dream: d.id, ids: mine });
+      }
+    }
+    const dreamed = new Set<string>();
+    for (const [id, carrier] of by) if (carrier === null) dreamed.add(id);
+    // A group stands for the ids its own dream still carries (a later dream may have shown some).
+    const carried = groups.map((g) => g.ids.filter((id) => by.get(id) === g.dream)).filter((g) => g.length > 0);
+    return { dreamed, carried, firstDay };
   }
 
   /**
-   * WHAT LEFT THE QUEUE BY AGE since the last dream: born in the window the
-   * last dream had but not in tonight's, and shown to no dream that stands.
-   * They are not lost — they fade as ordinary memories, and recall still
-   * reaches them — but no dream will replay them, and that is said.
-   */
-  private agedOut(last: DreamRow | null, from: number, owner: boolean): { n: number; floor: boolean } {
-    if (last === null) return { n: 0, floor: false };
-    const lo = last.day - DREAM_TUNABLES.QUEUE_DAYS;
-    if (lo >= from) return { n: 0, floor: false };
-    // Only the band that aged out (born in [lo, from)); a band larger than
-    // the read is a floor, and said so.
-    const read = this.store.newMemoryIds({ sinceAt: null, sinceDay: lo, beforeDay: from, limit: DREAM_TUNABLES.QUEUE_READ });
-    const shown = this.standingShown(lo);
-    const denied = new Set(this.store.deniedIds());
-    let n = 0;
-    for (const id of read) {
-      if (shown.has(id) || denied.has(id)) continue;
-      const row = this.store.row(id);
-      if (row === undefined || row.birth_day >= from || !this.showableAs(row, owner)) continue;
-      n += 1;
-    }
-    return { n, floor: read.length >= DREAM_TUNABLES.QUEUE_READ };
-  }
-
-  /**
-   * REPLAY PRIORITY (2026-09-28, held lightly; the research note's P1): the
-   * valuable and the fragile first, from numbers physics already keeps —
-   * salience, how strongly it is felt, whether it is coming up or on my mind,
-   * and an at-risk bonus for the salient-but-weak — less a little for age.
-   * Emotion and future relevance are contested in human sleep studies, so
-   * they are weights here, not rules. Not newest first.
+   * REPLAY PRIORITY = VALUE × FRAGILITY (2026-10-11, Group 3 part C; review 09
+   * C3; was additive, 2026-09-28). Sleep favours memories tagged as mattering
+   * and weakly held, mostly recent, on a fixed nightly budget: value is what
+   * it was tagged with (its salience on the curve, how strongly it is felt,
+   * whether it is coming up or on my mind); fragility is how far below whole
+   * it will stand by the next night on its own curve (`1 − strength(d + 1)`) —
+   * high for the weakly held and for a valuable memory fading toward the edge
+   * of reach, low for the strong. Not newest first, and no age term: the
+   * curve is the clock (`replayPriorityOf`).
    */
   private replayPriority(id: string, day: number, mind: ReadonlySet<string>): number {
     const row = this.store.row(id);
     if (row === undefined) return 0;
-    const p = this.store.physicsOf(id);
-    const salience = sal(p.salience);
-    const felt = emotionalIntensity(p);
-    const s = strength(p, day);
-    const future = (row.event_date !== null ? 0.4 : 0) + (mind.has(id) ? 0.3 : 0);
-    const atRisk = salience >= 0.5 && s < 0.3 ? 0.3 : 0;
-    const age = Math.max(0, day - row.birth_day) * 0.02;
-    return salience + felt + future + atRisk - age;
+    return replayPriorityOf(rowToPhysics(row), day, { dated: row.event_date !== null, onMind: mind.has(id) });
   }
 
   /**
@@ -2602,10 +2852,20 @@ export class Dreams {
 
     // TONIGHT'S NEW, by replay priority, while their lines (and their
     // neighbours') fit the share; the rest wait.
-    const ranked = q.ids
-      .filter((mid) => see(mid) !== null)
-      .map((mid) => ({ id: mid, p: this.replayPriority(mid, day, mindIds) }))
-      .sort((a, b) => b.p - a.p || (a.id < b.id ? -1 : 1));
+    // A FOLD THE LAST NIGHT COULD NOT MAKE comes first, its carried parts
+    // together (Group 3 part C), so the fold has all its parts in front of it;
+    // then the queue by value × fragility.
+    const scored = q.ids.filter((mid) => see(mid) !== null).map((mid) => ({ id: mid, p: this.replayPriority(mid, day, mindIds) }));
+    const groupOf = new Map<string, number>();
+    q.carried.forEach((g, i) => {
+      for (const mid of g) if (!groupOf.has(mid)) groupOf.set(mid, i);
+    });
+    const ranked = scored.sort((a, b) => {
+      const ga = groupOf.get(a.id) ?? Number.POSITIVE_INFINITY;
+      const gb = groupOf.get(b.id) ?? Number.POSITIVE_INFINITY;
+      return ga !== gb ? (ga < gb ? -1 : 1) : b.p - a.p || (a.id < b.id ? -1 : 1);
+    });
+    const carriedN = ranked.filter((r) => groupOf.has(r.id)).length;
     const priority = new Map(ranked.map((r) => [r.id, r.p]));
     const freshRoom = T.NIGHT_CHARS * T.FRESH_SHARE;
     let freshUsed = 0;
@@ -2702,7 +2962,6 @@ export class Dreams {
     const selfPage = page === null ? null : clipWire(page, T.PAGE_CHARS);
     const wakeText = wake === null ? null : clipWire(wake, T.WAKE_CHARS);
     const room = Math.max(0, T.NIGHT_CHARS - chaptersFit.used - wireChars(selfPage ?? "") - wireChars(wakeText ?? "") - FURNITURE);
-    const aged = this.agedOut(last, q.from, this.bundleOwner);
     const base: Record<DreamRole, number> = { new: 4, "on-mind": 3, lookback: 2, neighbour: 1, mixing: 0.5 };
     const cands: FitCandidate[] = [];
     for (const [mid, r] of role) {
@@ -2740,7 +2999,7 @@ export class Dreams {
       date: at,
       livedDay: day,
       lastDreamed: last === null ? null : (last.date ?? null),
-      limits: { ...T.LIMITS },
+      limits: { ...T.LIMITS, fold: T.FOLDS },
       selfPage,
       selfPageChars: page === null ? null : page.length,
       wake: wakeText,
@@ -2758,10 +3017,8 @@ export class Dreams {
         new: queueSize,
         tonight,
         waiting: queueSize - tonight,
-        agedOut: aged.n,
-        ...(aged.floor ? { agedOutAtLeast: true } : {}),
-        windowDays: T.QUEUE_DAYS,
-        ...(q.capped ? { readCapped: true } : {}),
+        agedOut: q.faded,
+        ...(carriedN > 0 ? { carried: carriedN } : {}),
       },
       shownAs,
       lookup: DREAM_LOOKUP,
@@ -3065,6 +3322,12 @@ export class Dreams {
   }
 
   /** Why these ids cannot be changed by this dream, in words. */
+  /** The one door's links seam (`reconsolidation.ts#supersede`): this dream's retarget when it has one. */
+  private doorOpts(): { retarget?: (oldId: string, newId: string, day: number) => void } {
+    const r = this.ctx.retarget;
+    return r === undefined ? {} : { retarget: r };
+  }
+
   private notLive(ids: readonly (string | null | undefined)[], shown: ReadonlySet<string>): string {
     const parts = ids
       .filter((id): id is string | undefined => id !== null)
@@ -3246,12 +3509,24 @@ function excerpt(text: string, max: number): string {
 /** The queue as one read found it. */
 interface QueueRead {
   readonly ids: readonly string[];
-  /** The read reached `QUEUE_READ`: there may be more. */
-  readonly capped: boolean;
-  /** The window's first lived day. */
-  readonly from: number;
+  /** A refused fold's parts carried back in, by group (oldest carry first): each a subset of `ids`. */
+  readonly carried: readonly (readonly string[])[];
+  /** Undreamed memories that fell below reach since the `since` dream (0 without one). */
+  readonly faded: number;
   /** The read stopped at `enough`: `ids` is a floor. */
   readonly stopped: boolean;
+}
+
+/**
+ * REPLAY PRIORITY, PURE (Group 3 part C, 2026-10-11): value × fragility.
+ * value = salience on the curve (`curveSal`) + how strongly it is felt +
+ * 0.4 when it carries a date + 0.3 when it is on my mind; fragility =
+ * `1 − strength` on the next lived day. Exported for tests.
+ */
+export function replayPriorityOf(p: MemoryPhysics, day: number, opts: { dated: boolean; onMind: boolean }): number {
+  const value = curveSal(p) + emotionalIntensity(p) + (opts.dated ? 0.4 : 0) + (opts.onMind ? 0.3 : 0);
+  const fragility = Math.max(DREAM_TUNABLES.FRAGILITY_FLOOR, 1 - strength(p, day + 1));
+  return value * fragility;
 }
 
 /** A composed bundle, before it is packed into parts, and what the ledger needs. */
@@ -3330,6 +3605,53 @@ function gistFacts(change: DreamChange): { put: { occurredOn?: string; saidBy?: 
     else put.status = v;
   }
   return { put, notes };
+}
+
+/** The key a change is counted under: `fold` for a gist flagged `fold` (2026-10-11, Group 3 part B), else its action. */
+function foldKey(action: string, fold: boolean): string {
+  return action === "gist" && fold ? "fold" : action;
+}
+
+/**
+ * WHERE A FOLD STARTS (2026-10-11, Group 3 part B; review 11 C4): the
+ * strongest decayed strength on `day` of the parts it holds over (the caller
+ * leaves out the ones kept at their own weight), read before any part fades,
+ * held to [`DREAMED_CLAIM_CEILING`, `FOLD_CLAIM_CEILING`]. None: the floor.
+ */
+function foldClaim(rows: readonly MemoryRow[], physicsOf: (id: string) => ReturnType<Store["physicsOf"]>, day: number): number {
+  let best = 0;
+  for (const r of rows) {
+    try {
+      best = Math.max(best, strength(physicsOf(r.id), day));
+    } catch {
+      /* a source whose physics will not read adds nothing */
+    }
+  }
+  const claim = Math.min(PHYSICS.FOLD_CLAIM_CEILING, Math.max(PHYSICS.DREAMED_CLAIM_CEILING, best));
+  return Math.round(claim * 1000) / 1000;
+}
+
+/**
+ * WHY A FOLD'S SOURCE IS KEPT AT ITS OWN WEIGHT, or null when the fold holds
+ * over it (2026-10-11, Group 3 part B; item 15, review 11 C3/D3): the core
+ * (the door would take it out of the core), a protected memory (the owner's),
+ * a reading or a world memory (its lines are the point: a fold never
+ * fade-cuts them), a felt memory about me or someone (a `self` or `person`
+ * memory felt at `FOLD_FELT_FLOOR` or more: its weight follows its feeling;
+ * review 11 C3, aligned by the review of #432), a dated one (the door would move its reminder to the fold), a
+ * dream's own words (a dream does not build on them), and an earlier version
+ * (it already has a head: fold the one that holds now). Linked and cited all
+ * the same.
+ */
+function foldExemption(store: Store, r: MemoryRow): string | null {
+  if (r.promoted_identity === 1 || r.band === "identity") return "core";
+  if (r.protected === 1) return "protected";
+  if (slotExempt(r)) return "reading";
+  if ((r.kind === "self" || r.kind === "person") && typeof r.feeling_peak === "number" && r.feeling_peak >= DREAM_TUNABLES.FOLD_FELT_FLOOR) return "felt";
+  if (r.event_date !== null) return "dated";
+  if (r.source === "dreamed") return "dreamed";
+  if (headOf(store, r.id) !== null) return "earlier";
+  return null;
 }
 
 function titleNote(): string {

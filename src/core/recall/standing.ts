@@ -87,8 +87,8 @@ export function standingOf(
   // "Earlier (now …)" names the END of the chain, the one memory a write's
   // neighbours and the dream's bundles name too (`headOf`, review of #408):
   // on A→B→C, A reads "now [C]", not "now [B]". And `headOf`'s rule decides
-  // whether it is earlier at all: re-affirmed by a newer pair, or its holder
-  // gone with nothing live after it, it stands and carries no "Earlier".
+  // whether it is earlier at all: its holder gone with nothing live after it,
+  // it stands and carries no "Earlier".
   const head = changedOver ? headOf(store, id) : null;
   const now: string[] = head === null ? [] : [head];
   const front: string[] = [];
@@ -144,13 +144,18 @@ export function standingOf(
  * this first and marks what it shows (`earlierMark`); `standingOf`'s
  * "Earlier (now …)" names the same memory (review of #408).
  *
- * The rule is `self/index.ts#settledOver`'s, for one id: in the NEWEST
- * settled pair that names it directly (a `changed` or `corrected` closed
- * through another speaks through that one), it is the `over`, and that
- * pair's `holds` leads to a live memory — followed through its own newer
- * settles and through `superseded_by` to the live end. A memory re-affirmed
- * by a later pair (it holds there) stands; a `holds` with no live end hides
- * nothing. A replaced row (`superseded_by`) answers its live successor.
+ * The rule is `self/index.ts#settledOver`'s, for one id: of the STANDING
+ * settled pairs in which it is the `over` (a `changed` or `corrected` closed
+ * through another speaks through that one), the newest — and that pair's
+ * `holds` leads to a live memory, followed through its own settles and
+ * through `superseded_by` to the live end. A settle speaks only about the
+ * pair it names (2026-10-11, Group 3 part B; random-06, lightly held): a
+ * later "B over A" says nothing about "C over B", so B stays earlier under C.
+ * To make B current again, settle B over C: the settle door reorders the pair
+ * it names (`reconsolidation.ts#settle`, review of #432). Until then a pair in
+ * which it HOLDS re-affirmed it (#408's rule). A
+ * `holds` with no live end hides nothing. A replaced row (`superseded_by`)
+ * answers its live successor.
  * Bounded (a chain is walked at most `HEAD_MAX_STEPS` links, a cycle is
  * none) and never throws: a store that will not answer has settled nothing.
  */
@@ -163,14 +168,24 @@ function liveRow(store: HeadStore, id: string): boolean {
   return r !== undefined && r.archived === 0 && r.superseded_by === null && !(r.body === "" && r.content_hash === "");
 }
 
-/** The `holds` of the newest direct changed/corrected settle naming `id` when `id` is its `over`; else null. */
+/**
+ * NEWEST BY WHEN IT WAS RAISED, not when it was answered (2026-10-11, Group
+ * 2b; review of #420): a pair's `flagged_day`, then the moment it was made.
+ * A late answer to an old question — a slot proposal confirmed days after a
+ * newer settle over its newer memory — must not re-affirm what that newer
+ * settle covered. A direct settle is raised the day it is made.
+ */
+export function pairOrder(a: Pick<ContradictionRow, "flagged_day" | "created_at">, b: Pick<ContradictionRow, "flagged_day" | "created_at">): number {
+  return a.flagged_day - b.flagged_day || a.created_at - b.created_at;
+}
+
+/** The `holds` of the newest standing direct changed/corrected settle in which `id` is the `over`; else null. */
 function newestHolder(store: HeadStore, id: string): string | null {
   const pairs = [...(store.contradictionsOf([id]).get(id) ?? [])]
     .reverse()
-    .filter((p) => p.state === "settled" && p.via === null && p.over !== null && p.holds !== null && (p.how === "changed" || p.how === "corrected"))
-    .sort((a, b) => a.updated_at - b.updated_at || a.created_at - b.created_at);
-  const newest = pairs[pairs.length - 1];
-  return newest !== undefined && newest.over === id ? newest.holds : null;
+    .filter((p) => p.state === "settled" && p.via === null && p.over === id && p.holds !== null && (p.how === "changed" || p.how === "corrected"))
+    .sort(pairOrder);
+  return pairs[pairs.length - 1]?.holds ?? null;
 }
 
 export function headOf(store: HeadStore, id: string): string | null {

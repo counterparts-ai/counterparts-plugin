@@ -81,19 +81,45 @@ export interface AssociateStore {
    * store without it keeps those rows, which conduct nothing either way.
    */
   sweepArchivedEdges?(reasons: readonly string[], graceMs?: number): number;
+  /** Read a latch (`TERMINAL_ARCHIVE_LATCHES`). Optional: a store without it never sweeps a latched reason. */
+  getMeta?(key: string): string | undefined;
 }
 
 /**
  * ARCHIVED FOR GOOD (2026-10-11, Group 4 item 5; review 06 C3): the archive
  * reasons whose memory never conducts again AND whose links were carried to
  * what replaced it when it was archived — a regrown chapter copy (to the live
- * copy, NOTES §15) and a dream merge's originals (to the merged memory; a
- * dream's undo carries them back). Their rows are swept after every flush.
- * NOT here: a decay archive, so a memory that comes back keeps its trails;
- * and `corrected`, whose settle does not carry its links today and whose
- * undo brings it back — sweeping it would drop them.
+ * copy, NOTES §15), a dream merge's originals (to the merged memory; a
+ * dream's undo carries them back), and since Group 2b a `corrected` memory
+ * (the one door hands its links to the memory that holds; an undo carries
+ * them back). Their rows are swept after every flush. NOT here: a decay
+ * archive, so a memory that comes back keeps its trails.
  */
-export const TERMINAL_ARCHIVE_REASONS: readonly string[] = ["episode-regrown", "dream-merge"];
+export const TERMINAL_ARCHIVE_REASONS: readonly string[] = ["episode-regrown", "dream-merge", "corrected"];
+
+/**
+ * A reason whose rows from BEFORE its carry existed are carried once, at open
+ * (review of #423): until that pass has latched (its meta key is set), the
+ * sweep leaves the reason alone, so a pass that threw cannot let the sweep
+ * delete rows never carried.
+ */
+export const TERMINAL_ARCHIVE_LATCHES: Readonly<Record<string, string>> = {
+  "episode-regrown": "associate.regrown.relink",
+  corrected: "associate.corrected.relink",
+};
+
+/** The reasons the sweep may take now: every terminal one whose latch, if it has one, is set. */
+export function sweepableReasons(getMeta: ((key: string) => string | undefined) | undefined): string[] {
+  return TERMINAL_ARCHIVE_REASONS.filter((r) => {
+    const latch = TERMINAL_ARCHIVE_LATCHES[r];
+    if (latch === undefined) return true;
+    try {
+      return getMeta !== undefined && getMeta(latch) !== undefined;
+    } catch {
+      return false;
+    }
+  });
+}
 
 /**
  * How long ago such an end must have been archived before its rows go
@@ -567,7 +593,8 @@ export class Associate {
     }
     if (this.store.sweepArchivedEdges !== undefined) {
       try {
-        archived = this.store.sweepArchivedEdges(TERMINAL_ARCHIVE_REASONS, TERMINAL_ARCHIVE_GRACE_MS);
+        const getMeta = this.store.getMeta === undefined ? undefined : (key: string) => this.store.getMeta?.(key);
+        archived = this.store.sweepArchivedEdges(sweepableReasons(getMeta), TERMINAL_ARCHIVE_GRACE_MS);
       } catch (err) {
         this.emit("associate.sweep.failed", undefined, { day, error: codeOf(err), archived: true });
       }

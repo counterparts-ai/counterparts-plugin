@@ -206,18 +206,22 @@ export const NARRATORS = {
   },
   // ── dreaming (2026-09-26) ──────────────────────────────────────────────────
   // The queue (2026-09-28, on the row since #277): what tonight's room could
-  // not take waits for the next night; what grew too old for any dream's
-  // window left the queue undreamed (it fades as an ordinary memory). Said
-  // only when nonzero, so an ordinary night reads as it always did.
+  // not take waits for the next night; what left the queue undreamed (past
+  // the old 7-day window; since 2026-10-11, below reach on its own curve)
+  // fades as an ordinary memory; a fold the last night could not make has its
+  // parts carried. Said only when nonzero, so an ordinary night reads as it
+  // always did.
   "dream.begun": (t) => {
     const waiting = n(t, "waiting") ?? 0;
     const agedOut = n(t, "agedOut") ?? 0;
-    // A floor is said as one: the queue was read only so deep (`readCapped`),
-    // or more aged out than one read holds (`agedOutAtLeast`).
+    const carried = n(t, "carried") ?? 0;
+    // A floor is said as one (rows before 2026-10-11, when the queue was read
+    // only so deep — `readCapped` — or more aged out than one read held).
     const atLeast = (k: string): string => (t.p[k] === true ? "at least " : "");
     const tail = [
       waiting > 0 ? `${atLeast("readCapped")}${waiting} more ${waiting === 1 ? "waits" : "wait"} for the next night` : "",
-      agedOut > 0 ? `${atLeast("agedOutAtLeast")}${agedOut} grew too old to be dreamed and will fade as usual` : "",
+      agedOut > 0 ? `${atLeast("agedOutAtLeast")}${agedOut} left the queue undreamed and will fade as usual` : "",
+      carried > 0 ? `${carried} ${carried === 1 ? "is a part" : "are parts"} of a fold the last night could not make, carried` : "",
     ].filter((x) => x !== "");
     return calm(
       `I began to dream, over ${n(t, "fresh") ?? 0} new memories and ${n(t, "shown") ?? 0} in all.${tail.length > 0 ? ` ${tail.join("; ").replace(/^a/, "A")}.` : ""}`,

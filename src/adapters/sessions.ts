@@ -1953,11 +1953,20 @@ function cutReply(text: string): string {
  * out with it. One function, so the hook's part count and the door's parts
  * agree. Read-only.
  */
-export function writeUpEntries(spans: SpanBuffer, held: { session: string; scopes: readonly string[] }): WriteUpEntry[] {
+export function writeUpEntries(
+  spans: SpanBuffer,
+  held: { session: string; scopes: readonly string[] },
+  /** `coveredBefore` (2026-10-11, the re-owe's planner): read as kept only what
+   *  was claimed BEFORE that moment, so the parts come out as a run that began
+   *  then cut them. Absent: everything claimed so far. */
+  opts: { readonly coveredBefore?: number } = {},
+): WriteUpEntry[] {
   const seen = new Set<string>();
   const found: { span: Span; kept: boolean }[] = [];
+  const before = opts.coveredBefore;
   for (const scope of held.scopes) {
-    const covered = spans.coveredHashes(scope);
+    const covered =
+      before === undefined ? spans.coveredHashes(scope) : new Set(spans.coverage(scope).filter((m) => m.at < before).map((m) => m.spanHash));
     const said = [
       ...spans.spans(scope),
       ...spans.quarantined(scope).filter((x) => x.kind !== "assistant"),
@@ -2010,22 +2019,41 @@ function partCost(text: string): number {
   return Math.max(Buffer.byteLength(text, "utf8"), wireChars(JSON.stringify(text)) - 2);
 }
 
+/** One part as the door serves it (`writeUpPartsDated`). */
+export interface WriteUpPart {
+  readonly text: string;
+  /** The capture time of its latest entry, epoch ms. */
+  readonly lastAt: number;
+  /**
+   * What in it is NOT already written up, in the same cost as the part's size
+   * (2026-10-11): 0 when every entry in it carries `WRITE_UP_KEPT_MARK` — the
+   * session's own chapters or memories took those words before any write-up
+   * came. Such a part holds nothing to write, and the door passes it over
+   * (`mcp/write-up.ts#handOver`) instead of handing a reader 24 KB of words it
+   * is told not to write again.
+   */
+  readonly unwritten: number;
+}
+
 /**
  * The same parts, each with the capture time of its latest entry — what dates
- * the day a write-up of that part records as LIVED (`happened_on`, 2026-10-01).
+ * the day a write-up of that part records as LIVED (`happened_on`, 2026-10-01)
+ * — and how much of it is not yet written up (`unwritten`, 2026-10-11).
  */
-export function writeUpPartsDated(entries: readonly WriteUpEntry[], chunkBytes: number): { text: string; lastAt: number }[] {
+export function writeUpPartsDated(entries: readonly WriteUpEntry[], chunkBytes: number): WriteUpPart[] {
   const size = Math.max(1, Math.floor(chunkBytes));
   const sep = partCost(WRITE_UP_SEPARATOR);
-  const parts: { text: string; lastAt: number }[] = [];
+  const parts: WriteUpPart[] = [];
   let cur = "";
   let curBytes = 0;
   let curAt = 0;
+  let curUnwritten = 0;
   const flush = (): void => {
-    if (cur.length > 0) parts.push({ text: cur, lastAt: curAt });
+    if (cur.length > 0) parts.push({ text: cur, lastAt: curAt, unwritten: curUnwritten });
     cur = "";
     curBytes = 0;
     curAt = 0;
+    curUnwritten = 0;
   };
   for (const entry of entries) {
     const rendered =
@@ -2038,6 +2066,7 @@ export function writeUpPartsDated(entries: readonly WriteUpEntry[], chunkBytes: 
       cur += WRITE_UP_SEPARATOR + rendered;
       curBytes += sep + bytes;
       curAt = Math.max(curAt, entry.at);
+      if (!entry.kept) curUnwritten += bytes;
       continue;
     }
     flush();
@@ -2045,15 +2074,17 @@ export function writeUpPartsDated(entries: readonly WriteUpEntry[], chunkBytes: 
       cur = rendered;
       curBytes = bytes;
       curAt = entry.at;
+      curUnwritten = entry.kept ? 0 : bytes;
       continue;
     }
-    // Longer than a part on its own: cut it, by code point.
+    // Longer than a part on its own: cut it, by code point. Every slice of a
+    // kept entry is kept, though only the first carries the mark.
     let slice = "";
     let sliceBytes = 0;
     for (const ch of rendered) {
       const b = partCost(ch);
       if (sliceBytes + b > size && slice.length > 0) {
-        parts.push({ text: slice, lastAt: entry.at });
+        parts.push({ text: slice, lastAt: entry.at, unwritten: entry.kept ? 0 : sliceBytes });
         slice = "";
         sliceBytes = 0;
       }
@@ -2063,9 +2094,24 @@ export function writeUpPartsDated(entries: readonly WriteUpEntry[], chunkBytes: 
     cur = slice;
     curBytes = sliceBytes;
     curAt = entry.at;
+    curUnwritten = entry.kept ? 0 : sliceBytes;
   }
   flush();
   return parts;
+}
+
+/**
+ * THE FIRST PART WORTH HANDING OVER at or after `from` (1-based): parts that
+ * hold nothing unwritten are passed over, but never the LAST part — the mark
+ * is set only by a session that was handed words (`mcp/write-up.ts` header),
+ * so the last part is served even when every word in it is kept. The door and
+ * the catch-up's plan read the same rule, so a plan never grants a part the
+ * door would pass over as its first.
+ */
+export function firstUnwrittenPart(parts: readonly Pick<WriteUpPart, "unwritten">[], from: number): number {
+  let part = Math.max(1, from);
+  while (part < parts.length && (parts[part - 1]?.unwritten ?? 1) === 0) part += 1;
+  return part;
 }
 
 /**
