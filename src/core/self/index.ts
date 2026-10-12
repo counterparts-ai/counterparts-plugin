@@ -264,8 +264,11 @@ export interface WakeShown {
   readonly identity: readonly string[];
   readonly craft: readonly string[];
   readonly hints: readonly string[];
-  /** What each list lane left out, by id — its "N more" line's. */
-  readonly more: { readonly identity: readonly string[]; readonly craft: readonly string[] };
+  /** What each list lane left out, by id — its "N more" line's. For
+   *  "Nearby" (2026-10-12), only the hints the lane CHOSE and the trim
+   *  popped — never its cap's, which is the rest of the store — so a session
+   *  start can list or count them in its own room, not drop them silently. */
+  readonly more: { readonly identity: readonly string[]; readonly craft: readonly string[]; readonly hints: readonly string[] };
 }
 
 /** The record `WAKE_SHOWN_KEY` holds, or null — absent (a bundle published
@@ -284,6 +287,8 @@ export function wakeShown(store: Pick<Store, "getMeta">): WakeShown | null {
     const hints = ids(r["hints"]);
     const moreIdentity = ids(more["identity"] ?? []);
     const moreCraft = ids(more["craft"] ?? []);
+    // Absent on a record written before 2026-10-12: nothing carried.
+    const moreHints = ids(more["hints"] ?? []) ?? [];
     const budget = num(r["budget"]);
     const hash = r["hash"];
     if (typeof hash !== "string" || hash.length === 0) return null;
@@ -301,7 +306,7 @@ export function wakeShown(store: Pick<Store, "getMeta">): WakeShown | null {
       identity,
       craft,
       hints,
-      more: { identity: moreIdentity, craft: moreCraft },
+      more: { identity: moreIdentity, craft: moreCraft, hints: moreHints },
     };
   } catch {
     return null;
@@ -417,7 +422,7 @@ export interface BoundaryRequest extends BriefingRequest {
    * ARRIVING ITEMS PAST THE CALLER'S COUNT, by id (review of #367,
    * 2026-10-10): `prospective/`'s `HORIZON_ITEMS` offers the lane two, and a
    * third dated item was in no wake line and no count. They join the lane's
-   * overflow, so its "N more arriving" line names them for recall. The
+   * overflow, so its "N more coming up" line names them for recall. The
    * owner's wake only (ignored with `omit`).
    */
   readonly horizonMore?: readonly string[];
@@ -955,7 +960,10 @@ export class Self {
       }
       return out;
     };
-    const hintsScanned = carried(shown.hints, "hints");
+    // "Nearby" as the turn-end CHOSE it — what it listed, then what its trim
+    // popped (2026-10-12) — so this composition lists or counts them in its
+    // own room rather than leaving the popped ones without a word.
+    const hintsScanned = carried([...shown.hints, ...shown.more.hints], "hints");
     const covered = hintsScanned.length === 0 ? new Set<string>() : this.pageCovers(hintsScanned);
     const lanes: Lanes = {
       identity: carried(shown.identity, "identity").map((s) => rankedAs(note(s), "identity")),
@@ -2023,6 +2031,16 @@ export class Self {
       hints: briefing.counts.hints,
       horizon: briefing.counts.horizon,
       trimmed: briefing.trimmed.length,
+      // WHAT THE WAKE COUNTS RATHER THAN LISTS, AND WHAT IT LEFT UNSAID
+      // (2026-10-12): `counted` is the step-downs ("N more", a collapsed or
+      // the folded line), never a fault; `untold` is ids no line names —
+      // a silent drop, which doctor's Wake line reads in red.
+      counted: Object.values(briefing.more).reduce((n, k) => n + (k ?? 0), 0),
+      folded: briefing.folded,
+      untold: Object.values(briefing.untold).reduce((n, k) => n + (k ?? 0), 0),
+      untoldLanes: LANE_ORDER.filter((l) => (briefing.untold[l] ?? 0) > 0).join(","),
+      // "Nearby" left uncounted by rank: a step-down, not a drop (2026-10-12).
+      quiet: Object.values(briefing.quiet).reduce((n, k) => n + (k ?? 0), 0),
       // WHETHER THE PAGE RENDERED, AND WHETHER IT WAS CUT. Zero and false mean
       // "no page in this render", which is what a store with none looks like;
       // without these a wake led by a 6 KB page and a wake led by nothing are
@@ -3177,7 +3195,11 @@ function shownRecord(briefing: BriefingResult, lanes: Lanes, req: BoundaryReques
     identity: briefing.kept.identity,
     craft: briefing.kept.craft,
     hints: briefing.kept.hints,
-    more: { identity: lost("identity"), craft: lost("craft") },
+    more: {
+      identity: lost("identity"),
+      craft: lost("craft"),
+      hints: lanes.hints.map((r) => r.id).filter((id) => !briefing.kept.hints.includes(id)),
+    },
   };
 }
 

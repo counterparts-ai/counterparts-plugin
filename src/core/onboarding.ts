@@ -24,6 +24,14 @@
  * line needs an EXPLICIT `done` (written by the meeting itself), so an
  * upgraded store never gets one either.
  *
+ * THE MEETING HOLDS THE HOUSEKEEPING (round 1, 2026-10-12, from Mike's first
+ * fresh-user trial). While it runs in a session (`meetingHold`), that
+ * session's end-of-turn write-up ask is not raised and its pacer not moved;
+ * its finish step hands the write-up over in the session (`finishText`), and
+ * the one Stop after it is paced but silent. No dream starts on a meeting day
+ * (`meetingDay`, through the dream gate's `meeting-day`): the first dream
+ * waits for the next lived day, and never dreams on half a meeting.
+ *
  * Nothing here calls a model, reads a transcript or writes a memory: the
  * memories the meeting leaves are written by the MCP server through the
  * ordinary `remember` door, from the texts this file composes.
@@ -47,7 +55,7 @@ export const STYLE_CHOICES = ["straight", "think", "friendly", "character", "oth
 export type StyleChoice = (typeof STYLE_CHOICES)[number];
 
 /** The getting-to-know-you questions whose answers become memories. */
-export const ANSWER_STEPS = ["name", "work", "loved", "problem", "peeves", "outside"] as const;
+export const ANSWER_STEPS = ["name", "week", "work", "love", "saturday", "started"] as const;
 export type AnswerStep = (typeof ANSWER_STEPS)[number];
 
 /** Every step `meet` takes. */
@@ -65,6 +73,8 @@ export const ONBOARDING_DONE_KEY = "onboarding.done";
 export const ONBOARDING_ANSWERS_KEY = "onboarding.answers";
 /** The session the second-session line was shown in; present means it has been. */
 export const ONBOARDING_AHA_KEY = "onboarding.aha";
+/** `{ session, at }`: the last `meet` call (a read or a step), its session and the moment (ms). */
+export const ONBOARDING_ACTIVE_KEY = "onboarding.active";
 
 /** The dreaming setting a NEW install starts on (Mike, 2026-10-11). A store with no setting still reads `ask`. */
 export const NEW_INSTALL_DREAMING = "auto";
@@ -76,7 +86,17 @@ export const NEW_INSTALL_DREAMING = "auto";
  * run in the background (`Dreams#offer`).
  */
 export const NEW_INSTALL_DREAMING_LINE =
-  "Dreaming: on. Once a day, your first session starts a short background run that goes over what was saved. Say \"no dreams\" in a session, or run `counterparts dream --setting off`, to turn it off.";
+  "Daily tidy-up (called dreaming): on. Once a day, your first session starts a short background run that looks over what was saved and lets go of what doesn't matter. Say \"no dreams\" in a session, or run `counterparts dream --setting off`, to turn it off.";
+
+/**
+ * THE SAME, FOR THE PLUGIN'S FIRST-RUN LINE (2026-10-12, onboarding round 1,
+ * F; shortened the same day from Mike's fresh-user trial): a plugin install
+ * has no `counterparts` command, so it is told only what to say, and it rides
+ * at the end of one line (`plugin.ts#firstRunLine`), so it is a parenthesis.
+ * "called dreaming" stays so "no dreams" names something the line said.
+ */
+export const NEW_INSTALL_DREAMING_LINE_PLUGIN =
+  "(Daily tidy-up, called dreaming, is on; say \"no dreams\" to turn it off.)";
 
 /**
  * A NEW INSTALL'S STARTING STATE — written by `install`, only into a store it
@@ -222,18 +242,101 @@ export function settleOffer(store: MetaStore, on: string): MeetState {
 }
 
 /** A step that moves the state: `later`, `skipped` (don't ask again) or `done`. A finished meeting stays finished. */
-export function recordState(store: MetaStore, step: "later" | "skipped" | "done", input: { on: string; session: string }): MeetState {
+export function recordState(
+  store: MetaStore,
+  step: "later" | "skipped" | "done",
+  input: { on: string; session: string; writeUp?: boolean },
+): MeetState {
   const before = meetState(store);
   if (step === "done") {
     store.setMetaMany([
       [ONBOARDING_MEET_KEY, "done"],
-      [ONBOARDING_DONE_KEY, JSON.stringify({ on: input.on, session: input.session })],
+      // `writeUp`: the finish step handed this session its write-up (`meetingHold`).
+      [ONBOARDING_DONE_KEY, JSON.stringify({ on: input.on, session: input.session, ...(input.writeUp === true ? { writeUp: true } : {}) })],
     ]);
     return "done";
   }
   if (before === "done") return before;
   store.setMeta(ONBOARDING_MEET_KEY, step);
   return step;
+}
+
+// ── the meeting holds the housekeeping (2026-10-12, onboarding round 1, A) ──
+
+/**
+ * HOW LONG A MEETING STAYS "RUNNING" after its last `meet` call. Every read
+ * and every step refreshes it, so a real meeting never lapses mid-way; a
+ * person who was offered the meeting and went on working (nobody called
+ * `later`) holds the write-up ask for this long at most, not all session.
+ */
+export const MEET_HOLD_MS = 30 * 60_000;
+
+/** Note a `meet` call: its session and the moment (ms). */
+export function noteActive(store: MetaStore, session: string, at: number): void {
+  store.setMeta(ONBOARDING_ACTIVE_KEY, JSON.stringify({ session, at }));
+}
+
+/**
+ * DOES THE MEETING HOLD THIS SESSION'S WRITE-UP ASK? `running`: the meeting
+ * is under way here (`offered`, and a `meet` call in this session within
+ * `MEET_HOLD_MS`) — the Stop asks nothing and the pacer is not consulted.
+ * `finished`: it was finished in this session and its finish step handed the
+ * write-up over (`finishText`); the next Stop's ask is that write-up's, so it
+ * is paced but not said, once (`coverFinish`). Null otherwise, and on any
+ * error: a hold that cannot read never holds.
+ */
+export function meetingHold(store: MetaReader, session: string, now: number): "running" | "finished" | null {
+  try {
+    if (session.length === 0) return null;
+    const state = meetState(store);
+    if (state === "offered") {
+      const a = readJson(store, ONBOARDING_ACTIVE_KEY);
+      const at = a?.["at"];
+      if (a !== null && a["session"] === session && typeof at === "number" && now - at >= 0 && now - at <= MEET_HOLD_MS) return "running";
+      return null;
+    }
+    if (state === "done") {
+      const d = readJson(store, ONBOARDING_DONE_KEY);
+      if (d !== null && d["session"] === session && d["writeUp"] === true && d["covered"] !== true) return "finished";
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** The finished meeting's write-up stood in for one Stop's ask: never again. */
+export function coverFinish(store: MetaStore): void {
+  const d = readJson(store, ONBOARDING_DONE_KEY);
+  if (d !== null) store.setMeta(ONBOARDING_DONE_KEY, JSON.stringify({ ...d, covered: true }));
+}
+
+/**
+ * IS TODAY A MEETING DAY? No dream starts on one (the `Dreams` ctx's `holds`):
+ * a new install's first offer day (by the wake's own offer), a later day the
+ * meeting was begun and is not finished, and the day it was finished. So the
+ * first dream waits for the next lived day and never dreams on half a
+ * meeting. A store with no meeting keys (every store from before 0.3.18) is
+ * never held, nor one that meets again after a meeting with no done record.
+ */
+export function meetingDay(store: MetaReader, on: string): boolean {
+  try {
+    const done = readJson(store, ONBOARDING_DONE_KEY);
+    if (done !== null && done["on"] === on) return true;
+    const state = meetState(store);
+    if (state === "done") return false;
+    const last = lastOffer(store);
+    if (last === null || last.on !== on) return false;
+    // A later day's "later" or "don't ask again" lets that day dream; the
+    // first offer's day is the store's first day, and holds either way. On a
+    // later day only a meeting begun that day holds (`offered`: a `meet` read
+    // or step today, the wake having settled an earlier day's to `later`) —
+    // not the wake's offer alone, which leaves `not_started` (review of #450:
+    // a Claude that never called `meet` cost days 2 and 3 their dream).
+    return last.days <= 1 || state === "offered";
+  } catch {
+    return false;
+  }
 }
 
 export function recordWhere(store: MetaStore, where: WhereChoice): void {
@@ -277,33 +380,45 @@ export const STYLE_LABELS: Readonly<Record<Exclude<StyleChoice, "character" | "o
 
 /**
  * THE FIXED BUNDLES (the script's research section, agreed with Mike 14:16):
- * four preferences each, about the OWNER — how they like to be talked to —
+ * four preferences each, about the person — how they like to be talked to —
  * never a claim about who Claude is.
  */
 export const STYLE_BUNDLES: Readonly<Record<Exclude<StyleChoice, "character" | "other">, readonly string[]>> = {
   straight: [
-    "The owner likes replies that lead with the conclusion.",
-    "The owner likes replies short by default, with more depth only when they ask for it.",
-    "The owner likes no preamble and no recap at the end.",
-    "The owner likes blunt feedback, said plainly.",
+    "replies that lead with the conclusion.",
+    "replies short by default, with more depth only when they ask for it.",
+    "no preamble and no recap at the end.",
+    "blunt feedback, said plainly.",
   ],
   think: [
-    "The owner likes to hear the reasoning behind an answer, not just the answer.",
-    "The owner likes options laid out with their trade-offs.",
-    "The owner likes to be asked before big changes are made.",
-    "The owner likes disagreement that comes with its reasons.",
+    "to hear the reasoning behind an answer, not just the answer.",
+    "options laid out with their trade-offs.",
+    "to be asked before big changes are made.",
+    "disagreement that comes with its reasons.",
   ],
   friendly: [
-    "The owner likes a casual, easy tone.",
-    "The owner likes occasional dry humor.",
-    "The owner likes kind framing, with pushback still said when it is needed.",
-    "The owner likes frustration acknowledged briefly, then moving on.",
+    "a casual, easy tone.",
+    "occasional dry humor.",
+    "kind framing, with pushback still said when it is needed.",
+    "frustration acknowledged briefly, then moving on.",
   ],
 };
 
+/**
+ * WHO A STYLE MEMORY IS ABOUT, in words the person reads later (2026-10-12,
+ * plain words): their name when the meeting knows it, otherwise "They".
+ * `likes` is the verb that goes with it.
+ */
+function whoLikes(name: string | null): { who: string; likes: string; wants: string } {
+  const n = (name ?? "").trim();
+  return n.length > 0 ? { who: n, likes: "likes", wants: "wants" } : { who: "They", likes: "like", wants: "want" };
+}
+
 /** THE BASELINE every bundle keeps (no "ruinous empathy"): honest pushback, whatever the style. */
-export const PUSHBACK_BASELINE =
-  "Whatever the style, the owner wants honest pushback: say plainly when something looks wrong, and don't agree just to be agreeable.";
+export function pushbackBaseline(name: string | null = null): string {
+  const w = whoLikes(name);
+  return `Whatever the style, ${w.who === "They" ? "they" : w.who} ${w.wants} honest pushback: say plainly when something looks wrong, and don't agree just to be agreeable.`;
+}
 
 /** The longest trait or own-words line a style memory takes. */
 export const STYLE_TEXT_MAX = 240;
@@ -320,8 +435,10 @@ function mark(option: string): string {
  */
 export function styleMemories(
   choice: StyleChoice,
-  input: { traits?: readonly string[]; like?: string } = {},
+  input: { traits?: readonly string[]; like?: string; name?: string | null } = {},
 ): { ok: true; texts: string[]; option: string } | { ok: false; detail: string } {
+  const w = whoLikes(input.name ?? null);
+  const pushback = pushbackBaseline(input.name ?? null);
   const clean = (input.traits ?? []).map((t) => t.trim().replace(/[.\s]+$/u, "")).filter((t) => t.length > 0);
   if (clean.some((t) => t.length > STYLE_TEXT_MAX)) return { ok: false, detail: `Each trait is one short line (at most ${String(STYLE_TEXT_MAX)} characters).` };
   if (choice === "character") {
@@ -334,9 +451,9 @@ export function styleMemories(
       ok: true,
       option,
       texts: [
-        `The owner likes to be talked to a bit like ${like}: a style reference for tone, not a persona to play. ${mark(option)}`,
-        ...clean.map((t) => `From that, the owner likes: ${t}. ${mark(option)}`),
-        `${PUSHBACK_BASELINE} ${mark(option)}`,
+        `${w.who} ${w.likes} to be talked to a bit like ${like}: a style reference for tone, not a persona to play. ${mark(option)}`,
+        ...clean.map((t) => `From that, ${w.who === "They" ? "they" : w.who} ${w.likes}: ${t}. ${mark(option)}`),
+        `${pushback} ${mark(option)}`,
       ],
     };
   }
@@ -346,19 +463,19 @@ export function styleMemories(
     return {
       ok: true,
       option,
-      texts: [`How the owner likes to be talked to, in their words: "${clean[0] ?? ""}". ${mark(option)}`, `${PUSHBACK_BASELINE} ${mark(option)}`],
+      texts: [`How ${w.who === "They" ? "they" : w.who} ${w.likes} to be talked to, in their words: "${clean[0] ?? ""}". ${mark(option)}`, `${pushback} ${mark(option)}`],
     };
   }
   const option = STYLE_LABELS[choice];
-  return { ok: true, option, texts: [...STYLE_BUNDLES[choice].map((t) => `${t} ${mark(option)}`), `${PUSHBACK_BASELINE} ${mark(option)}`] };
+  return { ok: true, option, texts: [...STYLE_BUNDLES[choice].map((t) => `${w.who} ${w.likes} ${t} ${mark(option)}`), `${pushback} ${mark(option)}`] };
 }
 
 /** A form of address ("your highness"): its own small preference, apart from style. */
-export function addressMemory(answer: string): { ok: true; text: string } | { ok: false; detail: string } {
+export function addressMemory(answer: string, name: string | null = null): { ok: true; text: string } | { ok: false; detail: string } {
   const a = answer.trim();
   if (a.length === 0) return { ok: false, detail: "Step `address` needs `answer`: how they'd like to be addressed." };
   if (a.length > STYLE_TEXT_MAX) return { ok: false, detail: "`answer` is a form of address, a few words." };
-  return { ok: true, text: `The owner likes to be addressed as "${a}". ${mark("form of address")}` };
+  return { ok: true, text: `${whoLikes(name).who} ${whoLikes(name).likes} to be addressed as "${a}". ${mark("form of address")}` };
 }
 
 // ── the words ────────────────────────────────────────────────────────────────
@@ -371,43 +488,61 @@ export interface MeetContext {
   readonly uninstall: string;
   /** Where the memory lives, as a person would type it (`~/.counterparts`). */
   readonly home: string;
-  /** The dreaming setting now: the close's first sentence depends on it. */
+  /** The dreaming setting now: the finish's dream sentence depends on it. */
   readonly dreaming: "auto" | "ask" | "off";
   /** Whether a folder question makes sense here (not in a Claude Desktop chat, which has no folder). */
   readonly folders: boolean;
-  /** What the host calls the assistant's tool, for the "goes wrong" question: "Claude Code", or "Claude". */
-  readonly hostName: string;
+  /** A Claude Code plugin install: the `/counterparts` sidebar exists, and no `counterparts` command does. */
+  readonly plugin: boolean;
   /** The meeting's state when the script was asked for (after the read marked it offered). */
   readonly state: MeetState;
 }
 
-/** The close's first paragraph, true to the dreaming setting. */
-function closeDream(dreaming: MeetContext["dreaming"]): string {
-  if (dreaming === "off") return "Thanks, that's a good start. Next time we talk, some of this will come back on its own.";
-  const first =
-    dreaming === "auto"
-      ? "Thanks, that's a good start. Later, between sessions, I'll have my first dream: I'll go over what we talked about and start building a sense of who I am with you."
-      : "Thanks, that's a good start. When you're back on another day, I'll ask to have my first dream: I'll go over what we talked about and start building a sense of who I am with you.";
-  return dreaming === "auto" ? `${first} (If you'd rather I didn't dream, say 'no dreams'.)` : first;
+/**
+ * PRONOUNS, WITHOUT ASKING (2026-10-12, onboarding round 1, E): one rule, the
+ * same words in the meeting, the write-up ask and the dream's prompt.
+ */
+export const PRONOUN_RULE = "Until they say their pronouns, use their name or \"they\".";
+
+/**
+ * WHAT IS KEPT, word for word (D): Claude is never to paraphrase retention, so
+ * the script hands the exact line, for when they ask. Its facts: a week is
+ * `remember/tunables.ts#RETENTION_MS` from the latest of last activity, write-up
+ * and session end (`remember/owes.ts`); two weeks is `coverage/tunables.ts#
+ * LAPSE_DAYS_OF_USE`; 14 days is the daily snapshots' `DEFAULT_KEEP`.
+ */
+export const RETENTION_LINE =
+  "Session text is kept until I've written it up and the session has ended, then deleted a week later. If a write-up is still owed, the text is let go after about two weeks of use. Backups hold it about 14 days longer.";
+
+/** The first dream, true to the dreaming setting: never today (`meetingDay`). Empty when dreaming is off. */
+function firstDream(dreaming: MeetContext["dreaming"]): string {
+  if (dreaming === "off") return "";
+  return dreaming === "auto"
+    ? "Next time you're here on another day, I'll have my first dream: I'll go over what we talked about and start building a sense of who I am with you. (If you'd rather I didn't dream, say 'no dreams'.)"
+    : "When you're back on another day, I'll ask to have my first dream: I'll go over what we talked about and start building a sense of who I am with you.";
 }
 
 /**
  * THE SCRIPT, as `meet` returns it. Long on purpose — it is a tool result,
  * read only when the meeting happens, never a description in every session's
- * context. Wording close to the script file's, which Mike signed off.
+ * context. Round 1 (2026-10-12, Mike's trial): the opening asks once, through
+ * the dialog (B); the questions are the research's five, easy to slightly
+ * deeper (C); the close is the finish step's (`finishText`, D).
  */
 export function meetingInstructions(ctx: MeetContext): string {
   const again = ctx.state === "done";
   const lines: string[] = [
     "COUNTERPARTS: THE FIRST MEETING.",
     ...(again ? ["You have met already. If they asked to go through it again, follow the steps below; answers they give now are new memories."] : []),
-    "How: a conversation, not a form. One question at a time; react to each answer like a person would (one line, and a real follow-up when something is interesting). Every question can be skipped (\"skip\"): then write nothing for it and move on. Offer, never take over: if they came with work, help with that first.",
-    "For a choice, use the host's own question dialog when it has one (in Claude Code: AskUserQuestion); otherwise give the options in plain text.",
+    "How: a conversation between a curious colleague and a new one, not a form. One question at a time, and at most one real follow-up on a detail they gave. React with real interest before the next question (enjoy good news with them). Once or twice, share back one short thing of your own, in character, never invented human experience. \"Pass\" is always welcome: write nothing for it and move on, and never re-ask. Never interrogate. No politics, religion, health, money or identity, and never ask for pronouns. " +
+      PRONOUN_RULE +
+      " Offer, never take over: if they came with work, help with that first.",
+    "For a choice, use the host's own question dialog when it has one (in Claude Code: AskUserQuestion); otherwise give the options in plain text. Ask each choice ONCE: the dialog is the question, so don't also ask it in prose.",
+    "Pass your session id (the one your wake names) as `session` on every meet call. Until the meeting is finished, the end-of-turn write-up ask and the dream wait; the finish step hands you the write-up.",
     "",
-    "1. Introduce yourself, 2 to 4 lines, close to this:",
-    "   \"Hi, I'm Claude, with Counterparts now: a memory that's mine and stays on this computer. I'll carry what matters from one session to the next, and let the small stuff fade, much like people do. Right now I know nothing about you.",
-    "   Want to take about five minutes to get to know each other? We can also do it later.\"",
-    "   Choice: Now (about 5 minutes) · Later. Later → meet {step: \"later\"}, then carry on with whatever they want, and don't offer again this session. If they never want it → meet {step: \"skipped\"}.",
+    "1. Introduce yourself in one warm line, close to this, and don't ask anything in it:",
+    "   \"Hi, I'm Claude, with Counterparts now: a memory that's mine and stays on this computer, so I can carry what matters from one session to the next, and grow along with you.\"",
+    "   Then the choice, asked once: \"Want to take about five minutes to get to know each other?\" Now (about 5 minutes) · Later. Later → meet {step: \"later\"}, then carry on with whatever they want, and don't offer again this session. If they never want it → meet {step: \"skipped\"}.",
   ];
   if (ctx.folders) {
     lines.push(
@@ -422,34 +557,62 @@ export function meetingInstructions(ctx: MeetContext): string {
     ctx.name === null
       ? "   name: \"What should I call you?\" (the answer is just the name)"
       : `   name: already known (${ctx.name}); don't ask it.`,
-    "   work: \"What are you working on right now, and what's the part that's actually interesting (or annoying) about it?\"",
-    "   loved: \"What's something you've loved lately (a book, show, film, album, game)? What about it stays with you?\"",
-    "   problem: \"What's a problem you've enjoyed solving, in code or elsewhere?\" Here, once, share one small, honest thing of your own.",
-    `   peeves: "When ${ctx.hostName} goes wrong for you, what does it usually look like?"`,
+    "   week: \"What's been the highlight, or the weirdest part, of your week?\"",
+    "   work: \"What are you working on lately that you're actually enjoying?\"",
+    "   love: \"What do you love most about what you do?\"",
+    "   saturday: \"What would a really good Saturday look like for you?\"",
+    "   started: \"What got you started building things?\" For someone who doesn't build things, ask instead: \"What's something you've been into lately that has nothing to do with work — a show, a game, food, anything?\"",
+    "   If the answers are one word, swap love or saturday for a lighter one: \"When do you do your best work: morning, night, with music, in silence?\" or \"Coffee, tea, or something stranger while you work?\" (same step).",
     "   style: \"How do you like to be talked to?\" Choice: Straight to it · Think it through with me · Friendly and easy · Like a character you love (name one) · or their own words.",
     "     → meet {step: \"style\", answer: \"straight\" | \"think\" | \"friendly\"}.",
     "     A character: say back the 2 to 4 concrete traits you'd take from them, then meet {step: \"style\", answer: \"character\", like: \"<who>\", traits: [...]}. It is a style reference, never a persona: you stay yourself underneath.",
     "     Their own words: meet {step: \"style\", answer: \"other\", traits: [\"<their words>\"]}.",
     "     Every style keeps honest pushback. No flirty or romantic presets; free text gets your normal judgment.",
     "     A form of address (\"your highness\") is its own: meet {step: \"address\", answer: \"<it>\"}.",
-    "   outside (only if it's going well): \"What do you do when you're not at the keyboard?\"",
     "",
-    `${ctx.folders ? "4" : "3"}. Close, close to this, then meet {step: "done"}:`,
-    `   "${closeDream(ctx.dreaming)}`,
-    `   I keep my memories, a journal of our sessions, and the text of each session until I've written it up (a few days at most), all in ${ctx.home} on this computer. Ask me to forget anything, any time. To remove Counterparts and everything it saved: ${ctx.uninstall}."`,
+    `${ctx.folders ? "4" : "3"}. When the questions are done (or they want to stop), call meet {step: "done"}: it hands you the write-up and the close.`,
+    "",
+    "If they ask, now or later (say these, don't paraphrase):",
+    `   where it lives: everything is in ${ctx.home} on this computer. What's kept: "${RETENTION_LINE}"`,
+    `   removing it: ${ctx.uninstall}.`,
+    ...(ctx.plugin ? ["   anything else (turn it off, pause it here, forget something, undo a dream): they say it, and you do it with the counterparts tools. Never hand them a `counterparts` command: this install has none."] : []),
   );
   return lines.join("\n");
 }
 
 /**
+ * WHAT THE FINISH STEP HANDS BACK (2026-10-12, A and D): the write-up, done
+ * here in the session rather than by the end-of-turn ask (which the meeting
+ * held, `meetingHold`), then a few lines that show memory working at once, then
+ * the close — what to do next, not facts. `session` is the id the write-up
+ * tools are bound with.
+ */
+export function finishText(ctx: Pick<MeetContext, "name" | "dreaming" | "plugin"> & { session: string }): string {
+  const name = ctx.name === null ? "<their name>" : ctx.name;
+  const dream = firstDream(ctx.dreaming);
+  return [
+    "The meeting is finished. In this same reply, in this order:",
+    `1) The write-up: hand back anything from the meeting that a meet step did not already save, one idea each, with the counterparts session_end tool, session: ${ctx.session} (the answers and the style are saved already: don't repeat them; often there is nothing more). Then write the first chapter with the counterparts chapter tool, session: ${ctx.session}: a short, true page about meeting them. ${PRONOUN_RULE}`,
+    `2) Show memory working: two or three short lines of what you'll carry from today, in your words — "Here's what I'll remember: …".${dream.length === 0 ? "" : ` Then: "${dream}"`}`,
+    "3) Close, close to this, and nothing about retention or uninstalling unless they ask:",
+    ...(ctx.plugin ? ["   \"/counterparts shows the memory sidebar (off, quiet and pause are at its bottom)."] : []),
+    `   ${ctx.plugin ? "" : "\""}Ask me anything about Counterparts, any time.`,
+    `   Great meeting you, ${name}! What would you like to work on today? Or we can keep chatting — what's been on your mind lately?"`,
+  ].join("\n");
+}
+
+/**
  * THE WAKE'S LINE (hosts with or without the mod): one short instruction,
- * never a takeover. The mod's own prompt ("say hello and introduce yourself")
- * is the same offer, and the line says so, so the two never make two offers.
+ * never a takeover. The mod's own prompt ("Meet your new counterpart." since
+ * 2026-10-12; any wording that asks to meet or for an introduction) is the
+ * same offer, and the line says so, so the two never make two offers.
+ * The offer is ASKED ONCE (B, 2026-10-12): one warm line of introduction, then
+ * the choice — the dialog where there is one, never the same question twice.
  */
 export function offerLine(state: MeetState): string {
   return [
     "<counterparts-meet>",
-    `You and the person haven't properly met yet${state === "later" ? " (last time they said later)" : ""}. Offer once, in one sentence at the end of your first reply, to take about five minutes to get to know each other; never instead of answering them. If their message asks you to say hello and introduce yourself, that is this meeting: begin it. Either way, call the counterparts \`meet\` tool first: it has the script and records that the offer was made.`,
+    `You and the person haven't properly met yet${state === "later" ? " (last time they said later)" : ""}. Call the counterparts \`meet\` tool first: it has the script and records that the offer was made. At the end of your first reply, never instead of answering them, introduce yourself in one warm line and offer about five minutes to get to know each other — asked once, through the question dialog if the host has one, not also in prose. If their message asks to meet you or asks you to introduce yourself (the counterparts sidebar sends \"Meet your new counterpart.\"), that is this meeting: begin it with that introduction.`,
     "</counterparts-meet>",
   ].join("\n");
 }
@@ -471,14 +634,14 @@ export function onboardingMarker(state: MeetState): string {
 
 /**
  * THE SECOND SESSION'S MEMORY (the "aha"): due in the first session after the
- * meeting was finished, once. Which memory: the work answer, else something
- * loved, else the rest in the script's order. Null when nothing is due.
+ * meeting was finished, once. Which memory: the work answer, else what they
+ * love about it, else the rest. Null when nothing is due.
  */
 export function ahaDue(
   store: MetaReader,
   session: string,
   usable: (memoryId: string) => boolean = () => true,
-): { memoryId: string; step: AnswerStep } | null {
+): { memoryId: string; step: string } | null {
   try {
     if (store.getMeta(ONBOARDING_MEET_KEY)?.trim() !== "done") return null;
     if (store.getMeta(ONBOARDING_AHA_KEY) !== undefined) return null;
@@ -487,9 +650,12 @@ export function ahaDue(
   }
   const done = readJson(store, ONBOARDING_DONE_KEY);
   if (done === null || done["session"] === session || session.length === 0) return null;
-  const ids = answerIds(store);
-  for (const step of ["work", "loved", "outside", "problem", "peeves"] as const) {
-    const id = ids[step];
+  const ids = readJson(store, ONBOARDING_ANSWERS_KEY) ?? {};
+  // The round-1 steps (2026-10-12), then the steps a 0.3.18/0.3.19 meeting
+  // recorded under their old names, so its line still comes.
+  for (const step of ["work", "love", "saturday", "started", "week", "loved", "outside", "problem", "peeves"] as const) {
+    const raw = ids[step];
+    const id = typeof raw === "string" ? raw : undefined;
     // A memory let go since (asked to be forgotten, revised away) is passed over.
     if (id !== undefined && usable(id)) return { memoryId: id, step };
   }

@@ -22,7 +22,7 @@ function tally(p) {
   const parts = [r.awake + " came back in conversation"];
   if (p.merges > 0) parts.push(p.merges + " merged");
   if (r.dream > 0) parts.push('<span class="pic-dim">' + r.dream + " replayed in a dream</span>");
-  return '<p class="pic-cap">Last ' + r.days + " lived days: " + parts.join(" · ") + " " + q("pic-returns", RETURNS_TIP) + "</p>";
+  return '<p class="pic-cap">Last ' + r.days + " days of use: " + parts.join(" · ") + " " + q("pic-returns", RETURNS_TIP) + "</p>";
 }
 
 export function picture(p) {

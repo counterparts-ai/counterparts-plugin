@@ -95,7 +95,7 @@ const plural = (n: number, says: readonly [string, string]): string => `${n} ${n
 /** "in 2 lived days" / "at the next session's end". */
 export function nextRunWords(nextInDays: number): string {
   if (nextInDays <= 0) return "at the next session's end";
-  return `in ${nextInDays} lived ${nextInDays === 1 ? "day" : "days"}`;
+  return `in ${nextInDays} ${nextInDays === 1 ? "day" : "days"} of use`;
 }
 
 /** Returns in the window, by source (`store.returnCounts`; `legacy` rows are never among them). */
@@ -219,7 +219,7 @@ export function lightOf(v: Verdict, returns?: ReturnsBySource): MechanismLight {
     return {
       ...base,
       status: "green",
-      evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} lived days.${todayLine}${heldLine}`,
+      evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} days of use.${todayLine}${heldLine}`,
       events: v.events,
     };
   }
@@ -228,14 +228,14 @@ export function lightOf(v: Verdict, returns?: ReturnsBySource): MechanismLight {
     const said = v.parts.filter((p) => p.count > 0).map((p) => plural(p.count, p.says));
     const missing = v.parts.find((p) => p.key === v.starved);
     const none = missing === undefined ? "" : `, but no ${missing.says[0]}`;
-    return { ...base, status: "amber", evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} lived days${none}.${heldLine}`, events: v.events };
+    return { ...base, status: "amber", evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} days of use${none}.${heldLine}`, events: v.events };
   }
   // YOUNG (reviewer of #423): the same, on a store too new to expect it — waiting, in plain words.
   if (v.young !== undefined) {
     const said = v.parts.filter((p) => p.count > 0).map((p) => plural(p.count, p.says));
     const missing = v.parts.find((p) => p.key === v.young);
     const none = missing === undefined ? "" : ` No ${missing.says[0]} yet; that takes a few weeks of use.`;
-    return { ...base, status: "waiting", evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} lived days.${none}${heldLine}`, events: v.events };
+    return { ...base, status: "waiting", evidence: `${said.join(", ")} in the last ${MECHANISM_DAYS} days of use.${none}${heldLine}`, events: v.events };
   }
   if (row.held !== undefined && v.held === 0) {
     return { ...base, status: "waiting", evidence: row.held.none, events: [] };
@@ -245,7 +245,7 @@ export function lightOf(v: Verdict, returns?: ReturnsBySource): MechanismLight {
       ...base,
       status: "waiting",
       evidence:
-        `Ran on schedule on lived day ${v.schedule.lastRanDay} with nothing to change; ` +
+        `Ran on schedule on day ${v.schedule.lastRanDay} of use with nothing to change; ` +
         `next run ${nextRunWords(v.schedule.nextInDays)}.`,
       events: [],
     };
@@ -253,7 +253,7 @@ export function lightOf(v: Verdict, returns?: ReturnsBySource): MechanismLight {
   const evidence =
     v.lastFiredDay === null
       ? `Built, and no record of it firing yet.`
-      : `Built, but quiet for ${MECHANISM_DAYS} lived days (last fired on lived day ${v.lastFiredDay}).`;
+      : `Built, but quiet for ${MECHANISM_DAYS} days of use (last fired on day ${v.lastFiredDay} of use).`;
   return { ...base, status: "amber", evidence: `${evidence}${heldLine}`, events: [] };
 }
 

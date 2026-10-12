@@ -244,7 +244,7 @@ export function wakeBudget(src: DashboardSource): WakeBudget {
 
 /** Each phase of the cycle, in a few plain words (hover text on its dot). */
 const PHASE_GLOSS: Record<string, string> = {
-  clock: "move the lived day on",
+  clock: "start the next day of use",
   decay: "let unused memories weaken",
   consolidate: "strengthen and promote what was used",
   prune: "let go of what fell to the floor",

@@ -195,6 +195,20 @@ export function firstChapter(body: string): { text: string; count: number } {
   return { text: body.slice(start, next === undefined ? undefined : next.index), count: heads.length };
 }
 
+/**
+ * A SHORT STAMP AS A PERSON READS IT (2026-10-12, plain words): `10-11` is
+ * `Oct 11` and `10-11 16:01` is `Oct 11 16:01`; a bare clock (`16:01`) or
+ * anything else passes through. The stamps are made by `time.ts#localStamp`,
+ * which other lines still print as `MM-DD`.
+ */
+export function stampWords(stamp: string): string {
+  const m = /^(\d{2})-(\d{2})(?=$| )/.exec(stamp);
+  const mo = m === null ? undefined : SHORT_MONTHS[Number(m[1]) - 1];
+  return m === null || mo === undefined ? stamp : `${mo} ${String(Number(m[2]))}${stamp.slice(5)}`;
+}
+
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 /**
@@ -273,11 +287,12 @@ export function chaptersHere(
   return out.sort((a, b) => b.chapter.writtenAt - a.chapter.writtenAt || (a.chapter.id < b.chapter.id ? 1 : -1));
 }
 
-/** `— "Title" (epi_…)`, or `— epi_…` when the chapter has no title; with
- *  `, N chapters` inside the brackets when there is more than the first. */
+/** `— "Title" (epi_…)`, or `— epi_…` when the chapter has no title. The count
+ *  of chapters inside the episode is not printed (2026-10-12, plain words):
+ *  the id is what `recall` opens, and a person reading the line has no use
+ *  for the numbering. */
 function named(c: ChapterHere): string {
-  const more = c.chapters > 1 ? `, ${String(c.chapters)} chapters` : "";
-  return c.title === null ? `— ${c.id}${more === "" ? "" : ` (${more.slice(2)})`}` : `— "${excerpt(c.title, LAST_HERE_TITLE_BYTES)}" (${c.id}${more})`;
+  return c.title === null ? `— ${c.id}` : `— "${excerpt(c.title, LAST_HERE_TITLE_BYTES)}" (${c.id})`;
 }
 
 /**
@@ -417,20 +432,17 @@ export function chaptersOn(store: Store, date: string, opts: { fromDay?: number 
 export function yesterdayLine(day: readonly ChaptersOnDate[], date: string, titles = YESTERDAY_SHOWN, hidden = 0): string | null {
   if (day.length === 0) {
     if (hidden <= 0) return null;
-    return flatten(`Yesterday, ${date.slice(5)}: chapters from ${String(hidden)} session${hidden === 1 ? "" : "s"} in other directories.`);
+    return flatten(`Yesterday, ${stampWords(date.slice(5))}: ${String(hidden)} session${hidden === 1 ? "" : "s"} in other projects.`);
   }
   // The first `YESTERDAY_SHOWN` are named, the first `titles` of them by
   // title and id and the rest by id alone — pointers instead of titles
   // (2026-10-10, `yesterdayShorter`); past them, a count.
   const named = Math.min(day.length, YESTERDAY_SHOWN);
   const shown = day.slice(0, named).map((c, i) => {
-    const n = c.chapters > 1 ? `, ${String(c.chapters)} chapters` : "";
-    return c.title === null || i >= titles
-      ? `${c.id}${n === "" ? "" : ` (${n.slice(2)})`}`
-      : `"${excerpt(c.title, YESTERDAY_TITLE_BYTES)}" (${c.id}${n})`;
+    return c.title === null || i >= titles ? c.id : `"${excerpt(c.title, YESTERDAY_TITLE_BYTES)}" (${c.id})`;
   });
   const rest = day.length - shown.length + Math.max(0, hidden);
-  return flatten(`Yesterday, ${date.slice(5)}: ${shown.join("; ")}${rest > 0 ? `; and ${String(rest)} more` : ""}.`);
+  return flatten(`Yesterday, ${stampWords(date.slice(5))}: ${shown.join("; ")}${rest > 0 ? `; and ${String(rest)} more` : ""}.`);
 }
 
 /**
@@ -476,7 +488,7 @@ export function placeWords(scope: string): string {
  */
 export function elsewhereLine(chapter: ChapterHere, date: string, reader: string | null = null): string {
   const where = chapter.scope === null ? "" : ` in ${placeWords(chapter.scope)}`;
-  return flatten(`About me, from another directory: ${sessionWords(chapter.session, chapter.model, reader)}, ${date}${where} ${named(chapter)}.`);
+  return flatten(`About me, from another project: ${sessionWords(chapter.session, chapter.model, reader)}, ${date}${where} ${named(chapter)}.`);
 }
 
 /**
@@ -595,7 +607,7 @@ function elsewhereForms<D>(
   };
   const candidates: string[] = [];
   for (let k = Math.min(named.length, TODAY_ELSEWHERE_MAX_DIRS); k >= 1; k--) candidates.push(line(k, true), line(k, false));
-  candidates.push(`${head} ${String(named.length)} other ${named.length === 1 ? "directory" : "directories"}.`);
+  candidates.push(`${head} ${String(named.length)} other ${named.length === 1 ? "project" : "projects"}.`);
   const size = (s: string): number => new TextEncoder().encode(s).length;
   const forms: string[] = [];
   for (const form of candidates) {

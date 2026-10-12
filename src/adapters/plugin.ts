@@ -51,7 +51,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { NEW_INSTALL_DREAMING_LINE } from "../core/onboarding.js";
+import { NEW_INSTALL_DREAMING_LINE_PLUGIN } from "../core/onboarding.js";
 import { implicitConfigRefusal } from "./config-path.js";
 import type { ConfigChoice } from "./config-path.js";
 import { pluginInstall } from "./host-wiring.js";
@@ -379,20 +379,25 @@ export function takeFirstRunNotice(noticePath: string): boolean {
   }
 }
 
-/** The line a new install is announced with, for the configuration at `configPath`. */
+/**
+ * The line a new install is announced with, for the configuration at
+ * `configPath`. ONE LINE (2026-10-12, Mike's fresh-user trial: the three-line
+ * notice read as machinery): that it is set up, that it stays on this
+ * computer and where, and how to turn dreaming off. A memory parked beside it
+ * is the one case that adds a sentence.
+ */
 export function firstRunLine(configPath: string, home: string): string {
   const base = dirname(configPath);
   const parked = parkedBeside(base);
   return (
-    `Counterparts: first run — a new memory was set up at ${tildeOf(base, home)}. ` +
-    "It stays on this computer." +
+    `Counterparts is set up: a memory that stays on this computer, in ${tildeOf(base, home)}. ` +
+    // A NEW MEMORY DREAMS BY DEFAULT (2026-10-11): said once, here, with the
+    // way to turn it off, by saying so (`core/onboarding.ts#NEW_INSTALL_DREAMING_LINE_PLUGIN`).
+    NEW_INSTALL_DREAMING_LINE_PLUGIN +
     (parked.length === 0
       ? ""
       : ` A memory set aside earlier is still at ${parked.map((p) => tildeOf(p, home)).join(", ")}, untouched; ` +
-        "the new one does not include it.") +
-    // A NEW MEMORY DREAMS BY DEFAULT (2026-10-11): said once, here, with the
-    // way to turn it off (`core/onboarding.ts#NEW_INSTALL_DREAMING_LINE`).
-    ` ${NEW_INSTALL_DREAMING_LINE}`
+        "the new one does not include it.")
   );
 }
 

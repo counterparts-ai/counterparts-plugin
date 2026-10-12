@@ -153,7 +153,7 @@ export function overviewView(src: DashboardSource, feedLimit = FEED_LIMIT): Over
 
   const tiles: Tile[] = [
     {
-      label: "lived days",
+      label: "days of use",
       value: String(day),
       note:
         lastActive(store.getMeta("lastActiveDate")) === null
@@ -199,8 +199,8 @@ export function overviewView(src: DashboardSource, feedLimit = FEED_LIMIT): Over
 
   const opening =
     day === 0 && rows.length === 0
-      ? "I have not lived a day yet. Everything below is what I would be able to tell you, and the honest word for how much of it I know is on each panel."
-      : `I have lived ${day} ${day === 1 ? "day" : "days"}. I am holding ${held.length} ${held.length === 1 ? "memory" : "memories"}` +
+      ? "I have not had a day of use yet. Everything below is what I would be able to tell you, and the honest word for how much of it I know is on each panel."
+      : `I have had ${day} ${day === 1 ? "day" : "days"} of use. I am holding ${held.length} ${held.length === 1 ? "memory" : "memories"}` +
         (beliefs === 0 ? "" : ` and ${beliefs} ${beliefs === 1 ? "belief or entity" : "beliefs and entities"}`) +
         (archived.length === 0 ? "" : `, with ${archived.length} more archived`) +
         (journalCount === 0 ? "." : `, beside ${journalCount} journal ${journalCount === 1 ? "entry" : "entries"} that do not decay.`);

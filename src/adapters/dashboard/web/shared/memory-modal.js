@@ -149,17 +149,17 @@ function usePart(d) {
   let cells = "";
   for (let day = first; day <= last; day++) {
     const cls = "mc-cell" + (used.has(day) ? " used" : "") + (day === d.bornDay ? " born" : "") + (day === last ? " today" : "");
-    cells += '<i class="' + cls + '" title="lived day ' + day + (day === d.bornDay ? " — born" : "") + (used.has(day) ? " — used" : "") + '"></i>';
+    cells += '<i class="' + cls + '" title="day ' + day + ' of use' + (day === d.bornDay ? " — born" : "") + (used.has(day) ? " — used" : "") + '"></i>';
   }
   const shown = [...used].filter((x) => x >= first).length;
   const lines = [];
   if (d.uses > 0) {
     lines.push("Used " + d.uses + "× over " + d.reinforcedDays + (d.reinforcedDays === 1 ? " separate day" : " separate days") +
-      ", last on lived day " + d.lastUsedDay + ".");
+      ", last on day " + d.lastUsedDay + " of use.");
     if (shown < d.reinforcedDays) lines.push("The log shows " + shown + " of those days; it keeps only so much.");
   } else lines.push("Not used yet.");
   if (road) lines.push(road);
-  return '<div class="mc-strip" role="img" aria-label="lived days, a dot on each day it was used">' +
+  return '<div class="mc-strip" role="img" aria-label="days of use, a dot on each day it was used">' +
     (first > d.bornDay ? '<span class="mc-more">…</span>' : "") + cells + "</div>" +
     '<div class="mc-axis"><span>' + (first === d.bornDay ? "born, day " + first : "day " + first) + "</span><span>today, day " + last + "</span></div>" +
     '<p class="mc-line">' + esc(lines.join(" ")) + "</p>";
@@ -246,7 +246,7 @@ function chips(d) {
     c.push('<span class="mc-chip" title="the calendar day it entered the store (on a migrated or seeded store, the day of the import)">recorded ' +
       esc(dateOr(d.learnedOn, FULL)) + "</span>");
   }
-  c.push('<span class="mc-chip" title="the lived day it was born">lived day ' + esc(String(d.bornDay)) + "</span>");
+  c.push('<span class="mc-chip" title="the day of use it was born">day ' + esc(String(d.bornDay)) + " of use</span>");
   for (const p of d.prospective || []) {
     c.push('<span class="mc-chip" title="a reminder it holds">reminder ' + esc(dateOr(p.date, FULL)) + " · " + esc(p.state) + "</span>");
   }
@@ -277,7 +277,7 @@ function footer(d) {
       " · predictive " + n2(s.predictive) + " · novelty " + (s.novelty === null ? "blind" : n2(s.novelty)) +
       (s.claimed === null ? "" : " · claimed floor " + n2(s.claimed)) + "</span>") +
     (d.feelingsLine || d.intensity > 0 ? kv("feelings", esc(d.feelingsLine || "none recorded") + " <span class='mc-dim'>· intensity " + n2(d.intensity) + "</span>") : "") +
-    kv("lived", "born day " + d.bornDay + " · used " + d.uses + "× over " + d.reinforcedDays + " days · last used day " + d.lastUsedDay) +
+    kv("use", "born day " + d.bornDay + " · used " + d.uses + "× over " + d.reinforcedDays + " days · last used day " + d.lastUsedDay) +
     kv("standing", (d.consolidated ? "consolidated" : "not consolidated") + " · " + (d.promoted ? "promoted" : "not promoted") +
       " · " + (d.protected ? "protected" : "revisable") + " · pressure " + n3(d.pressure) + (d.bar === null ? "" : " / bar " + n3(d.bar))) +
     (writtenStamp(d) ? kv("written", esc(writtenStamp(d))) : "") +

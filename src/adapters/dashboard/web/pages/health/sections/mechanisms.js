@@ -35,7 +35,7 @@ import { q, wireTips } from "../../../shared/widgets/tips.js";
 
 const LEGEND =
   "The small colour mark is the stage a mechanism works in: " + FAMILIES.map((f) => f.label.toLowerCase()).join(", ") + ". " +
-  "A green light fired in the last 7 lived days. A ring is waiting: its next run is ahead, or it has nothing to act on yet. " +
+  "A green light fired in the last 7 days of use. A ring is waiting: its next run is ahead, or it has nothing to act on yet. " +
   "Amber is built but quiet. Grey is not built yet. \"Partly built\" means some of it works and some is still to come. " +
   "The line scrolls sideways.";
 

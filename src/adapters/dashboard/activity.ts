@@ -64,7 +64,7 @@ export function renderActivity(src: DashboardSource, opts: ActivityOptions = {})
   const atLeast = opts.ref !== undefined && all.length >= FEED_CEILING;
 
   const bound =
-    `I keep events for ${plural(store.retentionDays, "lived day")}; older ones are swept unless ` +
+    `I keep events for ${plural(store.retentionDays, "day of use", "days of use")}; older ones are swept unless ` +
     "a replay latch holds them. This is what I still have, not everything that ever happened.";
 
   if (shown.length === 0) {

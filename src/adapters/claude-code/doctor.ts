@@ -386,6 +386,21 @@ function unreadableClause(keys: readonly string[] | undefined): string {
 }
 
 /** The config file itself: the one the hooks read, and whether it was readable. */
+/**
+ * WHICH WAKE CEILING IS IN FORCE (2026-10-12). A configuration with no
+ * `injectionBudgetBytes` wakes under Claude Code's default
+ * (`config.ts#withBudgetDefault`) — the plugin's first run and scripted
+ * installs wrote none before 0.3.20 — and the line says which, so "the file
+ * says 9000" and "nothing said, 9000 was used" read differently.
+ */
+function ceilingClause(config: AdapterConfig): string {
+  const bytes = config.injectionBudgetBytes;
+  if (bytes === undefined) return "; no wake ceiling, so no wake is composed";
+  return config.injectionBudgetDefaulted === true
+    ? `; wake ceiling ${String(bytes)} bytes, Claude Code's default (the file sets no injectionBudgetBytes)`
+    : `; wake ceiling ${String(bytes)} bytes`;
+}
+
 function configFindings(input: DoctorInput): Finding[] {
   const out: Finding[] = [];
   const reason = input.configReason;
@@ -452,9 +467,15 @@ function configFindings(input: DoctorInput): Finding[] {
         "config",
         "green",
         "Config",
-        `${input.configPath} — read; dataDir ${input.config.dataDir ?? "(unset: the default store)"}`,
+        `${input.configPath} — read; dataDir ${input.config.dataDir ?? "(unset: the default store)"}${ceilingClause(input.config)}`,
         "",
-        { path: input.configPath, reason: reason ?? "read-by-caller", dataDir: input.config.dataDir ?? null },
+        {
+          path: input.configPath,
+          reason: reason ?? "read-by-caller",
+          dataDir: input.config.dataDir ?? null,
+          ceiling: input.config.injectionBudgetBytes ?? null,
+          ceilingDefaulted: input.config.injectionBudgetDefaulted === true,
+        },
       ),
     );
     // SETTINGS THIS BUILD NO LONGER READS (keyless, 2026-09-24) — a quiet note,
@@ -933,13 +954,13 @@ function clockFindings(input: DoctorInput, store: Store): Finding[] {
   // the clock, so the comparison is not made and the line says why.
   if (read.unknown) {
     const facts =
-      `lived day ${livedDay}, lastActiveDate ${lastActive ?? "(unset)"}, today ${input.today} ${zoneNote(input)} — ` +
+      `day ${livedDay} of use, lastActiveDate ${lastActive ?? "(unset)"}, today ${input.today} ${zoneNote(input)} — ` +
       undetermined(BOUNDARY_EVENT);
     return [finding("clock", "green", "Clock", facts, "", data)];
   }
   const facts =
-    `lived day ${livedDay}, lastActiveDate ${lastActive ?? "(unset)"}, ` +
-    `newest boundary ${boundary ?? "(none)"}, today ${input.today} ${zoneNote(input)}`;
+    `day ${livedDay} of use, lastActiveDate ${lastActive ?? "(unset)"}, ` +
+    `last session end ${boundary ?? "(none)"}, today ${input.today} ${zoneNote(input)}`;
   if (boundary !== null && (lastActive === null || lastActive < boundary)) {
     return [
       finding(
@@ -955,6 +976,28 @@ function clockFindings(input: DoctorInput, store: Store): Finding[] {
   return [finding("clock", "green", "Clock", facts, "", data)];
 }
 
+/**
+ * HAS THE WORKER HAD A WHOLE DAY? The first boundary a store reaches (its first
+ * session after midnight) starts the first night run, which writes its rows when
+ * it FINISHES, minutes later. A doctor run in that window is not a fault: absent
+ * rows are evidence of trouble only once a boundary from an earlier day exists.
+ * "never" = no boundary yet; "today" = the newest is today's and the run is owed
+ * its time; "earlier" = a worker has had its chance.
+ */
+function boundaryAge(store: Store, today: string): "never" | "today" | "earlier" {
+  // ALL boundary rows, not the newest: every active day writes one, so the newest
+  // is today's on any day the store has been used, however long it has lived.
+  const rows = store.eventLog({ name: BOUNDARY_EVENT, limit: 4000 });
+  if (rows.length === 0) return "never";
+  if (rows.length >= 4000) return "earlier"; // certainly lived
+  return rows.some((r) => {
+    const d = rowDate(r);
+    return d !== null && d < today;
+  })
+    ? "earlier"
+    : "today";
+}
+
 /** The newest row of each family the background half leaves behind. */
 function rowFindings(input: DoctorInput, store: Store): Finding[] {
   const livedDay = store.livedDay();
@@ -968,13 +1011,21 @@ function rowFindings(input: DoctorInput, store: Store): Finding[] {
    */
   // `unknown` means the store holds MORE than `NEWEST_LIMIT` boundary rows, so
   // it has certainly lived — the one thing this flag needs to know.
-  const boundaries = newestRows(store, BOUNDARY_EVENT, 1, livedDay);
-  const lived = boundaries.unknown || boundaries.rows.length > 0;
-  /** The "no row yet" finding: amber once the store has lived, green before. */
+  const age = boundaryAge(store, input.today);
+  /** The "no row yet" finding: amber once a worker has had a whole day, green before. */
   const absent = (key: string, title: string, what: string, fix: string): Finding =>
-    lived
+    age === "earlier"
       ? finding(key, "amber", title, what, fix, { rows: 0 })
-      : finding(key, "green", title, `${what} — and no boundary has been reached here yet`, "", { rows: 0 });
+      : finding(
+          key,
+          "green",
+          title,
+          age === "today"
+            ? `${what} — the first night run starts today and writes this when it finishes`
+            : `${what} — and no session has ended here yet`,
+          "",
+          { rows: 0 },
+        );
   /** The "we could not read the newest one" finding: neutral, never a grade. */
   const unread = (key: string, title: string, name: string): Finding =>
     finding(key, "green", title, undetermined(name), "", { unknown: true });
@@ -1561,8 +1612,7 @@ function firedFindings(input: DoctorInput, store: Store): Finding[] {
         "fired",
         "green",
         "Fired",
-        `this store is on lived day ${String(report.livedDay)} — too new to grade; nothing has fired ` +
-          `because nothing has happened yet` +
+        `Too new to judge yet: nothing has run because you've only just started` +
           (c.blocked === 0 ? "" : `, though ${String(c.blocked)} was already stopped by something`),
         c.blocked === 0 ? "" : "Run: counterparts mechanisms --all — the blocked rows say by what.",
         data,
@@ -2538,12 +2588,18 @@ export function wakeArrivalFindings(store: Store): Finding[] {
     lastHereNoRoom: room.lastHereNoRoom,
     workNoRoom: room.workNoRoom,
     datedUnlisted: room.datedUnlisted,
+    steppedDown: room.steppedDown,
+    untold: room.untold,
     floor,
   };
   const head =
     expected <= 0
       ? `${window} — no wake checked on arrival (an opt-in check: COUNTERPARTS_WAKE_CHECK=1 in Claude Code's environment)`
       : `${window} — ${String(whole)} of ${String(expected)} ${expected === 1 ? "wake" : "wakes"} arrived whole`;
+  // A LANE LEFT WITHOUT A WORD (2026-10-12) is a bug, not a full wake: red.
+  if (room.red !== null) {
+    return [finding("wake", "red", "Wake", `${head}${rest}`, room.red, data)];
+  }
   if (cut === 0 && room.amber !== null) {
     return [
       finding(
@@ -2582,8 +2638,17 @@ interface WakeRoom {
   readonly lastHereNoRoom: number;
   readonly workNoRoom: number;
   /** Wake renders that left a dated item ("Arriving:") unlisted for want of
-   *  room (2026-10-10) — amber. */
+   *  room (2026-10-10) — amber. Counted, since 2026-10-12, not gone. */
   readonly datedUnlisted: number;
+  /** Wake renders that said some lane by count rather than in full — a
+   *  step-down (a lane's cap, the identity share, the trim), never a fault
+   *  (2026-10-12). */
+  readonly steppedDown: number;
+  /** Wake renders that left an id unsaid — in no line, not even a count — a
+   *  silent drop: red (2026-10-12). */
+  readonly untold: number;
+  /** The red's remedy, or null when nothing here is red. */
+  readonly red: string | null;
   /** The clauses, each led by "; ", or "". */
   readonly clauses: string;
   /** The amber's remedy, or null when nothing here is amber. */
@@ -2615,9 +2680,17 @@ function wakeRoom(store: Store, since: number): WakeRoom {
   // row says "Arriving:" lost an element for want of room
   // (`self/briefing.ts#ROOM_ORDER`) — by its uncapped per-lane count, or, on
   // a row from before that count, by its trimmed list.
-  const datedRows = read(SELF_BRIEFING_EVENT).filter((r) => datedUnlisted(payloadOf(r)) > 0);
+  const briefings = read(SELF_BRIEFING_EVENT);
+  const datedRows = briefings.filter((r) => datedUnlisted(payloadOf(r)) > 0);
   const datedUnlistedRenders = datedRows.length;
   const datedNewest = rowDate(datedRows[0]);
+  // STEP-DOWNS AND SILENT DROPS (2026-10-12, `self/briefing.ts#tellLost`): a
+  // lane said by count is the wake doing its job; an id no line names is not.
+  // "Nearby" left uncounted by rank (`quiet`) is a step-down too.
+  const steppedDown = briefings.filter((r) => (num(payloadOf(r), "counted") ?? 0) + (num(payloadOf(r), "quiet") ?? 0) > 0).length;
+  const untoldRows = briefings.filter((r) => (num(payloadOf(r), "untold") ?? 0) > 0);
+  const untold = untoldRows.length;
+  const untoldNewest = rowDate(untoldRows[0]);
   const parts = Object.entries(gaveWay)
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
     .map(([part, n]) => `${part} ${String(n)}`);
@@ -2640,7 +2713,10 @@ function wakeRoom(store: Store, since: number): WakeRoom {
       : "") +
     (workNoRoom > 0 ? `; "Work here" lines that did not fit, in ${String(workNoRoom)} ${workNoRoom === 1 ? "directory-day" : "directory-days"}` : "") +
     (datedUnlistedRenders > 0
-      ? `; a dated item under "Arriving:" was not listed for want of room in ${String(datedUnlistedRenders)} ${datedUnlistedRenders === 1 ? "render" : "renders"} of the wake${datedNewest === null ? "" : ` (newest ${datedNewest})`}`
+      ? `; a dated item under "Coming up:" was counted, not listed, for want of room in ${String(datedUnlistedRenders)} ${datedUnlistedRenders === 1 ? "render" : "renders"} of the wake${datedNewest === null ? "" : ` (newest ${datedNewest})`}`
+      : "") +
+    (untold > 0
+      ? `; something the wake chose went unsaid — in no line, not even a count — in ${String(untold)} ${untold === 1 ? "render" : "renders"}${untoldNewest === null ? "" : ` (newest ${untoldNewest})`}`
       : "");
   const remedies = [
     ...(datedUnlistedRenders > 0
@@ -2653,8 +2729,12 @@ function wakeRoom(store: Store, since: number): WakeRoom {
       : []),
   ];
   const amber = remedies.length === 0 ? null : remedies.join(" ");
+  const red =
+    untold === 0
+      ? null
+      : "Every lane the wake chose is meant to show whole, shortened, or as a count with its ids, so an id in no line is a bug in Counterparts, or a ceiling too small for the wake's own furniture. Worth reporting with this line; recall still finds the memories.";
   const any = clauses.length > 0;
-  return { overBudget, overCap, noticeDropped, gaveWay, handoffNoRoom, lastHereNoRoom, workNoRoom, datedUnlisted: datedUnlistedRenders, clauses, amber, any, floor };
+  return { overBudget, overCap, noticeDropped, gaveWay, handoffNoRoom, lastHereNoRoom, workNoRoom, datedUnlisted: datedUnlistedRenders, steppedDown, untold, red, clauses, amber, any, floor };
 }
 
 /**
@@ -3102,8 +3182,8 @@ function snapshotFindings(input: DoctorInput, store: Store): Finding[] {
     // The same rule the row findings use: an absent copy is only evidence once a
     // boundary has been reached. On a fresh install there has been no worker run
     // to take a first one, and an amber there is decoration.
-    const boundaries = newestRows(store, BOUNDARY_EVENT, 1, livedDay);
-    const lived = boundaries.unknown || boundaries.rows.length > 0;
+    const age = boundaryAge(store, input.today);
+    const lived = age === "earlier";
     const failed = newestRows(store, SNAPSHOT_FAILED_EVENT, 1, livedDay);
     const failedRow = failed.rows[0];
     const why =
@@ -3124,7 +3204,7 @@ function snapshotFindings(input: DoctorInput, store: Store): Finding[] {
             "snapshot",
             "green",
             "Snapshots",
-            `no snapshot yet — and no boundary has been reached here yet${strange}${upgrade}${misread}`,
+            `no snapshot yet — ${age === "today" ? "the first night run starts today and takes one when it finishes" : "and no boundary has been reached here yet"}${strange}${upgrade}${misread}`,
             "",
             { ...held, rows: 0 },
           ),

@@ -50,7 +50,7 @@ import { readSnapshotsDir, resolveSnapshotsDir } from "../snapshots.js";
 // the console's face on the file and the store that adapter owns, and a console
 // with its own idea of "what counts as red" is exactly the drift I32 ran inside of.
 import { SPAWN_REFUSAL_PREFIX, SPAWN_START_COUNT_KEY, SPAWN_START_DATE_KEY } from "../claude-code/hooks.js";
-import { zoneBeside } from "../config.js";
+import { withBudgetDefault, zoneBeside } from "../config.js";
 import type { AdapterConfig } from "../config.js";
 import {
   anyRed,
@@ -934,7 +934,9 @@ export function doctorCommand(
       configPath,
       configReason: reason,
       ...(unreadableKeys === undefined ? {} : { configUnreadableKeys: unreadableKeys }),
-      config,
+      // The ceiling the hooks will use (`config.ts#withBudgetDefault`), so the
+      // Config line can say which one is in force and where it came from.
+      config: reason === "loaded" ? withBudgetDefault(config) : config,
       dir,
       store,
       today,

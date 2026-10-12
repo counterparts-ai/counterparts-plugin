@@ -31,22 +31,10 @@ import type {
   SidebarToday,
 } from '../types'
 import { dateOf, hm, humanDates } from './feed'
-import { MECHS, STAGES, dashboardRoutes, hex, stageOf } from './mechanisms'
+import { MECHS, STAGES, hex, stageOf } from './mechanisms'
 import type { MechId } from './mechanisms'
+import { P } from './theme'
 import { cells, headCells } from './width'
-
-/** The mockups' palette: neutral text, stage colours only on dots and bars. */
-export const P = {
-  panel: '#05080c',
-  hi: '#dde3e9',
-  text: '#b3bcc5',
-  mid: '#8e98a2',
-  dim: '#66717c',
-  faint: '#1d262e',
-  head: '#c9d1d8',
-  cyan: '#00e5ff',
-  amber: '#ffb347',
-} as const
 
 /** Bars a shade under the site's full stage colour. */
 const BAR_K = 0.84
@@ -92,7 +80,7 @@ const BLANK: Line = { segs: [] }
 
 // ── text ───────────────────────────────────────────────────────────────────
 
-const TRAIL = /[\s,;:·—–-]+$/
+export const TRAIL = /[\s,;:·—–-]+$/
 
 /**
  * Word wrap to `width` cells (the first line to `first`); past `maxLines`
@@ -179,9 +167,7 @@ export type BodyState = {
   open: SidebarOpen | null
   mech: SidebarMechOpen | null
   focus: string | null
-  dash: 'unknown' | 'up' | 'down'
-  /** How this install starts the dashboard, first the one to try (`mechanisms.ts#dashboardRoutes`). */
-  routes: readonly string[]
+  dash: 'unknown' | 'up' | 'down' | 'other'
   search: SidebarSearch
 }
 
@@ -276,7 +262,7 @@ function textLines(text: string, w: number, max: number, c: string, key: string,
   const last = wrapN(all.slice(head.length).join(' '), room, 1)[0] ?? ''
   return [
     ...plain(head, c, key, o),
-    { segs: [seg(last, c, o), seg(' ', c), seg(MORE, P.cyan)], key, link: { from: cells(last) + 1, key: moreKey } },
+    { segs: [seg(last, c, o), seg(' ', c), seg(MORE, P.accent)], key, link: { from: cells(last) + 1, key: moreKey } },
   ]
 }
 
@@ -320,7 +306,7 @@ function subTitle(r: SidebarMemoryRef, key: string, w: number, now: number): Lin
   const c = r.opened === true ? P.text : P.mid
   const title = humanDates(r.title, now)
   if (r.opened !== true) return plain(wrapN(title, w, ITEM_LINES), c, key)
-  const mark = [seg(' ', P.dim), seg('↗', P.cyan), seg(' opened', P.dim)]
+  const mark = [seg(' ', P.dim), seg('↗', P.accent), seg(' opened', P.dim)]
   const markW = cells(' ↗ opened')
   let ls = wrapN(title, w, ITEM_LINES)
   const lastW = cells(ls[ls.length - 1] ?? '')
@@ -386,18 +372,23 @@ export function bar(v: number, max: number, width: number): string {
   return '▄'.repeat(Math.floor(halves / 2)) + (halves % 2 === 1 ? '▖' : '')
 }
 
+/** The Mechanisms section's link while the dashboard is down: a click runs /counterparts:dashboard. */
+export const DASHBOARD_LINK = 'Start the dashboard to see stats here'
+
+/** What shows in place of another store's numbers. */
+export const OTHER_STORE = 'This dashboard belongs to another memory.'
+
 function chart(s: BodyState, f: Fold): Line[] {
   const t = s.today
   if (t === null) {
     if (s.dash === 'down') {
-      // The route that works for this install; unsure which install, the plugin's first, then `or` the npm one.
-      const [first, ...rest] = s.routes.length > 0 ? s.routes : dashboardRoutes(null)
-      return [
-        heading('Mechanisms today', '', s.w),
-        ...plain(wrapN("The dashboard isn't running, so these can't be counted. Start it with", s.w), P.dim),
-        line([seg(clip(first ?? '', s.w), P.cyan)]),
-        ...rest.map(r => line([seg('or ', P.dim), seg(clip(r, s.w - 3), P.cyan)])),
-      ]
+      // A link that starts it (the plugin's own command, which every install that draws this sidebar has), cyan
+      // like the intro's (the owner's fox trial, 2026-10-12).
+      return [heading('Mechanisms today', '', s.w), ...wrapN(DASHBOARD_LINK, s.w).map(t => line([seg(t, P.accent)], 'dash:start'))]
+    }
+    if (s.dash === 'other') {
+      // The dashboard on the port serves another store (core #459): none of its numbers here.
+      return [heading('Mechanisms today', '', s.w), ...plain(wrapN(OTHER_STORE, s.w), P.dim)]
     }
     return [heading('Mechanisms today', '', s.w), line([seg('reading the dashboard…', P.dim)])]
   }
@@ -412,7 +403,9 @@ function chart(s: BodyState, f: Fold): Line[] {
     const v = t.counts[m.id]
     const key = `mech:${m.id}`
     const picked = s.mech?.id === m.id
-    if (v === null || m.notBuilt === true) {
+    // Not built yet: not drawn until it is (the fox trial, 2026-10-12).
+    if (m.notBuilt === true) continue
+    if (v === null) {
       out.push(line([seg(m.short.padEnd(NAME), P.dim), seg(clip('○ not built yet', s.w - NAME), P.dim)], key))
       continue
     }
@@ -576,26 +569,3 @@ export function textOf(lines: readonly Line[]): string[] {
 }
 
 export type { MechId }
-
-// ── the quiet view's tail ────────────────────────────────────────────────────
-
-/** What ends the quiet tail, always: the way back to the pane (the tail is dim text; it can't be clicked). */
-export const TAIL_HINT = '/counterparts opens it'
-
-/**
- * The quiet view's tail under the prompt: the newest thing, shortened so the
- * hint after it is never cut (the engine cuts a tail where its row ends),
- * then ` · /counterparts opens it` (Mike, 2026-10-10). `room` is the cells
- * the tail may take (the row less the engine's own line), null when the
- * surface says no width. Nothing new yet: `Counterparts is quiet · …`.
- */
-export function quietTail(latest: string | null, room: number | null, now: number): string {
-  const end = ` · ${TAIL_HINT}`
-  if (latest === null) {
-    const whole = `Counterparts is quiet${end}`
-    return room !== null && cells(whole) > room ? TAIL_HINT : whole
-  }
-  const r = room ?? 45 + cells(end)
-  if (r - cells(end) < 12) return TAIL_HINT
-  return `${clip(humanDates(latest, now), r - cells(end))}${end}`
-}

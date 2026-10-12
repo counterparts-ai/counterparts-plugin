@@ -42,7 +42,7 @@ function countsLine(counts) {
 export function paint(d) {
   if (d) last = d;
   d = last;
-  $("self-dreams-q").innerHTML = q("dreams", "Once a day, with the owner's yes, I dream for a few minutes over what was lived since the last dream: merging near-copies, linking what belongs together, replaying what matters, writing down a pattern. Every change can be undone as a whole (counterparts dream --undo <id>). A dream is never a memory of something that happened.");
+  $("self-dreams-q").innerHTML = q("dreams", "Once a day, with your yes, I dream for a few minutes over what was lived since the last dream: merging near-copies, linking what belongs together, replaying what matters, writing down a pattern. Every change can be undone as a whole (counterparts dream --undo <id>). A dream is never a memory of something that happened.");
   wireTips($("self-dreams-q"));
   const box = $("self-dreams");
   if (d.dreamsAbsent) {
@@ -54,7 +54,7 @@ export function paint(d) {
     const open = openIds.has(x.id);
     return '<div class="dr' + (open ? " open" : "") + (x.state === "undone" ? " undone" : "") + '">' +
       '<button type="button" class="dr-top" data-id="' + esc(x.id) + '" aria-expanded="' + open + '">' +
-        '<span class="dr-date">' + esc(dateOr(x.date) || "lived day " + x.day) + "</span>" +
+        '<span class="dr-date">' + esc(dateOr(x.date) || "day " + x.day + " of use") + "</span>" +
         '<span class="dr-title">' + esc(x.title || "(no journal yet)") + "</span>" +
         '<span class="chip">' + esc(STATE[x.state] || x.state) + "</span>" +
         '<span class="dr-counts">' + esc(countsLine(x.counts)) + "</span>" +

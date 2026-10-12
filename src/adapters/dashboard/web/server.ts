@@ -84,6 +84,8 @@ import { mechanismsView } from "./views/mechanisms.js";
 import { DREAM_LIMIT, dreamsView } from "./views/dreams.js";
 import { resolveStatic } from "./static.js";
 import { packagePath } from "../../runtime.js";
+import { installedVersion } from "../../sessions.js";
+import { storeId } from "../../store-id.js";
 import {
   activityView,
   eventDetail,
@@ -256,7 +258,13 @@ export function router(
     if (path === "/api/meta") return json(metaView(src));
     // THE FIRST MEETING'S STATE, for the sidebar mod (2026-10-11): `{ meet,
     // where, style }`, option keys only, never an answer's words.
-    if (path === "/api/onboarding") return json(onboardingView(src.store));
+    // `store` (2026-10-12): which store this dashboard serves, as `/api/whoami` says it.
+    if (path === "/api/onboarding") return json({ ...onboardingView(src.store), store: storeId(src.store.dir) });
+    // WHICH STORE THIS IS (2026-10-12, `adapters/store-id.ts`): two stores on
+    // one machine can race for one port, so the mod checks this against the
+    // wake's `counterparts:store` marker before it trusts what it reads here.
+    // An id, never the path; `version` is null when the manifest is unreadable.
+    if (path === "/api/whoami") return json({ store: storeId(src.store.dir), version: installedVersion() });
     if (path === "/api/pulse") return json(pulse(src));
     if (path === "/api/overview") return json(overviewView(src, intParam(url, "limit", 40)));
     if (path === "/api/memories") return json(memoriesView(src, { limit: intParam(url, "limit", 4000) }));

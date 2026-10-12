@@ -92,7 +92,7 @@ import {
 } from "../../config-path.js";
 import type { ConfigChoice } from "../../config-path.js";
 
-import { loadConfig, withEmbedderDefault } from "../../config.js";
+import { loadConfig, withBudgetDefault, withEmbedderDefault } from "../../config.js";
 import type { AdapterConfig } from "../../config.js";
 import { openEmbedder } from "../index.js";
 import type { LiveEmbedder } from "../embed-client.js";
@@ -574,13 +574,17 @@ export function runnerConfig(
   const loaded = loadConfig(raw);
   const pinned = pinnedDataDir(env);
   // THE EMBEDDER DEFAULT (config.ts#resolveEmbedder), the same rule the hook
-  // applies, so the worker backfills with the table the hooks embed with.
+  // applies, so the worker backfills with the table the hooks embed with. And
+  // the hook's ceiling default (`config.ts#withBudgetDefault`), so the worker
+  // and the night run render the wake the session start reads.
   return {
-    config: withEmbedderDefault({
-      ...loaded.config,
-      // The PIN wins. The spawner wrote it last precisely so nothing else can.
-      dataDir: pinned ?? loaded.config.dataDir ?? dataDir(),
-    }),
+    config: withBudgetDefault(
+      withEmbedderDefault({
+        ...loaded.config,
+        // The PIN wins. The spawner wrote it last precisely so nothing else can.
+        dataDir: pinned ?? loaded.config.dataDir ?? dataDir(),
+      }),
+    ),
     reason: loaded.reason,
   };
 }

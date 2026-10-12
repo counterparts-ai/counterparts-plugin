@@ -20,6 +20,7 @@
  * labelled SINCE BIRTH. A number invented to look like "last cycle" would be scar
  * §2.17 committed by the very view that exists to prevent it.
  */
+import { stampWords } from "../../core/handoff/last-here.js";
 import { band, strength, symmetryCheck } from "../../core/physics/index.js";
 import { TUNABLES as SCHEMA_TUNABLES } from "../../core/schemas/index.js";
 import {
@@ -150,8 +151,10 @@ export function renderStatus(src: DashboardSource, opts: StatusOptions = {}): st
   const lastActive = src.store.getMeta("lastActiveDate") ?? "";
 
   const opening =
-    `I have lived ${plural(day, "day")}` +
-    (lastActive === "" ? "" : ` — the last of them ${lastActive}`) +
+    // In the wake's and doctor's words (2026-10-12): days of use, and the
+    // date as "Oct 11".
+    `I have had ${plural(day, "day of use", "days of use")}` +
+    (lastActive === "" ? "" : ` — the latest ${/^\d{4}-\d{2}-\d{2}$/.test(lastActive) ? stampWords(lastActive.slice(5)) : lastActive}`) +
     ". " +
     (t.live + t.archived + t.journal === 0
       ? "I am holding nothing yet."

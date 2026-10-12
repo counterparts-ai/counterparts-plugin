@@ -292,7 +292,7 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
       }
       const s = v.schedule;
       if (s !== null && s.onTime && s.lastRanDay !== null) {
-        const next = s.nextInDays <= 0 ? "at the next session's end" : `in ${plural(s.nextInDays, "lived day")}`;
+        const next = s.nextInDays <= 0 ? "at the next session's end" : `in ${plural(s.nextInDays, "day of use", "days of use")}`;
         return { light: LIGHT.idle, says: `built, ran on schedule with nothing to change; next run ${next}` };
       }
       return { light: LIGHT.idle, says: "built, not firing yet: nothing consolidated this week" };
@@ -323,7 +323,7 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
         says:
           v.lastFiredDay === null
             ? "built, not firing yet: no dream yet (a session asks, once a day, and you say yes or not today)"
-            : `built, not firing this week: the last dream was on lived day ${String(v.lastFiredDay)}`,
+            : `built, not firing this week: the last dream was on day ${String(v.lastFiredDay)} of use`,
       };
     },
   },

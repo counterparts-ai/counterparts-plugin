@@ -263,7 +263,7 @@ export async function startFreshCommand(
     io.out("");
     io.out(`  Note: "injectionBudgetBytes": ${String(ceiling)} is not a whole number of bytes, so`);
     io.out("  it is not handed to the install. Your configuration is kept exactly as it is —");
-    io.out("  this only means the install ends on its 'no ceiling was written' paragraph.");
+    io.out("  and the hooks read it as they always have.");
   }
 
   const rollback = rollbackLines(plan, existsSync, { parkTheBlankStore: false });

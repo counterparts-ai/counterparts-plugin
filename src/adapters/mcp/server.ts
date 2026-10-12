@@ -94,8 +94,11 @@ import {
   STYLE_CHOICES,
   addressMemory,
   answerText,
+  finishText,
   meetState,
+  meetingHold,
   meetingInstructions,
+  noteActive,
   noteOffered,
   onboardingView,
   recordAnswer,
@@ -794,12 +797,15 @@ export class McpServer {
     const session = this.callSession;
     if (session === null) return this.withUnboundReason(result);
     const writing = name === "session_end" || name === "chapter";
+    // The first meeting holds the write-up ask here too (2026-10-12): never on
+    // a `meet` result, nor while the meeting runs in this chat.
+    const held = name === "meet" || meetingHold(this.counterpart.store, session, this.nowFn()) === "running";
     let ask = false;
     try {
       const touched = touchDesktopSession(this.registryDir, session, {
         now: this.nowFn(),
         wroteUp: writing && result.isError !== true,
-        mayAsk: !writing,
+        mayAsk: !writing && !held,
         // Only a call that NAMED its session moves that session's record or
         // carries its ask (review of #294, finding 1): a fallback-bound call
         // may be another chat's.
@@ -1350,9 +1356,21 @@ export class McpServer {
       return this.refuse("meet", "night-run", { detail: "This is the nightly run: there is nobody here to meet." });
     }
     const store = this.counterpart.store;
-    const session = this.session ?? this.hostSession() ?? UNBOUND_SESSION;
+    // The session the meeting holds (2026-10-12): the one it names when the
+    // hooks' registry knows it, else this server's own, else the host's.
+    const named = typeof args["session"] === "string" ? args["session"].trim() : "";
+    const session = (named.length > 0 && this.corroborate(named) ? named : null) ?? this.session ?? this.hostSession() ?? UNBOUND_SESSION;
     const on = this.today();
     const step = args["step"];
+    // EVERY CALL IS THE MEETING STILL GOING (2026-10-12, onboarding round 1, A):
+    // while it is, this session's write-up ask and the day's dream wait.
+    if (!this.observer && session !== UNBOUND_SESSION) {
+      try {
+        noteActive(store, session, this.nowFn());
+      } catch {
+        /* a lost mark costs the hold, never the meeting */
+      }
+    }
     if (step === undefined) {
       let state = meetState(store);
       if (!this.observer) {
@@ -1369,7 +1387,7 @@ export class McpServer {
         home: memoryHomeWords(this.counterpart.store.dir, this.lifecycleOpts.configPath),
         dreaming: this.counterpart.dreams.setting(),
         folders: this.meetAsksWhere(),
-        hostName: this.desktop ? "Claude" : "Claude Code",
+        plugin: this.install === "plugin" && !this.desktop,
         state,
       });
       this.emit("mcp.meet.read", undefined, { state });
@@ -1380,7 +1398,9 @@ export class McpServer {
       return this.refuse("meet", "step-unknown", { detail: `step is one of ${MEET_STEPS.join(", ")} — or omit it for the script.` });
     }
     // A step taken is an offer made: the mod and the wake stop offering.
-    if (meetState(store) === "not_started") noteOffered(store, { on, session, state: true });
+    // An answer after a "later" is the meeting resumed: offered again, so it holds.
+    const before = meetState(store);
+    if (before === "not_started" || (before === "later" && step !== "later" && step !== "skipped" && step !== "done")) noteOffered(store, { on, session, state: true });
     const answer = typeof args["answer"] === "string" ? args["answer"].trim() : "";
     const done = (extra: Record<string, unknown>): ToolResult => {
       this.emit("mcp.meet.step", undefined, { step, stored: typeof extra["stored"] === "number" ? extra["stored"] : null });
@@ -1389,9 +1409,25 @@ export class McpServer {
     switch (step as MeetStep) {
       case "later":
       case "skipped":
-      case "done":
-        recordState(store, step as "later" | "skipped" | "done", { on, session });
+        recordState(store, step as "later" | "skipped", { on, session });
         return done({});
+      case "done": {
+        // THE FINISH STEP HANDS OVER THE WRITE-UP (2026-10-12, A): done here,
+        // in the session, in place of the end-of-turn ask the meeting held —
+        // so the next Stop paces that ask and does not say it (`meetingHold`).
+        const writeUp = session !== UNBOUND_SESSION;
+        recordState(store, "done", { on, session, writeUp });
+        this.emit("mcp.meet.step", undefined, { step, stored: null });
+        const view = { recorded: step, ...onboardingView(store) };
+        // Unbound, the close still comes; the write-up names the id to pass.
+        const next = finishText({
+          name: this.counterpart.ownerDisplayName(),
+          dreaming: this.counterpart.dreams.setting(),
+          plugin: this.install === "plugin" && !this.desktop,
+          session: writeUp ? session : "<your session id, as the wake names it>",
+        });
+        return { content: [{ type: "text", text: next }], structuredContent: { ...view, next } };
+      }
       case "where":
         return this.meetWhere(answer, done);
       case "style": {
@@ -1399,14 +1435,14 @@ export class McpServer {
         if (choice === null) return this.refuse("meet", "style-unknown", { detail: `answer is one of ${STYLE_CHOICES.join(", ")}.` });
         const traits = Array.isArray(args["traits"]) ? args["traits"].filter((t): t is string => typeof t === "string") : [];
         const like = typeof args["like"] === "string" ? args["like"] : "";
-        const bundle = styleMemories(choice, { traits, like });
+        const bundle = styleMemories(choice, { traits, like, name: this.counterpart.ownerDisplayName() });
         if (!bundle.ok) return this.refuse("meet", "style-incomplete", { detail: bundle.detail });
         const ids = await this.meetWrite(bundle.texts);
         recordStyle(store, choice);
         return done({ option: bundle.option, stored: ids.length, ids });
       }
       case "address": {
-        const made = addressMemory(answer);
+        const made = addressMemory(answer, this.counterpart.ownerDisplayName());
         if (!made.ok) return this.refuse("meet", "answer-required", { detail: made.detail });
         const ids = await this.meetWrite([made.text]);
         return done({ stored: ids.length, ids });
@@ -1416,7 +1452,7 @@ export class McpServer {
         if (answer.length === 0) {
           return this.refuse("meet", "answer-required", { detail: "Send the answer, in your words. A skipped question is never sent: nothing is stored for it." });
         }
-        const text = step === "name" ? `The owner likes to be called ${answer}.` : answer;
+        const text = step === "name" ? `They like to be called ${answer}.` : answer;
         const ids = await this.meetWrite([answerText(text)]);
         if (ids[0] !== undefined) recordAnswer(store, step as AnswerStep, ids[0]);
         return done({ stored: ids.length, ...(ids[0] === undefined ? {} : { id: ids[0] }) });

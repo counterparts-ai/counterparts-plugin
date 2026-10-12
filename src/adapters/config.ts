@@ -28,7 +28,7 @@ import { isAbsolute, join } from "node:path";
 
 import { isZone } from "../core/time.js";
 
-import { PAGE_WRITER_MODES } from "../core/self/index.js";
+import { PAGE_HOST_BUDGET_BYTES, PAGE_WRITER_MODES } from "../core/self/index.js";
 import type { PageWriterMode } from "../core/self/index.js";
 import { DEFAULT_KEEP as SNAPSHOT_DEFAULT_KEEP } from "./snapshots.js";
 
@@ -235,8 +235,13 @@ export const EMBEDDER_KINDS: readonly EmbedderKind[] = ["static"];
 export interface AdapterConfig {
   /** Where the memory lives. Pinned onto the child's environment LAST. */
   readonly dataDir?: string;
-  /** The host's reported injection ceiling, in bytes. NO DEFAULT (scar §2.18). */
+  /** The host's reported injection ceiling, in bytes. The core has no default
+   *  (scar §2.18); Claude Code's loaders fill an absent one with that host's
+   *  (`withBudgetDefault`, 2026-10-12). */
   readonly injectionBudgetBytes?: number;
+  /** Set by `withBudgetDefault` alone, never read from a file: the ceiling above
+   *  is Claude Code's default because the file named none. Runtime only. */
+  readonly injectionBudgetDefaulted?: true;
   /** How long the host lets a foreground hook run, ms. Reported, not assumed. */
   readonly executionCeilingMs?: number;
   /** How long a socket survives in this host, ms. The reason E3 rescoped here. */
@@ -257,19 +262,6 @@ export interface AdapterConfig {
    * unreadable rather than guessed at.
    */
   readonly embedder?: { readonly enabled: boolean; readonly kind?: EmbedderKind };
-  /**
-   * THE PARALLEL-RUN KNOB, and it defaults to ABSENT.
-   *
-   * Absent ⇒ v2 delivers on every delivering hook, which is what it does in
-   * every other situation and what every test that does not name this flag
-   * asserts. Present and true ⇒ every delivering hook first asks
-   * `primacy.ts` whether the OTHER system is speaking today, and stands down if
-   * the answer is anything but a clean "engram" (parallel-run G3). It is a knob
-   * rather than an inference for the same reason the egress knob is: the
-   * presence of v1's file on the machine must not be the thing that decides
-   * whether v2 speaks. RETIRED at PROMOTE.
-   */
-  readonly parallel?: { readonly enabled: boolean };
   /**
    * THE DAILY ROTATING SNAPSHOT (owner ruling 3, 2026-09-18).
    *
@@ -412,7 +404,6 @@ export function loadConfig(raw: unknown): LoadedConfig {
     socketLifetimeMs?: number;
     watchdogMs?: number;
     embedder?: { enabled: boolean; kind?: EmbedderKind };
-    parallel?: { enabled: boolean };
     snapshots?: { dir?: string; keep?: number; mirror?: string; ignored?: string[] };
     pageWriter?: { mode: PageWriterMode; ignored?: string[] };
     dreaming?: { model?: string; timeoutMs?: number; maxTurns?: number; ignored?: string[] };
@@ -530,19 +521,10 @@ export function loadConfig(raw: unknown): LoadedConfig {
       out.embedder = { enabled: e["enabled"], ...(kind === undefined ? {} : { kind: kind as EmbedderKind }) };
     }
   }
-  const parallel = rec["parallel"];
-  if (parallel !== undefined) {
-    // Read as strictly as the egress knob, and for the same reason: a
-    // half-written `parallel` block must not resolve to "on" — and, this being
-    // the mute switch, it must not resolve to "off" by accident either. An
-    // unreadable one takes the whole configuration to observer below.
-    const p = parallel as Record<string, unknown>;
-    if (typeof parallel !== "object" || parallel === null || Array.isArray(parallel) || typeof p["enabled"] !== "boolean") {
-      unreadable = true;
-    } else {
-      out.parallel = { enabled: p["enabled"] };
-    }
-  }
+  // `parallel` — the parallel run's knob — was removed 2026-10-12 (the run
+  // ended 2026-09-21). A configuration that still carries it, in any shape, is
+  // read as if it did not: never refused, never observer, nothing said. It
+  // switched on a stand-down only the run used, so ignoring it changes nothing.
   // THE SECOND LENIENT BLOCK, and it became one under review (S2, 2026-09-20).
   //
   // It was written strict, beside the egress knob, on the argument that `host`
@@ -834,7 +816,8 @@ export function capabilities(config: AdapterConfig): CapabilityReport[] {
   return [
     {
       name: "injectionBudgetBytes",
-      reported: config.injectionBudgetBytes !== undefined,
+      // A defaulted ceiling is a value with no report behind it (§2.4).
+      reported: config.injectionBudgetBytes !== undefined && config.injectionBudgetDefaulted !== true,
       value: config.injectionBudgetBytes ?? null,
       why: "The host's injection cliff. v1 hardcoded 90% of one host's, as though it were physiology.",
     },
@@ -899,6 +882,31 @@ export function resolveEmbedder(
 export function withEmbedderDefault(config: AdapterConfig): AdapterConfig {
   const { block, source } = resolveEmbedder(config);
   return source === "explicit" || block === undefined ? config : { ...config, embedder: block };
+}
+
+/**
+ * CLAUDE CODE'S WAKE CEILING WHEN ITS CONFIGURATION NAMES NONE (2026-10-12).
+ *
+ * Scar §2.18 keeps the CORE free of a ceiling: the renderer still refuses an
+ * undefined one. But this file is the Claude Code adapter's, and 9,000 bytes is
+ * that host's number, measured — the one the interactive install has always
+ * written and the self page's room is sized against (`PAGE_HOST_BUDGET_BYTES`).
+ * The plugin's first run and every scripted install wrote no key until 0.3.20,
+ * so their stores never had a wake composed at all: every session woke on the
+ * bootstrap line. So the hooks, the worker, the night run and the console fill
+ * an absent key with this, at load, and say so (`injectionBudgetDefaulted`;
+ * doctor's Config line, `capabilities()` still `reported: false`). Nothing is
+ * written back to the file. A key in the file always wins. Claude Desktop's MCP
+ * server does NOT apply it: that host has no measured ceiling. But the worker
+ * its `wake` starts is this adapter's runner, which does, so a keyless store a
+ * Desktop chat wakes from is rendered at 9,000 too (well inside a tool result's
+ * `TOOL_RESULT_CHARS`); Desktop's install writes the same file by default.
+ */
+export const CLAUDE_CODE_BUDGET_BYTES = PAGE_HOST_BUDGET_BYTES;
+
+export function withBudgetDefault(config: AdapterConfig): AdapterConfig {
+  if (config.injectionBudgetBytes !== undefined) return config;
+  return { ...config, injectionBudgetBytes: CLAUDE_CODE_BUDGET_BYTES, injectionBudgetDefaulted: true };
 }
 
 /**

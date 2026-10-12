@@ -2,7 +2,7 @@
 import { $, esc } from "../../../shared/dom.js";
 
 export const markup = `
-    <h2>Lived day × event <small>— the last three weeks of the log</small></h2>
+    <h2>Day of use × event <small>— the last three weeks of the log</small></h2>
     <div class="card pad heat" id="h-heat"></div>`;
 
 export function paint(d) {

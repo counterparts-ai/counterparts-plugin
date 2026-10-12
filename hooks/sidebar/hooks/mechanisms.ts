@@ -66,7 +66,7 @@ export const MECHS: readonly Mech[] = [
   { id: 'episodic-semantic', stage: 'transformation', short: 'Gist', region: 'cortex',
     site: '“I met her on Tuesday” slowly becomes “I know her”: the event fades, the meaning stays.' },
   { id: 'schema', stage: 'transformation', short: 'Schemas', region: 'prefrontal', notBuilt: true,
-    site: "New facts don't land on blank ground. They're folded into what you already believe. Not built yet." },
+    site: "New facts don't land on blank ground. They're folded into what you already believe." },
 ];
 
 const BY_ID = new Map<string, Mech>(MECHS.map(m => [m.id, m]));
@@ -130,19 +130,10 @@ export function memoryUrl(id: string, base: string = DASHBOARD): string {
 }
 
 /**
- * How this install starts the dashboard, said where the dashboard is down.
- * The memory server this session connected tells the installs apart: the npm
- * install registers `counterparts` (and puts `counterparts` on the PATH); a
- * plugin-only install connects the plugin's own server and has no such
- * command, so it gets `/counterparts:dashboard`. Beside the npm install the
- * plugin's server stands down with no tools, so the npm one is what resolves.
- * Not known yet (no server found): the plugin route first, since it works
- * under either install.
+ * How to open the dashboard, said where it is down: the plugin's own command.
+ * Every install that draws this sidebar has it (the sidebar ships in the
+ * plugin), beside the npm install too. Until 2026-10-12 an npm install was
+ * told the console's `counterparts dashboard` instead; a stranger's read
+ * found two ways to say one thing, and the slash command works everywhere.
  */
-export const NPM_DASHBOARD_ROUTE = 'counterparts dashboard';
 export const PLUGIN_DASHBOARD_ROUTE = '/counterparts:dashboard';
-export function dashboardRoutes(server: string | null): readonly string[] {
-  if (server === 'counterparts') return [NPM_DASHBOARD_ROUTE];
-  if (server === 'plugin_counterparts_counterparts') return [PLUGIN_DASHBOARD_ROUTE];
-  return [PLUGIN_DASHBOARD_ROUTE, NPM_DASHBOARD_ROUTE];
-}

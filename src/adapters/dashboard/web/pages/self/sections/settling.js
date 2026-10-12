@@ -150,7 +150,7 @@ export function ruleWords(s) {
   const r = s.rule;
   const foot = ["Only a memory about me or about us joins the core, by one of two lanes: strongly felt (" + n2(r.needFeeling) +
     " or more) and come back at least once, " + r.needGap + " or more days after it was made; or keep coming back — it, or the memories that are its earlier and later states — on " + r.days +
-    " different days" + (r.sessions ? ", in " + r.sessions + " sessions," : "") + " over " + r.span + (r.window ? ", within the last " + r.window : "") + ", once it has been used itself. That is checked every " + r.everyDays + " lived days, at most " + r.cap + " a night. " +
+    " different days" + (r.sessions ? ", in " + r.sessions + " sessions," : "") + " over " + r.span + (r.window ? ", within the last " + r.window : "") + ", once it has been used itself. That is checked every " + r.everyDays + " days of use, at most " + r.cap + " a night. " +
     (r.quietDays ? "A core memory that stops coming back for " + r.quietDays + " days is reconsidered, never dropped without a decision. " : "") +
     // The map's own words (round 4 of the map, 2026-09-28: three named rings,
     // no legend) — this sentence described the legend before it.

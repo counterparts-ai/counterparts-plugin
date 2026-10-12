@@ -291,7 +291,7 @@ export const FLOW_NODES: readonly FlowNode[] = [
     key: "self",
     label: "SELF",
     sub: "identity · episodes",
-    what: "The autobiography: identity elements that strength earned or the owner made permanent, and the episode journal written in chapters, in the first person, at the boundary.",
+    what: "The autobiography: identity elements that strength earned or you made permanent, and the episode journal written in chapters, in the first person, at the boundary.",
     analog: "Autobiographical memory and the narrative self — episodic replay feeding a stable self-schema.",
     breaks: "Humans never author their episodes; here it is a ritual, which is the authorship thesis. Identity-band memories do not decay here. And transcript-derived self-reinforcement is deliberately not copied — it is the rumination pathway, a documented bug of human cognition rather than architecture.",
     x: 0.82,

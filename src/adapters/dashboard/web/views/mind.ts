@@ -11,6 +11,9 @@ import {
   FRAMING,
   LANE_ORDER,
   collapsedLane,
+  headingsOf,
+  isFoldedLine,
+  FOLDED_WORDS,
   SELF_PAGE_REVISED_EVENT,
   chapterModels,
   dayBefore,
@@ -673,8 +676,8 @@ function countOf(n: number, one: string, many: string): string {
  * alarm. Pure, so every shape is tested without a store.
  */
 export function pageBehindWords(x: { date: string; writtenDay: number; livedDays: number; chapters: number; dreams: number }): string {
-  const when = isIsoDay(x.date) ? shortDay(x.date) : `on lived day ${String(x.writtenDay)}`;
-  const parts = [x.livedDays === 1 ? "1 lived day" : `${String(x.livedDays)} lived days`];
+  const when = isIsoDay(x.date) ? shortDay(x.date) : `on day ${String(x.writtenDay)} of use`;
+  const parts = [x.livedDays === 1 ? "1 day of use" : `${String(x.livedDays)} days of use`];
   if (x.chapters > 0) parts.push(countOf(x.chapters, "chapter", "chapters"));
   if (x.dreams > 0) parts.push(countOf(x.dreams, "dream", "dreams"));
   const list = parts.length === 1 ? parts[0] as string : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1] as string}`;
@@ -829,7 +832,7 @@ export function pageDayWords(w: Pick<WriterLine, "what" | "next">): string {
 export function pageDayUnrecorded(today: boolean): { why: string; more: string } {
   return today
     ? { why: "Not rewritten today; the page writer has not run yet.", more: `${WRITER_IS} It runs at most once a night, when a session starts.` }
-    : { why: "Not rewritten, and the page writer left no record that day.", more: `${WRITER_IS} Nothing in the record says it ran on this lived day.` };
+    : { why: "Not rewritten, and the page writer left no record that day.", more: `${WRITER_IS} Nothing in the record says it ran on this day of use.` };
 }
 
 /**
@@ -1129,8 +1132,8 @@ const PART_LABEL: Record<string, string> = {
   identity: "who I am",
   craft: "how I work",
   threads: "still open",
-  hints: "nearby memories",
-  horizon: "arriving",
+  hints: "might be relevant",
+  horizon: "coming up",
 };
 
 /**
@@ -1142,7 +1145,7 @@ const PART_LABEL: Record<string, string> = {
  */
 export function wakeParts(text: string, hasPage: boolean): WakePart[] {
   const headings = new Map<string, string>();
-  for (const lane of LANE_ORDER) headings.set(FRAMING[lane], lane);
+  for (const lane of LANE_ORDER) for (const h of headingsOf(lane)) headings.set(h, lane);
   const bytes = new Map<string, number>();
   const order: string[] = [];
   const add = (key: string, n: number): void => {
@@ -1168,7 +1171,8 @@ export function wakeParts(text: string, hasPage: boolean): WakePart[] {
       add(collapsed, n);
       return;
     }
-    if (line.startsWith("<!--") || line === FRAMING.context) {
+    // The lanes' lines folded into one (2026-10-12) belong to no one lane.
+    if (line.startsWith("<!--") || line === FRAMING.context || isFoldedLine(line)) {
       add("furniture", n);
       return;
     }
@@ -1464,7 +1468,7 @@ export function wakeLanes(text: string): WakeLane[] {
   // this splitter silently returning one enormous lane called "the preface",
   // which is precisely the quiet-wrong-answer shape the registries exist against.
   const headings = new Map<string, string>();
-  for (const lane of LANE_ORDER) headings.set(FRAMING[lane], lane);
+  for (const lane of LANE_ORDER) for (const h of headingsOf(lane)) headings.set(h, lane);
 
   const lanes: { heading: string; lane: string | null; items: string[] }[] = [];
   let current: { heading: string; lane: string | null; items: string[] } = {
@@ -1483,7 +1487,15 @@ export function wakeLanes(text: string): WakeLane[] {
     const collapsed = collapsedLane(line);
     if (collapsed !== null) {
       if (current.items.length > 0) lanes.push(current);
-      current = { heading: FRAMING[collapsed], lane: collapsed, items: [line.slice(FRAMING[collapsed].length).trim()] };
+      const said = headingsOf(collapsed).find((h) => line.startsWith(`${h} `)) ?? FRAMING[collapsed];
+      current = { heading: FRAMING[collapsed], lane: collapsed, items: [line.slice(said.length).trim()] };
+      continue;
+    }
+    // The lanes' lines folded into one (2026-10-12): a block of its own, no lane's.
+    if (isFoldedLine(line)) {
+      if (current.items.length > 0) lanes.push(current);
+      lanes.push({ heading: FOLDED_WORDS, lane: null, items: [line.slice(FOLDED_WORDS.length).trim()] });
+      current = { heading: "", lane: null, items: [] };
       continue;
     }
     // A markdown heading counts too, so a future briefing that uses one still

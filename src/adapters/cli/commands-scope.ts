@@ -8,6 +8,7 @@ import { storeExists } from "../../core/store/index.js";
 // The ONE rule for "which host configuration": the console resolves it with the
 // same function the hook, the worker and the MCP server do.
 import { defaultConfigPath } from "../config-path.js";
+import { CLAUDE_CODE_BUDGET_BYTES } from "../config.js";
 import type { ConfigChoice, ConfigSource } from "../config-path.js";
 // The scope registry — host configuration, beside the host configuration. The
 // console is the surface that WRITES it; the hooks and the MCP server only read.
@@ -51,8 +52,9 @@ import type { Io, Parsed } from "./commands-shared.js";
  *     consolidation, dedup and prune stay the boundary's work.
  *
  * The ceiling is the host's, never this file's (scar §2.18): `--budget`, else
- * `injectionBudgetBytes` from the host config beside the store, else a refusal
- * that names both.
+ * `injectionBudgetBytes` from the host config beside the store, else Claude
+ * Code's default when that config is there without the key (2026-10-12), else
+ * a refusal that names both.
  */
 export function rebriefCommand(
   dir: string,
@@ -383,6 +385,9 @@ function scopeEffect(mode: ScopeMode, resumeTo: string | undefined): string {
  *   3. `~/.counterparts/claude-code.json` — the hooks' own hardcoded path, which
  *      is where `counterparts install` always writes, because `--dir` moves the
  *      store and never the configuration.
+ *   4. One of those files there WITHOUT the key: Claude Code's default, the
+ *      ceiling its hooks wake under (`config.ts#withBudgetDefault`, 2026-10-12).
+ *      Only no file at all is a refusal.
  *
  * **Never `<dir>/claude-code.json`.** A file inside the data dir fails the layout
  * totality check (§5 G11) and the store stops opening; the `--help` said that
@@ -442,6 +447,8 @@ export function hostCeiling(
         ? [beside]
         : [beside, hooksConfig];
   const namedBy = named !== undefined && named.source !== "default" ? named.source : undefined;
+  // The first readable file with no key, for the default below.
+  let keyless: string | undefined;
   for (const candidate of searched) {
     if (!existsSync(candidate)) continue;
     try {
@@ -455,12 +462,26 @@ export function hostCeiling(
           ...(namedBy === undefined ? {} : { namedBy }),
         };
       }
+      if (value === undefined && keyless === undefined) keyless = candidate;
     } catch {
       /* an unreadable host config reports no ceiling — the refusal below says so */
     }
   }
-  // Scar §2.18: the ceiling is a host capability. There is no default anywhere
-  // in this package and this command does not become the place there is one.
+  // A CLAUDE CODE CONFIGURATION THAT NAMES NO CEILING gets that host's default
+  // (`config.ts#withBudgetDefault`, 2026-10-12), the one its hooks wake under:
+  // the plugin's first run and every scripted install wrote no key before
+  // 0.3.20, and a rebrief that refused them would leave those stores on the
+  // bootstrap line. The printed source says the number was the default.
+  if (keyless !== undefined) {
+    return {
+      bytes: CLAUDE_CODE_BUDGET_BYTES,
+      source: `${keyless} (no injectionBudgetBytes there, so Claude Code's default)`,
+      searched,
+      ...(namedBy === undefined ? {} : { namedBy }),
+    };
+  }
+  // Scar §2.18: the ceiling is a host capability. With no Claude Code
+  // configuration found at all, there is no host to take one from.
   return {
     refusal: [
       'refused: no injection ceiling. Nothing set "injectionBudgetBytes" in either place',

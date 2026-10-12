@@ -22,12 +22,12 @@ let last = null;
  * else the entry's own). "lived day 3" only when no date reads at all.
  */
 export function dayLabel(day) {
-  return dateWords(day.iso) || "lived day " + day.day;
+  return dateWords(day.iso) || "day " + day.day + " of use";
 }
 
 /** The picked day's heading: "Thu, Jul 16th" (the year when it is not this one). */
 export function dayTitle(day) {
-  return dateWords(day.iso, { weekday: true }) || "lived day " + day.day;
+  return dateWords(day.iso, { weekday: true }) || "day " + day.day + " of use";
 }
 
 /** "1 chapter" / "7 chapters": what the number in a day's cell counts. */
@@ -39,7 +39,7 @@ export function paint(d) {
   if (d) last = d;
   d = last;
   $("self-journal-q").innerHTML = q("journal", "A chapter is written at the end of a session; these do not fade. " +
-    "Each day in the strip shows its date, its lived day, and how many chapters were written that day. Pick one to list them.");
+    "Each day in the strip shows its date, its day of use, and how many chapters were written that day. Pick one to list them.");
   wireTips($("self-journal-q"));
   const box = $("self-journal");
   if (d.journalAbsent) {
@@ -60,7 +60,7 @@ export function paint(d) {
       (n === 1 ? "chapter" : "chapters") + "</span>";
     const dated = !!dateWords(x.iso);
     return '<button type="button" class="jd-day' + (on ? " on" : "") + '" data-day="' + x.day + '" aria-pressed="' + on + '"' +
-      ' aria-label="' + esc(dayTitle(x) + (dated ? ", lived day " + x.day : "") + ", " + chapterCount(n)) + '">' +
+      ' aria-label="' + esc(dayTitle(x) + (dated ? ", day " + x.day + " of use" : "") + ", " + chapterCount(n)) + '">' +
       '<b>' + esc(dayLabel(x)) + "</b>" +
       (dated ? '<span class="jd-lived">day ' + x.day + "</span>" : "") + marks + "</button>";
   }).join("");
@@ -83,7 +83,7 @@ export function paint(d) {
   box.innerHTML =
     '<div class="jd-strip" role="group" aria-label="Days">' + cells + "</div>" +
     '<div class="jd-head"><b>' + esc(dayTitle(picked)) + "</b>" +
-      (dateWords(picked.iso) ? "<span>lived day " + picked.day + " · " + esc(chapterCount(picked.chapters.length)) + "</span>" : "<span>" + esc(chapterCount(picked.chapters.length)) + "</span>") + "</div>" +
+      (dateWords(picked.iso) ? "<span>day " + picked.day + " of use · " + esc(chapterCount(picked.chapters.length)) + "</span>" : "<span>" + esc(chapterCount(picked.chapters.length)) + "</span>") + "</div>" +
     '<div class="jd-list">' + chapters + "</div>" +
     (d.journalMore > 0 ? '<p class="foot">' + d.journalMore + " older chapters are not shown here.</p>" : "");
   box.querySelector(".jd-strip").scrollLeft = scrollLeft;

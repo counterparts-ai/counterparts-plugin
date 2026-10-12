@@ -45,7 +45,7 @@ export type RefState =
  */
 export const ABSENCE: Record<Exclude<RefState, "live" | "superseded" | "archived">, string> = {
   unknown: "[no longer at this address]",
-  removed: "[removed by the owner]",
+  removed: "[removed by you]",
   dangling: "[a forwarding address with nothing at the end]",
   broken: "[a forwarding loop]",
   unreadable: "[here, but unreadable]",

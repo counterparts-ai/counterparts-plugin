@@ -84,7 +84,7 @@ export function paintBehind(d) {
   el.hidden = false;
   el.innerHTML = esc(b.line) + " " +
     q("behind", "The page is rewritten by the page writer, at most once a night, when something about who I am has moved. " +
-      "It was last rewritten on lived day " + b.writtenDay + "; today is lived day " + (b.writtenDay + b.livedDays) +
+      "It was last rewritten on day " + b.writtenDay + " of use; today is day " + (b.writtenDay + b.livedDays) + " of use" +
       ". The strip beside the page says what happened on each day since.");
   wireTips(el);
 }
@@ -92,8 +92,8 @@ export function paintBehind(d) {
 /** A day's name on the strip: its date when the record gives one, else its lived day. */
 export function dayName(x) {
   const date = dateWords(x.date);
-  return (x.today ? "Today" + (date ? ", " + date : "") : date || "Lived day " + x.day) +
-    (date || x.today ? " · lived day " + x.day : "");
+  return (x.today ? "Today" + (date ? ", " + date : "") : date || "Day " + x.day + " of use") +
+    (date || x.today ? " · day " + x.day + " of use" : "");
 }
 
 /**
@@ -118,8 +118,8 @@ export function stripSummary(list) {
   if (list.length === 0) return "";
   const newest = written[written.length - 1];
   const n = list.length;
-  return "Rewritten on " + written.length + " of " + n + " lived day" + (n === 1 ? "" : "s") +
-    (newest ? " · newest " + (dateWords(newest.date) || "lived day " + newest.day) : "") + ".";
+  return "Rewritten on " + written.length + " of " + n + (n === 1 ? " day of use" : " days of use") +
+    (newest ? " · newest " + (dateWords(newest.date) || "day " + newest.day + " of use") : "") + ".";
 }
 
 /** A filled day opens its newest version. */
@@ -135,7 +135,7 @@ export function paintHistory(d) {
     // Versions with no lived day still exist: say so rather than draw nothing.
     el.hidden = undated === 0;
     el.innerHTML = undated === 0 ? "" : '<h3 class="sb-h">The page, day by day</h3><p class="ps-say">' +
-      esc(undated + (undated === 1 ? " version carries" : " versions carry") + " no lived day, so no strip can draw " + (undated === 1 ? "it" : "them") + ".") + "</p>";
+      esc(undated + (undated === 1 ? " version carries" : " versions carry") + " no day of use, so no strip can draw " + (undated === 1 ? "it" : "them") + ".") + "</p>";
     paintVersion();
     return;
   }
@@ -147,14 +147,14 @@ export function paintHistory(d) {
       '" data-day="' + x.day + '" aria-pressed="' + on + '" aria-label="' + esc(dayWords(x)) + '"><i></i></button>';
   }).join("");
   const first = days[0], last = days[days.length - 1];
-  const ends = '<div class="ps-ends"><span>' + esc(dateWords(first.date) || "lived day " + first.day) + "</span>" +
-    (days.length > 1 ? "<span>" + esc(last.today ? "today" : dateWords(last.date) || "lived day " + last.day) + "</span>" : "") + "</div>";
+  const ends = '<div class="ps-ends"><span>' + esc(dateWords(first.date) || "day " + first.day + " of use") + "</span>" +
+    (days.length > 1 ? "<span>" + esc(last.today ? "today" : dateWords(last.date) || "day " + last.day + " of use") + "</span>" : "") + "</div>";
   el.innerHTML =
     '<h3 class="sb-h">The page, day by day ' +
-      q("history", "One dot per lived day since the page was first written. A filled dot is a day it was rewritten: click it to see what changed. " +
+      q("history", "One dot per day of use since the page was first written. A filled dot is a day it was rewritten: click it to see what changed. " +
         "A hollow dot is a day it was not: hover or tap it for why, from the page writer's own record." +
-        (undated > 0 ? " " + undated + (undated === 1 ? " older version carries" : " older versions carry") + " no lived day, so no dot shows it." : "")) + "</h3>" +
-    '<div class="ps-strip" role="group" aria-label="The page\'s history, one dot per lived day">' + dots + "</div>" +
+        (undated > 0 ? " " + undated + (undated === 1 ? " older version carries" : " older versions carry") + " no day of use, so no dot shows it." : "")) + "</h3>" +
+    '<div class="ps-strip" role="group" aria-label="The page\'s history, one dot per day of use">' + dots + "</div>" +
     ends +
     '<p class="ps-say" id="self-day-say" aria-live="polite"></p>';
   say();
@@ -189,7 +189,7 @@ function say(hover) {
   if (!x) {
     box.className = "ps-say";
     box.textContent = stripSummary(days) +
-      (earlier > 0 ? " " + earlier + " earlier lived day" + (earlier === 1 ? " is" : "s are") + " not drawn." : "");
+      (earlier > 0 ? " " + earlier + (earlier === 1 ? " earlier day of use is" : " earlier days of use are") + " not drawn." : "");
     return;
   }
   box.className = "ps-say" + (x === picked ? " picked" : "");
@@ -207,7 +207,7 @@ function paintVersion() {
   const w = rewriteWords(s.by, s.reason, days.some((x) => x.day === s.day && x.today));
   const head =
     '<div class="tl-vhead"><b>' + (s.current ? "The page as it stands" : "Version " + (s.seq - 1)) + "</b>" +
-    '<span class="tl-meta">' + esc(dateWords(s.date) || "undated") + (s.day !== null ? " · lived day " + s.day : "") +
+    '<span class="tl-meta">' + esc(dateWords(s.date) || "undated") + (s.day !== null ? " · day " + s.day + " of use" : "") +
     " · written by " + esc(w.who) + (s.bytes !== null ? " · " + s.bytes + " bytes" : "") + "</span>" +
     '<button type="button" class="tl-close" id="self-version-close" aria-label="Close this version">close</button></div>' +
     (w.quote ? '<div class="tl-why">“' + esc(w.quote) + "”</div>" : "");

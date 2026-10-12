@@ -122,6 +122,8 @@ export type SidebarSaved = {
   replacesId: string | null;
   /** `new` (Salience's dot), `update` (Reconsolidation's). */
   kind: 'new' | 'update';
+  /** What was written (the call's text), for the quiet tail; absent on a row rebuilt from the dashboard. */
+  text?: string;
 };
 
 /**
@@ -203,7 +205,13 @@ export type SidebarMechOpen = {
 };
 
 /** The newest thing, in plain words (`remembered: …`, `stored: …`): the dim tail under the prompt while the pane is closed. */
-export type SidebarLatest = { text: string; mech: SidebarMechId; at: number };
+export type SidebarLatest = {
+  text: string;
+  mech: SidebarMechId;
+  at: number;
+  /** A stored memory's own words, for the tail to show as much of as the row holds. */
+  body?: string;
+};
 
 /** What `scope` says this folder is set to, or why it could not be asked. */
 export type SidebarScope = {
@@ -257,8 +265,11 @@ export type SidebarFiring = { ids: SidebarMechId[]; at: number };
  */
 export type SidebarView = 'sidebar' | 'quiet';
 
-/** The brain beside the title: swaying (`turning`), a fixed view that lights when something fires (`still`), or none (`off`). */
-export type SidebarBrain = 'turning' | 'still' | 'off';
+/** The avatar: the fox at the top (`fox`, the default), the brain beside the title swaying (`turning`) or still (`still`), or none (`off`). */
+export type SidebarBrain = 'turning' | 'still' | 'off' | 'fox';
+
+/** The pane's colours (`hooks/theme.ts`): the mockups' `tron` (the default) or the warm `cozy`. */
+export type SidebarTheme = 'tron' | 'cozy';
 
 declare module 'claude-code' {
   interface PluginState {
@@ -279,18 +290,12 @@ declare module 'claude-code' {
       firing: SidebarFiring | null;
       search: SidebarSearch;
       scope: SidebarScope;
-      /** Claude Code's own memory (MEMORY.md and its prompt section): on unless turned off. */
-      claudeMemory: boolean;
-      /**
-       * Whether the footer draws the Claude memory switch: only for someone
-       * who opted in (`COUNTERPARTS_SIDEBAR_CC_MEMORY=1`, or `$.store`
-       * `claudeMemorySwitch`, set for whoever had already turned it off).
-       */
-      claudeMemorySwitch: boolean;
       /** Where the first meeting stands (core's `/api/onboarding`). */
       onboarding: SidebarOnboarding;
       view: SidebarView;
       brain: SidebarBrain;
+      /** The pane's colours, for every session (`$.store` `theme`). */
+      theme: SidebarTheme;
       /** The pane is placed and showing (opened and not closed since). */
       placed: boolean;
       /** What the Counterparts switch said about a press it would not act on. */

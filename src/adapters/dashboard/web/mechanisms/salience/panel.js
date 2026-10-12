@@ -6,7 +6,7 @@ import { memLink, nothingYet, two } from "../picture.js";
 
 /** The line under the rows: which these are, of how many. */
 export function caption(p) {
-  const days = "the last " + p.days + " lived days";
+  const days = "the last " + p.days + " days of use";
   if (p.written > p.memories.length) {
     return "The " + p.memories.length + " most salient of the " + p.written + " memories written in " + days + ".";
   }
@@ -15,7 +15,7 @@ export function caption(p) {
 
 export function picture(p) {
   if (!p || p.memories.length === 0) {
-    return nothingYet("Nothing was written in the last " + ((p && p.days) || 7) + " lived days, so nothing new has been scored.");
+    return nothingYet("Nothing was written in the last " + ((p && p.days) || 7) + " days of use, so nothing new has been scored.");
   }
   return '<ul class="pic-sal">' + p.memories.map((m) => {
     const size = 6 + Math.round(Math.sqrt(Math.max(0, Math.min(1, m.salience))) * 22);

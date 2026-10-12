@@ -196,7 +196,7 @@ export const NARRATORS = {
     );
   },
   "band.demoted": (t) =>
-    notable(`The owner sent ${subject(t)} back out of the core, to fade like any other memory from today.`),
+    notable(`You sent ${subject(t)} back out of the core, to fade like any other memory from today.`),
   "physics.upgrade.census": (t) => {
     const down = n(t, "bandDown") ?? 0;
     const sooner = n(t, "pruneSooner") ?? 0;
@@ -246,14 +246,14 @@ export const NARRATORS = {
     );
   },
   "dream.journaled": () => notable("I woke from a dream and wrote it in the dream journal."),
-  "dream.undone": (t) => notable(`The owner undid a dream — ${n(t, "reversed") ?? 0} of its changes were put back.`),
+  "dream.undone": (t) => notable(`You undid a dream — ${n(t, "reversed") ?? 0} of its changes were put back.`),
   "dream.ask": (t) => {
     // The day's line follows the owner's setting (2026-09-28): `launched`
     // (auto), `offered` (ask), `relaunched` (a run left behind, started
     // again), `declined`, and `setting` (the owner changed it).
     switch (s(t, "state")) {
       case "declined":
-        return calm("The owner said not today to a dream.");
+        return calm("You said not today to a dream.");
       case "launched":
         return calm("I started the nightly run in the background: the page writer, a dream, a reflection.");
       case "relaunched":
@@ -292,8 +292,8 @@ export const NARRATORS = {
     // that must not read as routine housekeeping.
     return notable(
       original === null
-        ? `The owner put ${subject(t, s(t, "candidateId"))} back: a merge had archived it, and it should never have been a duplicate.`
-        : `The owner put ${subject(t, s(t, "candidateId"))} back — a merge had folded it into ${subject(t, original)}, and it should never have been a duplicate. The use that merge credited stands.`,
+        ? `You put ${subject(t, s(t, "candidateId"))} back: a merge had archived it, and it should never have been a duplicate.`
+        : `You put ${subject(t, s(t, "candidateId"))} back — a merge had folded it into ${subject(t, original)}, and it should never have been a duplicate. The use that merge credited stands.`,
     );
   },
 
@@ -630,7 +630,7 @@ export const NARRATORS = {
     // self-update, first in the nightly run) and the reflection after it.
     const who =
       by === "owner"
-        ? "the owner wrote my page"
+        ? "you wrote my page"
         : by === "writer"
           ? "the nightly writer revised my page"
           : by === "reflection"
@@ -690,7 +690,7 @@ export const NARRATORS = {
     const created = t.p["created"] === true;
     const days = n(t, "lifeDays") ?? 0;
     return calm(
-      `I left a handoff for the next session in this directory: ${num(bytes, 0)} bytes, ` +
+      `I left a handoff for the next session in this project: ${num(bytes, 0)} bytes, ` +
         `${created ? "a new one from this session" : "replacing this session's earlier one"}, showing for ${num(days, 0)} ${days === 1 ? "day" : "days"} of use.`,
     );
   },
@@ -700,13 +700,13 @@ export const NARRATORS = {
     const when = age === null ? "" : age === 0 ? ", written today" : `, written ${num(age, 0)} ${age === 1 ? "day" : "days"} of use ago`;
     const among = n(t, "among");
     const beside = among === null || among <= 1 ? "" : ` — one of ${num(among, 0)} left here by different sessions`;
-    return calm(`I woke here and was handed the pointer to a handoff in this directory${when}${beside} (${num(bytes, 0)} bytes of the wake).`);
+    return calm(`I woke here and was handed the pointer to a handoff in this project${when}${beside} (${num(bytes, 0)} bytes of the wake).`);
   },
   "handoff.cleared": (t) => {
     const bytes = n(t, "bytes") ?? 0;
     // Since 2026-09-30 a session retires its own handoff with a blank field,
     // or another session's by id; either way others' handoffs here stand.
-    const whose = t.p["byId"] === true ? "a handoff in this directory by its id" : "my handoff for this directory";
+    const whose = t.p["byId"] === true ? "a handoff in this project by its id" : "my handoff for this project";
     return calm(`I finished the work and retired ${whose} (${num(bytes, 0)} bytes). Any others left here still stand.`);
   },
   "handoff.refused": (t) => {
@@ -738,7 +738,7 @@ export const NARRATORS = {
           : `This wake had room for ${num(shown, 0)} of ${num(found, 0)} "Work here" lines.`,
       );
     }
-    return calm(`This directory has more work than one wake shows: ${num(shown, 0)} of ${num(found, 0)} "Work here" lines shown, and the rest take turns.`);
+    return calm(`This project has more work than one wake shows: ${num(shown, 0)} of ${num(found, 0)} "Work here" lines shown, and the rest take turns.`);
   },
 
   // ── what a delivery could not carry (durable since 2026-10-02) ─────────────
@@ -1098,7 +1098,7 @@ export const NARRATORS = {
   "contradiction.settled": (t) => {
     const how = s(t, "how") ?? "settled";
     const by = s(t, "actor") ?? "someone";
-    const who = by === "owner" ? "The owner" : by === "session" ? "A session" : `The ${by}`;
+    const who = by === "owner" ? "You" : by === "session" ? "A session" : `The ${by}`;
     return how === "open"
       ? calm(`${who} kept two memories that disagree open, each shown with the other (${s(t, "pair") ?? "a pair"}).`)
       : notable(`${who} settled a contradiction as ${how}: ${s(t, "holds") ?? "one"} holds over ${s(t, "over") ?? "the other"}.`);

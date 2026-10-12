@@ -212,7 +212,7 @@ function renderOne(src: DashboardSource, id: string, opts: BrowseOptions): strin
           : ` · claimed floor ${num(physics.salience.claimed)}`),
     ],
     [
-      "lived",
+      "use",
       `born day ${physics.birthDay} · used ${plural(physics.uses, "time")} over ` +
         `${plural(physics.reinforcedDays ?? 0, "day")} · last used day ${physics.lastUsedDay}`,
     ],

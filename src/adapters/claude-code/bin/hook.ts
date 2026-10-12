@@ -43,7 +43,7 @@ import { canonicalScope, isEntrypoint, readSession } from "../../sessions.js";
 import { openLog } from "../../log/index.js";
 import type { LogEvent, ProcessLog } from "../../log/index.js";
 import { resolveZone, todayIn } from "../../../core/time.js";
-import { TUNABLES, loadConfig, withEmbedderDefault } from "../../config.js";
+import { TUNABLES, loadConfig, withBudgetDefault, withEmbedderDefault } from "../../config.js";
 import type { AdapterConfig } from "../../config.js";
 import { HOOKS, openAdapter } from "../index.js";
 import { STOP_HUMAN_LINE, plainLine, withoutDream, withoutDreamNote, withoutPlain } from "../hooks.js";
@@ -200,9 +200,11 @@ export function hostConfig(
   // stood down because we did not" — the difference matters only for a config
   // somebody NAMED (`namedUnreadableRefusal`).
   // THE EMBEDDER DEFAULT (config.ts#resolveEmbedder): an absent block is the
-  // local table.
+  // local table. THE CEILING DEFAULT (`config.ts#withBudgetDefault`): a file
+  // with no `injectionBudgetBytes` wakes under Claude Code's 9,000 rather than
+  // on the bootstrap line for good.
   return {
-    config: withEmbedderDefault({ ...loaded, dataDir: loaded.dataDir ?? dataDir() }),
+    config: withBudgetDefault(withEmbedderDefault({ ...loaded, dataDir: loaded.dataDir ?? dataDir() })),
     reason: load.reason,
   };
 }

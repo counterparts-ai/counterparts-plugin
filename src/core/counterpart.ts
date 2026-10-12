@@ -42,6 +42,7 @@ import type { CoactivateResult, Credited, FlushReport, PairDelta, PendingClaim }
 import { horizonFor } from "./briefing.js";
 import { episodeGate } from "./bridge.js";
 import { Dreams, Reflections } from "./dream/index.js";
+import { meetingDay } from "./onboarding.js";
 import type { VectorSource } from "./bridge.js";
 import type { MintResult } from "./mint.js";
 import { isObserver } from "./observer.js";
@@ -115,7 +116,7 @@ import {
 } from "./handoff/index.js";
 import type { Handoff, HandoffRefusal, HandoffWrite, PointerSince } from "./handoff/index.js";
 import { CLAIM_CHAPTER, askFromStretch, chapterClaims, claimUnwritten, sessionStretch, sessionsHere, workSince } from "./coverage/index.js";
-import { LAST_HERE_LIFE_DAYS, LAST_HERE_NOROOM_EVENT, chaptersBySession, chaptersHere, chaptersOn, elsewhereLine, lastHereLadder, sinceElsewhereLines, todayElsewhereLines, yesterdayLine, yesterdayShorter } from "./handoff/last-here.js";
+import { LAST_HERE_LIFE_DAYS, LAST_HERE_NOROOM_EVENT, chaptersBySession, chaptersHere, chaptersOn, elsewhereLine, lastHereLadder, sinceElsewhereLines, stampWords, todayElsewhereLines, yesterdayLine, yesterdayShorter } from "./handoff/last-here.js";
 import type { ChapterHere, LastHere, SinceElsewhere, TodayElsewhere } from "./handoff/last-here.js";
 import { LAST_EXCHANGE_LINE_MAX_BYTES, exchangeLikely, lastExchange, lastExchangeLine, withExchange } from "./handoff/last-exchange.js";
 import type { LastExchange } from "./handoff/last-exchange.js";
@@ -579,6 +580,7 @@ export class Counterpart {
       page: () => this.self.page()?.body ?? null,
       wake: () => this.store.getMeta(BRIEFING_KEY) ?? null,
       today: () => this.store.today(),
+      holds: (at) => meetingDay(this.store, at),
       retarget: (oldId, newId, day) => {
         this.associate.retargetOnSupersede(oldId, newId, day);
       },
@@ -778,6 +780,11 @@ export class Counterpart {
         horizon: out.kept.horizon.length,
         elsewhere: out.elsewhere !== undefined,
         page: out.page?.rung ?? "",
+        // What it counted rather than listed, and what it left unsaid
+        // (2026-10-12). Ring only: a session start writes no `self.briefing` row.
+        counted: Object.values(out.more).reduce((n, k) => n + (k ?? 0), 0),
+        untold: Object.values(out.untold).reduce((n, k) => n + (k ?? 0), 0),
+        quiet: Object.values(out.quiet).reduce((n, k) => n + (k ?? 0), 0),
       });
       return out;
     } catch (err) {
@@ -1294,16 +1301,16 @@ export class Counterpart {
       const zone = this.store.zone();
       const entries: LastHere[] = found.map((f) => ({
         chapter: f.chapter,
-        when: `${localStamp(f.firstAt, zone)}–${localStampAfter(f.lastAt, f.firstAt, zone)}`,
-        // `09-30 17:50` → `09-30`.
-        date: localStamp(f.chapter.writtenAt, zone).split(" ")[0] ?? "",
+        when: `${stampWords(localStamp(f.firstAt, zone))}–${stampWords(localStampAfter(f.lastAt, f.firstAt, zone))}`,
+        // `09-30 17:50` → `Sep 30`.
+        date: stampWords(localStamp(f.chapter.writtenAt, zone).split(" ")[0] ?? ""),
       }));
       const base = entries.length === 0 ? [] : lastHereLadder(entries, reader);
       // ABOUT ME, FROM ANOTHER DIRECTORY (2026-10-01): one more line on the
       // widest rungs, given up first; alone when nothing was written here.
       const away = this.selfChapterElsewhere(all, new Set(found.map((f) => f.chapter.id)), reader, exportsFrom);
       if (away === null) return base;
-      const line = elsewhereLine(away, localStamp(away.writtenAt, zone).split(" ")[0] ?? "", reader);
+      const line = elsewhereLine(away, stampWords(localStamp(away.writtenAt, zone).split(" ")[0] ?? ""), reader);
       return base.length === 0 ? [line] : [...base.map((b) => `${b}\n${line}`), ...base];
     } catch {
       return [];
@@ -1820,6 +1827,10 @@ export class Counterpart {
        *  host is saying outright in the same breath (2026-09-26 review), so the
        *  model is not handed the same date twice in one turn. */
       withhold?: ReadonlySet<string>;
+      /** No temporal cues at all THIS turn (2026-10-12): a turn nobody will
+       *  read — the headless nightly run's own — must not spend the fires a
+       *  person's day is owed. */
+      noCues?: boolean;
     } = {},
   ): RecallResult {
     // THE TEMPORAL CUES ARE COMPUTED HERE, not inside `composeTurn`, for one
@@ -1831,7 +1842,9 @@ export class Counterpart {
     const arrived =
       opts.at === undefined || turn.temporal !== undefined
         ? null
-        : this.prospective.arrivals({
+        : opts.noCues === true
+          ? []
+          : this.prospective.arrivals({
             at: opts.at,
             ...(turn.day === undefined ? {} : { day: turn.day }),
             sessionId: turn.sessionId,

@@ -65,6 +65,30 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
           },
           false,
         );
+      case "undo": {
+        // "UNDO THAT DREAM", SAID (2026-10-12, onboarding round 1, F): a
+        // plugin install has no `counterparts dream --undo`, so the owner's
+        // word reaches `Dreams.undo` here — the same reversal, never in the
+        // nightly run (a dream does not undo itself).
+        if (dreamChild || (server["env"][NIGHT_CHILD_ENV] ?? "").trim().length > 0) return refused("night-run", "This is the nightly run: only the owner undoes a dream.");
+        const id = typeof args["dream"] === "string" ? args["dream"].trim() : "";
+        if (id.length === 0) return refused("dream-required", "Pass `dream`: the id of the dream to undo (the line that told of it names it).");
+        if (server.counterpart.store.dream(id) === undefined) return refused("unknown-dream", `No dream ${id} in this memory.`);
+        const out = dreams.undo(id);
+        if (!out.ok) return refused(out.reason, "Nothing was undone.");
+        server["emit"]("mcp.dream", undefined, { phase: "undo", session, reversed: out.reversed, kept: out.kept });
+        const kept = out.kept === 0 ? "" : ` ${String(out.kept)} merge${out.kept === 1 ? " was" : "s were"} left as they are: the merged memory changed since, and bringing its originals back would duplicate it.`;
+        return server["result"](
+          {
+            phase,
+            dream: id,
+            reversed: out.reversed,
+            kept: out.kept,
+            said: `${out.reversed === 0 ? "That dream had nothing left to reverse; it is marked undone." : `Undone: ${String(out.reversed)} change${out.reversed === 1 ? "" : "s"} reversed — merged memories are back as they were, its links and gists are gone.`}${kept} Its journal entry stays, as a record that it happened.`,
+          },
+          false,
+        );
+      }
       case "decline": {
         dreams.decline({ at, session });
         server["emit"]("mcp.dream", undefined, { phase: "decline", session });
@@ -82,7 +106,7 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
         const said: Record<DreamingSetting, string> = {
           auto: "Dreaming on its own: once a day, the first session starts the nightly run by itself, in a separate windowless session in the background, and says so in one line. Today's run is still yours to start, if the owner asked for it.",
           ask: "Dreaming asks first: once a day, the first session shows the owner the question in the terminal and waits for their word.",
-          off: "No dreams: nothing starts the nightly run and nothing asks. It can be turned back on with this phase (value ask or auto) or with counterparts dream --setting ask.",
+          off: "No dreams: nothing starts the nightly run and nothing asks. It can be turned back on with this phase (value ask or auto) when the owner says so.",
         };
         // "No dreams" does not stop a run already going (owner decision D): said.
         const finishes = out.setting === "off" && dreams.nightRunUnderWay() ? ` ${NIGHT_RUN_FINISHES}` : "";

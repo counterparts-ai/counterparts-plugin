@@ -111,15 +111,12 @@ export const SHORT: Record<string, string | readonly string[]> = {
   status: "Memories held and recent activity",
   doctor: "Check that everything is working",
   dashboard: "Open the dashboard in your browser",
-  "self-page": [
-    "The assistant's identity page — who it is, who you are —",
-    "read at the start of every session",
-  ],
+  "self-page": "See what it knows about you",
   // ── setup ──
   install: "First-time setup: your memory and Claude Code — safe to run again",
   connect: "Connect an AI to your memory (Claude Code today; more soon)",
   disconnect: "Disconnect an AI",
-  scope: "Turn memory on or off for a directory",
+  scope: "Choose which folders it remembers",
   uninstall: "Remove Counterparts; keeps your memory unless you say otherwise",
   // ── your data ──
   export: "A copy of your memory you can take anywhere, encrypted by default",
@@ -371,8 +368,9 @@ export const COMMAND_DETAIL: Record<string, readonly string[]> = {
     "It needs an injection ceiling, and says which of these gave it one:",
     "--budget <bytes>, else the config named by --config / $COUNTERPARTS_CONFIG,",
     "else <dir>/../claude-code.json (beside the store), else",
-    "~/.counterparts/claude-code.json (where the hooks read). Never a config",
-    "INSIDE the data dir — that store stops opening (§5 G11).",
+    "~/.counterparts/claude-code.json (where the hooks read). A config found",
+    "there without the key gives Claude Code's 9000, as the hooks use. Never a",
+    "config INSIDE the data dir — that store stops opening (§5 G11).",
   ],
   "probe-oq4": [
     "recall CONTRACT §7. The footnote header is the one string the probe varies",

@@ -20,7 +20,7 @@ export function coreRoadLine(p, promoted) {
   if (p.eligible && p.lane === "slow") return "It has come back on enough separate days — it has met the core's bar, and a sleep can make it core.";
   if (p.oneReturn) {
     return "Felt strongly, so one real return makes it core — coming back to it " + p.needGap +
-      (p.needGap === 1 ? " lived day" : " lived days") + " or more after it was made.";
+      (p.needGap === 1 ? " day of use" : " days of use") + " or more after it was made.";
   }
   if (p.byUse) {
     const more = Math.max(0, p.required - p.days);

@@ -25,7 +25,7 @@
  *   - **In the host's adapter** — how its events arrive and what they are
  *     called, how its output leaves and how much room it has, what its
  *     transcript looks like, the words of its ask, and anything only it has (for
- *     Claude Code: the parallel run's primacy, the wake-arrival check against
+ *     Claude Code: the wake-arrival check against
  *     the transcript, the update notice, the doctor notice, the first-launch
  *     question, the dream line and the headless nightly run). `ClaudeCodeAdapter`
  *     EXTENDS `Lifecycle`, so its hook bodies read exactly as they did.
@@ -64,6 +64,7 @@ import type {
   Turn as CapturedTurn,
 } from "../core/remember/index.js";
 import { calendarDate } from "../core/self/index.js";
+import { storeMarker } from "./store-id.js";
 import { ahaDue, ahaLine, markAha, meetPending, meetState, noteOffered, offerDue, offerLine, onboardingMarker, settleOffer } from "../core/onboarding.js";
 import { localClock, localDate, readableDate } from "../core/time.js";
 
@@ -404,7 +405,7 @@ export interface HostLifecycle {
   noteTail(input: SessionInput): void;
   /** The ask's PACING: the chapter this boundary asks for, or null when it
    *  asks nothing. The host words the ask. */
-  paceAsk(input: SessionInput): number | null;
+  paceAsk(input: SessionInput, opts?: { coveredBy?: string }): number | null;
 
   /** The next-session write-up pointer, measured against the room the caller
    *  names; the empty string when there is none, or no room for it. `label`
@@ -749,6 +750,19 @@ export class Lifecycle implements HostLifecycle {
     return onboardingMarker(meetState(store));
   }
 
+  /**
+   * WHICH STORE THIS SESSION OPENED, for the mod (2026-10-12,
+   * `adapters/store-id.ts#storeMarker`): an id, never the path. Rides beside
+   * the onboarding marker on every session-start wake. Never throws.
+   */
+  storeMarker(): string {
+    try {
+      return storeMarker(this.counterpart.store.dir);
+    } catch {
+      return "";
+    }
+  }
+
   /** Is the first meeting still to happen? The first-launch scope question waits while it is: the meeting asks where. */
   meetPending(): boolean {
     try {
@@ -1077,7 +1091,7 @@ export class Lifecycle implements HostLifecycle {
   recallTurn(
     input: SessionInput,
     text: string,
-    opts: { budgetBytes?: number; withhold?: ReadonlySet<string> } = {},
+    opts: { budgetBytes?: number; withhold?: ReadonlySet<string>; noCues?: boolean } = {},
   ): ReturnType<Counterpart["recallForTurn"]> {
     const result = this.counterpart.recallForTurn(
       {
@@ -1089,6 +1103,10 @@ export class Lifecycle implements HostLifecycle {
         ...(input.at === undefined ? {} : { at: input.at }),
         // Said outright this turn, so not ALSO handed over as a quiet cue.
         ...(opts.withhold === undefined ? {} : { withhold: opts.withhold }),
+        // The headless nightly run's prompt (2026-10-12): no day's cue is
+        // handed to it, so none of the person's fires is spent at 00:19.
+        // And a turn the host says no person started (review of #453).
+        ...(input.nightRun === true || opts.noCues === true ? { noCues: true } : {}),
       },
     );
     const decision = result.decision;
@@ -1467,7 +1485,7 @@ export class Lifecycle implements HostLifecycle {
    *   - **The re-fired Stop asks nothing and advances nothing** — the host's
    *     to refuse, before this is called.
    */
-  paceAsk(input: SessionInput): number | null {
+  paceAsk(input: SessionInput, opts: { coveredBy?: string } = {}): number | null {
     try {
       // Typed turns and both roles' text (`substanceOf`). The pacing and the
       // per-session, per-calendar-day cap are `self/episodes.ts#askDue`'s; the
@@ -1510,6 +1528,9 @@ export class Lifecycle implements HostLifecycle {
         unaskableBytes: coverage?.unaskableBytes ?? null,
         unwritten: chapter.verdict.unwritten?.pieces ?? null,
         unwrittenMinutes: chapter.verdict.unwritten?.minutes ?? null,
+        // An ask paced but not said: something else already asked for this
+        // write-up in the session (the first meeting's finish step, 2026-10-12).
+        ...(opts.coveredBy === undefined ? {} : { coveredBy: opts.coveredBy }),
       });
       // The chapter number is the STORE's, one past what was written; the ask
       // that carries it must also name this session, because the id is what

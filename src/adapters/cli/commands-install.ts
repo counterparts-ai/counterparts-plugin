@@ -114,6 +114,13 @@ export function installCommand(
      * owner's blank store has always started.
      */
     newInstall?: "install" | "start-fresh";
+    /**
+     * Claude Code's ceiling for a configuration this call CREATES with no
+     * `--budget` (2026-10-12). On for every Claude Code install — the plugin's
+     * first run, the scripted arm, the terminal's — and off for Claude
+     * Desktop's (`installDesktop`), which has no measured ceiling.
+     */
+    defaultBudget?: boolean;
   } = {},
 ): number {
   const dirFlag = typeof parsed.flags["dir"] === "string" ? parsed.flags["dir"] : undefined;
@@ -190,6 +197,16 @@ export function installCommand(
       return EXIT.refused;
     }
     budgetBytes = Number(budgetFlag);
+  } else if (opts.defaultBudget !== false && !existsSync(layout.config)) {
+    // CLAUDE CODE'S CEILING, WRITTEN INTO A NEW CONFIGURATION (2026-10-12).
+    // Until 0.3.20 only the terminal arm wrote it, and the plugin's first run
+    // (`install --no-connect`, no terminal) and every scripted install made a
+    // store that never composed a wake: every session woke on the bootstrap
+    // line. 9,000 is that host's measured number, not one invented here (scar
+    // §2.18 keeps the core free of a default; `config.ts#withBudgetDefault`
+    // covers the files already written without it). Only a configuration
+    // being CREATED: a forced re-install carries a chosen ceiling forward (B1).
+    budgetBytes = DEFAULT_BUDGET_BYTES;
   }
   const name = typeof parsed.flags["name"] === "string" ? parsed.flags["name"] : undefined;
   const force = parsed.flags["force"] === true;
@@ -358,7 +375,7 @@ export function installCommand(
   if (config.what === "kept") {
     say("  (an existing file is never rewritten — pass --force to replace it)");
   }
-  if (budgetBytes === undefined) {
+  if (budgetBytes === undefined && opts.defaultBudget === false) {
     say("");
     say('  NO "injectionBudgetBytes" was written: nobody told us this host\'s ceiling');
     say("  and this package invents none (scar §2.18). Re-run with --budget <bytes>,");
@@ -529,7 +546,9 @@ export function installDesktop(
     io.err(unavailable);
     return EXIT.refused;
   }
-  const code = installCommand(parsed, io, env, home_, named, { hostSteps: false });
+  // NO CLAUDE CODE CEILING HERE: Desktop's wake is a tool result, and nobody
+  // has measured what that host carries (`defaultBudget`).
+  const code = installCommand(parsed, io, env, home_, named, { hostSteps: false, defaultBudget: false });
   if (code !== EXIT.ok) return code;
   const custom = customConfigPath(named, home_);
   const dirFlag = typeof parsed.flags["dir"] === "string" ? parsed.flags["dir"] : undefined;
@@ -691,12 +710,10 @@ async function installConversation(
 
   // ── the store and the configuration — SILENTLY ────────────────────────────
   //
-  // THE CEILING GETS A NUMBER ON THIS ARM ONLY. Scar §2.18 says this package
-  // invents no host ceiling, and nothing about that changes for a script: the
-  // non-interactive arm still ends on its "NO injectionBudgetBytes was written"
-  // paragraph. What changes here is that there is a person, and the sentence
-  // explaining the knob moved off this screen into `help install` (item 10) — a
-  // number that works is worth more to a stranger than a paragraph of homework.
+  // THE CEILING. This arm wrote Claude Code's 9,000 first (item 10: a number
+  // that works is worth more to a stranger than a paragraph of homework); since
+  // 2026-10-12 `installCommand` writes it on every Claude Code arm, the plugin's
+  // first run and the scripted one included, so this flag only says it twice.
   // A `--budget` on the line still wins.
   //
   // AND IT IS INJECTED ONLY WHEN THE CONFIGURATION IS BEING CREATED (review
@@ -1058,8 +1075,10 @@ function blankBeside(u: Ui, usable: readonly ParkedSighting[], home: string): "b
 }
 
 /**
- * The interactive install's ceiling, and the ONLY default this package has for
- * one (scar §2.18 holds everywhere else, the scripted arm included). It is the
+ * Claude Code's ceiling, written into every configuration a Claude Code install
+ * creates (the terminal's, the scripted arm's and the plugin's first run, since
+ * 2026-10-12; `config.ts#withBudgetDefault` fills it in for a file written
+ * without it). Claude Desktop's install writes none. It is the
  * ceiling the self page's write limit is sized against
  * (`self/briefing.ts#PAGE_HOST_BUDGET_BYTES`, 2026-10-09), read from there so
  * the two cannot drift: 9,000.

@@ -119,9 +119,10 @@ export const PLAIN = {
     const part = (looked, offered, runs, one, many) =>
       runs === 0 ? "no " + one + " measured yet"
         : looked + " of " + offered + " shown only in part were looked up, over " + runs + " " + (runs === 1 ? one : many);
-    const window = /^last \d+ lived days?/.exec(String(detail || ""));
+    // Doctor's detail says "lived days"; the dashboard says "days of use" (2026-10-12).
+    const window = /^last (\d+) (?:lived days?|days? of use)/.exec(String(detail || ""));
     const none = d.dreamNights + d.reflections > 0 && d.dreamOffered + d.reflectionOffered > 0 && d.dreamLooked + d.reflectionLooked === 0;
-    return (window ? window[0] + " — " : "") +
+    return (window ? "last " + window[1] + (window[1] === "1" ? " day of use" : " days of use") + " — " : "") +
       "dreams: " + part(d.dreamLooked, d.dreamOffered, d.dreamNights, "night", "nights") +
       "; reflections: " + part(d.reflectionLooked, d.reflectionOffered, d.reflections, "reflection", "reflections") +
       (none ? ". None looked up yet: if that holds, the lines may be too thin or the lookup unclear" : "") +

@@ -8,7 +8,7 @@ export default {
   name: "Decay & forgetting",
   short: "Forgetting",
   tagline: "Forgetting isn’t a failure of memory. It’s one of its jobs.",
-  does: "Memories we don't use fade a little each lived day, until they are set aside.",
+  does: "Memories we don't use fade a little each day of use, until they are set aside.",
   explainer: "Unused memories fade over the days you actually work together, not calendar days. Very faint ones are archived, not deleted, and memories in the core identity band do not fade at all.",
   built: ["Unused memories fade on the days you actually work together, and restart the curve when used.", "Very faint ones are archived, never deleted; the core identity band does not fade.", "Cards for people and projects fade gently after months of silence (people slower), and naming one again in a saved memory keeps it or brings it back."],
   inDevelopment: [],

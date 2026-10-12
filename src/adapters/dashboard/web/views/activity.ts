@@ -72,7 +72,7 @@ export function activityView(
     lastSeq,
     retentionDays: store.retentionDays,
     bound:
-      `I keep events for ${store.retentionDays} lived days; older ones are swept unless a replay latch holds them. ` +
+      `I keep events for ${store.retentionDays} days of use; older ones are swept unless a replay latch holds them. ` +
       "This is what I still have, not everything that ever happened.",
     absent: events.length === 0 ? (everLived ? NONE : NEVER) : null,
     vocabulary: DURABLE_EVENT_NAMES.map((name) => {

@@ -8,7 +8,7 @@
  * `Lifecycle` (2026-09-30), which `ClaudeCodeAdapter` extends; this file keeps
  * what is Claude Code's: its five events, its envelope and the room it
  * measures, its transcript's delivery check, the Stop ask's words, the
- * parallel run's primacy, the notices and the dream line. The rules this file
+ * notices and the dream line. The rules this file
  * mechanizes, each from the CONTRACT (some of them now in the lifecycle's
  * methods it calls):
  *
@@ -36,13 +36,8 @@
  *   from PACING but kept in CAPTURE.** `substanceOf` counts one and
  *   `captureSpans` receives the other; the two are computed from the same turns
  *   in the same function, so they cannot drift apart.
- *   **The parallel run's G3/G5 — exactly one system delivers, and the shadow is
- *   ENCODE-ONLY.** Behind `parallel.enabled` (absent by default), every
- *   DELIVERING hook asks `primacy.ts` first and stands down when the answer is
- *   anything but a clean "engram". A stand-down withholds the wake, the recall
- *   and both asks; it withholds NOTHING from capture, because the shadow's whole
- *   job is to encode the same days v1 encodes. Both verdicts are durable
- *   (parallel-run G4: the mute is evidenced, not asserted).
+ *   (The parallel run's primacy stand-down — `parallel.enabled` and
+ *   `primacy.ts` — was removed 2026-10-12; the parallel run ended 2026-09-21.)
  */
 import {
   CHECKOUT_EVENT,
@@ -50,13 +45,12 @@ import {
   ENVELOPE_OVERCAP_EVENT,
   INJECTION_OVERBUDGET_EVENT,
   NOTICE_DROPPED_EVENT,
-  PRIMACY_DELIVER_EVENT,
-  PRIMACY_STANDDOWN_EVENT,
   WAKE_DELIVERED_EVENT,
   WAKE_INJECTED_EVENT,
 } from "../../core/counterpart.js";
 import type { PlainReminder } from "../../core/counterpart.js";
 import { newNightRunId } from "../../core/dream/index.js";
+import { PRONOUN_RULE, coverFinish, meetingHold } from "../../core/onboarding.js";
 import type { DreamOffer } from "../../core/dream/index.js";
 import type { BoundaryKind } from "../../core/remember/index.js";
 import { homedir } from "node:os";
@@ -84,7 +78,6 @@ import { TUNABLES } from "../config.js";
 import { TUNABLES as RECALL_TUNABLES } from "../../core/recall/tunables.js";
 import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessage, readCheckout } from "./doctor.js";
 import type { CheckoutReading } from "./doctor.js";
-import { primacy } from "./primacy.js";
 import { nightRowTimeoutMs, planNightRunner } from "./night-run.js";
 import { NOTHING_OWED_BEFORE_KEY, catchUpOf, catchUpWords, owedBefore } from "./night-catch-up.js";
 import type { NightKind } from "./night-run.js";
@@ -295,6 +288,25 @@ export function isInteractive(input: Pick<HookInput, "entrypoint" | "attended">)
   return input.entrypoint === undefined || !NON_INTERACTIVE_ENTRYPOINTS.has(input.entrypoint);
 }
 
+/**
+ * IS A PERSON THERE FOR THIS SESSION START? (2026-10-12.) `isInteractive`,
+ * and two starts no person makes even when the host says somebody attends:
+ *  - the headless nightly run's child (`HookInput.nightRun`), named outright
+ *    rather than left to the host's `sdk-cli` and `ATTENDED=0` (measured on
+ *    2.1.296: `claude -p` sets both in its hooks' environment), so the run's
+ *    own marker holds whatever a later host sets;
+ *  - a COMPACTION (`source: "compact"`): it fires mid-turn, so it is as
+ *    watched as the turn that filled the context, which may be a hand-back no
+ *    person typed, and a subagent's own compaction fires it too (measured
+ *    2026-10-10: `SessionStart:compact` inside an Agent-tool subagent, `cli`,
+ *    handed a full wake). What a person is owed waits one prompt.
+ * A plain reminder and the first meeting's line read this (the wake row's
+ * `interactive` does not: it says who is in the session, not this start); `startup`, `clear` and `resume` are a person's.
+ */
+export function watchedAtStart(input: Pick<HookInput, "entrypoint" | "attended" | "nightRun" | "source">): boolean {
+  return isInteractive(input) && input.nightRun !== true && input.source !== "compact";
+}
+
 /** No plain reminders: what a session nobody watches is handed. */
 const NO_PLAIN: PlainLines = { context: "", notices: [], due: [] };
 
@@ -502,7 +514,7 @@ export const PAGE_WRITER_TOOL = "counterparts self_page";
  */
 export function stopAsk(sessionId: string, chapter: number): string {
   return [
-    `${STOP_ASK_OPENER} 1) hand back what caught your attention since you last wrote, one idea each — what you read, what they said, what happened — with the counterparts session_end tool, session: ${sessionId}. \`handoff\` only if work here is unfinished; \`retireHandoff\` any now done; \`updates\` anything dated or open now done.`,
+    `${STOP_ASK_OPENER} 1) hand back what caught your attention since you last wrote, one idea each — what you read, what they said, what happened — with the counterparts session_end tool, session: ${sessionId}. \`handoff\` only if work here is unfinished; \`retireHandoff\` any now done; \`updates\` anything dated or open now done. ${PRONOUN_RULE}`,
     `2) Write chapter ${String(chapter)} with the counterparts chapter tool, session: ${sessionId}.`,
   ].join("\n");
 }
@@ -590,22 +602,14 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // was handed its wake today: `noteSession` keeps the start, but a record
       // it CREATES (one pruned, or never written) would read as started now.
       const resumed = this.resumesToday(input);
-      // BEFORE the delivery verdict, because the registry is not delivery: a
-      // muted shadow still lives a session, and the tool that writes its dump
-      // still has to be able to find out that the session is real.
       this.noteSession("start", input);
-      // FIRST, before anything is read or composed: is this ours to deliver?
-      // A stand-down sets no delivery expectation, because there is no render
-      // for the next hook to check — recording one would put a false negative
-      // into scar §2.3's telemetry on every muted day.
-      if (!this.deliveryVerdict("session-start", input)) {
-        return { ...out, ok: true, reason: "primacy-standdown" };
-      }
       const budget = this.config.injectionBudgetBytes;
-      if (budget === undefined) {
+      if (budget === undefined || this.config.injectionBudgetDefaulted === true) {
         // The tripwire. We inject what exists, and we say that nobody told us
-        // what this host can carry — an invented ceiling is scar §2.18.
-        this.emit("adapter.budget.unreported", {});
+        // what this host can carry — an invented ceiling is scar §2.18. A
+        // configuration with no key wakes under Claude Code's default since
+        // 2026-10-12 (`config.ts#withBudgetDefault`), and still trips it.
+        this.emit("adapter.budget.unreported", budget === undefined ? {} : { defaulted: budget });
       }
       // THE DELIVERY PREFACE is asked for here, at injection, and composed
       // nowhere else. The stored bundle was rendered at the last boundary and is
@@ -675,7 +679,8 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // escaped envelope (`ENVELOPE_CHARS`), which cost a full wake its
       // reminders and both asks. What actually gave way is recorded by the
       // delivery (`noteGaveWay`) and by each ask's own deferral.
-      const plain = isInteractive(input) ? this.plainFor(input) : NO_PLAIN;
+      const watched = watchedAtStart(input);
+      const plain = watched ? this.plainFor(input) : NO_PLAIN;
       // DESKTOP'S CODE TAB (2026-10-01): one line, right under the clock,
       // naming this session's id — there the counterparts tools the model sees
       // are Claude Desktop's server, which serves a call as this session only
@@ -683,8 +688,11 @@ export class ClaudeCodeAdapter extends Lifecycle {
       const codeTab = codeTabSessionLine(input);
       // THE FIRST MEETING'S MARKER (2026-10-11), on its own line under the
       // clock, on every session-start wake: the state word only, for the mod,
-      // which cannot reach the dashboard before somebody starts it.
-      const marker = `${this.onboardingMarker(input)}\n`;
+      // which cannot reach the dashboard before somebody starts it. The store
+      // marker on the line under it (2026-10-12) says which store this session
+      // opened, so the mod can tell this store's dashboard from another's.
+      const storeLine = this.storeMarker();
+      const marker = `${this.onboardingMarker(input)}\n${storeLine.length === 0 ? "" : `${storeLine}\n`}`;
       const lead = `${woke.text.length === 0 && plain.context.length === 0 && codeTab === null ? "" : `${this.nowLine()}\n`}${marker}${codeTab === null ? "" : `${codeTab}\n`}${plain.context}`;
       const sent = woke.bytes + Buffer.byteLength(lead, "utf8");
       const rides =
@@ -721,6 +729,8 @@ export class ClaudeCodeAdapter extends Lifecycle {
         // reminders. The `fired` report's plain-due check reads it, so a day
         // only the headless run or `claude -p` came is not a day a reminder
         // could have been said.
+        // Not `watched`: the fired report marks a session unattended for good
+        // on any start that says so, and a person's session compacts too.
         interactive: isInteractive(input) && input.nightRun !== true,
         // A resume's short wake (2026-10-11): `bytes` is the line, not a bundle.
         resumed,
@@ -755,7 +765,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // While the meeting is still to happen the scope question waits: the
       // meeting asks where memory is on, and asking twice is the wall of
       // questions the meeting replaces.
-      const meet = isInteractive(input) ? this.deliverMeetLine(input, room) : "";
+      const meet = watched ? this.deliverMeetLine(input, room) : "";
       const meetBytes = meet.length === 0 ? 0 : room.cost(`\n\n${meet}`);
       const scope = wantsAsk && !this.meetPending() ? this.deliverScopeAsk(input, { ...room, spent: room.spent + meetBytes }) : "";
       const chosen = [meet, scope].filter((a) => a.length > 0).join("\n\n");
@@ -896,9 +906,9 @@ export class ClaudeCodeAdapter extends Lifecycle {
       return "";
     }
     // The mark is a SECOND write of the same phase rather than a field folded
-    // into the first: the first write happens before the delivery verdict (a
-    // muted session still lives one) and the ask is decided after the wake, so
-    // one write cannot carry both facts without moving the other.
+    // into the first: the first write happens before the wake is composed and
+    // the ask is decided after it, so one write cannot carry both facts
+    // without moving the other.
     const marked = recordSession(this.counterpart.store.dir, {
       sessionId: input.sessionId,
       scope: input.scope,
@@ -927,18 +937,11 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // Desktop's Code tab, whose tools are Desktop's server (mcp CONTRACT
       // G21), that turn's calls ran unbound, filed under `claude-desktop:`.
       // This hook runs before the model makes any call, so the session is live
-      // again by the time it names its id. Before the delivery verdict, like
-      // the Stop's: the registry is not delivery. It REFRESHES a record and
+      // again by the time it names its id. It REFRESHES a record and
       // never creates one: a session with no record is the off→on flip
       // (#92 review, F1), which the Stop alone may make bindable.
       if (input.sessionId.length > 0 && readSession(this.counterpart.store.dir, input.sessionId) !== null) {
         this.noteSession("boundary", input);
-      }
-      // The stand-down precedes the delivery check for the same reason it
-      // precedes the recall: a muted session rendered nothing, so there is no
-      // expectation to test and a "not delivered" record would be a lie.
-      if (!this.deliveryVerdict("user-prompt-submit", input)) {
-        return { ...out, ok: true, reason: "primacy-standdown" };
       }
       this.checkWakeArrival(input);
       // A plain reminder whose day began while this session was already open —
@@ -950,8 +953,10 @@ export class ClaudeCodeAdapter extends Lifecycle {
       const text = input.prompt ?? "";
       const byHost = isInteractive(input) && startedByHost(text);
       const plain = isInteractive(input) && !byHost ? this.plainFor(input) : NO_PLAIN;
-      // Nor handed over there as a quiet cue, which would spend its fire.
-      const waiting = byHost ? this.plainFor(input).due : plain.due;
+      // Nor handed over there as a quiet cue, which would spend its fire; and
+      // no quiet cue at all at such a turn (review of #453): each spends a fire
+      // of the person's day on a turn nobody reads.
+      const waiting = plain.due;
       const told: { notices?: readonly string[]; plain?: readonly PlainReminder[]; dream?: DreamTold; dreamNote?: { notice: string; context: string } } =
         plain.due.length === 0 ? {} : { notices: plain.notices, plain: plain.due };
       // The DREAM lines (2026-09-26): the once-a-day line, and any contradiction
@@ -975,6 +980,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
         ...(budgetBytes === undefined ? {} : { budgetBytes }),
         // Said outright this turn, so not ALSO handed over as a quiet cue.
         ...(waiting.length === 0 ? {} : { withhold: new Set(waiting.map((r) => r.memoryId)) }),
+        ...(byHost ? { noCues: true } : {}),
       });
       const decision = result.decision;
       // "SINCE YOU STARTED" (2026-10-11): what changed in other directories
@@ -1455,20 +1461,13 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // it, and a session already running when this shipped never saw a
       // SessionStart write — so this is also where it first becomes bindable.
       this.noteSession("boundary", input);
-      // The boundary is UNCONDITIONAL — the shadow encodes the same days v1
-      // encodes, and a parallel run that stopped capturing would be comparing
-      // nothing (parallel-run G5: encode-only, and honest). What the stand-down
-      // withholds is the ASK, which is delivery: an ask from a system the
-      // owner is not talking to today is exactly the double-voice G3 forbids.
-      const deliver = this.deliveryVerdict("stop", input);
       // THE WAKE'S ARRIVAL, closed here when the first prompt could not
       // (2026-10-08): the host writes the transcript only after that prompt, so
-      // the end of the first turn is where every session can be read. Muted
-      // sessions are not checked, for the prompt's reason. The check marks a
+      // the end of the first turn is where every session can be read. The check marks a
       // record that exists and never makes one; a session the boundary above
       // just sealed (no record before it) has one with no sentinel, and says
       // `no-wake-expected` — what its second prompt used to say.
-      if (deliver) this.checkWakeArrival(input, { final: true });
+      this.checkWakeArrival(input, { final: true });
       // THE AUTHORED FRONT DOOR, first: the experiencer writes its own memories
       // while it still has the pen, and the sweep the worker spawns below is
       // only the fallback for the day nobody got to (contract §4). The ask goes
@@ -1483,7 +1482,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // the code did not keep: one evening's Stops billed 13 chunks and minted
       // 61 memories beside 34 the model had authored itself.
       // The headless nightly run is asked nothing (`HookInput.nightRun`).
-      const ask = deliver && input.nightRun !== true ? this.askAtStop(input) : null;
+      const ask = input.nightRun !== true ? this.askAtStop(input) : null;
       const spawn = this.spawnWorker(input);
       return { ...claimed, ask, spawn };
     });
@@ -1534,40 +1533,6 @@ export class ClaudeCodeAdapter extends Lifecycle {
   // ── internals ──────────────────────────────────────────────────────────────
 
   /**
-   * MAY THIS HOOK DELIVER? — the parallel run's G3, at every delivering channel.
-   *
-   * Without the knob this is `true` and nothing is emitted at all: the flag's
-   * absence must be indistinguishable from a build that never had it, or every
-   * test and every ordinary session grows a primacy record it cannot explain.
-   *
-   * With the knob, `primacy()` decides and BOTH verdicts are recorded — the
-   * stand-down because an unevidenced mute is indistinguishable from a broken
-   * hook (parallel-run G4, scar §2.4), and the delivery because a Phase P day
-   * has to be able to show positive evidence that v2 spoke. Each record goes to
-   * the ring AND to box 2, because the ring dies with the hook process and the
-   * daily count is a claim about the run.
-   *
-   * `date` rides in the durable payload deliberately: the log's `day` column is
-   * the store's LIVED day, which only the heavy cycle advances, so a hook-path
-   * row would stamp whatever lived day the store was already on.
-   */
-  private deliveryVerdict(hook: HookName, input: HookInput): boolean {
-    if (this.config.parallel?.enabled !== true) return true;
-    const verdict = primacy();
-    const name = verdict.deliver ? PRIMACY_DELIVER_EVENT : PRIMACY_STANDDOWN_EVENT;
-    const data = {
-      hook,
-      reason: verdict.reason,
-      system: verdict.system,
-      date: input.at ?? null,
-      session: input.sessionId,
-    };
-    this.emit(name, data);
-    this.counterpart.noteAdapterEvent(name, data);
-    return verdict.deliver;
-  }
-
-  /**
    * Capture and record the boundary — `Lifecycle#captureBoundary`, under this
    * host's event name and boundary kind. ONE function for all three paths, so a
    * fourth session-ending event added later cannot accidentally get a different
@@ -1589,6 +1554,25 @@ export class ClaudeCodeAdapter extends Lifecycle {
    */
   private askAtStop(input: HookInput): string | null {
     if (input.reFired === true) return null;
+    // THE FIRST MEETING HOLDS THE ASK (2026-10-12, onboarding round 1, A).
+    // Under way in this session: nothing is asked and the pacer is not
+    // consulted, so nothing advances. Just finished here: its finish step
+    // handed over the write-up, so this one Stop is paced (the pacer counts
+    // the write-up as asked) and says nothing.
+    const hold = meetingHold(this.counterpart.store, input.sessionId, this.nowFn());
+    if (hold === "running") {
+      this.emit("adapter.ask.held", { by: "meeting" });
+      return null;
+    }
+    if (hold === "finished") {
+      try {
+        coverFinish(this.counterpart.store);
+      } catch {
+        /* uncovered, the next Stop is paced the same way once more */
+      }
+      this.paceAsk(input, { coveredBy: "meeting" });
+      return null;
+    }
     const chapter = this.paceAsk(input);
     // The ask NAMES this session and its chapter: the id is what the MCP
     // server binds itself with, so an ask that omitted it would be an

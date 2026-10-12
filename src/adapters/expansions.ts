@@ -181,6 +181,19 @@ export function expansionsSaltPath(dataDir: string): string {
  * reason, as a log this process cannot open.
  */
 export function expansionSalt(dataDir: string): string | null {
+  return saltFrom(dataDir, true);
+}
+
+/**
+ * The same salt, READ ONLY: null when it has not been minted yet or cannot be
+ * read. For a reader that must never write (the dashboard's store id,
+ * `adapters/store-id.ts`); it never creates the file or its directory.
+ */
+export function readExpansionSalt(dataDir: string): string | null {
+  return saltFrom(dataDir, false);
+}
+
+function saltFrom(dataDir: string, mint: boolean): string | null {
   const path = expansionsSaltPath(dataDir);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let salt: string | null = null;
@@ -192,7 +205,7 @@ export function expansionSalt(dataDir: string): string | null {
          try. */
     }
     if (salt !== null) return salt.length === SALT_BYTES * 2 ? salt : null;
-    if (attempt === 1) return null;
+    if (attempt === 1 || !mint) return null;
     try {
       mkdirSync(join(dataDir, SESSIONS_DIR), { recursive: true });
       writeFileSync(path, `${randomBytes(SALT_BYTES).toString("hex")}\n`, {

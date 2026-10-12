@@ -61,7 +61,7 @@ export function renderIdentity(src: DashboardSource, opts: IdentityOptions = {})
       : e.protectedOutsideIdentity.map((id) => resolveRef(src.store, id, 56).label).join("\n");
 
   const opening =
-    `On lived day ${day} I hold ${plural(e.identity.length, "element")} in the identity band ` +
+    `On day ${day} of use I hold ${plural(e.identity.length, "element")} in the identity band ` +
     `and ${plural(e.protected.length, "element")} under protection. ` +
     "The first is what repetition and salience earned and physics can still move; " +
     "the second is ink no revision path reaches, including a revision that would be right.";

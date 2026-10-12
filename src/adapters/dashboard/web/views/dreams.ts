@@ -205,7 +205,7 @@ export function dreamsView(src: DashboardSource, limit = DREAM_LIMIT): DreamsVie
     dreams: shown.map((r) => dreamView(src, r)),
     total,
     more: total - shown.length,
-    lastDreamed: shown[0] === undefined ? null : (shown[0].date ?? `lived day ${String(shown[0].day)}`),
+    lastDreamed: shown[0] === undefined ? null : (shown[0].date ?? `day ${String(shown[0].day)} of use`),
   };
 }
 

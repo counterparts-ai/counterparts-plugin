@@ -423,7 +423,7 @@ export function settle(store: Store, input: SettleInput, opts: { closeFlags?: bo
   if (pair !== undefined && pair.state === "settled" && input.actor !== "owner" && isReversal(store, pair, holds, over, how, "owner") && settledByOwner(store, pair.id)) {
     return refuse(
       "already-settled",
-      `${pair.id} is already settled: the owner settled ${over} over ${holds}, so it stands as his. Tell him: he can settle ${holds} over ${over} himself (counterparts settle --holds ${holds} --against ${over} --how changed --why "...") or undo it (counterparts settle --undo ${pair.id}).`,
+      `${pair.id} is already settled: the owner settled ${over} over ${holds}, so it stands as theirs. Tell them: they can settle ${holds} over ${over} themselves (counterparts settle --holds ${holds} --against ${over} --how changed --why "...") or undo it (counterparts settle --undo ${pair.id}).`,
     );
   }
   if (pair !== undefined && pair.state === "settled" && isReversal(store, pair, holds, over, how, input.actor)) {

@@ -10,19 +10,19 @@ export const markup = `
    page; it read the browser's calendar until 2026-10-09. */
 export function when(c) {
   if (c.today) return "today";
-  if (c.on) return "on " + (dateWords(c.on) || c.on) + " (lived day " + c.day + ")";
-  return "on lived day " + c.day;
+  if (c.on) return "on " + (dateWords(c.on) || c.on) + " (day " + c.day + " of use)";
+  return "on day " + c.day + " of use";
 }
 
-const WORD = { ran: "finished in the last cycle", waiting: "not due yet", behind: "behind — last finished on lived day ", never: "has never run", torn: "its marker is unreadable" };
+const WORD = { ran: "finished in the last cycle", waiting: "not due yet", behind: "behind — last finished on day ", never: "has never run", torn: "its marker is unreadable" };
 
 export function paint(d) {
   const c = d.cycle;
   const dots = c.phases.map((p) => {
     const tone = p.state === "ran" ? "green" : p.state === "waiting" ? "grey" : p.state === "never" && c.day === null ? "grey" : "amber";
     const said =
-      p.state === "behind" ? WORD.behind + p.day
-      : p.state === "waiting" ? WORD.waiting + (p.nextInDays === null ? "" : p.nextInDays === 0 ? " — due at the next sleep" : " — next in " + p.nextInDays + " lived day" + (p.nextInDays === 1 ? "" : "s"))
+      p.state === "behind" ? WORD.behind + p.day + " of use"
+      : p.state === "waiting" ? WORD.waiting + (p.nextInDays === null ? "" : p.nextInDays === 0 ? " — due at the next sleep" : " — next in " + p.nextInDays + (p.nextInDays === 1 ? " day of use" : " days of use"))
       : WORD[p.state];
     const title = p.phase + " — " + p.gloss + " (" + said + ")";
     return '<span class="hcy-dot hc-dot hc-' + tone + '" title="' + esc(title) + '" role="img" aria-label="' + esc(title) + '"></span>';

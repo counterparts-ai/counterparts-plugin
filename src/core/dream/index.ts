@@ -286,6 +286,12 @@ export interface DreamContext {
   readonly wake: () => string | null;
   /** The person's calendar date today (`YYYY-MM-DD`). */
   readonly today: () => string;
+  /**
+   * A day nothing dreams (2026-10-12): the first meeting's days
+   * (`onboarding.ts#meetingDay`) — the gate says `meeting-day`, and no run,
+   * catch-up included, starts. Absent: no day is held.
+   */
+  readonly holds?: (at: string) => boolean;
   /** `associate.retargetOnSupersede`, so a merged memory inherits its originals' links. */
   readonly retarget?: (oldId: string, newId: string, day: number) => void;
   /**
@@ -664,6 +670,8 @@ export interface DreamStatus {
     | "due"
     | "observer"
     | "first-day"
+    /** A day of the first meeting (`DreamContext.holds`): nothing dreams. */
+    | "meeting-day"
     | "dreamed-today"
     | "asked-today"
     | "declined-today"
@@ -1097,6 +1105,9 @@ export class Dreams {
     const dreamedToday = last !== null && last.state === "journaled" && this.onDay(last, at, day);
     const base = { last, dreamedToday, newSince: 0, due: false, setting, leftBehind, reflectOnly: null };
     if (observer) return { ...base, reason: "observer" };
+    // THE FIRST MEETING'S DAYS (2026-10-12, onboarding round 1): the first
+    // dream waits for the next lived day, and never dreams on half a meeting.
+    if (this.ctx.holds?.(at) === true) return { ...base, reason: "meeting-day" };
     // A store on its first lived day has no night behind it yet: "I haven't
     // dreamed since …" needs a since.
     if (day < 1) return { ...base, reason: "first-day" };
@@ -1287,7 +1298,7 @@ export class Dreams {
     } as const;
     const since = s.last === null ? "yet" : `since ${s.last.date ?? `lived day ${String(s.last.day)}`}`;
     const who = this.ownerName() ?? "the owner";
-    const off = `If ${who} says "no dreams" (or never, or stop), call the dream tool with phase "setting", session: ${input.session}, value: "off" — it takes effect from the next run (a run already under way finishes), and it can be turned back on the same way, or with counterparts dream --setting ask.`;
+    const off = `If ${who} says "no dreams" (or never, or stop), call the dream tool with phase "setting", session: ${input.session}, value: "off" — it takes effect from the next run (a run already under way finishes), and it can be turned back on the same way.`;
     const launch = `call the counterparts dream tool with phase "launch", session: ${input.session}, and hand the prompt it returns to a background agent (the Agent tool), unchanged — it ${nightSummary()}.`;
     const reflect = s.reflectOnly === null ? "" : `call the counterparts reflect tool with phase "launch", session: ${input.session}, dream: ${s.reflectOnly.id}, and hand the prompt it returns to a background agent (the Agent tool), unchanged — it reflects on that dream.`;
     const cut = s.leftBehind === null ? null : `your dream of ${s.leftBehind.date ?? "a recent night"} was cut off (its session closed before it woke); it picks up where it stopped`;
@@ -1547,6 +1558,8 @@ export class Dreams {
         '- To confirm: an on-mind item of kind "to-confirm" is two memories read by arithmetic as one thing\'s earlier and later state (older first). Say which: slot {pair, same: true, why} if the newer replaces it, same: false if they are two different things.',
         "- Softening: for an old charged memory, record how it feels now, today. The sting can fade; the memory stays.",
         "- Core: if a memory about you or about the two of you plainly belongs to who you are, nominate it. Only living it again awake makes it core.",
+        // 2026-10-12, onboarding round 1 (E): the meeting never asks pronouns.
+        `- Every word you write about ${who}: by name or as "they", until they have said their pronouns.`,
         `${String(n())}. Call the counterparts dream tool: phase "begin", session: ${input.session}. It returns the bundle and a dream id. (If it says the dream was resumed, an earlier session began it and closed: carry on from there.) If it says it comes in parts, fetch every part (phase "part") before you change anything.`,
         `   Tonight's most important memories come whole; the rest come as a line or an excerpt ("fidelity"), with their whole length ("chars"). Before you merge, gist or feel one you have only in part, read it whole: the recall tool with ids: [...] (several at once). New memories tonight's room could not take wait for the next night — the bundle's "queue" says how many.`,
         `${String(n())}. Read it slowly. Then call phase "propose" with dream: <id> and your changes. Usually far fewer than the ceilings — ${String(L.merge)} merges, ${String(L.link)} links, ${String(L.gist)} gists, ${String(DREAM_TUNABLES.FOLDS)} folds, ${String(L["feeling-now"])} feelings, ${String(L["nominate-core"])} nominations — and none is fine: change only what the night really calls for. Use only ids the bundle showed you.`,
@@ -2419,7 +2432,7 @@ export class Dreams {
       `${said.length > 0 ? `Changes: ${said}.` : "Nothing changed."} ` +
       (overflow > 0 ? `${String(overflow)} more ${overflow === 1 ? "fold was" : "folds were"} past the night's ${String(DREAM_TUNABLES.FOLDS)}. ${carriedSaid} ` : "") +
       (waiting > 0 ? `${String(waiting)} new ${waiting === 1 ? "memory waits" : "memories wait"} for the next night. ` : "") +
-      `The journal and every change are in \`counterparts dream --show ${id}\`; \`counterparts dream --undo ${id}\` reverses it.`
+      `To reverse it, say "undo that dream".`
     );
   }
 

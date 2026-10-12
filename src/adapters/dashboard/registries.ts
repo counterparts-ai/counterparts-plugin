@@ -280,7 +280,7 @@ export const DURABLE_EVENTS = {
   // What a delivery could not carry (durable since 2026-10-02; ring-only
   // before, so a dropped notice or a hook past the host's cap left nothing).
   "adapter.envelope.overcap": "a hook's output was past the host's 10,000-character cap even in plain form, so the host showed only a preview of it",
-  "adapter.notice.dropped": "the owner's notice was dropped from a session start so the rest of the envelope stayed under the host's cap",
+  "adapter.notice.dropped": "the notice meant for you was dropped from a session start so the rest of the envelope stayed under the host's cap",
   "adapter.envelope.gave-way": "a part of a delivery waited for want of room — the write-up pointer, the scope question, the turn's recall, a reminder, the dream offer or the update notice (which hook, which part)",
   "adapter.injection.overbudget": "a session start sent more than the ceiling the host reported (what it sent, and the ceiling)",
   // Which CODE was live at a session start (2026-09-14): the hooks run whatever
@@ -299,7 +299,7 @@ export const DURABLE_EVENTS = {
   "gate.deposit": "an authored deposit met the gate battery (which gates acted, and what they refused)",
   "memory.pruned": "a memory was let go at the floor",
   "memory.merged": "a duplicate was merged into its original",
-  "memory.unmerged": "the owner put back a row a merge had archived (repair-merged-beliefs)",
+  "memory.unmerged": "you put back a row a merge had archived (repair-merged-beliefs)",
   "recall.decision": "a turn decided what came to mind (and what stayed quiet)",
   "revision.pressure": "a belief or an identity element took a credited challenge",
   "sweep.gate": "the crash fallback ran its gate (scopes looked at, every scope's refusal counted by reason, spans swept)",
@@ -325,15 +325,15 @@ export const DURABLE_EVENTS = {
   // for scar §2.3's reason, one lane along: "we wrote one" is not "a session
   // was handed one", and a pointer that stops being delivered is exactly the
   // failure a single row would hide.
-  "handoff.written": "a session left a handoff for the next one in that directory — one per session there (how big, which version, and how long it will show)",
-  "handoff.shown": "a session opening in that directory was handed the pointer to a handoff there (how old it was, what it cost the wake, and how many were live beside it)",
-  "handoff.cleared": "a session finished the work in a directory and retired a handoff there — its own, or another's by id — while any others stand (how big the retired one was, and which version)",
-  "handoff.refused": "a handoff was turned away (past the hard limit, stopped by the gate battery, carrying the wake's own markers, written where no directory was named, sent as something other than text, sent from a Claude Desktop call that named no session, retiring an id that is not a handoff here, or — with `no-room` — composed before the wake had room reserved for its pointer)",
+  "handoff.written": "a session left a handoff for the next one in that project — one per session there (how big, which version, and how long it will show)",
+  "handoff.shown": "a session opening in that project was handed the pointer to a handoff there (how old it was, what it cost the wake, and how many were live beside it)",
+  "handoff.cleared": "a session finished the work in a project and retired a handoff there — its own, or another's by id — while any others stand (how big the retired one was, and which version)",
+  "handoff.refused": "a handoff was turned away (past the hard limit, stopped by the gate battery, carrying the wake's own markers, written where no project was named, sent as something other than text, sent from a Claude Desktop call that named no session, retiring an id that is not a handoff here, or — with `no-room` — composed before the wake had room reserved for its pointer)",
   // Durable since 2026-10-01: it was a ring event, gone with the hook, and
   // the wake bar could not say a session start went without it.
-  "handoff.lasthere.noroom": "a session start had no room for the \"Last here\" line naming the chapter last written in that directory (the bundle's bytes, the ceiling, and whether a handoff was carried in its place)",
+  "handoff.lasthere.noroom": "a session start had no room for the \"Last here\" line naming the chapter last written in that project (the bundle's bytes, the ceiling, and whether a handoff was carried in its place)",
   // Durable since 2026-10-02: "Work here" had more lines than the wake carried.
-  "self.work.overflow": "a session start had more \"Work here\" lines for its directory than it carried — more than the wake shows, so they rotate, or fewer fitted the room (how many, how many shown)",
+  "self.work.overflow": "a session start had more \"Work here\" lines for its project than it carried — more than the wake shows, so they rotate, or fewer fitted the room (how many, how many shown)",
   "recall.credit": "a boundary decided which memories the replies actually used, and credited them",
   // Learned association had no line in the log at all: an edge is its own
   // record, so a flush that never happened read exactly like a credit pass with
@@ -347,14 +347,14 @@ export const DURABLE_EVENTS = {
   // Remembering to act (2026-09-20, E2), in two names so a refusal can never be
   // counted as a firing.
   "prospective.fire": "a future date arrived and the reminder was offered into the turn (which window, and how much of its budget is left)",
-  "prospective.fire.refused": "a reminder was NOT offered (which brake held — one row per window per reason per lived day)",
+  "prospective.fire.refused": "a reminder was NOT offered (which brake held — one row per window per reason per day of use)",
   "prospective.plain": "a reminder its author marked plain was told to the person on its day (which window, which beat — its day, a month or range opening, or its last day — and the date; `late` when a day passed untold was told within its week after)",
   // The journal's markdown copy and the hand export (2026-09-20, F6 and F7):
   // the two places the constitution's "prose the owner can view" is kept now
   // that every body is a column.
   "journal.copy.written": "a chapter's markdown copy was written beside the store, so the diary is readable in any editor (which episode, which file, how big)",
   "journal.copy.failed": "a chapter's markdown copy could not be written (which episode, and the reason code) — the chapter itself is safe in the database",
-  "store.export": "the owner exported the store by hand (which kind of export, how many rows went, how many confidential ones were left out)",
+  "store.export": "you exported the store by hand (which kind of export, how many rows went, how many confidential ones were left out)",
   // Raw-transcript retention (2026-09-23, B3). One row per date; `STARTED` goes
   // in when the pass takes its latch and `LATCH_HELD` when a later worker finds
   // the latch taken with no row, so a pass that died is never a silence.
@@ -367,15 +367,15 @@ export const DURABLE_EVENTS = {
   "dream.begun": "a dream began: the dreamer was shown what was lived since the last one (how many new memories, how many shown in all, how many chapters)",
   "dream.changed": "a dream changed memories (how many changes landed and were refused, by kind: merges, links, replays, gists, contradictions, feelings, nominations)",
   "dream.journaled": "a dream ended with its journal entry written (how long, and what it changed)",
-  "dream.undone": "the owner reversed a whole dream (how many of its changes were put back)",
-  "dream.ask": "the day's dream line started the nightly run or asked first (or again, for a run cut off), the owner said not today, or the dreaming setting changed",
+  "dream.undone": "you reversed a whole dream (how many of its changes were put back)",
+  "dream.ask": "the day's dream line started the nightly run or asked first (or again, for a run cut off), you said not today, or the dreaming setting changed",
   // The owner's door out of the core (2026-09-26).
-  "band.demoted": "the owner sent a core memory back to ordinary fading (and why is kept beside it)",
+  "band.demoted": "you sent a core memory back to ordinary fading (and why is kept beside it)",
   // The v8 upgrade's one-time proof (2026-09-26).
   "physics.upgrade.census": "after the v8 upgrade, every memory was measured by the old arithmetic and the new (how many moved a band, down or up, and how many would be let go sooner or later)",
   // Contradictions (2026-09-29). Ids and counts only; the why is on the pair's trail.
   "contradiction.flagged": "two memories that disagree were flagged as a pair, unsettled (by a dream, today)",
-  "contradiction.settled": "a pair of memories that disagree was settled — changed, corrected or open — and by whom (a session, a dream, a reflection, the page writer or the owner)",
+  "contradiction.settled": "a pair of memories that disagree was settled — changed, corrected or open — and by whom (a session, a dream, a reflection, the page writer or you)",
   "contradiction.undone": "a settle was undone: strength put back, a corrected memory back in recall, the pair unsettled again",
   // The update guard (2026-10-09). Ids, the reading and its numbers; no text.
   "contradiction.held": "a new memory said it changed or corrected one that looked unrelated to it, so the old one was left as it was and the two were not linked (the writer was shown it and asked to settle it if it meant to)",

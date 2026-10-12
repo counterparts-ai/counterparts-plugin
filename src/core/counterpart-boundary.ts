@@ -877,6 +877,15 @@ export function recordSelfBriefing(
           lane: stringField(e, "lane"),
         })),
         trimmedTotal: trims.length,
+        // COUNTED AND UNTOLD (2026-10-12, `self/briefing.ts#tellLost`): ids
+        // the wake said by count (a step-down), and ids no line named (a
+        // silent drop — doctor's Wake line, red), with the lanes of the latter.
+        counted: numberField(rendered, "counted") ?? 0,
+        untold: numberField(rendered, "untold") ?? 0,
+        quiet: numberField(rendered, "quiet") ?? 0,
+        ...((stringField(rendered, "untoldLanes") ?? "") === ""
+          ? {}
+          : { untoldLanes: (stringField(rendered, "untoldLanes") ?? "").split(",") }),
         // PER LANE, uncapped (2026-10-10): what doctor's Wake line reads to
         // say a dated item went unlisted ("Arriving:", `horizon`) — the list
         // above is capped, and the trim order puts that lane near its end.

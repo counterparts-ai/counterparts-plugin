@@ -1,6 +1,6 @@
 /* "Next time I wake, I start with:" — what the next session's wake holds, as a
-   short list (round 3b, item 2): the self page and its age, the nearby
-   memories by title (each opens its card), and anything arriving. "read it"
+   short list (round 3b, item 2): the self page and its age, the memories
+   that might be relevant by title (each opens its card), and anything coming up. "read it"
    opens the whole wake in place, as it will be read. Its size against the
    budget is the health tab's now; the rebuild button comes back when it is
    built (the console's `counterparts rebrief` is unchanged). */
@@ -17,7 +17,7 @@ export const markup = `
         <div id="self-wake"></div>
       </div>`;
 
-const EXPLAIN = "The wake is what a session is handed before its first word: composed without a model at the end of each day, from the page and the memories that are nearby. " +
+const EXPLAIN = "The wake is what a session is handed before its first word: composed without a model at the end of each day, from the page and the memories that might be relevant. " +
   "When a session starts, a line with today's date goes on top, and in a folder with a handoff note, a pointer to it. " +
   "How much room it takes is on the health tab.";
 
@@ -27,7 +27,7 @@ let last = null;
 export function pageAge(p) {
   if (!p) return "";
   const date = dateWords(p.date);
-  const ago = p.livedDaysAgo === null ? "" : p.livedDaysAgo === 0 ? "today" : p.livedDaysAgo === 1 ? "1 lived day ago" : p.livedDaysAgo + " lived days ago";
+  const ago = p.livedDaysAgo === null ? "" : p.livedDaysAgo === 0 ? "today" : p.livedDaysAgo === 1 ? "1 day of use ago" : p.livedDaysAgo + " days of use ago";
   const when = date && ago ? "written " + date + ", " + ago : date ? "written " + date : ago ? "written " + ago : "";
   return when + (p.newerThanWake ? (when ? " — " : "") + "rewritten since; the next wake carries the new one" : "");
 }
@@ -65,13 +65,13 @@ export function paint(d) {
     : l.nearbyLines.map((t) => '<li class="wk-line-i">' + esc(headline(t)) + "</li>").join("");
   const nNear = l.nearby.length || l.nearbyLines.length;
   if (nNear > 0) {
-    items.push('<li class="wk-it"><span class="wk-what">' + (nNear === 1 ? "A memory nearby" : nNear + " memories nearby") + "</span>" +
+    items.push('<li class="wk-it"><span class="wk-what">' + (nNear === 1 ? "A memory that might be relevant" : nNear + " memories that might be relevant") + "</span>" +
       '<ul class="wk-sublist">' + nearby + "</ul></li>");
   }
   items.push(l.arriving.length > 0
-    ? '<li class="wk-it"><span class="wk-what">Arriving</span><ul class="wk-sublist">' +
+    ? '<li class="wk-it"><span class="wk-what">Coming up</span><ul class="wk-sublist">' +
         l.arriving.map(memoryItem).join("") + "</ul></li>"
-    : '<li class="wk-it wk-none"><span class="wk-what">Nothing arriving</span></li>');
+    : '<li class="wk-it wk-none"><span class="wk-what">Nothing coming up</span></li>');
   const also = l.also.length > 0
     ? '<p class="wk-also">Also ' + l.also.map((a) => a.lines + " line" + (a.lines === 1 ? "" : "s") + " of " + esc(a.label)).join(", ") + ".</p>"
     : "";

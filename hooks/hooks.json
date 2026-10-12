@@ -1,5 +1,5 @@
 {
-  "description": "Counterparts: the five events the npm install wires into settings.json, launched from the plugin root; and the sidebar mod (hooks/sidebar/), a module of function hooks.",
+  "description": "Counterparts: memory hooks on five Claude Code events (session start, each prompt, each reply, session end, before compaction), started from the plugin folder; and the sidebar mod (hooks/sidebar/).",
   "hooks": {
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }

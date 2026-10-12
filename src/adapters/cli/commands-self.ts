@@ -11,6 +11,7 @@ import { CLAIMS_ERA_CUTOFF_KEY, storeExists } from "../../core/store/index.js";
 // same function the hook, the worker and the MCP server do.
 import { CONFIG_FLAG, defaultConfigPath } from "../config-path.js";
 import type { ConfigChoice } from "../config-path.js";
+import { withBudgetDefault } from "../config.js";
 import type { AdapterConfig } from "../config.js";
 import { BIN, DEFAULT_STORE_DIR } from "./install.js";
 import { bodyFrom, writeLines, versionLines, NO_PAGE_LINES, pageLines } from "./self-page.js";
@@ -733,7 +734,9 @@ export async function catchUpEntry(
       io.err(`refused: ${configPath} is there and will not be understood, so this will not guess which store to write into. --dir <path> names one directly.`);
       return EXIT.refused;
     }
-    config = { ...host.config, dataDir: host.config.dataDir ?? join(dirname(configPath), DEFAULT_STORE_DIR) };
+    // The hooks' ceiling default (`config.ts#withBudgetDefault`): the run
+    // renders the wake under the ceiling a session start reads it at.
+    config = withBudgetDefault({ ...host.config, dataDir: host.config.dataDir ?? join(dirname(configPath), DEFAULT_STORE_DIR) });
     fromFile = configPath;
   }
   const dataDir = config.dataDir ?? "";

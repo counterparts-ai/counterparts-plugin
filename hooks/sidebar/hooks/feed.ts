@@ -485,7 +485,17 @@ export function savedItems(tool: string, args: Record<string, unknown>, resultTe
     const settled = p?.['settled'] as { ok?: unknown; held?: unknown } | undefined;
     const refused = REMEMBER.has(ours.tool) && settled !== undefined && (settled.ok === false || settled.held === true);
     const replacesId = src['how'] === 'open' || refused ? null : memoryId(src['updates']);
-    return { key: `live:${String(seq)}:${String(i)}`, id, title, at, replaces: null, replacesId, kind: replacesId === null ? 'new' : 'update' };
+    const body = typeof src['text'] === 'string' ? src['text'].replace(/\s+/g, ' ').trim() : '';
+    return {
+      key: `live:${String(seq)}:${String(i)}`,
+      id,
+      title,
+      at,
+      replaces: null,
+      replacesId,
+      kind: replacesId === null ? 'new' : 'update',
+      ...(body === '' ? {} : { text: body }),
+    };
   };
   if (REMEMBER.has(ours.tool)) {
     const title = firstLine(args['title']) ?? firstLine(args['text']) ?? 'a note';
@@ -771,7 +781,38 @@ export function parseOnboardingMarker(text: string): SidebarMeet | null {
 }
 
 /**
- * Whether the sidebar shows "Meet your counterpart": core says the meeting
+ * WHICH STORE (core #459, 2026-10-12): the wake carries
+ * `<!-- counterparts:store id=st_… -->` on its own line, and the dashboard says
+ * the store it serves at `/api/whoami` (and `/api/onboarding`'s `store`). Two
+ * stores on one machine can race for one port, so the sidebar shows a
+ * dashboard's numbers only when the two agree; either unknown (no marker, an
+ * older core, a store whose id is not minted yet: null) is "can't tell", and
+ * it carries on.
+ */
+export const STORE_MARKER = /<!--\s*counterparts:store\s+id=(st_[0-9a-f]{16})\s*-->/
+
+/** The store the wake names, or null. */
+export function parseStoreMarker(text: string): string | null {
+  return STORE_MARKER.exec(text)?.[1] ?? null
+}
+
+/** The `store` a dashboard answer names (`/api/whoami`, `/api/onboarding`), or null: absent, null, or not an id. */
+export function storeOf(text: string): string | null {
+  try {
+    const v = (JSON.parse(text) as { store?: unknown } | null)?.store
+    return typeof v === 'string' && /^st_[0-9a-f]{16}$/.test(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+/** Whether a dashboard serving `dash` belongs to another store than the wake's: only when both are known and differ. */
+export function otherStore(wake: string | null, dash: string | null): boolean {
+  return wake !== null && dash !== null && wake !== dash
+}
+
+/**
+ * Whether the sidebar shows "Start the 5-minute intro": core says the meeting
  * was put off (`later`) or offered and not finished (`offered`), or it never
  * started though this install's one speak-first went out in an EARLIER
  * session (the turn ended before Claude reached core's `meet`: a dead end

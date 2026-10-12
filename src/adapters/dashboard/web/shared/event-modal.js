@@ -9,7 +9,7 @@ export async function openEvent(seq) {
   const e = d.event;
   openModal(
     "<h3>" + esc(e.name) + "</h3>" +
-    "<div class='sub'>lived day " + e.day + " · " + esc(d.when || "") +
+    "<div class='sub'>day " + e.day + " of use · " + esc(d.when || "") +
       " · sequence " + e.seq + (e.node ? " · " + esc(e.node) : "") + "</div>" +
     "<div class='body tone-" + e.tone + "'>" + esc(e.text) + "</div>" +
     (e.subject ? "<h4>subject</h4><div class='ref'>" + esc(e.subject) + "</div>" : "") +

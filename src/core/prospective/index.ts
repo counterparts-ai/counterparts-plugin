@@ -400,7 +400,7 @@ export interface HorizonResult {
   /**
    * WHAT THE COUNT LEFT OUT (review of #367, 2026-10-10): the arrivals that
    * would have taken a wake line but for `HORIZON_ITEMS`, in the same order.
-   * The wake names them by id under the lane ("N more arriving; recall ids:
+   * The wake names them by id under the lane ("N more coming up; recall ids:
    * …") so a dated item past the count is never silently missing.
    */
   readonly more: Arrival[];
@@ -759,10 +759,28 @@ export class Prospective {
     // 13th and the 14th. A plain reminder never loses its place to quiet ones;
     // within a tier the nearest date leads, and the salience order only
     // breaks a tie (`byArrivingOrder`).
-    const offered = considered.arrivals
-      .filter((a) => a.precision === "day")
-      .filter((a) => a.recurring !== "daily")
-      .filter((a) => !this.toldForGood(a, input.at));
+    //
+    // WHAT THE LANE LEAVES OUT, SAID ONCE (2026-10-12): one event with the
+    // count and ids per reason, so a dated item that arrived and is not under
+    // "Arriving:" can be traced to the rule that left it out.
+    const excluded = { notDay: [] as string[], daily: [] as string[], told: [] as string[] };
+    const offered = considered.arrivals.filter((a) => {
+      if (a.precision !== "day") excluded.notDay.push(a.memoryId);
+      else if (a.recurring === "daily") excluded.daily.push(a.memoryId);
+      else if (this.toldForGood(a, input.at)) excluded.told.push(a.memoryId);
+      else return true;
+      return false;
+    });
+    if (excluded.notDay.length + excluded.daily.length + excluded.told.length > 0) {
+      this.emit("prospective.horizon.excluded", undefined, {
+        notDay: excluded.notDay.length,
+        daily: excluded.daily.length,
+        told: excluded.told.length,
+        notDayIds: excluded.notDay.join(","),
+        dailyIds: excluded.daily.join(","),
+        toldIds: excluded.told.join(","),
+      });
+    }
     const ordered = [...offered].sort(byArrivingOrder(input.at));
     const items = ordered.slice(0, this.tunables.HORIZON_ITEMS);
     // Past the count: named by id in the wake, never silently gone (review of #367).

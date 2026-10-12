@@ -143,9 +143,6 @@ export type {
   WakeArrival,
 } from "./transcript.js";
 
-export { AB_DIR_ENV, V2_OVERRIDE, abDir, assignmentHealth, assignmentPath, primacy, readAssignment } from "./primacy.js";
-export type { Assignment, AssignmentHealth, AssignmentState, Primacy, PrimacyReason } from "./primacy.js";
-
 import { Counterpart } from "../../core/counterpart.js";
 import type { CounterpartEvent } from "../../core/counterpart.js";
 import type { AdapterConfig } from "../config.js";

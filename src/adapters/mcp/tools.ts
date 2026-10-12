@@ -1411,7 +1411,7 @@ const DREAM: ToolSpec = {
   privileges: [
     {
       claim:
-        "It is bound to ONE session exactly as `session_end` is, and every change a dream makes is recorded under that session's dream, in order, so `counterparts dream --undo <id>` reverses the whole batch.",
+        "It is bound to ONE session exactly as `session_end` is, and every change a dream makes is recorded under that session's dream, in order, so undoing it (the `undo` phase, on the owner's word) reverses the whole batch.",
       mechanizedBy: "src/adapters/mcp/server.ts#requireBoundSession + src/core/dream/index.ts#Dreams.undo",
     },
     {
@@ -1460,8 +1460,8 @@ const DREAM: ToolSpec = {
     properties: {
       phase: {
         type: "string",
-        enum: ["launch", "begin", "part", "propose", "journal", "writer", "decline", "setting"],
-        description: "Which step: launch, begin, part (the rest of a bundle that came in parts), propose, journal, writer, decline, or setting.",
+        enum: ["launch", "begin", "part", "propose", "journal", "writer", "decline", "setting", "undo"],
+        description: "Which step: launch, begin, part (the rest of a bundle that came in parts), propose, journal, writer, decline, setting, or undo (only when the owner asks to undo a dream; pass `dream`).",
       },
       session: {
         type: "string",
@@ -1713,6 +1713,7 @@ const MEET: ToolSpec = {
     type: "object",
     properties: {
       step: { type: "string", enum: [...MEET_STEPS] },
+      session: { type: "string", description: "Your session id, as the wake names it." },
       answer: { type: "string", description: "Their answer in your words; for where/style, the option." },
       like: { type: "string", description: "Style character: who." },
       traits: { type: "array", items: { type: "string" }, description: "Style character: the traits you said back; other: their words." },

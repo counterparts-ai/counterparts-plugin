@@ -32,8 +32,10 @@
  *      `install` on a live machine reports what it found and changes nothing —
  *      the same idempotence `init` already has, extended to the two files.
  *   3. **No ceiling is invented** (scar §2.18). `injectionBudgetBytes` is
- *      written only when `--budget` says what it is; without it the config is
- *      written without the key and the printed steps say so out loud.
+ *      what `--budget` says, else Claude Code's measured 9,000 on a Claude Code
+ *      install (`commands-install.ts#installCommand`, every arm since
+ *      2026-10-12), else — Claude Desktop's install — no key, and the printed
+ *      steps say so out loud.
  */
 import {
   chmodSync,
