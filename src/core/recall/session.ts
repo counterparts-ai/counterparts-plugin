@@ -34,7 +34,9 @@
  * **Lifetime:** the session, then `Store.pruneGateSessions()` — a real retention
  * sweep beside `pruneSupersededVersions`, which a meta keyspace could never have.
  * `MAX_SESSION_RECORDS` still bounds the per-session record maps, applied on the
- * write AND on the read, so neither direction can exceed it.
+ * write AND on the read, so neither direction can exceed it. (As of 2026-10-13
+ * nothing on a live path calls `pruneGateSessions`; the one piece that is the
+ * person's words, the carried cues, is emptied by `clearIdleCarries` below.)
  * **Observer:** never written. An instrument deposits nothing, so its gate state
  * lives and dies in the process (`Recall` holds it in memory and stands down at
  * the write).
@@ -167,6 +169,9 @@ interface ScalarPayload {
   affectFiredTurn: number | null;
   carriedCues: string[];
   carriedFromTurn: number;
+  /** When this row was saved, wall-clock ms (2026-10-13). Read only by
+   *  `clearIdleCarries`; absent on rows saved before it, which it treats as old. */
+  at?: number;
 }
 
 export function loadGateState(store: Store, sessionId: string, max = Infinity): LoadResult {
@@ -253,6 +258,7 @@ export function saveGateState(store: Store, state: GateState, max: number): void
         affectFiredTurn: state.affectFiredTurn,
         carriedCues: state.carriedCues,
         carriedFromTurn: state.carriedFromTurn,
+        at: store.now(),
       } satisfies ScalarPayload),
     },
   ];
@@ -280,6 +286,39 @@ export function saveGateState(store: Store, state: GateState, max: number): void
     });
   }
   store.setGateRecords(rows);
+}
+
+/**
+ * TYPED WORDS LEAVE A QUIET SESSION (2026-10-13). `carriedCues` is the one
+ * piece of gate state that is the person's own words (up to `MAX_CUES` tokens
+ * from the last turn). It is overwritten every turn, but a session that ends,
+ * or is killed, keeps its last turn's tokens in the scalar row — and in every
+ * backup — for as long as the row lives. The policy is that what the person
+ * typed is never kept more than the retention ceiling (`retention.maxDays`,
+ * default 14, `remember/tunables.ts#RETENTION_MAX_MS`), so this empties the
+ * carry of every session whose row was last saved that long ago. Only the
+ * carry: the turn count, refractory and per-memory records (ids, not text)
+ * stay, so a session that comes back keeps its dedup and loses one turn of
+ * carry, which expires after a turn anyway. A row saved before `at` existed
+ * counts as old. An unreadable row is left as it is (it reads `unreadable`).
+ *
+ * Whole-store and cheap: only rows whose carry is non-empty are read.
+ * Called by the worker (`claude-code/bin/runner.ts`) before its daily copy.
+ */
+export function clearIdleCarries(store: Store, maxMs: number): number {
+  const cutoff = store.now() - maxMs;
+  return store.rewriteGateValues("scalar", SCALAR_REF, '"carriedCues":["', (value) => {
+    let parsed: Partial<ScalarPayload>;
+    try {
+      parsed = JSON.parse(value) as Partial<ScalarPayload>;
+    } catch {
+      return null;
+    }
+    if (parsed === null || typeof parsed !== "object" || parsed.v !== GATE_STATE_VERSION) return null;
+    if (!Array.isArray(parsed.carriedCues) || parsed.carriedCues.length === 0) return null;
+    if (typeof parsed.at === "number" && parsed.at > cutoff) return null;
+    return JSON.stringify({ ...parsed, carriedCues: [] });
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

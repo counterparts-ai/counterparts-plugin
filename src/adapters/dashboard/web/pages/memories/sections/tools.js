@@ -1,5 +1,6 @@
 /* The page's own buttons: add a memory (a note the owner writes, the same as
-   `counterparts note`), back up, export. Each runs the
+   `counterparts note`), back up, export, and delete one kind of data (the
+   same as `counterparts delete <kind>`, 2026-10-13). Each runs the
    console's own command through `shared/actions.js` and says what it said.
    (Remove lives on the memory card, where the memory is.) */
 import { act, resultHtml } from "../../../shared/actions.js";
@@ -12,6 +13,7 @@ export const markup = `
       <button class="mbtn primary" id="note-open" type="button" aria-expanded="false">+ Add a memory</button>
       <button class="mbtn" id="backup-open" type="button">Back up…</button>
       <button class="mbtn" id="export-open" type="button">Export…</button>
+      <button class="mbtn" id="delete-open" type="button">Delete data…</button>
     </div>`;
 
 export const notePanel = `
@@ -57,6 +59,74 @@ export function mount() {
   });
   $("backup-open").addEventListener("click", () => folderDialog("backup"));
   $("export-open").addEventListener("click", () => folderDialog("export"));
+  $("delete-open").addEventListener("click", deleteDialog);
+}
+
+// ── delete one kind of data ─────────────────────────────────────────────────
+
+const KINDS = [
+  { kind: "conversation-text", label: "Conversation text",
+    what: "Every word of conversation still kept, waiting to be written up or to age out. Memories already made from it stay." },
+  { kind: "backups", label: "Backups",
+    what: "Every daily copy, and the copies taken before an upgrade. Rollback then has nothing to go back to." },
+  { kind: "activity-log", label: "Activity log",
+    what: "What the background processes did, one line each. Never what was said." },
+];
+
+/* Each kind: "Delete…" asks the console what it would delete (its dry run,
+   counts only), shows that, and offers one plain "Yes, delete", which runs the
+   console's own `delete <kind> --yes`. */
+function deleteDialog() {
+  const back = document.createElement("div");
+  back.className = "confirm-back";
+  back.innerHTML =
+    '<div class="confirm mdialog" role="dialog" aria-modal="true" aria-labelledby="dd-title">' +
+      '<h3 id="dd-title">Delete one kind of data</h3>' +
+      '<p class="fd-lede">Each deletes that kind and nothing else. Memories are not touched.</p>' +
+      KINDS.map((k) =>
+        '<div class="fd-set" data-kind="' + esc(k.kind) + '">' +
+          "<b>" + esc(k.label) + "</b> — " + esc(k.what) +
+          ' <button class="mbtn dd-ask" type="button">Delete…</button>' +
+          '<div class="dd-out"></div>' +
+        "</div>").join("") +
+      '<div class="confirm-buttons"><button class="fd-cancel" type="button">Close</button></div>' +
+    "</div>";
+  const close = () => {
+    removeEventListener("keydown", onKey, true);
+    if (back.parentNode) back.parentNode.removeChild(back);
+  };
+  const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+  back.querySelectorAll(".fd-set[data-kind]").forEach((row) => {
+    const kind = row.getAttribute("data-kind");
+    const out = row.querySelector(".dd-out");
+    const ask = row.querySelector(".dd-ask");
+    ask.addEventListener("click", async () => {
+      ask.disabled = true;
+      out.innerHTML = '<div class="act-out">counting…</div>';
+      const plan = await act("delete", { kind });
+      ask.disabled = false;
+      if (!plan || !plan.ok) { out.innerHTML = resultHtml(plan); return; }
+      const said = (plan.out || []).filter((l) => l.trim().length > 0);
+      const nothing = said.some((l) => /nothing to delete/i.test(l));
+      const lines = said.filter((l) => !/^Nothing has changed/.test(l));
+      out.innerHTML = '<div class="act-out">' + lines.map((l) => "<div>" + esc(l) + "</div>").join("") +
+        (nothing ? "" : '<div class="confirm-buttons"><button class="dd-no" type="button">Keep it</button>' +
+          '<button class="dd-yes" type="button">Yes, delete</button></div>') + "</div>";
+      if (nothing) return;
+      out.querySelector(".dd-no").addEventListener("click", () => { out.innerHTML = ""; });
+      out.querySelector(".dd-yes").addEventListener("click", async (e) => {
+        e.target.disabled = true;
+        out.innerHTML = '<div class="act-out">deleting…</div>';
+        const r = await act("delete", { kind, confirm: true });
+        out.innerHTML = plainResult(r);
+        if (r && r.ok) changed();
+      });
+    });
+  });
+  back.querySelector(".fd-cancel").addEventListener("click", close);
+  back.addEventListener("click", (e) => { if (e.target === back) close(); });
+  addEventListener("keydown", onKey, true);
+  document.body.appendChild(back);
 }
 
 // ── the folder dialog (back up / export) ────────────────────────────────────
@@ -64,8 +134,8 @@ export function mount() {
 const COPY = {
   backup: {
     title: "Back up this memory",
-    lede: "A dated snapshot of the whole store — the database and the conversation it is still " +
-      "writing up — into a new folder inside the one you name. Nothing in the store changes.",
+    lede: "A dated snapshot of your memories — the database, never conversation text — " +
+      "into a new folder inside the one you name. Nothing in the store changes.",
     go: "Back up",
   },
   export: {

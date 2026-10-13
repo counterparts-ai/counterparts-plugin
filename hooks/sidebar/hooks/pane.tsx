@@ -15,7 +15,7 @@ import { shortDir, wrap } from './feed'
 import { clip } from './sections'
 import type { Line } from './sections'
 import { HOVER_CP, searchFlag } from './state'
-import { P } from './theme'
+import { P, SURFACE, bg } from './theme'
 import { CONFIRM_FROM, scopeHover, switchAt } from './words'
 
 /** The constructors the pane draws with: every surface has these three; `Input` all but mobile. */
@@ -40,11 +40,11 @@ export function searchBox(els: PaneEls, actions: PaneActions, width: number): JS
   const { Box, Text, Input } = els
   if (!searchFlag.on) return <Box key="search" width={width} />
   return (
-    <Box key="search" flexDirection="row" width={width} backgroundColor={P.searchBg}>
-      <Text color={P.mid} backgroundColor={P.searchBg}>⌕ </Text>
+    <Box key="search" flexDirection="row" width={width} {...bg(P.searchBg)}>
+      <Text color={P.mid} {...bg(P.searchBg)}>⌕ </Text>
       <Box flexGrow={1}>
         {Input === null ? (
-          <Text color={P.dim} backgroundColor={P.searchBg}>search</Text>
+          <Text color={P.dim} {...bg(P.searchBg)}>search</Text>
         ) : (
           <Input key="q" placeholder="search" value="" submitLabel="find" onSubmit={(value: string) => actions.search(value)} />
         )}
@@ -155,7 +155,7 @@ export function footer(
   const cpLabel = w >= 32 ? 'Counterparts' : 'memory'
   // What a click on the Counterparts switch does, over the two rows above the footer while hovered: nothing moves under the pointer.
   const hoverCard = (key: string, group: string, text: string) => (
-    <Box key={key} position="absolute" top={-2} left={0} width={w} height={2} display="none" hover={{ display: 'flex', scope: group }} flexDirection="column" backgroundColor={P.panel}>
+    <Box key={key} position="absolute" top={-2} left={0} width={w} height={2} display="none" hover={{ display: 'flex', scope: group }} flexDirection="column" {...bg(P.panel)}>
       {wrap(text, w)
         .slice(0, 2)
         .map((l, i) => (
@@ -166,8 +166,8 @@ export function footer(
   const viewNow = s.view
   return (
     <Box key="footer" flexDirection="column" width={w}>
-      {cards ? hoverCard('cp-why', HOVER_CP, scopeHover(scope)) : null}
-      <Text color={P.faint}>{'─'.repeat(w)}</Text>
+      {cards && !SURFACE.prose ? hoverCard('cp-why', HOVER_CP, scopeHover(scope)) : null}
+      {SURFACE.prose ? <Text> </Text> : <Text color={P.faint}>{'─'.repeat(w)}</Text>}
       <Box key="row-cp" flexDirection="row" hover={{ scope: HOVER_CP }}>
         <Text color={P.mid}>{cpLabel}</Text>
         {(['on', 'paused', 'off'] as const).map(pos => (
@@ -188,7 +188,7 @@ export function footer(
       </Box>
       <Box flexDirection="row">
         <Text color={P.mid}>avatar</Text>
-        {([['turning', 'brain'], ['fox', 'animal'], ['off', 'off']] as const).map(([b, word]) => (
+        {(SURFACE.prose ? ([['fox', 'animal'], ['off', 'off']] as const) : ([['turning', 'brain'], ['fox', 'animal'], ['off', 'off']] as const)).map(([b, word]) => (
           <Box key={`b-${b}`} flexDirection="row">
             <Text> </Text>
             {/* The brain is one dot, turning or still: a press on it keeps whichever it was. */}
@@ -220,7 +220,7 @@ export function frame(els: PaneEls, W: number, fill: number, rows: JSX.Element[]
   const { Box } = els
   if (top !== null && top.length > 0) {
     return (
-      <Box flexDirection="column" width={W} minHeight={fill} backgroundColor={P.panel}>
+      <Box flexDirection="column" width={W} minHeight={fill} {...bg(P.panel)}>
         <Box key="stage-head" flexDirection="column" paddingX={1}>{top.slice(0, -1)}</Box>
         {top[top.length - 1]}
         <Box key="stage-rest" flexDirection="column" paddingX={1} flexGrow={1}>{rows}</Box>
@@ -228,7 +228,7 @@ export function frame(els: PaneEls, W: number, fill: number, rows: JSX.Element[]
     )
   }
   return (
-    <Box flexDirection="column" paddingX={1} width={W} minHeight={fill} backgroundColor={P.panel}>
+    <Box flexDirection="column" paddingX={1} width={W} minHeight={fill} {...bg(P.panel)}>
       {rows}
     </Box>
   )

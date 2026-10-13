@@ -52,7 +52,7 @@
  * directory, a failed copy, a failed rename, an aborted run — is a
  * `snapshot.failed` row carrying its `reason` and the `step` it died at.
  */
-import { cpSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { cpSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
 
@@ -775,6 +775,89 @@ export function rotate(
   };
 }
 
+// ── the owner's "delete every backup" (2026-10-13) ──────────────────────────
+
+/** What deleting every copy in one directory did. Names and counts. */
+export interface DeleteCopiesReport {
+  /** The copies deleted — daily and pre-migration — by name. */
+  readonly deleted: readonly string[];
+  /** Files and directories removed inside them, one by one. */
+  readonly entries: number;
+  /** Copies of a pre-rows store, and correctly-named directories that are not
+   *  ours: left, exactly as rotation leaves them. */
+  readonly left: readonly string[];
+  readonly errors: readonly string[];
+}
+
+/**
+ * DELETE EVERY COPY THIS PACKAGE WROTE in one snapshots directory — the
+ * owner's "delete backups" (`cli/commands-delete.ts`), not rotation. It
+ * deletes what rotation may delete and nothing more: the directory must pass
+ * `assertRotatableDir` (it throws otherwise), the copies are the ones
+ * `readSnapshotsDir` counts as ours (daily names and pre-migration names that
+ * hold a classified store), and everything else — a pre-rows copy, a folder
+ * that only wears the name, a `.partial-…` a live run may be writing — is left.
+ *
+ * Each copy is taken apart BY NAME (`removeCopy`), never by a recursive
+ * force-delete of a computed path.
+ */
+export function deleteAllCopies(storeDir: string, dir: string): DeleteCopiesReport {
+  const real = assertRotatableDir(storeDir, dir);
+  const read = readSnapshotsDir(real);
+  const deleted: string[] = [];
+  const errors: string[] = [];
+  let entries = 0;
+  for (const name of [...read.names, ...read.preMigration]) {
+    const removed = removeCopy(join(real, name), errors);
+    entries += removed.entries;
+    if (removed.ok) deleted.push(name);
+  }
+  return { deleted, entries, left: [...read.preRows, ...read.unrecognised], errors };
+}
+
+/**
+ * Take one copy apart: list it, unlink each file (a symlink is unlinked as
+ * itself, never followed), descend only into real directories, then remove
+ * each directory once it is empty. A file that will not go is named in
+ * `errors` and its directory stays.
+ */
+function removeCopy(path: string, errors: string[]): { ok: boolean; entries: number } {
+  let entries = 0;
+  let ok = true;
+  let listing;
+  try {
+    listing = readdirSync(path, { withFileTypes: true });
+  } catch (err) {
+    errors.push(`could not read ${basename(path)}: ${messageOf(err)}`);
+    return { ok: false, entries };
+  }
+  for (const entry of listing) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) {
+      const inner = removeCopy(child, errors);
+      entries += inner.entries;
+      if (!inner.ok) ok = false;
+      continue;
+    }
+    try {
+      unlinkSync(child);
+      entries += 1;
+    } catch (err) {
+      ok = false;
+      errors.push(`could not remove ${entry.name}: ${messageOf(err)}`);
+    }
+  }
+  if (!ok) return { ok, entries };
+  try {
+    rmdirSync(path);
+    entries += 1;
+  } catch (err) {
+    errors.push(`could not remove ${basename(path)}: ${messageOf(err)}`);
+    return { ok: false, entries };
+  }
+  return { ok: true, entries };
+}
+
 /**
  * The pre-migration copies rotation may remove: older than
  * `PRE_MIGRATION_KEEP_DAYS` by the date in their name, with at least `keep`
@@ -935,6 +1018,12 @@ function fewOf(names: readonly string[], limit = 3): string {
  * whatever else it holds. It is not "unrecognised" either — it is a copy, of a
  * floor this build cannot open — and it gets its own channel so the sentence
  * the owner reads can say which it is.
+ *
+ * **Since 2026-10-13 a new copy holds the database and nothing else** —
+ * `spans/` left the backup set (backups never hold conversation text). The
+ * database entry matches by prefix, so such a copy is "ours"; one taken
+ * before, which still holds `spans/`, is "ours" by either name and rotates out
+ * as it always did.
  */
 function copyKind(path: string): "ours" | "pre-rows" | "not-a-copy" {
   let entries: string[];

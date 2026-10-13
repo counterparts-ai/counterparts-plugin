@@ -39,7 +39,8 @@
  *
  * ## Which commands
  *
- * `note`, `remove`, `about` (what a memory is about, 2026-10-11), `backup`,
+ * `note`, `remove`, `delete` (one kind of data, 2026-10-13), `about` (what a
+ * memory is about, 2026-10-11), `backup`,
  * `export`, `scope`, `rebrief`, `verify`, and the
  * read-only `ask` and `doctor` (the health tab's checklist: `doctor --json`,
  * the console's own reading, so the page and the terminal cannot disagree
@@ -62,8 +63,12 @@ import { toMyVoice } from "./ask-voice.js";
 export const NO_CONFIG_HOME = "/nonexistent/counterparts-dashboard-bare-store";
 
 /** The actions, in the order a reader meets them. */
-export const ACTIONS = ["ask", "note", "remove", "about", "backup", "export", "scope", "rebrief", "verify", "doctor"] as const;
+export const ACTIONS = ["ask", "note", "remove", "delete", "about", "backup", "export", "scope", "rebrief", "verify", "doctor"] as const;
 export type ActionName = (typeof ACTIONS)[number];
+
+/** The kinds `delete` takes — `cli/commands-delete.ts#DELETE_KINDS`, spelled
+ *  again so this file imports nothing of the console up front. */
+const DELETE_KINDS: readonly string[] = ["conversation-text", "backups", "activity-log"];
 
 export function isActionName(name: string): name is ActionName {
   return (ACTIONS as readonly string[]).includes(name);
@@ -84,6 +89,8 @@ export const TIMEOUT_MS: Record<ActionName, number> = {
   ask: 120_000,
   note: 120_000,
   remove: 120_000,
+  // Deleting backups takes every copy apart file by file.
+  delete: 10 * 60_000,
   about: 30_000,
   scope: 30_000,
   rebrief: 120_000,
@@ -429,6 +436,18 @@ function argvFor(name: ActionName, body: Body, ctx: ActionContext): Built {
         throw new Invalid("confirm is the id, typed back");
       }
       return { argv: [...argv, "--confirm", "--", id], answer: typed };
+    }
+    case "delete": {
+      // ONE KIND OF DATA (2026-10-13): the console's `delete <kind>`. WITHOUT
+      // `confirm` it is the console's own dry run — the counts, and "Nothing
+      // has changed"; WITH it, `--yes`, after the page asked plainly. The
+      // kinds are spelled here, not imported: this file loads nothing of the
+      // console until an action runs, and the console refuses any other word.
+      const kind = body["kind"];
+      if (typeof kind !== "string" || !DELETE_KINDS.includes(kind)) {
+        throw new Invalid(`kind is one of ${DELETE_KINDS.join(", ")}`);
+      }
+      return { argv: ["delete", ...dir, ...(flag(body, "confirm") ? ["--yes"] : []), "--", kind] };
     }
     case "about": {
       // WHAT A MEMORY IS ABOUT (2026-10-11): the console's `about`, as the

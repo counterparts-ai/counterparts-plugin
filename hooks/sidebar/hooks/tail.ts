@@ -34,6 +34,21 @@ export const CLASSIC_HINT = '/tui fullscreen shows the memory sidebar'
 /** The classic hint on a row too narrow for the whole of it (80 columns leaves about 33 cells). */
 export const CLASSIC_HINT_SHORT = '/tui fullscreen'
 
+/**
+ * What the tail says where the screen docks a pane but the window is too
+ * narrow to place the sidebar (Mike, 2026-10-13: a plain hint to widen, not
+ * `/counterparts`, which can't open it there either).
+ */
+export const NARROW_HINT = 'widen this window to see the memory sidebar'
+
+/** The narrow hint on a row too short for the whole of it. */
+export const NARROW_HINT_SHORT = 'widen to see the sidebar'
+
+/** The narrow-window hint for a tail of `room` cells (null: the surface gave no width). */
+export function narrowHint(room: number | null): string {
+  return room !== null && cells(NARROW_HINT) > room ? NARROW_HINT_SHORT : NARROW_HINT
+}
+
 /** `text` cut at a word, with an ellipsis, to at most `w` cells; whole when it fits; null when under a few words' room. */
 export function clipWords(text: string, w: number): string | null {
   if (cells(text) <= w) return text
@@ -48,13 +63,14 @@ export function clipWords(text: string, w: number): string | null {
  * The quiet view's tail under the prompt: the newest thing, shortened so the
  * hint after it is never cut (the engine cuts a tail where its row ends),
  * then ` · ` and the hint (`/counterparts opens it`, Mike, 2026-10-10; on the
- * classic screen `CLASSIC_HINT`). `room` is the cells the tail may take (the
+ * classic screen `CLASSIC_HINT`; a window too narrow to place the pane, `NARROW_HINT`). `room` is the cells the tail may take (the
  * row less the engine's own line), null when the surface says no width.
  * Nothing new yet: `Watching quietly · nothing new yet · …`. A save's own words (`body`)
  * follow its title after a dash, as much as the row holds, cut at a word.
  */
 export function quietTail(latest: string | null, room: number | null, now: number, body?: string, wanted: string = TAIL_HINT): string {
-  const hint = wanted === CLASSIC_HINT && room !== null && cells(CLASSIC_HINT) > room ? CLASSIC_HINT_SHORT : wanted
+  const short = wanted === CLASSIC_HINT ? CLASSIC_HINT_SHORT : wanted === NARROW_HINT ? NARROW_HINT_SHORT : wanted
+  const hint = room !== null && cells(wanted) > room ? short : wanted
   const end = ` · ${hint}`
   if (latest === null) {
     const whole = `Watching quietly · nothing new yet${end}`

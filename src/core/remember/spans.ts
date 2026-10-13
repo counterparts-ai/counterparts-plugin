@@ -887,8 +887,9 @@ export class SpanBuffer {
 
   /** Spans the sweep gave up on, in full. The sweep never drops them: this file
    *  is the owner's copy, readable in any editor (constitution line 16), until
-   *  RETENTION ages a line out — 7 days after its session ended, and only when
-   *  that session owes no write-up (`retention.ts`). */
+   *  RETENTION ages a line out — 3 days after its session ended when that
+   *  session owes no write-up, and 14 days after its last activity whatever it
+   *  owes, by default (`owes.ts`, `retention.ts`). */
   quarantined(scope: string): Span[] {
     return this.readSpans(this.path(scope, "quarantine.jsonl"));
   }

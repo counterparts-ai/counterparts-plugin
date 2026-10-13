@@ -380,6 +380,37 @@ export function takeFirstRunNotice(noticePath: string): boolean {
 }
 
 /**
+ * "INSTALLED TWICE" IS SAID ONCE (2026-10-13, Mike's first session with the
+ * plugin beside his npm install: the stand-down line at every session start
+ * read as an error). The stand-down itself is unchanged and needs nothing
+ * done; doctor's Claude Code row keeps saying it (`doctor-host.ts`). The mark
+ * lives in the plugin's own data directory, which outlasts a reboot and goes
+ * with the plugin at uninstall (so a reinstall says it once more); without
+ * one, the system temp directory, beside the first-run notice and for its
+ * reasons. Keyed by the configuration path, like the notice. The line for a
+ * dead npm entry is not this: it asks for something, and says so every time.
+ */
+export function twiceNoticePath(configPath: string, env: Record<string, string | undefined>, tmp: string = tmpdir()): string {
+  const data = (env[PLUGIN_DATA_ENV] ?? "").trim();
+  return join(data.length > 0 ? data : tmp, `counterparts-installed-twice-${firstRunKey(configPath)}.said`);
+}
+
+/**
+ * Mark it said: true for the first caller only (`wx` either makes the file or
+ * finds one there). A mark that cannot be written for any other reason is
+ * true, so the line is said, as it was before there was a mark.
+ */
+export function markTwiceSaid(markPath: string): boolean {
+  try {
+    mkdirSync(dirname(markPath), { recursive: true });
+    writeFileSync(markPath, `${new Date().toISOString()}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    return true;
+  } catch (err) {
+    return (err as { code?: string }).code !== "EEXIST";
+  }
+}
+
+/**
  * The line a new install is announced with, for the configuration at
  * `configPath`. ONE LINE (2026-10-12, Mike's fresh-user trial: the three-line
  * notice read as machinery): that it is set up, that it stays on this

@@ -14,7 +14,10 @@ import type { ClientModule, ClientSurface } from 'claude-code'
 
 import type { Line } from './sections'
 
-export type BodyProps = { lines: Line[] }
+/** `prose`: the surface sets text in its own font (desktop): a heading's `─` rule becomes space that pushes the right part to the edge. */
+export type BodyProps = { lines: Line[]; prose?: boolean }
+
+const RULE = /^ ?─+$/
 
 const Body: ClientModule<BodyProps, never> = (props, surface: ClientSurface<never>) => {
   const { Box, Text } = surface.elements
@@ -32,11 +35,30 @@ const Body: ClientModule<BodyProps, never> = (props, surface: ClientSurface<neve
           <Text key={`l${String(y)}`}> </Text>
         ) : (
           <Box key={`l${String(y)}`} flexDirection="row">
-            {l.segs.map((s, i) => (
-              <Text key={String(i)} color={s.c} {...(s.b === true ? { bold: true } : {})} {...(s.i === true ? { italic: true } : {})}>
-                {s.t}
-              </Text>
-            ))}
+            {l.segs.map((s, i) =>
+              props.prose === true && (s.grow === true || RULE.test(s.t)) ? (
+                <Box key={String(i)} flexGrow={1} />
+              ) : props.prose === true && s.fill !== undefined ? (
+                // a share of its column, drawn in half blocks clipped to that share: whatever width the app's
+                // font gives `▄`, the bar is the right length, half a row tall like the terminal's
+                <Box key={String(i)} width={s.of ?? s.fill} overflow="hidden">
+                  {/* one row tall and clipped, no `wrap`: a truncating Text drew `…` at the bar's end */}
+                  {s.fill > 0 ? (
+                    <Box width={`${String(Math.round((100 * s.fill) / Math.max(1, s.of ?? s.fill)))}%`} height={1} overflow="hidden">
+                      <Text color={s.c}>{'▄'.repeat(2 * (s.of ?? s.fill))}</Text>
+                    </Box>
+                  ) : null}
+                </Box>
+              ) : props.prose === true && s.cw !== undefined ? (
+                <Box key={String(i)} width={s.cw}>
+                  <Text color={s.c} {...(s.b === true ? { bold: true } : {})}>{s.t}</Text>
+                </Box>
+              ) : (
+                <Text key={String(i)} color={s.c} {...(s.b === true ? { bold: true } : {})} {...(s.i === true ? { italic: true } : {})}>
+                  {props.prose === true && i > 0 && RULE.test(l.segs[i - 1]?.t ?? '') ? s.t.replace(/^ /, '') : s.t}
+                </Text>
+              ),
+            )}
           </Box>
         ),
       )}

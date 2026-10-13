@@ -10,7 +10,28 @@ import type { MechId } from './mechanisms'
 import { hex, stageOf } from './mechanisms'
 import { searchBox, titleButton } from './pane'
 import type { PaneActions, PaneEls } from './pane'
-import { P } from './theme'
+import { searchFlag } from './state'
+import { P, SURFACE } from './theme'
+import { cells } from './width'
+
+/** The title row's cells: `◉ COUNTERPARTS ↗`. */
+const TITLE_CELLS = 16
+
+/**
+ * What the title row says on its right: the memories and the day on one line (Mike, 2026-10-13: "save a
+ * line"), shortened to what fits beside the title: `1511 memories · day 22`, `1511 · day 22`, `day 22`.
+ * A surface with its own font fits about a fifth more than its cells say.
+ */
+export function headRight(day: number | null, count: string, w: number): string {
+  const room = Math.floor((w - TITLE_CELLS - 1) * (SURFACE.prose ? 1.2 : 1))
+  const d = day === null ? '' : `day ${String(day)}`
+  const n = count.replace(/ memories?$/, '')
+  for (const t of [[count, d], [n, d], [d]]) {
+    const s = t.filter(x => x !== '').join(' · ')
+    if (cells(s) <= room) return s
+  }
+  return d
+}
 
 /**
  * The brain-off header's `◉` while something fires: the mechanism's stage
@@ -22,7 +43,7 @@ export function litDot(id: MechId): string {
   return st.id === 'retrieval' ? P.accent : hex(st.col, 0.95)
 }
 
-/** The brainless header and the blank row under it: three rows. */
+/** The brainless header and the blank row under it: two rows, three with the search box (`searchFlag`). */
 export function brainlessHeader(
   els: PaneEls,
   actions: PaneActions,
@@ -33,12 +54,9 @@ export function brainlessHeader(
   return [
     <Box key="head1" flexDirection="row" justifyContent="space-between" width={w}>
       {titleButton(els, actions, { lead: true, paused: s.paused, dot: s.lit === null ? null : litDot(s.lit) })}
-      <Text color={P.dim}>{s.day === null ? '' : `day ${String(s.day)}`}</Text>
+      <Text color={P.dim}>{headRight(s.day, s.count, w)}</Text>
     </Box>,
-    <Box key="head2" flexDirection="row" justifyContent="space-between" width={w}>
-      {searchBox(els, actions, 14)}
-      <Text color={P.dim}>{s.count}</Text>
-    </Box>,
+    ...(searchFlag.on ? [<Box key="head2" flexDirection="row" width={w}>{searchBox(els, actions, w)}</Box>] : []),
     <Text key="head-gap"> </Text>,
   ]
 }

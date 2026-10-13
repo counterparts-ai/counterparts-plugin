@@ -160,9 +160,9 @@ import {
   run,
   searchFlag,
 } from './state'
-import { CLASSIC_HINT, TAIL_HINT, TAIL_SPARE, quietTail } from './tail'
-import { BRAIN_ROWS, brain, brainHeader, fireBrain, fps, fpsReport, frameCells, look, lookKey, paceMs, raster } from './terminal'
-import { P, applyTheme, normTheme } from './theme'
+import { CLASSIC_HINT, NARROW_HINT, TAIL_HINT, TAIL_SPARE, narrowHint, quietTail } from './tail'
+import { BRAIN_COLS, BRAIN_ROWS, brain, brainHeader, fireBrain, fps, fpsReport, frameCells, look, lookKey, paceMs, raster } from './terminal'
+import { P, SURFACE, applyTheme, normTheme } from './theme'
 import { cells } from './width'
 import {
   CONFIRM_FROM,
@@ -177,6 +177,8 @@ import {
   scopeOf,
   statusFor,
   stoodDownNote,
+  failedPressNote,
+  isRefusal,
   storedWords,
   switchExplains,
   truthy,
@@ -1214,10 +1216,10 @@ async function setScope($: EngineInterface, to: 'pause' | 'resume' | 'off' | 'on
     const { payload, isError } = await callMemory($, 'scope', { mode: to })
     const now = scopeOf(payload, isError, scope)
     await update($, scopeA, () => now)
-    await noteSwitch($, now.error === null ? null : payload?.['stoodDown'] === true ? stoodDownNote(scope, to) : `The memory server said: ${now.error}`)
+    await noteSwitch($, now.error === null ? null : payload?.['stoodDown'] === true ? stoodDownNote(scope, to) : isRefusal(now.error) ? failedPressNote(to, now.error) : `The memory server said: ${now.error}`)
   } catch (err) {
     await update($, scopeA, () => ({ ...scope, busy: false }))
-    await noteSwitch($, err instanceof Error ? err.message : String(err))
+    await noteSwitch($, failedPressNote(to, err))
   }
   look.mono = isPaused((await read($, scopeA)).mode)
   await refreshStatus($)
@@ -1235,6 +1237,7 @@ async function runSearch($: EngineInterface, raw: string): Promise<void> {
     const { payload, isError } = await callMemory($, 'recall', { question: query, mode: 'facts' })
     const answer = payload?.['answer']
     if (isError || typeof answer !== 'string') {
+      // the memory server's own reason, in its words (an auto-mode refusal throws, below)
       const why = String(payload?.['detail'] ?? payload?.['reason'] ?? 'the search was refused')
       await update($, searchA, () => ({ ...IDLE_SEARCH, query, status: 'error' as const, error: why }))
       return
@@ -1242,8 +1245,13 @@ async function runSearch($: EngineInterface, raw: string): Promise<void> {
     const { header, total, hits } = parseFacts(answer)
     await update($, searchA, () => ({ query, status: 'done' as const, header, total, hits: hits.slice(0, 12), error: null }))
   } catch (err) {
-    await update($, searchA, () => ({ ...IDLE_SEARCH, query, status: 'error' as const, error: err instanceof Error ? err.message : String(err) }))
+    await update($, searchA, () => ({ ...IDLE_SEARCH, query, status: 'error' as const, error: searchWhy(err) }))
   }
+}
+
+/** A search call that threw, in plain words: the engine's refusal text is never shown. */
+function searchWhy(err: unknown): string {
+  return isRefusal(err) ? "Auto mode didn't let the search run. Ask Claude to look it up." : 'The search failed. Try again.'
 }
 
 // ── views and the brain's mode ─────────────────────────────────────────────
@@ -1257,7 +1265,8 @@ async function runSearch($: EngineInterface, raw: string): Promise<void> {
 async function openPane($: EngineInterface): Promise<{ isPlaced: boolean }> {
   brain.wake() // opened, it eases out of rest
   await setView($, 'sidebar')
-  const opened = await $.ui.open({ id: PANE, title: TITLE, columns: OPEN_COLUMNS })
+  // The desktop asks for a narrower pane: its font fits a fifth more in a cell's width (Mike, 2026-10-13).
+  const opened = await $.ui.open({ id: PANE, title: TITLE, columns: run.surface === 'desktop' ? OPEN_COLUMNS - 4 : OPEN_COLUMNS })
   await update($, placedA, () => opened.isPlaced)
   $.ui.invalidate('ui.render')
   return { isPlaced: opened.isPlaced }
@@ -1432,7 +1441,7 @@ async function foxEvent($: EngineInterface, ev: FoxEvent): Promise<void> {
 
 /**
  * What is on screen next, then one wait until it changes: no timer runs in
- * between (a still hold is one wait of 8–20 s). A change on a Raster or an
+ * between (a still hold is one wait of 4–9 s). A change on a Raster or an
  * Image is a blit; in sextants (Text) or on the desktop (an Svg) a redraw of
  * the pane. A pane no longer shown stops it (the next drawing starts it). A
  * refused blit stops it; an Image refused twice in a row (it draws its alt
@@ -1490,6 +1499,14 @@ function startStage($: EngineInterface): void {
   $.clock.after(0, () => quiet(stageStep($, gen)))
 }
 
+/**
+ * The desktop's pane, as wide as the person drags it (it keeps their width, not the one a plugin asks for;
+ * measured 2026-10-13): the fox shows down to this many columns, scaled to fit, where the terminal needs
+ * STAGE_COLS. `w` is the last drawing's width.
+ */
+const STAGE_MIN_PROSE_COLS = 22
+const prosePane = { w: STAGE_COLS }
+
 /** The stage's element in a tier, for the step on screen. */
 function stageElement(els: ReturnType<EngineInterface['ui']['resolve']>, tier: FoxTier, step: Step): JSX.Element {
   if (tier === 'basic' && 'Raster' in els) {
@@ -1507,7 +1524,9 @@ function stageElement(els: ReturnType<EngineInterface['ui']['resolve']>, tier: F
   if (tier === 'svg' && 'Svg' in els) {
     const { Svg } = els
     const svg = foxSvg(step)
-    return <Svg key="stage" source={svg.source} alt="a small fox" width={svg.width} height={svg.height} />
+    // A pane dragged narrower than the fox: the fox scales down with it (about 7 px a cell on the desktop).
+    const k = Math.min(1, (prosePane.w * 7) / svg.width)
+    return <Svg key="stage" source={svg.source} alt="a small fox" width={Math.round(svg.width * k)} height={Math.round(svg.height * k)} />
   }
   // fine: each row as runs of one colour pair; a cell with no colour is the panel's.
   const { Box, Text } = els
@@ -1861,16 +1880,18 @@ export const register: Register = on => {
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const [view, placed, latest, scope] = await Promise.all([read($, viewA), read($, placedA), read($, latestA), read($, scopeA)])
     if ((normView(view) === 'sidebar' && placed) || isPaused(scope.mode)) return next(e)
-    if (latest === null && normView(view) === 'sidebar') {
-      // an unasked pane this surface could not place yet: say how to open it, until it draws
-      return run.hint ? next({ ...e, props: { ...e.props, tail: '/counterparts opens the sidebar' } }) : next(e)
-    }
     const cols = e.viewport?.columns
     // The engine's line is wider than its `hint` prop, and it cuts the tail short of the row's end (TAIL_SPARE).
     const room = typeof cols === 'number' ? cols - cells(e.props.hint) - TAIL_SPARE : null
+    if (latest === null && normView(view) === 'sidebar') {
+      // an unasked pane this surface could not place (the window too narrow to dock it): say to widen it, until it draws
+      return run.hint ? next({ ...e, props: { ...e.props, tail: narrowHint(room) } }) : next(e)
+    }
     // Fullscreen docks the pane (and opens it); the classic screen cannot, so the hint there points at /tui fullscreen.
+    // A window still too narrow to place the asked-for pane keeps saying to widen it after something new.
     const docks = e.viewport?.isFullscreen ?? run.docks
-    const tail = quietTail(latest?.text ?? null, room, await $.clock.now(), latest?.body, docks === false ? CLASSIC_HINT : TAIL_HINT)
+    const wanted = run.hint && normView(view) === 'sidebar' ? NARROW_HINT : docks === false ? CLASSIC_HINT : TAIL_HINT
+    const tail = quietTail(latest?.text ?? null, room, await $.clock.now(), latest?.body, wanted)
     return next({ ...e, props: { ...e.props, tail } })
   }).catch(($, e, next) => next(e))
 
@@ -1879,6 +1900,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const docks = e.viewport?.isFullscreen
     if (docks !== undefined) run.docks = docks
+    run.surface = e.surface
     if (docks !== undefined && !run.placementDecided) {
       run.placementDecided = true
       if (docks) $.clock.after(0, () => quiet(openUnasked($)))
@@ -1899,9 +1921,11 @@ export const register: Register = on => {
     ])
     const [onboarding, theme] = await Promise.all([read($, onboardingA), read($, themeA)])
     // Every colour below (and in the body's lines) is read from the palette in use: this session's theme.
-    applyTheme(normTheme(theme))
+    applyTheme(normTheme(theme), e.surface)
     const paused = isPaused(scope.mode)
-    const mode = normBrain(brainMode)
+    // The desktop draws no brain yet (no Raster; a static Svg brain didn't light up, Mike 2026-10-13: next
+    // version): a stored brain choice shows the fox there, and the terminal keeps the brain.
+    const mode = SURFACE.prose && normBrain(brainMode) !== 'off' ? 'fox' : normBrain(brainMode)
     look.mono = paused
     look.still = mode === 'still'
     look.sel = mech === null ? null : mech.id
@@ -1910,6 +1934,7 @@ export const register: Register = on => {
       !paused && firing !== null && now - firing.at < FIRING_MS && Array.isArray(firing.ids) ? firing.ids : []
     look.firing = firingNow
     const W = Math.max(e.props.bodyColumns, 1)
+    prosePane.w = W
     const fill = Math.max(1, e.props.scroll?.bodyRows ?? 1)
     const inline = e.props.placement === 'inline'
     const w = Math.max(16, inline ? Math.min(W - 2, 64) : W - 2)
@@ -1919,7 +1944,7 @@ export const register: Register = on => {
     // tier this surface draws (fox.ts); on a surface with no way to draw it, the header with no avatar.
     const tier = pickTier(e.surface, stage.detail, stage.env, stage.noImages)
     const drawsStage = tier === 'svg' ? 'Svg' in els : 'Raster' in els
-    const hasStage = mode === 'fox' && drawsStage && !inline && fill >= STAGE_MIN_PANE_ROWS && W >= STAGE_COLS
+    const hasStage = mode === 'fox' && drawsStage && !inline && fill >= STAGE_MIN_PANE_ROWS && W >= (SURFACE.prose ? STAGE_MIN_PROSE_COLS : STAGE_COLS)
     // While the pane holds the keyboard the brain and the fox hold still.
     const holding = e.props.isFocused === true
     if (!hasStage || holding || tier !== stage.tier) stopStage()
@@ -1953,7 +1978,8 @@ export const register: Register = on => {
     const day = pulse === null ? null : pulse.day
     let stageTop: JSX.Element[] | null = null
     if (hasStage) {
-      // The title row, the stage edge to edge (outside the frame's padding), a thin rule, then the count.
+      // The title row (the count and the day on its right), the stage edge to edge (outside the frame's
+      // padding), a thin rule, and the search box when it is on.
       stage.director ??= newDirector(now)
       const step = advance(stage.director, now).step
       // An Image's first frame is blitted once mounted too: a refusal says it draws its alt here.
@@ -1962,25 +1988,23 @@ export const register: Register = on => {
       stageTop = [...rows, ...(title === undefined ? [] : [title]), stageElement(els, tier, step)]
       rows.length = 0
       rows.push(
-        <Text key="stage-rule" color={P.faint}>{'─'.repeat(w)}</Text>,
-        <Box key="head2" flexDirection="row" justifyContent="space-between" width={w}>
-          {searchBox(paneEls, actions, searchFlag.on ? Math.max(14, w - cells(countText) - 1) : 1)}
-          <Text color={P.dim}>{countText}</Text>
-        </Box>,
-        <Text key="head-gap"> </Text>,
+        SURFACE.prose ? <Text key="stage-rule"> </Text> : <Text key="stage-rule" color={P.faint}>{'─'.repeat(w)}</Text>,
+        ...(searchFlag.on ? [<Box key="head2" flexDirection="row" width={w}>{searchBox(paneEls, actions, w)}</Box>] : []),
       )
-      used += 1 + (tier === 'svg' ? 15 : stageRows(tier)) + 3
+      // The desktop's Svg is 180 px tall, about ten of its text rows (measured 2026-10-13), not the cells' fifteen;
+      // fewer when a narrow pane scales it down (stageElement's factor).
+      used += 1 + (tier === 'svg' ? (SURFACE.prose ? Math.ceil(10 * Math.min(1, (W * 7) / (STAGE_COLS * 6))) : 15) : stageRows(tier)) + 1 + (searchFlag.on ? 1 : 0)
       if (!holding) startStage($)
     } else if (mode === 'fox' && !hasRaster) {
       rows.push(...brainlessHeader(paneEls, actions, { w, paused, lit, day, count: countText }))
-      used += 3
+      used += searchFlag.on ? 3 : 2
     } else if (hasRaster) {
       const { Raster } = $.ui.resolve(e)
       rows.push(...brainHeader(paneEls, Raster, actions, { w, paused, day, count: countText }))
       used += BRAIN_ROWS + 1
     } else {
       rows.push(...brainlessHeader(paneEls, actions, { w, paused, lit, day, count: countText }))
-      used += 3
+      used += searchFlag.on ? 3 : 2
     }
 
     // ── a paused folder says so before anything else in the pane ──
@@ -2001,10 +2025,15 @@ export const register: Register = on => {
     // ── the body: the five sections, folded to the room left ──
     // The rule, the Counterparts switch, the view, the brain.
     const footRows = 4
-    const bodyRows = Math.max(4, fill - used - above.length - footRows)
-    const { lines } = layoutBody({ w, rows: bodyRows, now, mind, saved, today, dream: dreamNow, open, mech, focus, dash, search })
+    // The desktop's rows are its font's, a little taller than the cells it reports: two rows of headroom keep its
+    // pane from scrolling by a line (2026-10-13).
+    const bodyRows = Math.max(4, fill - used - above.length - footRows - (SURFACE.prose ? 2 : 0))
+    // The desktop sets the body in its own font, about a fifth narrower than the cells the pane is measured in:
+    // wrap to that, and a blank row between items there (2026-10-13, Mike: "hard to read").
+    const bodyW = SURFACE.prose ? Math.floor(w * 1.2) : w
+    const { lines } = layoutBody({ w: bodyW, rows: bodyRows, now, mind, saved, today, dream: dreamNow, open, mech, focus, dash, search, prose: SURFACE.prose, cellsW: w })
     // The Client tag stays here: the engine reads a hooks module's surface modules off its own source.
-    rows.push(Client !== null ? <Client key="body" module="./body.tsx" width={w} props={{ lines } satisfies BodyProps} /> : plainBody(paneEls, lines))
+    rows.push(Client !== null ? <Client key="body" module="./body.tsx" width={w} props={{ lines, prose: SURFACE.prose } satisfies BodyProps} /> : plainBody(paneEls, lines))
     rows.push(<Box key="spacer" flexGrow={1} />)
     rows.push(...above)
 

@@ -1121,7 +1121,7 @@ export const MECHANISMS: readonly Mechanism[] = [
     // pass that has not written its result — so a row is evidence the pass RAN;
     // what it found is doctor's `Raw transcripts` line.
     id: "retention",
-    label: "the raw transcript of a session that owes nothing was let go a week after it ended",
+    label: "the raw transcript of a session that owes nothing was let go a few days after it ended (never more than 14 days after its last activity)",
     module: "remember/retention.ts (run by the worker)",
     evidence: { kind: "event", names: ["remember.prune"] },
     since: "2026-09-23",

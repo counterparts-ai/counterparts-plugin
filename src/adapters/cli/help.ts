@@ -122,6 +122,7 @@ export const SHORT: Record<string, string | readonly string[]> = {
   export: "A copy of your memory you can take anywhere, encrypted by default",
   backup: "Save a snapshot of your memory to a folder",
   remove: "Delete one memory for good",
+  delete: "Delete one kind of data: conversation text, backups or the activity log",
   // ── advanced: the maintenance shelf, in a person's words rather than the
   //    build's. Finding #18 is exactly this list read by somebody who had just
   //    installed the package.
@@ -190,6 +191,7 @@ export const ADVANCED: readonly string[] = [
   "coverage",
   "catch-up",
   "init",
+  "delete",
   "start-fresh",
   "rollback",
   "verify",

@@ -71,9 +71,11 @@ import {
   firstRunNoticePath,
   hookGate,
   installRoute,
+  markTwiceSaid,
   pluginOrigin,
   runningAsPlugin,
   takeFirstRunNotice,
+  twiceNoticePath,
 } from "../../plugin.js";
 import { claimDelivery, deliveryClaimKey, finishClaim, firesOnce } from "../claim.js";
 
@@ -708,7 +710,11 @@ async function main(): Promise<void> {
         // it was installed: a first run the plugin made beside it is not this
         // hook's to announce, now or after a later move to the plugin.
         takeFirstRunNotice(firstRunNoticePath(choice.path));
-        if (gate.line !== null) process.stdout.write(JSON.stringify({ systemMessage: gate.line }));
+        // Said at the first session start that finds both, then not again
+        // (`plugin.ts#twiceNoticePath`).
+        if (gate.line !== null && markTwiceSaid(twiceNoticePath(choice.path, process.env))) {
+          process.stdout.write(JSON.stringify({ systemMessage: gate.line }));
+        }
       }
       return;
     }

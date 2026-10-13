@@ -1,7 +1,7 @@
 {
   "name": "counterparts",
   "displayName": "Counterparts",
-  "version": "0.3.20",
+  "version": "0.3.21",
   "description": "Memory that turns Claude into a counterpart: a local-first memory layer modeled on human memory. Wakes each session with what matters, remembers by meaning, forgets on purpose. Everything stays on your computer.",
   "author": {
     "name": "Mike LaPeter",

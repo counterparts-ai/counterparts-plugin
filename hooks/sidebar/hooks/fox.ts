@@ -131,16 +131,21 @@ export function stepKey(s: Pick<Step, 'frame' | 'fx'>): string {
 }
 
 /**
- * The schedule (round 6's design, the art's `schedule`): a still hold of
- * 8–20 s, then one small moment at random by weight (a blink, a glance, an
- * ear, the tail, rarely a yawn); after three minutes with nothing happening a
- * nap, which a prompt (or anything real) wakes; and the real-state moments:
- * `came` (something came to mind), `note` (a save), `hello` (the first
- * meeting) and `dream` (while a dream runs, until it ends). The hold is one
- * still frame: no breathing in between (the owner's round 2: calmer).
+ * The schedule (round 6's design, the art's `schedule`; round 8's polish,
+ * Mike 2026-10-13): a still hold of 4–9 s, then one small moment at random by
+ * weight (a blink, the tail tip's flick, an ear, a glance; rarely the whole
+ * tail or a yawn). The first hold after the fox appears is short and ends in
+ * the tail tip's flick. After 45 s with nothing happening he lies down (the
+ * loaf: `lieIn`, the pose changing behind shut eyes), keeps small moments
+ * lying (`lieWeights`), and at 2 min curls into a nap from there
+ * (`lieNapIn`), which a prompt (or anything real) wakes. The real-state
+ * moments: `came` (something came to mind), `note` (a save), `hello` (the
+ * first meeting) and `dream` (while a dream runs, until it ends); each gets
+ * him up first. A hold is one still frame: no breathing in between (the
+ * owner's round 2: calmer).
  */
 export type Director = {
-  mode: 'idle' | 'nap' | 'dream'
+  mode: 'idle' | 'lie' | 'nap' | 'dream'
   queue: Step[]
   cur: Step
   /** When `cur` ends. */
@@ -148,26 +153,48 @@ export type Director = {
   idleSince: number
   napSince: number
   dreamSince: number
+  /** The first hold is still to come: a short one, then the tail tip's flick. */
+  fresh: boolean
 }
 
 const STILL: Step = { frame: 'idle', ms: 0, fx: [], moment: 'rest' }
+const STILL_LIE: Step = { frame: 'lie0', ms: 0, fx: [], moment: 'lieRest' }
 
 export function newDirector(now: number): Director {
-  return { mode: 'idle', queue: [], cur: STILL, until: now, idleSince: now, napSince: 0, dreamSince: 0 }
+  return { mode: 'idle', queue: [], cur: STILL, until: now, idleSince: now, napSince: 0, dreamSince: 0, fresh: true }
 }
 
 /** A dream that never said it ended stops after this long. */
 export const DREAM_MAX_MS = 20 * 60000
 
-function pick(rand: () => number): string {
-  const w = SCHEDULE.weights as Readonly<Record<string, number>>
-  const total = Object.values(w).reduce((a, b) => a + b, 0)
+function pick(rand: () => number, weights: Readonly<Record<string, number>>, fallback: string): string {
+  const total = Object.values(weights).reduce((a, b) => a + b, 0)
   let r = rand() * total
-  for (const [k, v] of Object.entries(w)) {
+  for (const [k, v] of Object.entries(weights)) {
     r -= v
     if (r < 0) return k
   }
-  return 'blink'
+  return fallback
+}
+
+/** How a frame holds him: sitting, lying (the loaf) or curled asleep. A real event gets him up from where he is. */
+export function poseOf(frame: string): 'sit' | 'lie' | 'curl' {
+  if (frame === 'nap0' || frame === 'nap1') return 'curl'
+  return frame.startsWith('lie') ? 'lie' : 'sit'
+}
+
+/**
+ * A still hold in `range`, then `moment`. One that would run past `deadline`
+ * (the mode changes there) is the still alone, up to it: the change always
+ * starts from the still frame, never from a moment's last frame.
+ */
+function holdThen(d: Director, still: Step, moment: string, now: number, deadline: number, range: readonly number[], rand: () => number): void {
+  const lo = range[0] ?? 0, hi = range[1] ?? lo
+  const hold = Math.round(lo + rand() * (hi - lo))
+  const steps = momentSteps(moment)
+  const end = now + hold + steps.reduce((a, s) => a + s.ms, 0)
+  if (end >= deadline) d.queue.push({ ...still, ms: Math.max(1, deadline - now) })
+  else d.queue.push({ ...still, ms: hold }, ...steps)
 }
 
 function plan(d: Director, now: number, rand: () => number): void {
@@ -191,15 +218,36 @@ function plan(d: Director, now: number, rand: () => number): void {
     d.queue.push(...momentSteps('nap'))
     return
   }
-  if (now - d.idleSince >= SCHEDULE.napAfterMs) {
+  const napAt = d.idleSince + SCHEDULE.napAfterMs
+  if (d.mode === 'lie') {
+    if (now >= napAt) {
+      d.mode = 'nap'
+      d.napSince = now
+      d.queue.push(...momentSteps('lieNapIn'))
+      return
+    }
+    holdThen(d, STILL_LIE, pick(rand, SCHEDULE.lieWeights, 'lieBlink'), now, napAt, SCHEDULE.holdMs, rand)
+    return
+  }
+  // Sitting. Straight to a nap only when lying down was skipped (a pane hidden a long while, catching up).
+  if (now >= napAt) {
     d.mode = 'nap'
     d.napSince = now
     d.queue.push(...momentSteps('napIn'))
     return
   }
-  const [lo, hi] = SCHEDULE.holdMs
-  const hold = Math.round(lo + rand() * (hi - lo))
-  d.queue.push({ ...STILL, ms: hold }, ...momentSteps(pick(rand)))
+  const lieAt = d.idleSince + SCHEDULE.lieAfterMs
+  if (now >= lieAt) {
+    d.mode = 'lie'
+    d.queue.push(...momentSteps('lieIn'))
+    return
+  }
+  if (d.fresh) {
+    d.fresh = false
+    holdThen(d, STILL, SCHEDULE.first, now, lieAt, SCHEDULE.firstMs, rand)
+    return
+  }
+  holdThen(d, STILL, pick(rand, SCHEDULE.weights, 'blink'), now, lieAt, SCHEDULE.holdMs, rand)
 }
 
 /**
@@ -215,24 +263,43 @@ export function advance(d: Director, now: number, rand: () => number = Math.rand
     d.cur = s
     d.until = Math.max(d.until, now - 1) + s.ms
   }
-  // The next change: past any queued steps that show the same thing.
-  let next = d.until
+  // The next change: queued steps that show the same thing join `cur`. What follows is planned ahead
+  // from when `cur` ends, so a moment that ends on the frame the next hold shows (`came`'s idle,
+  // `lieIn`'s lie0) is one wake, not two.
   const key = stepKey(d.cur)
-  for (const s of d.queue) {
-    if (stepKey(s) !== key) break
-    next += s.ms
+  let ahead = 0
+  while (ahead++ < 20) {
+    if (d.queue.length === 0) plan(d, d.until, rand)
+    const s = d.queue[0]
+    if (s === undefined || stepKey(s) !== key) break
+    d.queue.shift()
+    d.until += s.ms
   }
-  return { step: d.cur, next }
+  return { step: d.cur, next: d.until }
 }
 
 export type FoxEvent = 'came' | 'note' | 'hello' | 'dream' | 'dreamEnd' | 'prompt'
 
-/** Something real happened: its moment plays at once (a nap ends first); a dream holds until it ends. */
+/**
+ * What gets him up from the pose on screen, so an event's first frame never
+ * jumps: from the nap a stretch (`napOut`), from lying a blink up to sitting
+ * (`lieOut`), and mid-moment sitting (a glance, the tail) a blink back to the
+ * sitting face (`bridge`).
+ */
+function getUp(d: Director): Step[] {
+  const pose = poseOf(d.cur.frame)
+  if (pose === 'curl') return momentSteps('napOut')
+  if (pose === 'lie') return momentSteps('lieOut')
+  const f = d.cur.frame
+  return f === 'idle' || f === 'blink' || f === 'drowsy' ? [] : momentSteps('bridge')
+}
+
+/** Something real happened: its moment plays at once, once he is up (from a nap or lying down); a dream holds until it ends. */
 export function trigger(d: Director, ev: FoxEvent, now: number): void {
-  const asleep = d.mode === 'nap' || d.mode === 'dream'
+  const pose = poseOf(d.cur.frame)
   if (ev === 'dream') {
     if (d.mode === 'dream') return
-    d.queue = asleep ? [] : momentSteps('napIn')
+    d.queue = pose === 'curl' ? [] : momentSteps(pose === 'lie' ? 'lieNapIn' : 'napIn')
     d.mode = 'dream'
     d.dreamSince = now
     d.until = now
@@ -250,13 +317,16 @@ export function trigger(d: Director, ev: FoxEvent, now: number): void {
   if (d.mode === 'dream') return
   d.idleSince = now
   if (ev === 'prompt') {
-    if (d.mode !== 'nap') return
+    // Awake and sitting, nothing on screen changes; a lie-down or nap on its way is called off.
+    if (d.mode === 'idle' && pose === 'sit') return
     d.mode = 'idle'
-    d.queue = momentSteps('napOut')
+    d.queue = pose === 'sit' ? [] : getUp(d)
     d.until = now
     return
   }
-  d.queue = [...(d.mode === 'nap' ? momentSteps('napOut') : []), ...momentSteps(ev), ...(ev === 'note' ? momentSteps('note') : [])]
+  // Lying, something coming to mind perks him up where he lies, then he sits up (round 8's lab).
+  const moment = ev === 'came' && pose === 'lie' ? [...momentSteps('cameLie'), ...momentSteps('lieOut')] : [...getUp(d), ...momentSteps(ev)]
+  d.queue = [...moment, ...(ev === 'note' ? momentSteps('note') : [])]
   d.mode = 'idle'
   d.until = now
 }
@@ -424,14 +494,14 @@ export const TEXT_256: Readonly<Record<string, string>> = {
   '#772222': '#5f0000', // shadow, red
   '#883322': '#af5f00', // fur, dark
   '#995544': '#af5f00', // fur, shaded
-  '#aa4422': '#d75f00', // fur, bright
-  '#aa7766': '#d7875f', // fur: most of the fox
+  '#aa4422': '#d75f00', // fur: most of the fox
+  '#aa7766': '#d7875f', // fur, muted
   '#bb4422': '#d75f00', // fur, bright
   '#cc9988': '#d7af87', // light fur
   '#ccbb99': '#d7af87', // shaded cream
   '#eeddbb': '#ffd7af', // cream
   '#eeddcc': '#ffd7af', // cream chest
-  '#ffbb44': '#ffaf00', // gold: the eyes, the notepad
+  '#ffbb44': '#ffaf00', // gold: the pencil
   '#ee8888': '#ffaf87', // pink: nose, tongue, inner ear
   '#775533': '#875f00', // grey-brown (else olive)
   '#99bbee': '#87afd7', // the z
@@ -464,7 +534,10 @@ export function fineCells(step: Pick<Step, 'frame' | 'fx'>, cols = STAGE_COLS): 
   const frames = S.frames as unknown as Readonly<Record<string, { glyphs: readonly string[]; fg: readonly string[]; bg: readonly string[] }>>
   const f = frames[step.frame] ?? frames['idle']
   const pal = S.palette as readonly string[]
-  const colour = (ch: string | undefined): string | null => (ch === undefined || ch === '.' ? null : (pal[parseInt(ch, 36)] ?? null))
+  // The cells name the art's palette from 1 ('1' is the outline, `#000`; 'j', 19, the last). Read from 0
+  // until 2026-10-13, every sextant colour was the next one along (the fur drew #a76, not #a42) and the
+  // notepad's 'j' fell off the end and drew nothing.
+  const colour = (ch: string | undefined): string | null => (ch === undefined || ch === '.' ? null : (pal[parseInt(ch, 36) - 1] ?? null))
   f?.glyphs.forEach((line, r) => {
     const glyphs = [...line]
     const fgs = [...(f.fg[r] ?? '')]
@@ -551,7 +624,9 @@ export function foxSvg(step: Pick<Step, 'frame' | 'fx'>): { source: string; widt
   // The PNG's box over the half-block fox's (the art lines both up: the same footprint, feet on the bottom line).
   const [bw, bh] = ART.half.box
   const image = png === '' ? '' : `<image x="${String(HALF_X0)}" y="${String(H - bh)}" width="${String(bw + 2)}" height="${String(bh)}" preserveAspectRatio="xMidYMax meet" style="image-rendering:pixelated" href="data:image/png;base64,${png}"/>`
-  const source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${String(cols)} ${String(H)}" shape-rendering="crispEdges">${rects.join('')}${image}</svg>`
+  // The picture alone when there is one: the half-block fox under it showed as a dark ghost edge on the
+  // desktop's light page (2026-10-13); it stays only as the fallback for a frame with no PNG.
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${String(cols)} ${String(H)}" shape-rendering="crispEdges">${image === '' ? rects.join('') : image}</svg>`
   return { source, width: cols * SVG_PX, height: H * SVG_PX }
 }
 

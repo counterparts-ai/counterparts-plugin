@@ -28,6 +28,7 @@ import { isAbsolute, join } from "node:path";
 
 import { isZone } from "../core/time.js";
 
+import { TUNABLES as REMEMBER_TUNABLES } from "../core/remember/tunables.js";
 import { PAGE_HOST_BUDGET_BYTES, PAGE_WRITER_MODES } from "../core/self/index.js";
 import type { PageWriterMode } from "../core/self/index.js";
 import { DEFAULT_KEEP as SNAPSHOT_DEFAULT_KEEP } from "./snapshots.js";
@@ -333,6 +334,20 @@ export interface AdapterConfig {
    * Whether the run is headless at all is the dreaming SETTING (`auto`), which
    * lives in the store, not here.
    */
+  /**
+   * HOW LONG CONVERSATION TEXT IS KEPT (Mike, 2026-10-13). Both optional:
+   * `afterWriteUpDays` — days after a session was written up and ended
+   * (default 3); `maxDays` — the ceiling, days after its last activity, owed
+   * or not (default 14). Whichever comes first. Read leniently, like
+   * `snapshots`: a bad field costs that field, falls back to its default, and
+   * is named in `ignored`. `retentionClocks` turns it into what
+   * `remember/owes.ts` reads.
+   */
+  readonly retention?: {
+    readonly afterWriteUpDays?: number;
+    readonly maxDays?: number;
+    readonly ignored?: readonly string[];
+  };
   readonly dreaming?: {
     readonly model?: string;
     readonly timeoutMs?: number;
@@ -407,6 +422,7 @@ export function loadConfig(raw: unknown): LoadedConfig {
     snapshots?: { dir?: string; keep?: number; mirror?: string; ignored?: string[] };
     pageWriter?: { mode: PageWriterMode; ignored?: string[] };
     dreaming?: { model?: string; timeoutMs?: number; maxTurns?: number; ignored?: string[] };
+    retention?: { afterWriteUpDays?: number; maxDays?: number; ignored?: string[] };
     retired?: string[];
     owner?: boolean;
     timeZone?: string;
@@ -577,6 +593,11 @@ export function loadConfig(raw: unknown): LoadedConfig {
   if (snapshots !== undefined) {
     out.snapshots = readSnapshots(snapshots);
   }
+  // THE FOURTH LENIENT BLOCK (2026-10-13): how long conversation text is kept.
+  const retention = rec["retention"];
+  if (retention !== undefined) {
+    out.retention = readRetention(retention);
+  }
   const identity = rec["identity"];
   if (identity !== undefined) {
     const i = identity as Record<string, unknown>;
@@ -693,6 +714,59 @@ function readDreaming(raw: unknown): { model?: string; timeoutMs?: number; maxTu
     if (key !== "model" && key !== "timeoutMs" && key !== "maxTurns") raws.push(`"dreaming.${key}" is not a setting this reads; it was ignored`);
   }
   return done();
+}
+
+/**
+ * The `retention` block, read leniently. Whole days, at least one: a value
+ * that is not one is named and its default used, so a typo never means
+ * "delete today" and never means "keep forever".
+ */
+function readRetention(raw: unknown): { afterWriteUpDays?: number; maxDays?: number; ignored?: string[] } {
+  const raws: string[] = [];
+  const out: { afterWriteUpDays?: number; maxDays?: number } = {};
+  const done = (): typeof out & { ignored?: string[] } => (raws.length === 0 ? out : { ...out, ignored: tidy(raws) });
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    raws.push(`"retention" was not an object; the defaults are used`);
+    return done();
+  }
+  const r = raw as Record<string, unknown>;
+  const defaults = retentionDefaults();
+  for (const key of ["afterWriteUpDays", "maxDays"] as const) {
+    const value = r[key];
+    if (value === undefined) continue;
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) out[key] = value;
+    else raws.push(`"retention.${key}" was ${JSON.stringify(value)}; using ${String(defaults[key])}`);
+  }
+  for (const key of Object.keys(r)) {
+    if (key !== "afterWriteUpDays" && key !== "maxDays") raws.push(`"retention.${key}" is not a setting this reads; it was ignored`);
+  }
+  return done();
+}
+
+const DAY_MS = 86_400_000;
+
+/** The two retention defaults, in days — `remember/tunables.ts`'s, never retyped. */
+export function retentionDefaults(): { afterWriteUpDays: number; maxDays: number } {
+  return {
+    afterWriteUpDays: Math.round(REMEMBER_TUNABLES.RETENTION_MS / DAY_MS),
+    maxDays: Math.round(REMEMBER_TUNABLES.RETENTION_MAX_MS / DAY_MS),
+  };
+}
+
+/**
+ * THE TWO CLOCKS THIS CONFIGURATION SETS, in days and in the milliseconds
+ * `remember/owes.ts#RetentionSources` reads. Absent fields are the defaults.
+ */
+export function retentionClocks(config: AdapterConfig): {
+  afterWriteUpDays: number;
+  maxDays: number;
+  retentionMs: number;
+  maxMs: number;
+} {
+  const d = retentionDefaults();
+  const afterWriteUpDays = config.retention?.afterWriteUpDays ?? d.afterWriteUpDays;
+  const maxDays = config.retention?.maxDays ?? d.maxDays;
+  return { afterWriteUpDays, maxDays, retentionMs: afterWriteUpDays * DAY_MS, maxMs: maxDays * DAY_MS };
 }
 
 /**

@@ -100,7 +100,7 @@ import {
   readSnapshotsDir,
   resolveSnapshotsDir,
 } from "../snapshots.js";
-import { TUNABLES, resolveEmbedder, withEmbedderDefault } from "../config.js";
+import { TUNABLES, resolveEmbedder, retentionClocks, withEmbedderDefault } from "../config.js";
 import type { EmbedderSource } from "../config.js";
 import { MODEL_FILE, STATIC_WEIGHTS_ENV, STATIC_WEIGHTS_PACKAGE, resolveStaticWeights } from "../../core/embed/static.js";
 import { DATABASE_FILE, heldExits, readRollbackHold, rollbackHeld } from "../../core/store/index.js";
@@ -855,12 +855,12 @@ const KEY_HISTORY_ROWS = 200;
  * RAW TRANSCRIPTS — how long the captured conversation is kept, and what the
  * newest retention pass did (remember INTERFACE-GAPS §11; roadmap B3).
  *
- * The first clause is the POLICY, worded so it does not over-promise (PR #189
- * review m4, m5): the text lives in the store for a week after a session ends,
- * and each daily snapshot holds a copy of whatever was there that day, so the
- * last copy is gone only after the snapshots rotate past it too. Both numbers
- * are read — the week from `remember/`'s tunable, the snapshots from the
- * configuration's `keep` — never retyped.
+ * The first clause is the POLICY (Mike, 2026-10-13): the text is deleted a
+ * few days after a session is written up and ended, and never kept past the
+ * ceiling, owed or not; backups never hold it. Both numbers are read — the
+ * configuration's `retention` block, else `remember/`'s defaults, through
+ * `config.ts#retentionClocks` — never retyped. A field in that block this
+ * could not read is named, amber, the way the Snapshot line names its own.
  *
  * The rest is the newest `remember.prune` row, in sessions. Grades:
  *
@@ -876,11 +876,24 @@ const KEY_HISTORY_ROWS = 200;
  */
 function retentionFindings(input: DoctorInput, store: Store): Finding[] {
   const TITLE = "Raw transcripts";
-  const days = Math.round(REMEMBER_TUNABLES.RETENTION_MS / 86_400_000);
-  const keep = keepOf(input.config.snapshots?.keep);
-  const policy = `${String(days)} days after a session ends (up to ${String(days + keep)} counting the daily snapshots)`;
+  const clocks = retentionClocks(input.config);
+  const days = clocks.afterWriteUpDays;
+  const policy = `deleted ${String(days)} day${days === 1 ? "" : "s"} after a session is written up and ended, never kept more than ${String(clocks.maxDays)} · never in backups`;
   const run = lastRetentionRun(store);
-  const base = { retentionDays: days, snapshotKeep: keep };
+  const base = { retentionDays: days, maxDays: clocks.maxDays };
+  const ignored = input.config.retention?.ignored ?? [];
+  if (ignored.length > 0) {
+    return [
+      finding(
+        "retention",
+        "amber",
+        TITLE,
+        `${policy} · the configuration's retention block was partly ignored: ${ignored.join("; ")}`,
+        `Fix "retention" in ${tilde(input.configPath)}: whole days, at least 1.`,
+        { ...base, ran: run !== null, ignored: ignored.length },
+      ),
+    ];
+  }
   if (run === null) {
     return [finding("retention", "green", TITLE, `${policy} · not run yet`, "", { ...base, ran: false })];
   }

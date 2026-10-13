@@ -125,6 +125,8 @@ export const run = {
   placementDecided: false,
   /** Whether this surface docks a pane (the fullscreen renderer), once the band or the hint has said. */
   docks: undefined as boolean | undefined,
+  /** The surface the band above the prompt last drew on (the pane opens narrower on the desktop). */
+  surface: null as string | null,
   cold: false,
   polling: false,
   /** A dashboard read is scheduled or running. */

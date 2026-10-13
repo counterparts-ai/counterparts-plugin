@@ -62,3 +62,32 @@ export function isRasterSafe(cp: number): boolean {
   if (cp >= 0xffe0 && cp <= 0xffe6) return false;
   return true;
 }
+
+/**
+ * A frame of Raster cells as an SVG, for a surface with no Raster (the desktop): a braille cell (U+2800..U+28FF) is
+ * its set dots, a 2 x 4 grid of circles; any other glyph is a filled cell. The cell's foreground colour, no
+ * background. `px` is the width of a cell column; a row is twice that (a dot is square).
+ */
+export function cellsSvg(b64: string, cols: number, rows: number, px = 7, fallback = '#8a8a8a'): { source: string; width: number; height: number } {
+  const cells = decodeCells(b64);
+  const d = px / 2;
+  const colour = (fg: number): string => (fg >= 0x01000000 ? fallback : `#${(fg & 0xffffff).toString(16).padStart(6, '0')}`);
+  let shapes = '';
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = (y * cols + x) * 3;
+      const cp = cells[i] ?? 0x20;
+      if (cp === 0x20 || cp === 0x2800) continue;
+      const c = colour(cells[i + 1] ?? 0);
+      if (cp >= 0x2800 && cp <= 0x28ff) {
+        // braille bits: 0x01 0x02 0x04 are the left column's rows 0..2, 0x08 0x10 0x20 the right's, 0x40 and 0x80 row 3
+        const bit = cp - 0x2800;
+        for (const [mask, cx, cy] of [[0x01, 0, 0], [0x02, 0, 1], [0x04, 0, 2], [0x40, 0, 3], [0x08, 1, 0], [0x10, 1, 1], [0x20, 1, 2], [0x80, 1, 3]] as const) {
+          if ((bit & mask) !== 0) shapes += `<circle cx="${String(x * px + cx * d + d / 2)}" cy="${String(y * 2 * px + cy * d + d / 2)}" r="${String(d * 0.46)}" fill="${c}"/>`;
+        }
+      } else shapes += `<rect x="${String(x * px)}" y="${String(y * 2 * px)}" width="${String(px)}" height="${String(2 * px)}" fill="${c}"/>`;
+    }
+  }
+  const width = cols * px, height = rows * 2 * px;
+  return { source: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${String(width)} ${String(height)}">${shapes}</svg>`, width, height };
+}

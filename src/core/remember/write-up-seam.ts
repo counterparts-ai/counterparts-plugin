@@ -3,7 +3,8 @@
  *
  * `owes.ts` keeps a session's captured text for as long as it owes a write-up.
  * This mark is what ends that: once a session is marked written up, its text
- * ages out 7 days later. So a mark is a DELETION ON A SEVEN-DAY FUSE, and the
+ * ages out 3 days later (7 until 2026-10-13). So a mark is a DELETION ON A
+ * FUSE, and the
  * PR #189 re-review (R1) found it was a public method on `SpanBuffer` — which
  * `Counterpart.spans` hands to everything that holds a `Counterpart` — taking
  * any scope (and CREATING it), any session, and free text for `by`.

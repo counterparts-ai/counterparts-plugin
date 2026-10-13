@@ -415,6 +415,27 @@ export function pruneLog(dataDir: string, today: string, days: number = LOG_DAYS
   return removed;
 }
 
+/**
+ * Delete EVERY dated file — the owner's "delete the activity log"
+ * (`cli/commands-delete.ts`, 2026-10-13). Named files only, the same ones
+ * `pruneLog` would take in time: a name that is not a date is left alone.
+ * Today's file is a file like the others; the next line written makes it
+ * again. Never throws. Returns how many went and how many would not.
+ */
+export function clearLog(dataDir: string): { removed: number; failed: number } {
+  let removed = 0;
+  let failed = 0;
+  for (const date of logDates(dataDir)) {
+    try {
+      rmSync(logFile(dataDir, date), { force: true });
+      removed += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { removed, failed };
+}
+
 /** What doctor says in one line: where, how many days, how many failures today. */
 export interface LogReading {
   readonly dir: string;

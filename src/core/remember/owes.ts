@@ -1,9 +1,12 @@
 /**
  * WHAT A SESSION OWES — the read-only half of raw-transcript retention.
  *
- * Owner's ruling 2026-09-23 (roadmap B3): **a session's captured text is
- * deleted 7 days after it ended, when nothing is owed; a session that owes a
- * write-up waits until it is written up.** This file decides; it never deletes.
+ * Owner's ruling 2026-09-23 (roadmap B3), clocks reset by Mike 2026-10-13:
+ * **a session's captured text is deleted 3 days after it was written up and
+ * ended, when nothing is owed; a session that owes a write-up waits until it
+ * is written up — but never more than 14 calendar days after its last
+ * activity.** Both numbers are defaults a host may change
+ * (`RetentionSources`). This file decides; it never deletes.
  * The deleting half is `retention.ts`, which only the background worker may
  * import and which `index.ts` does NOT re-export (PR #189 review, B1): holding
  * a `Counterpart` — and so its public `SpanBuffer` — reaches the plan and never
@@ -28,16 +31,24 @@
  * not deleted while the registry holds it (review m10): an idle-but-alive
  * session is not an ended one. That lasts only as long as the record does, and
  * the registry forgets a record 7 days after its last write
- * (`adapters/sessions.ts#pruneSessions`) — the same week as the retention clock
- * (re-review R8). What actually protects a session active in the last week is
- * the capture clock, which reads the buffer and nothing the registry keeps.
+ * (`adapters/sessions.ts#pruneSessions`) — longer than the 3-day clock since
+ * 2026-10-13, so for those days this guard, not the capture clock, is what
+ * keeps an open session's text (re-review R8). The ceiling overrides it too: a
+ * record still open 14 days after the session's last activity keeps nothing.
  *
  * ── THE CLOCK ─────────────────────────────────────────────────────────────
  *
- * Seven days (`TUNABLES.RETENTION_MS`) from the LATEST thing known about the
- * session anywhere in the store: its last capture or boundary in any scope, its
- * write-up mark, its registry end. It is the buffer's own clock. A lapsed
- * stretch owes nothing, so its text goes on this same week.
+ * Three days by default (`TUNABLES.RETENTION_MS`, or the host's
+ * `retentionMs`) from the LATEST thing known about the session anywhere in the
+ * store: its last capture or boundary in any scope, its write-up mark, its
+ * registry end. It is the buffer's own clock. A lapsed stretch owes nothing,
+ * so its text goes on the same clock.
+ *
+ * And THE CEILING, checked first: fourteen days by default
+ * (`TUNABLES.RETENTION_MAX_MS`, or the host's `maxMs`) from the session's LAST
+ * ACTIVITY — its last capture or boundary, not a later write-up or end, so
+ * nothing that happens afterwards can extend it. Past it the text is deleted
+ * whatever else is true: owed, held open, or not.
  *
  * Every failure to read a fact moves toward KEEPING: a host that cannot answer
  * is read as holding the session open.
@@ -79,9 +90,8 @@ export interface HostSessionEvidence {
   /**
    * The host's registry holds a record for this session with no end. Kept while
    * it does — and ONLY while it does: the registry drops a record 7 days after
-   * its last write (`adapters/sessions.ts#pruneSessions`), the same week as the
-   * retention clock, so this is an extra guard, not the one that protects a
-   * recently active session. That one is the capture clock (`kept-young`).
+   * its last write (`adapters/sessions.ts#pruneSessions`), and the ceiling
+   * (`maxMs`) overrides it either way.
    */
   readonly open: boolean;
   /** The registry's end, epoch ms. */
@@ -94,11 +104,22 @@ export const NO_HOST_EVIDENCE: HostSessionEvidence = {
 };
 
 /** Everything retention reads from outside the buffer: the host's evidence,
- *  and the zone the store names its days in. */
+ *  the zone the store names its days in, and the two clocks. */
 export interface RetentionSources {
   host(session: string): HostSessionEvidence;
   readonly zone: string;
+  /** Kept this long after the latest of activity, write-up and end, when
+   *  nothing is owed. `TUNABLES.RETENTION_MS` when absent. */
+  readonly retentionMs?: number;
+  /** Never kept longer than this after the last activity, whatever is owed.
+   *  `TUNABLES.RETENTION_MAX_MS` when absent. */
+  readonly maxMs?: number;
 }
+
+/** A clock a host handed over, or the default when it is not a positive
+ *  finite number — a bad value never means "delete now". */
+const clockOr = (ms: number | undefined, fallback: number): number =>
+  typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : fallback;
 
 /**
  * The sources as a host supplies them. Never throws: a host that cannot answer
@@ -106,7 +127,7 @@ export interface RetentionSources {
  */
 export function retentionSources(
   store: Partial<Pick<Store, "zone">>,
-  opts: { host?: (session: string) => HostSessionEvidence } = {},
+  opts: { host?: (session: string) => HostSessionEvidence; retentionMs?: number; maxMs?: number } = {},
 ): RetentionSources {
   let zone: string;
   try {
@@ -123,6 +144,8 @@ export function retentionSources(
       }
     },
     zone,
+    retentionMs: clockOr(opts.retentionMs, TUNABLES.RETENTION_MS),
+    maxMs: clockOr(opts.maxMs, TUNABLES.RETENTION_MAX_MS),
   };
 }
 
@@ -137,7 +160,7 @@ export interface HeldSession {
   readonly scopes: readonly string[];
   readonly facts: WriteUpFacts;
   /** It owes a write-up — `coverage/`'s rule, and the only thing that keeps
-   *  its text past its week. */
+   *  its text past the retention clock (never past the ceiling). */
   readonly owes: boolean;
   /** It owes, and what it owes is small: one line is enough. */
   readonly small: boolean;
@@ -253,13 +276,24 @@ export function planRetention(buffer: SpanBuffer, sources: RetentionSources): He
     };
     const owes = entry?.owed === true && !facts.writtenUp;
     const clockFrom = Math.max(t.lastActivityAt, t.writtenUpAt ?? 0, h.endedAt ?? 0);
-    const verdict: RetentionVerdict = h.open
-      ? "kept-live"
-      : owes
-        ? "kept-owed"
-        : now - clockFrom < TUNABLES.RETENTION_MS
-          ? "kept-young"
-          : "deleted";
+    // THE CEILING FIRST: past it nothing keeps the text — not a debt, not an
+    // open record. Read from the last activity alone, so a late write-up or a
+    // late end cannot push it out. A host's clocks are read through
+    // `clockOr` again, so a hand-built `RetentionSources` with a bad number
+    // falls back rather than deleting everything.
+    const maxMs = clockOr(sources.maxMs, TUNABLES.RETENTION_MAX_MS);
+    const retentionMs = clockOr(sources.retentionMs, TUNABLES.RETENTION_MS);
+    // A session whose every moment failed to read (0) is not judged by it.
+    const verdict: RetentionVerdict =
+      t.lastActivityAt > 0 && now - t.lastActivityAt >= maxMs
+        ? "deleted"
+        : h.open
+          ? "kept-live"
+          : owes
+            ? "kept-owed"
+            : now - clockFrom < retentionMs
+              ? "kept-young"
+              : "deleted";
     out.push({
       session,
       scopes: [...t.scopes].sort(),
@@ -291,7 +325,7 @@ export interface RetentionReport {
   readonly deleted: number;
   /** ...kept because they owe a write-up, however old. */
   readonly keptOwed: number;
-  /** ...kept because their 7 days have not run yet. */
+  /** ...kept because their retention clock (3 days by default) has not run yet. */
   readonly keptYoung: number;
   /** ...kept because the host's registry holds them open. */
   readonly keptLive: number;
@@ -304,8 +338,13 @@ export interface RetentionReport {
   readonly bytes: number;
 }
 
-/** The payload of one `remember.prune` row. */
-export function retentionRow(report: RetentionReport, date: string): Record<string, string | number> {
+/** The payload of one `remember.prune` row. `clocks` is the run's own, when
+ *  the caller has them; the defaults otherwise. */
+export function retentionRow(
+  report: RetentionReport,
+  date: string,
+  clocks: Partial<Pick<RetentionSources, "retentionMs" | "maxMs">> = {},
+): Record<string, string | number> {
   return {
     date,
     reason: report.reason,
@@ -317,7 +356,8 @@ export function retentionRow(report: RetentionReport, date: string): Record<stri
     failed: report.failed,
     lines: report.lines,
     bytes: report.bytes,
-    retentionDays: Math.round(TUNABLES.RETENTION_MS / 86_400_000),
+    retentionDays: Math.round(clockOr(clocks.retentionMs, TUNABLES.RETENTION_MS) / 86_400_000),
+    maxDays: Math.round(clockOr(clocks.maxMs, TUNABLES.RETENTION_MAX_MS) / 86_400_000),
   };
 }
 
@@ -390,7 +430,7 @@ export function retentionRuns(store: Pick<Store, "eventLog" | "livedDay">): Rete
 
 /**
  * THE READING DOCTOR SHOWS: the newest run — how many sessions it deleted, how
- * many are waiting on a write-up, how many are younger than a week, how many
+ * many are waiting on a write-up, how many are inside their clock, how many
  * the host still holds open — or null when retention has never run here.
  */
 export function lastRetentionRun(store: Pick<Store, "eventLog" | "livedDay">): RetentionRun | null {

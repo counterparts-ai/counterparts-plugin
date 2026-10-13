@@ -174,3 +174,22 @@ export function stoodDownNote(scope: SidebarScope, to: 'pause' | 'resume' | 'off
   const flag = to === 'pause' ? '--pause' : to === 'off' ? '--off' : to === 'on' ? '--on' : '--resume'
   return `This session started while the folder read only, so its memory server can't change the setting. \`counterparts scope ${scope.dir ?? '<this folder>'} ${flag}\` does; a session started after that follows it.`
 }
+
+/**
+ * Whether an engine error is the auto-mode classifier declining a pane press (a press is not a request from the
+ * person). Not the bare word "refused": the memory server's own errors use it (`scopeOf`'s fallback is
+ * "refused", a search's "the search was refused"), and those are not auto mode's.
+ */
+export function isRefusal(err: unknown): boolean {
+  return /classifier|auto mode/i.test(err instanceof Error ? err.message : String(err))
+}
+
+/**
+ * What the note above the switches says when a press's call failed: never the engine's own text. A refusal by
+ * the auto-mode classifier names what to ask Claude instead; anything else is a short generic line.
+ */
+export function failedPressNote(to: 'pause' | 'resume' | 'off' | 'on', err: unknown): string {
+  if (!isRefusal(err)) return 'The switch could not change this just now. Try again, or ask Claude.'
+  const say = to === 'pause' ? 'pause Counterparts here' : to === 'off' ? 'turn it off here' : 'turn it back on here'
+  return `Auto mode didn't let the switch change this. Ask Claude: "${say}"`
+}

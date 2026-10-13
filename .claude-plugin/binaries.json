@@ -1,10 +1,10 @@
 {
-  "version": "0.3.20",
-  "url": "https://github.com/mlapeter/counterparts/releases/download/v0.3.20",
+  "version": "0.3.21",
+  "url": "https://github.com/mlapeter/counterparts/releases/download/v0.3.21",
   "platforms": {
-    "darwin-arm64": { "file": "counterparts-0.3.20-darwin-arm64.gz", "bytes": 112701168, "sha256": "3fd4f46029591b443ed3ddc82f1975965a9bd7619a40415c1102b745ae88f2df", "gzBytes": 57601738, "gzSha256": "cc66620904ca6ace3e5c780162f561a2c94133ef3da3f0b37cdcee76761d3a32" },
-    "darwin-x64": { "file": "counterparts-0.3.20-darwin-x64.gz", "bytes": 117714928, "sha256": "9e1ebec0bc29a4de0db4599680ef0c0ff3b79f8c597fded61747d8e7c8a51135", "gzBytes": 59532589, "gzSha256": "e1b02690fccb4f1beba114402f2756c7dda0b13a9c481a50e3f2f15296394094" },
-    "linux-x64": { "file": "counterparts-0.3.20-linux-x64.gz", "bytes": 154910323, "sha256": "e1a7919ad62a526d2b7ed483196a477473e6e7377cf25e0379040506ffc0863d", "gzBytes": 74290860, "gzSha256": "3f1e220a80d80ac387c21eec695e5979de75bd0be1de28d682bcc111b18efc3f" },
-    "linux-arm64": { "file": "counterparts-0.3.20-linux-arm64.gz", "bytes": 152770021, "sha256": "6d7ef27c5fd2ef9deaeb0281357cdea4dd9e5bed656ecbc461a7b353b2c25b10", "gzBytes": 74366196, "gzSha256": "1b26ac0ae72911ed4e12a546e4666a04495b1f31cf5176f2e6c04b4b53f42489" }
+    "darwin-arm64": { "file": "counterparts-0.3.21-darwin-arm64.gz", "bytes": 112816752, "sha256": "979f9e52bb670889addeaa4fcc31f96a2eddaf7eef190de39b207d385d16bf9c", "gzBytes": 57631173, "gzSha256": "365d32fdf6a6fceeb9f5044844d610e039e4cbde8ac59a37d5de21a8449fc463" },
+    "darwin-x64": { "file": "counterparts-0.3.21-darwin-x64.gz", "bytes": 117830512, "sha256": "a6057eec305252c24a7ce48b023fb8f5acdd14fbd3c612367bf3530ab219c157", "gzBytes": 59560081, "gzSha256": "2879e94bbcca3d00a505c00909a6372cea16d00a1fbfecc379db54b45ed52547" },
+    "linux-x64": { "file": "counterparts-0.3.21-linux-x64.gz", "bytes": 155013427, "sha256": "642b2f9be040181bec2902fae32869167b81de96c84f9813f7a909689f2223ba", "gzBytes": 74323086, "gzSha256": "7ad0eb152b8bc4e69223a86e4fb62667cde61ab11c935a11a412c2b43be650bf" },
+    "linux-arm64": { "file": "counterparts-0.3.21-linux-arm64.gz", "bytes": 152873125, "sha256": "eb0c5309ae67d9085a4e6cea123b338d3b3579e66ce26f4ace5268c01cd2a4e0", "gzBytes": 74396220, "gzSha256": "a3610230a5f8282f9ea2b8776ac755e110824a369a25d49c7d1812a9f633192d" }
   }
 }

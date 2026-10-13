@@ -580,7 +580,7 @@ export function exportCommand(
     // no export kind carries it, and a person taking "a copy of my memory"
     // somewhere should not have to discover which half stayed behind.
     io.out(
-      "Not included: spans/ — the raw captured conversation, kept 7 days after a session ends, or for as long as it waits to be written up.",
+      "Not included: spans/ — the raw captured conversation, deleted 3 days after a session is written up and ended, and never kept more than 14 days.",
     );
     // THE DURABLE ROW. Counts and flags only: which kind, how many rows went,
     // how many confidential ones were left out, whether it was sealed. NOT the

@@ -535,7 +535,7 @@ export function spanResidue(
   const echoNote =
     echoes === 0
       ? ""
-      : ` ${echoes} line${echoes === 1 ? "" : "s"} of conversation under ${named} quote${echoes === 1 ? "s" : ""} these words — transcript, not this memory's own capture, and left alone here; retention deletes a session's captured text 7 days after it ends, unless it is still waiting to be written up, so ${echoes === 1 ? "it goes" : "they go"} then (the daily snapshots keep a copy up to 14 days longer).`;
+      : ` ${echoes} line${echoes === 1 ? "" : "s"} of conversation under ${named} quote${echoes === 1 ? "s" : ""} these words — transcript, not this memory's own capture, and left alone here; retention deletes a session's captured text 3 days after it is written up and ended, and never keeps it more than 14 days, so ${echoes === 1 ? "it goes" : "they go"} then (backups made since 2026-10-13 hold none of it).`;
 
   if (first !== null) {
     const where = count === 1 ? first : `${first} (and ${count - 1} more line${count === 2 ? "" : "s"})`;

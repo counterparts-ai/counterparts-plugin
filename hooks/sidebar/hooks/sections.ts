@@ -66,7 +66,12 @@ const ITEM_LINES = 3
  */
 const SAVED_MAX = 12
 
-export type Seg = { t: string; c: string; b?: true; i?: true }
+/**
+ * One run of a line. On a prose surface (BodyProps.prose) three more say how it is laid out rather than
+ * spelled with spaces: `cw`, a column that many cells wide; `fill` of `of`, a bar that share of a column `of` cells wide;
+ * `grow`, the space that pushes what follows to the edge.
+ */
+export type Seg = { t: string; c: string; b?: true; i?: true; cw?: number; fill?: number; of?: number; grow?: true }
 /**
  * One row of the body: its pieces, and what a click on it names; `link`, a
  * click from column `from` (0-based, in cells) to the row's end names
@@ -169,6 +174,13 @@ export type BodyState = {
   focus: string | null
   dash: 'unknown' | 'up' | 'down' | 'other'
   search: SidebarSearch
+  /**
+   * A surface that sets text in its own font (the desktop): a blank row between items, and the chart's rows as
+   * a name column, a solid bar and a count at the edge, since padding with spaces lines nothing up there.
+   */
+  prose?: boolean
+  /** The pane's own text width in cells, when `w` was widened for a prose surface's narrower font (bars use it). */
+  cellsW?: number
 }
 
 /** How far each section is folded: the ladder's knobs. */
@@ -396,7 +408,7 @@ function chart(s: BodyState, f: Fold): Line[] {
   if (f.chartFolded) return [heading('Mechanisms today', `${String(fired)} fired`, s.w, { folded: true, key: 'head:chart' })]
   const NAME = 16
   const CNT = 4
-  const barW = Math.max(4, s.w - NAME - CNT)
+  const barW = Math.max(4, (s.cellsW ?? s.w) - NAME - CNT)
   const max = Math.max(1, ...MECHS.map(m => t.counts[m.id] ?? 0))
   const out: Line[] = [heading('Mechanisms today', 'times fired', s.w, { key: 'head:chart' })]
   for (const m of MECHS) {
@@ -413,8 +425,14 @@ function chart(s: BodyState, f: Fold): Line[] {
     const name = seg(clip(m.short, NAME - 1).padEnd(NAME), n === 0 ? P.dim : picked ? P.hi : P.text, { b: picked })
     const b = n > 0 ? bar(n, max, barW) : ''
     const cs = String(n)
-    const pad = Math.max(1, s.w - NAME - cells(b) - cs.length)
-    out.push(line([name, seg(b, hex(stageOf(m.id).col, BAR_K)), seg(' '.repeat(pad), P.dim), seg(cs, n === 0 ? P.dim : picked ? P.hi : P.mid)], key))
+    const count = seg(cs, n === 0 ? P.dim : picked ? P.hi : P.mid)
+    if (s.prose === true) {
+      const len = cells(b)
+      out.push(line([{ ...name, t: name.t.trimEnd(), cw: NAME }, { t: '', c: hex(stageOf(m.id).col, BAR_K), fill: len, of: barW }, { t: '', c: P.dim, grow: true as const }, count], key))
+    } else {
+      const pad = Math.max(1, s.w - NAME - cells(b) - cs.length)
+      out.push(line([name, seg(b, hex(stageOf(m.id).col, BAR_K)), seg(' '.repeat(pad), P.dim), count], key))
+    }
     if (picked) out.push(...mechEvents(s, f))
   }
   return out
@@ -499,6 +517,20 @@ function total(secs: readonly Line[][], gaps: boolean): number {
   return secs.reduce((a, r) => a + r.length, 0) + (gaps ? Math.max(0, secs.length - 1) : 0)
 }
 
+/** An item's key: Memories, Subconscious and Saved rows (a mechanism's rows stay together). */
+const ITEM_KEY = /^(mem|sub|saved):/
+
+/** A blank row wherever one item ends and the next begins. */
+function spaced(sec: readonly Line[]): Line[] {
+  const out: Line[] = []
+  sec.forEach((l, i) => {
+    const prev = sec[i - 1]?.key
+    if (prev !== undefined && l.key !== undefined && prev !== l.key && ITEM_KEY.test(prev) && ITEM_KEY.test(l.key)) out.push(BLANK)
+    out.push(l)
+  })
+  return out
+}
+
 function joined(secs: readonly Line[][], gaps: boolean): Line[] {
   const out: Line[] = []
   secs.forEach((sec, i) => {
@@ -531,7 +563,10 @@ export function layoutBody(s: BodyState): { lines: Line[]; folds: string[] } {
   const mine = (st: Step): boolean => st.section === s.focus || (s.focus === 'mind' && st.section === 'sub')
   const ladder = ladderFor(s).filter(st => !(mine(st) && (st.fold || st.label === 'subconscious 0')))
   const steps = [...ladder.filter(st => !mine(st)), ...ladder.filter(mine)]
-  const build = (on: ReadonlySet<number>): Line[][] => sectionsOf(s, steps.reduce((f, st, i) => (on.has(i) ? st.apply(f) : f), FULL))
+  const build = (on: ReadonlySet<number>): Line[][] => {
+    const secs = sectionsOf(s, steps.reduce((f, st, i) => (on.has(i) ? st.apply(f) : f), FULL))
+    return s.prose === true ? secs.map(spaced) : secs
+  }
   const fit = (gaps: boolean): { on: Set<number>; secs: Line[][] } | null => {
     for (let k = 0; k <= steps.length; k++) {
       let on = new Set(Array.from({ length: k }, (_, i) => i))

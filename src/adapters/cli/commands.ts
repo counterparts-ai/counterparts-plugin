@@ -127,6 +127,7 @@ import { dashboardCommand } from "./commands-dashboard.js";
 import { startFreshCommand, rollbackCommand } from "./commands-start-fresh.js";
 import { noteCommand, recallCommand, backupCommand, exportCommand } from "./commands-note.js";
 import { removeCommand } from "./commands-remove.js";
+import { deleteCommand } from "./commands-delete.js";
 import {
   verifyCommand,
   migrateCacheCommand,
@@ -186,6 +187,9 @@ export const COMMANDS = [
   "export",
   "backup",
   "remove",
+  // Delete ONE kind of data — conversation text, backups or the activity log —
+  // and nothing else (2026-10-13). `commands-delete.ts`.
+  "delete",
   "verify",
   "migrate-cache",
   "backfill-claims",
@@ -284,6 +288,7 @@ export const OWNER_OPS: readonly Command[] = [
   // has no owner ruling behind it and this change is not the place to make one.
   "backup",
   "remove",
+  "delete",
   "verify",
   // Box 3 is rebuildable, and rewriting it is still a WRITE: an instrument does
   // not migrate the store it is reading.
@@ -527,6 +532,9 @@ export const COMMAND_FLAGS: Record<Command, readonly string[]> = {
   // across every project on the machine is how one removal reaches into work
   // nobody named. The dry run lists what it WOULD match; this flag performs it.
   remove: ["confirm", "reason", "strike-by-content-across-scopes", "echo-scan"],
+  // `--yes` is the door for anything that cannot be asked — a script, the
+  // dashboard (which asks in the browser first).
+  delete: ["yes"],
   verify: ["rebuild", "drop-vectors", "prune-index", "keep-vectors", "retry-skipped"],
   "migrate-cache": ["apply", "batch", "yes"],
   "backfill-claims": ["apply"],
@@ -613,9 +621,11 @@ export const COMMAND_BLURB: Record<Command, string> = {
   ask: "Ask memory a question. Read-only.",
   recall: "Ask memory a question — the same command as `ask`, under its older name. Read-only.",
   export: "A portable copy of the store, encrypted unless you say otherwise.",
-  backup: "Snapshot: prose plus the canonical DB via VACUUM INTO. The cache is excluded.",
+  backup: "Snapshot: the canonical DB via VACUUM INTO. The cache is excluded, and so is conversation text: backups never hold it.",
   remove:
     "The loud removal. With nothing after it, at a terminal, it asks for a memory id or for words to search for, numbers what it finds, lets you pick one or several (or name several ids outright), shows the plan for each, and asks once before it deletes them. --confirm is the scripted door: that exact id, confirmed by typing it back. Anywhere a person cannot be asked — a pipe, a redirect, a CI job — and without --confirm, it prints the plan and changes nothing.",
+  delete:
+    "Delete one kind of data, and nothing else: conversation-text (every word of conversation still held — sessions still owed a write-up lose theirs, and it says how many first), backups (every daily copy and every copy taken before an upgrade — rollback then has nothing to go back to) or activity-log (what the processes did, never what was said). Memories are not touched; start-fresh is their door. It prints what it would delete, then asks once at a terminal; anywhere else it changes nothing without --yes. Refuses under observer.",
   verify:
     "Census of the cache against canonical state. Read-only unless --rebuild, --prune-index or --retry-skipped. --rebuild, --prune-index, --retry-skipped and --drop-vectors require --dir.",
   "migrate-cache":
@@ -650,7 +660,7 @@ export const COMMAND_BLURB: Record<Command, string> = {
   about:
     "What a memory is about — me (who I am), us (the two of us), owner (you, as a person), work (the craft) or world (anything else). With an id alone, its mark and who set it; with an id and a mark, it changes the mark as you, keeps --why with it, and records it the way a nightly reflection's re-mark is recorded. Unmarked, a fact written in a project (or a skill) counts as that project's work and is shown only there; me, us and owner are shown everywhere and can become part of who I am. An archived memory can be marked too (the mark counts if it comes back); an earlier version's id marks the current one. Reading works under observer; the change refuses there.",
   coverage:
-    "What is written up, and what is not yet, for one date (default today): each session that captured something that day, how much of it is written up, and what is not yet written up — how many pieces, over how long, since when — and whether that is owed (the nightly run catches it up, or counterparts catch-up does now), lapsed (let go unwritten after fourteen days of use — lost to memory; nothing is deleted), under the floor, or still at work. Read-only.",
+    "What is written up, and what is not yet, for one date (default today): each session that captured something that day, how much of it is written up, and what is not yet written up — how many pieces, over how long, since when — and whether that is owed (the nightly run catches it up, or counterparts catch-up does now), lapsed (let go unwritten after fourteen days of use — lost to memory; its text is deleted with the rest, never more than 14 days after the session), under the floor, or still at work. Read-only.",
   "catch-up":
     "Write up, now, every session that ended before it was written up — what the nightly run does each morning, on demand. Oldest first, in batches, each a windowless claude -p of its own allowed one tool (session_end); it prints each batch, then what it caught up and what is left. Sessions may be open meanwhile: one still at work is left for later, one being written up elsewhere is passed over. It uses your Claude subscription like any session. At most 400 parts and an hour a run; what is left stays owed. A part whose every word the session's own chapters or notes already wrote up is passed over, and a part answered with nothing kept and no reason why stays owed. --reowe <run> owes again the parts a run (cup_… or nrn_…) closed with nothing kept, when their words were not yet written up: it prints the plan, then asks for the run's id typed back (--yes skips that, --dry-run stops at the plan); it reads the run from the log, which keeps a week, and refuses by name what it cannot do. Refuses under observer.",
   dashboard:
@@ -668,6 +678,7 @@ const COMMAND_ARGS: Partial<Record<Command, string>> = {
   // Three shapes, and the bare one is the door a person uses: an id, the words
   // to find one by, or nothing at all and it asks.
   remove: " [<id>… | <words>]",
+  delete: " conversation-text|backups|activity-log",
   scope: " <path|.>",
   // The host is OPTIONAL and there is one of them: `counterparts connect` and
   // `counterparts connect claude-code` are the same command, and any other name
@@ -961,6 +972,10 @@ const CATCH_UP_FLAG_HELP: Record<string, string> = {
   yes: "with --reowe: skip typing the run's id back, for a script or a pipe",
 };
 
+const DELETE_FLAG_HELP: Record<string, string> = {
+  yes: "delete without asking — for a script or a pipe, which otherwise get the counts and nothing changed",
+};
+
 const DASHBOARD_FLAG_HELP: Record<string, string> = {
   dir: "a store to look at instead of the one your configuration names",
 };
@@ -1008,7 +1023,9 @@ export function commandHelp(command: Command): string {
                     ? SETTLE_FLAG_HELP
                     : command === "about"
                       ? ABOUT_FLAG_HELP
-                      : {};
+                      : command === "delete"
+                        ? DELETE_FLAG_HELP
+                        : {};
   const flagLine = (name: string): string => {
     const shown = `--${name}${VALUED_FLAGS.includes(name) ? " <value>" : ""}`;
     return `  ${shown.padEnd(20)} ${override[name] ?? FLAG_HELP[name] ?? "(undocumented)"}`;
@@ -1628,6 +1645,8 @@ export async function run(argv: readonly string[], opts: RunOptions): Promise<nu
         // gate key` is three of them. `env` rides along because the door test is
         // `isInteractive`, which reads `CI` out of it.
         return await removeCommand(dir, io, env, parsed.positional, parsed.flags, now);
+      case "delete":
+        return await deleteCommand(dir, io, env, parsed.positional, parsed.flags);
       case "backfill-claims":
         return backfillClaimsCommand(dir, io, parsed.flags);
       case "repair-dates":

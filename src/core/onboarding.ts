@@ -506,13 +506,16 @@ export const PRONOUN_RULE = "Until they say their pronouns, use their name or \"
 
 /**
  * WHAT IS KEPT, word for word (D): Claude is never to paraphrase retention, so
- * the script hands the exact line, for when they ask. Its facts: a week is
- * `remember/tunables.ts#RETENTION_MS` from the latest of last activity, write-up
- * and session end (`remember/owes.ts`); two weeks is `coverage/tunables.ts#
- * LAPSE_DAYS_OF_USE`; 14 days is the daily snapshots' `DEFAULT_KEEP`.
+ * the script hands the exact line, for when they ask. Its facts (Mike,
+ * 2026-10-13), the DEFAULTS: 3 days is `remember/tunables.ts#RETENTION_MS`
+ * from the latest of last activity, write-up and session end
+ * (`remember/owes.ts`); 14 days is `RETENTION_MAX_MS`, the ceiling from the
+ * last activity, owed or not; backups never copy `spans/`
+ * (`store/paths.ts#LAYOUT`). A configuration may set other numbers
+ * (`retention` in claude-code.json); this line says the defaults.
  */
 export const RETENTION_LINE =
-  "Session text is kept until I've written it up and the session has ended, then deleted a week later. If a write-up is still owed, the text is let go after about two weeks of use. Backups hold it about 14 days longer.";
+  "Our conversation text is kept only so I can turn it into memories: it's deleted 3 days after I've written it up, and never kept more than 14 days. Backups never include it. Memories stay until they fade or you remove them, and you can delete the conversation text, the backups or the activity log on their own at any time.";
 
 /** The first dream, true to the dreaming setting: never today (`meetingDay`). Empty when dreaming is off. */
 function firstDream(dreaming: MeetContext["dreaming"]): string {
@@ -595,7 +598,7 @@ export function finishText(ctx: Pick<MeetContext, "name" | "dreaming" | "plugin"
     `1) The write-up: hand back anything from the meeting that a meet step did not already save, one idea each, with the counterparts session_end tool, session: ${ctx.session} (the answers and the style are saved already: don't repeat them; often there is nothing more). Then write the first chapter with the counterparts chapter tool, session: ${ctx.session}: a short, true page about meeting them. ${PRONOUN_RULE}`,
     `2) Show memory working: two or three short lines of what you'll carry from today, in your words — "Here's what I'll remember: …".${dream.length === 0 ? "" : ` Then: "${dream}"`}`,
     "3) Close, close to this, and nothing about retention or uninstalling unless they ask:",
-    ...(ctx.plugin ? ["   \"/counterparts shows the memory sidebar (off, quiet and pause are at its bottom)."] : []),
+    ...(ctx.plugin ? ["   \"/counterparts shows the memory sidebar on the right, once this window is wide enough. Off, quiet and pause are at its bottom."] : []),
     `   ${ctx.plugin ? "" : "\""}Ask me anything about Counterparts, any time.`,
     `   Great meeting you, ${name}! What would you like to work on today? Or we can keep chatting — what's been on your mind lately?"`,
   ].join("\n");

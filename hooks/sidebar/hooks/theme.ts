@@ -79,6 +79,31 @@ export const cozy: Palette = {
 
 export const THEMES: Readonly<Record<SidebarTheme, Palette>> = { tron, cozy }
 
+/**
+ * A surface that draws its own page (the desktop app, VS Code): Claude Code's
+ * theme keys, which follow the app's light or dark mode, and no panel of our
+ * own. Measured 2026-10-13 in the Desktop app's Code tab: on tron's black
+ * panel the app's native buttons (the title, the footer's switches) drew dark
+ * on dark, and the `─` rules, set in the app's proportional font, ran wider
+ * than the cells they were measured in and wrapped every heading.
+ */
+export const desk: Palette = {
+  panel: '',
+  hi: 'text',
+  text: 'text',
+  mid: 'inactive',
+  dim: 'inactive',
+  faint: 'subtle',
+  head: 'text',
+  accent: 'suggestion',
+  accent2: 'warning',
+  searchBg: '',
+  accentDim: 'inactive',
+}
+
+/** Whether the surface in use draws text in its own (proportional) font: no rules of `─`, no panel. */
+export const SURFACE = { prose: false }
+
 /** A stored theme: a name this version knows, else tron. */
 export function normTheme(v: unknown): SidebarTheme {
   return v === 'cozy' ? 'cozy' : 'tron'
@@ -88,6 +113,12 @@ export function normTheme(v: unknown): SidebarTheme {
 export const P: Palette = { ...tron }
 
 /** Makes `name` the palette in use. */
-export function applyTheme(name: SidebarTheme): void {
-  Object.assign(P, THEMES[name])
+export function applyTheme(name: SidebarTheme, surface: string = 'terminal'): void {
+  SURFACE.prose = surface === 'desktop' || surface === 'vscode'
+  Object.assign(P, SURFACE.prose ? desk : THEMES[name])
+}
+
+/** A Box's background, only when the palette has one (a prose surface keeps the app's). */
+export function bg(c: string): { backgroundColor?: string } {
+  return c === '' ? {} : { backgroundColor: c }
 }

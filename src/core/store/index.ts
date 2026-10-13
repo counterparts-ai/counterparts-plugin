@@ -417,6 +417,7 @@ export const WRITE_METHODS = [
   "updateMeta",
   "setGateRecords",
   "pruneGateSessions",
+  "rewriteGateValues",
   "appendEvent",
   "pruneEvents",
   "setRanking",
@@ -3270,6 +3271,44 @@ export class Store {
       cutoffDay: report.cutoffDay,
     });
     return report;
+  }
+
+  /**
+   * Rewrite one record's `value` across EVERY session, in one transaction:
+   * the rows of `(kind, ref)` whose value contains `contains` are handed to
+   * `rewrite`, and a returned string that differs replaces the value — only
+   * the value; the row, its turn and its day stay. `null` leaves a row alone.
+   * Each update is conditioned on the value it read, so it never writes over
+   * a newer save. Returns how many rows changed. The store knows nothing of
+   * what the value means: `recall/session.ts#clearIdleCarries` does, and uses
+   * this to take typed cue tokens out of sessions that have gone quiet.
+   */
+  rewriteGateValues(kind: string, ref: string, contains: string, rewrite: (value: string) => string | null): number {
+    const changed = this.mutate("rewriteGateValues", () => {
+      const rows = this.ops.all<{ session_id: string; value: string }>(
+        "SELECT session_id, value FROM gate_session WHERE kind = ? AND ref = ? AND value IS NOT NULL AND instr(value, ?) > 0",
+        kind,
+        ref,
+        contains,
+      );
+      let n = 0;
+      for (const row of rows) {
+        const next = rewrite(row.value);
+        if (next === null || next === row.value) continue;
+        this.ops.run(
+          "UPDATE gate_session SET value = ? WHERE session_id = ? AND kind = ? AND ref = ? AND value = ?",
+          next,
+          row.session_id,
+          kind,
+          ref,
+          row.value,
+        );
+        n++;
+      }
+      return n;
+    });
+    this.emit("store.gate.rewritten", undefined, { kind, count: changed });
+    return changed;
   }
 
   // ── box 2: the durable event log (SEAMS item K) ────────────────────────────

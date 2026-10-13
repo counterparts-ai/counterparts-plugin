@@ -3,8 +3,11 @@
  *
  * **Two callers, one door** (2026-09-23). The owner's removal (the console's
  * `remove`, in `adapters/cli/`) and the RETENTION rule the owner set that day —
- * a session's captured text goes 7 days after it ended, when nothing is owed
- * (`retention.ts`). Retention names whole SESSIONS rather than hashes, records
+ * a session's captured text goes some days after it ended (`retention.ts`;
+ * 3 since 2026-10-13, never more than 14 after its last activity, `owes.ts`).
+ * Since 2026-10-13 the owner's console has a second way in through the same
+ * door, `delete conversation-text` (`adapters/cli/commands-delete.ts`), which
+ * names every hash and session held, `by: "owner"`. Retention names whole SESSIONS rather than hashes, records
  * itself as `by: "retention"`, and bounds the ledger it writes; everything
  * else — the rename-aside choreography, the recovery pass, the record with no
  * word and no hash in it — is the same code for both, so there is still exactly
@@ -136,7 +139,7 @@ export interface StrikeRequest {
   sessions?: readonly string[];
   /**
    * Who asked, for the record. `owner` (the default) is the removal path;
-   * `retention` is the 7-day rule, whose ledger append is also trimmed to the
+   * `retention` is the retention clock, whose ledger append is also trimmed to the
    * consumed ledger's bound — a retention run can name thousands of spans, and
    * a keyless store never runs the `consume()` that would otherwise trim it.
    */

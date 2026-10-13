@@ -1677,8 +1677,11 @@ function registryFacts(dir: string, session: string): HostSessionEvidence {
  * deleted" and "what the next session is asked to write" are read off one set
  * of facts (B3's rule, kept by construction).
  */
-export function writeUpSources(store: Store): RetentionSources {
-  return retentionSources(store, { host: hostSessionEvidence(store) });
+export function writeUpSources(store: Store, clocks: { retentionMs?: number; maxMs?: number } = {}): RetentionSources {
+  // The clocks change only WHEN text goes, never what is owed — so the
+  // write-up's readers may leave them at the defaults, and the retention pass
+  // hands over the configuration's (`config.ts#retentionClocks`).
+  return retentionSources(store, { host: hostSessionEvidence(store), ...clocks });
 }
 
 /** Every session the store holds text for, judged by `remember/owes.ts`. Read-only. */

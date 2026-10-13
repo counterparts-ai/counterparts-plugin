@@ -272,8 +272,15 @@ export const LAYOUT: readonly LayoutEntry[] = [
   {
     name: "spans",
     match: "exact",
-    backup: true,
-    why: "remember/'s capture buffer: lived experience awaiting encoding; not reconstructible.",
+    // NOT BACKED UP, since 2026-10-13 (Mike): backups never hold conversation
+    // text. Removed, not flagged — there is no setting that turns it back on.
+    // The cost, accepted: a restored backup has lost whatever was not yet
+    // written up. The memories made from it are rows, and they are copied.
+    // Still CLASSIFIED (an unclassified name refuses the store at open), and
+    // `snapshots.ts#copyKind` keys on classification, so copies taken before
+    // this — which hold `spans/` — are still recognised and rotate as before.
+    backup: false,
+    why: "remember/'s capture buffer: conversation text awaiting its write-up, kept 3 days after that (never more than 14). Never backed up: backups never hold conversation text (Mike, 2026-10-13).",
   },
   {
     name: "journal",
