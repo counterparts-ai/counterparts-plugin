@@ -12,6 +12,7 @@
   "documentationUrl": "https://github.com/mlapeter/counterparts#readme",
   "supportUrl": "https://github.com/mlapeter/counterparts/issues",
   "privacyPolicyUrl": "https://counterparts.ai/privacy",
+  "icon": "./icon.png",
   "license": "MIT",
   "keywords": [
     "memory",
