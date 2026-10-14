@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { CONFIG_ENV } from "../config-path.js";
-import { scriptArgs } from "../runtime.js";
+import { readsHostUserConfig, scriptArgs } from "../runtime.js";
 import { BIN, desktopConfigPath, hostConfigBase, hostMcpFile, isOurDesktopEntry, MCP_SCRIPT, MCP_SERVER_NAME } from "./install.js";
 import { sightSettings, tilde, unparsedSettingsWhy, writeSettings } from "./wire.js";
 const DATA_DIR_VAR = "COUNTERPARTS_DATA_DIR";
@@ -135,13 +135,12 @@ function dataDirOf(entry) {
   const dir = env[DATA_DIR_VAR];
   return typeof dir === "string" && dir.length > 0 ? dir : null;
 }
-export function readDesktop(home, env = {}) {
+export function readDesktop(home, env = {}, readsUserConfig = readsHostUserConfig()) {
   const path = desktopConfigPath(home);
   const read = readObject(path);
   const servers = read.value["mcpServers"];
   const ours = isRecord(servers) ? servers[MCP_SERVER_NAME] : undefined;
-  const code = readObject(hostMcpFile(hostConfigBase(home, env)));
-  const codeServers = code.value["mcpServers"];
+  const codeServers = readsUserConfig ? readObject(hostMcpFile(hostConfigBase(home, env))).value["mcpServers"] : undefined;
   const codeOurs = isRecord(codeServers) ? codeServers[MCP_SERVER_NAME] : undefined;
   return {
     path,

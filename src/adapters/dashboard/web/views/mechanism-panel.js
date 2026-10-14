@@ -38,6 +38,13 @@ export function mechanismPanel(src, id) {
     return { id, found: false, built: false, livedDay, activity: [], picture: null };
   if (proof.build === "not")
     return { id, found: true, built: false, livedDay, activity: [], picture: null };
+  return { id, found: true, built: true, livedDay, activity: mechanismActivity(src, id), picture: pictureOf(src, id, livedDay) };
+}
+export function mechanismActivity(src, id) {
+  const store = src.store;
+  const proof = MECHANISM_PROOFS.find((m) => m.id === id);
+  if (proof === undefined || proof.build === "not")
+    return [];
   const backing = [];
   for (const p of proof.proofs) {
     for (const row of store.eventLog({ name: p.event, order: "desc", limit: ACTIVITY_LOOKBACK })) {
@@ -60,8 +67,7 @@ export function mechanismPanel(src, id) {
     }
     lines.push(line);
   }
-  const activity = mergeRepeats(lines).slice(0, PANEL_ACTIVITY);
-  return { id, found: true, built: true, livedDay, activity, picture: pictureOf(src, id, livedDay) };
+  return mergeRepeats(lines).slice(0, PANEL_ACTIVITY);
 }
 function pictureOf(src, id, day) {
   switch (id) {

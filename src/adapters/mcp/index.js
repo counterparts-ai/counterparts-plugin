@@ -92,6 +92,7 @@ export function openServer(opts = {}) {
     ...opts.ownerFrom === undefined ? {} : { ownerFrom: opts.ownerFrom },
     ...opts.codeTabOwner === undefined ? {} : { codeTabOwner: opts.codeTabOwner },
     ...opts.onEvent === undefined ? {} : { onEvent: opts.onEvent },
+    ...opts.afterCall === undefined ? {} : { afterCall: opts.afterCall },
     ...opts.now === undefined ? {} : { now: opts.now }
   });
 }

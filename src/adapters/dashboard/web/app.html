@@ -8,6 +8,9 @@
 <!-- The server fills this with a per-launch token; every management action
      echoes it (web/actions.ts). Empty means this page cannot act. -->
 <meta name="counterparts-action-token" content="">
+<!-- The server turns this off when the brain picture's three.js is not
+     installed (server.ts#BRAIN_LIBRARY); the home tab then draws without it. -->
+<meta name="counterparts-brain" content="on">
 <!--
   The shell. Styles, scripts and the two font faces are served beside this file
   (see README.md): no CDN, no network of any kind beyond this origin.

@@ -5,7 +5,7 @@
  * check, and in auto mode with no allow rule the sidebar never made that read:
  * a session started in a paused folder showed `?` until clicked (2026-10-09).
  * An allow rule for `scope` would let the model pause folders, so the file it
- * is. The tool stays for writes, after the confirm.
+ * is. The sidebar writes nothing (v1): Claude's `scope` tool does, when asked.
  *
  * A copy of the core's rules (a mod can't import from outside its folder):
  *

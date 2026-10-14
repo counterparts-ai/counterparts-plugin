@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Counterpart, RUNNER_FAILED_EVENT } from "../../../core/counterpart.js";
@@ -22,6 +23,7 @@ import { loadConfig, retentionClocks, withBudgetDefault, withEmbedderDefault } f
 import { openEmbedder } from "../index.js";
 import { DATA_DIR_ENV, SCOPE_ENV, SESSION_ENV, WATCHDOG_ENV } from "../../spawn.js";
 import { backfillVectors, laggedSemantic } from "../vectors.js";
+import { removeSidebarStatus, sidebarInstalled, writeSidebarStatus } from "../../sidebar-status.js";
 import { runSnapshot } from "../../snapshots.js";
 export const CONFIG_PATH = defaultConfigPath();
 export function runnerConfigChoice(argv = process.argv.slice(2), env = process.env) {
@@ -233,7 +235,16 @@ export async function runOnce(input) {
     }
     counterpart.close();
   }
-  return { ...result, snapshot: snapshotReport, retention: retentionReport };
+  let sidebar;
+  if (input.sidebarConfigPath !== undefined && input.sidebarConfigPath.length > 0) {
+    sidebar = writeSidebarStatus({
+      configPath: input.sidebarConfigPath,
+      dataDir: config.dataDir,
+      ...config.timeZone === undefined ? {} : { timeZone: config.timeZone }
+    });
+    emit("runner.sidebar", { written: sidebar.written, reason: sidebar.reason, bytes: sidebar.bytes, ms: sidebar.ms });
+  }
+  return { ...result, snapshot: snapshotReport, retention: retentionReport, ...sidebar === undefined ? {} : { sidebar } };
 }
 function noteFailure(counterpart, emit, code, step, date) {
   if (counterpart.observer)
@@ -316,12 +327,16 @@ async function main() {
     observer: config.observer === true
   });
   log.start();
+  const sidebarWanted = sidebarInstalled(process.env, homedir());
+  if (!sidebarWanted && removeSidebarStatus(choice.path))
+    log.event({ name: "runner.sidebar", data: { removed: true } });
   try {
     const report = await runOnce({
       config,
       signal: controller.signal,
       ...pinnedSession() === null ? {} : { session: pinnedSession() },
       ...pinnedScope() === null ? {} : { scope: pinnedScope() },
+      ...sidebarWanted ? { sidebarConfigPath: choice.path } : {},
       onEvent: (name, data) => log.event({ name, data })
     });
     log.end(report.reason, { swept: report.swept, minted: report.minted, code: report.code });

@@ -1,204 +1,81 @@
 /**
- * The pane's tree, on every surface: the title (each view's header places
- * it), a paused folder's banner, "Meet your
- * counterpart", the confirm row and a switch's note, the body, and the
- * footer's switches. No `$`: the Pane hook in `register.tsx` reads the state,
+ * The pane's tree, on every surface: the title (the header in `desktop.tsx`
+ * places it), a paused folder's banner, the body, and the footer of
+ * instructions. No `$`: the Pane hook in `register.tsx` reads the state and
  * builds the body (its `Client` tag must stay in the hooks module's own
- * source) and hands each press here as a closure. The header is the view's:
- * `terminal.tsx` (the brain, a `Raster`) or `desktop.tsx` (no brain).
+ * source).
+ *
+ * v1 (the directory trim, 2026-10-14): nothing in the pane acts. No Button
+ * runs a command or calls a tool: the intro row, the folder switch and its
+ * confirm, and the view and avatar switches are gone; the footer says how to
+ * do each instead (`words.ts#footerLines`). Nothing is a link either
+ * (2026-10-14): COUNTERPARTS is its name, and the dashboard is
+ * `/counterparts:dashboard`, which the footer says.
  */
 
 import type { Elements } from 'claude-code'
 
-import type { SidebarBrain, SidebarScope, SidebarView } from '../types'
-import { shortDir, wrap } from './feed'
+import type { SidebarScope } from '../types'
+import { shortDir } from './feed'
 import { clip } from './sections'
 import type { Line } from './sections'
-import { HOVER_CP } from './state'
-import { P, SURFACE, bg } from './theme'
-import { CONFIRM_FROM, scopeHover, switchAt } from './words'
+import { P, bg } from './theme'
+import { RESUME_SAY, footerLines } from './words'
 
-/** The constructors the pane draws with: every surface has these four. */
-export type PaneEls = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Link'>
+/** The constructors the pane draws with: every surface has these. */
+export type PaneEls = Pick<Elements['terminal'], 'Box' | 'Text'>
 
-/**
- * What a press does: closures the Pane hook makes over its `$`; and where the title links (`dashboardHref`, the
- * terminal only; null: the title is a Button that runs `/counterparts:dashboard`, `openDashboard`).
- */
-export type PaneActions = {
-  dashboardHref: string | null
-  openDashboard: () => Promise<unknown>
-  pressScope: (to: 'on' | 'paused' | 'off') => Promise<unknown>
-  pressMeet: () => Promise<unknown>
-  confirmChange: () => Promise<unknown>
-  cancelPause: () => Promise<unknown>
-  view: (v: SidebarView) => Promise<unknown>
-  brain: (b: SidebarBrain) => Promise<unknown>
-}
+// ── the title, which the header places ──
 
-// ── the title, which each view's header places ──
-
-/**
- * COUNTERPARTS, the way to the dashboard: on the terminal a `Link` the terminal opens; elsewhere a Button running
- * `/counterparts:dashboard`. `lead` (the brainless header) puts a dot before it and `↗` after.
- */
-export function titleButton(els: PaneEls, actions: PaneActions, o: { lead: boolean; paused: boolean; dot: string | null }): JSX.Element {
-  const { Box, Text, Link, Button } = els
+/** COUNTERPARTS, plain text on every surface (no link, 2026-10-14). `lead` puts a dot before it. */
+export function titleButton(els: PaneEls, o: { lead: boolean; paused: boolean; dot: string | null }): JSX.Element {
+  const { Box, Text } = els
   const words = [
     ...(o.lead ? [<Text key="dot" color={o.dot ?? P.accentDim}>◉ </Text>] : []),
     <Text key="name" color={o.paused ? P.dim : P.accent} bold>COUNTERPARTS</Text>,
-    ...(o.lead ? [<Text key="arrow" color={P.accentDim}> ↗</Text>] : []),
   ]
-  const href = actions.dashboardHref
-  // Off the terminal (the desktop draws a non-https Link as plain text): a Button, which starts the dashboard or,
-  // already up, opens it (`/counterparts:dashboard`).
-  if (href === null) {
-    return (
-      <Button key="title" plain onPress={() => actions.openDashboard()}>
-        {words}
-      </Button>
-    )
-  }
   return (
     <Box key="title" flexDirection="row">
-      <Text>
-        <Link href={href}>{words}</Link>
-      </Text>
+      <Text>{words}</Text>
     </Box>
   )
 }
 
 // ── under the header ──
 
-/** A paused (or off) folder says so before anything else in the pane: three rows. */
-export function pausedBanner(els: PaneEls, actions: PaneActions, scope: SidebarScope, w: number): JSX.Element[] {
-  const { Text, Button } = els
+/** A paused (or off) folder says so before anything else in the pane: three rows, said, not pressed. */
+export function pausedBanner(els: PaneEls, scope: SidebarScope, w: number): JSX.Element[] {
+  const { Text } = els
   const off = scope.mode === 'off'
+  const how = off
+    ? scope.own ? 'ask Claude to turn it back on' : `off by ${shortDir(scope.setBy)}`
+    : scope.own ? RESUME_SAY : `paused by ${shortDir(scope.setBy)}`
   return [
     <Text key="paused" color={P.accent2} bold>{clip(off ? '◌ Counterparts off here' : '⏸ Counterparts paused here', w)}</Text>,
-    <Button key="resume-banner" plain onPress={() => actions.pressScope('on')}>
-      <Text color={P.accent2} underline>
-        {clip(off ? (scope.own ? 'click to turn it back on' : `off by ${shortDir(scope.setBy)} · why`) : scope.own ? 'click to resume' : `paused by ${shortDir(scope.setBy)} · how to resume`, w)}
-      </Text>
-    </Button>,
+    <Text key="paused-how" color={P.accent2}>{clip(how, w)}</Text>,
     <Text key="paused-gap"> </Text>,
   ]
 }
 
-/** The first meeting, put off or not finished: one cyan row at the top of the body, and a blank one. */
-export function meetRow(els: PaneEls, actions: PaneActions, w: number): JSX.Element[] {
-  const { Text, Button } = els
-  return [
-    <Button key="meet" plain onPress={() => actions.pressMeet()}>
-      <Text color={P.accent} bold>{clip('Start the 5-minute intro', w)}</Text>
-    </Button>,
-    <Text key="meet-gap"> </Text>,
-  ]
+// ── the footer: how to do what the pane doesn't ──
+
+/** The footer's rows at `w` (`fit`: the cells its text may take, wider on a surface with its own font): a rule (or a blank) and the lines. */
+export function footerRows(fit: number, paused = false): number {
+  return 1 + footerLines(fit, paused).length
 }
 
-/** What the switches say, above them: the pause (or off, or on) confirm, a note. */
-export function aboveSwitches(
-  els: PaneEls,
-  actions: PaneActions,
-  s: { scope: SidebarScope; pauseAsk: { dir: string; to?: 'pause' | 'off' | 'on' } | null; note: { text: string } | null; w: number },
-): JSX.Element[] {
-  const { Box, Text, Button } = els
-  const { scope, pauseAsk, note, w } = s
-  const above: JSX.Element[] = []
-  const askTo = pauseAsk?.to ?? 'pause'
-  if (pauseAsk !== null && scope.mode !== 'unknown' && CONFIRM_FROM[askTo].includes(scope.mode)) {
-    const where = shortDir(pauseAsk.dir)
-    const ask =
-      askTo === 'off'
-        ? `Turn Counterparts memory off in ${where} for every session here? Nothing is kept or recalled while it's off.`
-        : askTo === 'on'
-          ? scope.mode === 'off'
-            ? `Turn memory back on in ${where}? Nothing from while it was off was kept.`
-            : `Turn memory fully on in ${where}? New memories will be kept here, for every session.`
-          : `Pause Counterparts memory in ${where} for every session here?`
-    wrap(ask, w).forEach((l, i) => above.push(<Text key={`ask${String(i)}`} color={P.accent2}>{l}</Text>))
-    above.push(
-      <Box key="pause-ask" flexDirection="row">
-        <Button key={`confirm-${askTo}`} onPress={() => actions.confirmChange()}>{askTo === 'off' ? 'Turn off' : askTo === 'on' ? 'Turn on' : 'Pause'}</Button>
-        <Text> </Text>
-        <Button key="cancel-pause" onPress={() => actions.cancelPause()}>Cancel</Button>
-      </Box>,
-    )
-  }
-  if (note !== null) wrap(note.text, w).forEach((l, i) => above.push(<Text key={`note${String(i)}`} color={P.text}>{l}</Text>))
-  if (above.length > 0) above.push(<Text key="above-gap"> </Text>)
-  return above
-}
-
-// ── the footer: each dot and its word one hit target ──
-
-export function footer(
-  els: PaneEls,
-  actions: PaneActions,
-  s: { scope: SidebarScope; w: number; view: SidebarView; mode: SidebarBrain; cards: boolean },
-): JSX.Element {
-  const { Box, Text, Button } = els
-  const { scope, w, mode, cards } = s
-  const dotWord = (key: string, isOn: boolean, word: string, onPress: () => Promise<unknown>, dot?: string, dim = false, lit: string = P.accent) => (
-    <Button key={key} plain onPress={onPress}>
-      <Text color={isOn && !dim ? lit : P.dim}>{dot ?? (isOn ? '●' : '○')}</Text>
-      <Text color={isOn && !dim ? P.hi : P.dim}>{` ${word}`}</Text>
-    </Button>
-  )
-  // The Counterparts switch, three-way: `on` (◐ for reads-only), `paused` and `off` (amber, a warning, as
-  // the status line says it). Unknown: every dot `?` and dim, never one lit; `…` while a press is answered.
-  const at = switchAt(scope.mode)
-  const cpDot = (pos: 'on' | 'paused' | 'off'): string => {
-    if (at === null) return scope.busy ? '…' : '?'
-    if (pos !== at) return '○'
-    if (scope.busy) return '…'
-    return pos === 'on' && scope.mode === 'observer' ? '◐' : '●'
-  }
-  // `Counterparts ● on ○ paused ○ off` is 32 cells, the docked pane's text width; narrower, a shorter word.
-  const cpLabel = w >= 32 ? 'Counterparts' : 'memory'
-  // What a click on the Counterparts switch does, over the two rows above the footer while hovered: nothing moves under the pointer.
-  const hoverCard = (key: string, group: string, text: string) => (
-    <Box key={key} position="absolute" top={-2} left={0} width={w} height={2} display="none" hover={{ display: 'flex', scope: group }} flexDirection="column" {...bg(P.panel)}>
-      {wrap(text, w)
-        .slice(0, 2)
-        .map((l, i) => (
-          <Text key={`${key}${String(i)}`} color={P.mid}>{l}</Text>
-        ))}
-    </Box>
-  )
-  const viewNow = s.view
+export function footer(els: PaneEls, s: { w: number; fit: number; prose: boolean; paused: boolean }): JSX.Element {
+  const { Box, Text } = els
+  const { w, fit, prose, paused } = s
   return (
     <Box key="footer" flexDirection="column" width={w}>
-      {cards && !SURFACE.prose ? hoverCard('cp-why', HOVER_CP, scopeHover(scope)) : null}
-      {SURFACE.prose ? <Text> </Text> : <Text color={P.faint}>{'─'.repeat(w)}</Text>}
-      <Box key="row-cp" flexDirection="row" hover={{ scope: HOVER_CP }}>
-        <Text color={P.mid}>{cpLabel}</Text>
-        {(['on', 'paused', 'off'] as const).map(pos => (
-          <Box key={`cp-${pos}-box`} flexDirection="row">
-            <Text> </Text>
-            {dotWord(`cp-${pos}`, at === pos, pos, () => actions.pressScope(pos), cpDot(pos), at === null, pos === 'on' ? P.accent : P.accent2)}
-          </Box>
-        ))}
-      </Box>
-      <Box flexDirection="row">
-        <Text color={P.mid}>view</Text>
-        {(['sidebar', 'quiet'] as const).map(v => (
-          <Box key={`v-${v}`} flexDirection="row">
-            <Text> </Text>
-            {dotWord(`view-${v}`, viewNow === v, v, () => actions.view(v))}
-          </Box>
-        ))}
-      </Box>
-      <Box flexDirection="row">
-        <Text color={P.mid}>avatar</Text>
-        {(SURFACE.prose ? ([['fox', 'animal'], ['off', 'off']] as const) : ([['turning', 'brain'], ['fox', 'animal'], ['off', 'off']] as const)).map(([b, word]) => (
-          <Box key={`b-${b}`} flexDirection="row">
-            <Text> </Text>
-            {/* The brain is one dot, turning or still: a press on it keeps whichever it was. */}
-            {dotWord(`brain-${b}`, mode === b || (b === 'turning' && mode === 'still'), word, () => actions.brain(b === 'turning' && mode === 'still' ? 'still' : b))}
-          </Box>
-        ))}
-      </Box>
+      {prose ? <Text> </Text> : <Text color={P.faint}>{'─'.repeat(w)}</Text>}
+      {footerLines(fit, paused).map((l, i) => (
+        <Text key={`f${String(i)}`}>
+          <Text color={P.mid}>{l.label}</Text>
+          {l.how === '' ? null : <Text color={P.hi}>{l.how}</Text>}
+        </Text>
+      ))}
     </Box>
   )
 }

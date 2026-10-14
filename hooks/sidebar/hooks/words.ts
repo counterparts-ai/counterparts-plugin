@@ -1,13 +1,12 @@
 /**
  * What the sidebar says, worked out with no `$` (shared core, no drawing):
- * the stored view and brain read from any version, the status line, what
- * the folder's switch says instead of acting and over its hover card, the
- * tail's words for what happened, an opened memory's meta line, the first
- * meeting's once-only mark, and a scope tool's answer read into a folder's
- * state.
+ * the stored view and avatar read from any version, the status line, what
+ * `/counterparts resume` says, the footer's instructions, the tail's words
+ * for what happened, an opened memory's meta line, and the first meeting's
+ * once-only mark.
  */
 
-import type { SidebarBrain, SidebarSaved, SidebarScope, SidebarView } from '../types'
+import type { SidebarAvatar, SidebarSaved, SidebarScope, SidebarView } from '../types'
 import { shortDay, shortDir } from './feed'
 
 /** Nothing is remembered and nothing comes to mind: paused for now, or set off. */
@@ -25,9 +24,12 @@ export function normView(v: unknown): SidebarView {
   return v === 'quiet' || v === 'rail' || v === 'hidden' || v === 'strip' ? 'quiet' : 'sidebar'
 }
 
-/** The avatar as stored: a mode someone chose stays; nothing stored (or one this version doesn't know) is the fox. */
-export function normBrain(v: unknown): SidebarBrain {
-  return v === 'still' || v === 'off' || v === 'turning' ? v : 'fox'
+/**
+ * The avatar as stored: `off` stays; anything else is the fox, including the
+ * brain (`turning`, `still`) an older version stored, which v1 no longer draws.
+ */
+export function normAvatar(v: unknown): SidebarAvatar {
+  return v === 'off' ? 'off' : 'fox'
 }
 
 /**
@@ -39,60 +41,9 @@ export function statusFor(scope: SidebarScope): string | undefined {
   if (!isPaused(scope.mode)) return undefined
   const parts =
     scope.mode === 'paused'
-      ? ['⏸ Counterparts memory paused in this folder', scope.own ? '/counterparts resume' : `resume it in ${shortDir(scope.setBy)}`]
+      ? ['⏸ Counterparts memory paused in this folder', scope.own ? RESUME_SAY : `resume it in ${shortDir(scope.setBy)}`]
       : ['◌ Counterparts memory off in this folder']
   return parts.join(' · ')
-}
-
-export function trimSlash(path: string): string {
-  return path.replace(/\/+$/, '')
-}
-
-/**
- * What the switch says instead of acting, by where the folder stands. It acts
- * only on a folder whose OWN entry holds the mode: pausing anything else would
- * leave an entry of its own behind when resumed (the `scope` tool can set
- * on, observer, off, pause and resume, not "unset"), and it never turns an
- * `off` folder on.
- */
-export function switchExplains(scope: SidebarScope): string | null {
-  const here = scope.dir ?? 'this folder'
-  // A folder off by its OWN entry: the switch turns it back on (after a confirm). Off by a parent's: never flipped from here.
-  if (scope.mode === 'off' && !scope.own) {
-    return scope.setBy === null
-      ? `This folder is off, and not by a setting of its own. \`counterparts scope ${here} --on\` turns it on.`
-      : `This folder is off because ${scope.setBy} is set off. The switch won't change that folder from here; \`counterparts scope ${scope.setBy} --on\` does.`
-  }
-  if (scope.mode === 'paused' && !scope.own) {
-    return `Paused because ${scope.setBy ?? 'a folder above this one'} is paused. Resume it there: \`counterparts scope ${scope.setBy ?? '<that folder>'} --resume\`.`
-  }
-  if (scope.mode === 'unset') {
-    return `Nothing is set for this folder, so Counterparts is on by default. The switch pauses only a folder with a setting of its own: a pause here would come back as an explicit “on”, and nothing can put a folder back to unset yet. \`counterparts scope ${here} --on\` gives it one.`
-  }
-  if ((scope.mode === 'on' || scope.mode === 'observer') && !scope.own) {
-    return `This folder follows ${scope.setBy ?? 'a folder above it'} (${scope.mode}). The switch pauses only a folder with a setting of its own; \`counterparts scope ${here} --${scope.mode}\` gives it one.`
-  }
-  return null
-}
-
-/**
- * What a click on the Counterparts switch does, shown while the pointer is on
- * it: whole sentences in the card's two rows at the pane's 32 columns (a
- * longer one was cut mid-sentence there: "A click pauses it for").
- */
-export function scopeHover(scope: SidebarScope): string {
-  if (scope.mode === 'unknown') return 'Not read yet: a click checks this folder, changing nothing.'
-  if (switchExplains(scope) !== null) return "This switch can't change this folder. A click says why."
-  if (scope.mode === 'paused') return 'Paused here, for every session. on resumes it; off asks first.'
-  if (scope.mode === 'off') return 'Off here, for every session. on turns it back on (asks first).'
-  if (scope.mode === 'observer') return 'Reads only here. on, paused or off: each asks first.'
-  return 'Paused or off holds for every session here; each asks first.'
-}
-
-/** Where the three-way switch stands: `on` for on, observer and unset (on by default); null while unknown. */
-export function switchAt(mode: string): 'on' | 'paused' | 'off' | null {
-  if (mode === 'unknown') return null
-  return mode === 'paused' ? 'paused' : mode === 'off' ? 'off' : 'on'
 }
 
 /** An opt-in written in the environment: `1`, `true`, `yes` or `on`. */
@@ -140,56 +91,76 @@ export function firedIn(stored: unknown): string | null {
   return typeof session === 'string' ? session : null
 }
 
-// ── the folder's switch ────────────────────────────────────────────────────
-
-export function scopeOf(payload: Record<string, unknown> | null, isError: boolean, before: SidebarScope): SidebarScope {
-  if (isError || payload === null) {
-    return { ...before, busy: false, error: String(payload?.['detail'] ?? payload?.['reason'] ?? 'refused') }
-  }
-  const mode = typeof payload['mode'] === 'string' ? (payload['mode'] as string) : before.mode
-  const dir = typeof payload['scope'] === 'string' ? (payload['scope'] as string) : before.dir
-  // A read names the entry that governs (`setBy`); a set wrote this folder's own.
-  const setBy = payload['set'] === true ? dir : typeof payload['setBy'] === 'string' ? (payload['setBy'] as string) : null
-  const own = setBy !== null && dir !== null && trimSlash(setBy) === trimSlash(dir)
-  return { mode, own, setBy, dir, error: null, busy: false, unread: null }
-}
-
 export function isAbsolutePath(path: string): boolean {
   return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
 }
 
-/** Which own modes each confirm may change: a pause from on or observer; an off from those or paused; an on from off or observer. */
-export const CONFIRM_FROM: Record<'pause' | 'off' | 'on', readonly string[]> = {
-  pause: ['on', 'observer'],
-  off: ['on', 'observer', 'paused'],
-  on: ['off', 'observer'],
+// ── pausing: said, not done (v1 trim, 2026-10-14) ───────────────────────────
+
+/** What to say to Claude to pause or resume memory in this folder: Claude calls Counterparts' `scope` tool. */
+export const PAUSE_SAY = 'say “pause memory here”'
+export const RESUME_SAY = 'say “resume memory here”'
+
+/**
+ * What `/counterparts resume` answers: the sidebar changes no setting, so it
+ * says where the folder stands and how to resume it.
+ */
+export function resumeWords(scope: SidebarScope): string {
+  if (scope.mode === 'unknown') return `Couldn't read this folder's setting. To resume memory here, ${RESUME_SAY} to Claude.`
+  const here = shortDir(scope.dir)
+  if (scope.mode === 'paused' && scope.own) return `Counterparts memory is paused in ${here}. To resume it, ${RESUME_SAY} to Claude.`
+  // Set by a folder above: resumed there (a session in that folder, or the npm install's console).
+  if (scope.mode === 'paused') {
+    const there = scope.setBy ?? '<that folder>'
+    return `Counterparts memory is paused here because ${shortDir(scope.setBy)} is paused. To resume, ${RESUME_SAY} to Claude in a session there, or, with the npm install, run \`counterparts scope ${shellQuote(there)} --resume\`.`
+  }
+  if (scope.mode === 'off') {
+    const where = scope.setBy ?? scope.dir ?? '<this folder>'
+    return `Counterparts memory is off in ${here}. To turn it back on, ask Claude in a session in ${shortDir(where)}, or, with the npm install, run \`counterparts scope ${shellQuote(where)} --on\`.`
+  }
+  return `Counterparts memory isn't paused in ${here}.`
+}
+
+/** A path as one shell word, as core's `scopes.ts#shellWord` writes it: plain, or in single quotes. */
+export function shellQuote(path: string): string {
+  return /^[A-Za-z0-9_./@%+=:,-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`
 }
 
 /**
- * The scope tool stood down: this session's memory server started while the
- * folder read only (`observer`), and changes nothing for the session's life,
- * the scope setting included (`serve.ts`). The console still can.
+ * The footer (v1 trim, 2026-10-14): how to do what the sidebar no longer does
+ * itself, a few words and a command each. One line, `label · command`, the
+ * labels shortened where a whole line won't fit in `w` cells (all four short
+ * ones fit the docked pane's 32); narrower still, the short label, then the
+ * command under it, indented.
  */
-export function stoodDownNote(scope: SidebarScope, to: 'pause' | 'resume' | 'off' | 'on'): string {
-  const flag = to === 'pause' ? '--pause' : to === 'off' ? '--off' : to === 'on' ? '--on' : '--resume'
-  return `This session started while the folder read only, so its memory server can't change the setting. \`counterparts scope ${scope.dir ?? '<this folder>'} ${flag}\` does; a session started after that follows it.`
-}
+export const FOOTER_ITEMS: readonly { label: string; short: string; how: string }[] = [
+  { label: '5-minute intro', short: 'Intro', how: '/counterparts:meet' },
+  { label: 'Dashboard', short: 'Dashboard', how: '/counterparts:dashboard' },
+  { label: 'Pause here', short: 'Pause', how: PAUSE_SAY },
+  { label: 'Hide this', short: 'Hide', how: '/counterparts quiet' },
+]
 
-/**
- * Whether an engine error is the auto-mode classifier declining a pane press (a press is not a request from the
- * person). Not the bare word "refused": the memory server's own errors use it (`scopeOf`'s fallback is
- * "refused"), and those are not auto mode's.
- */
-export function isRefusal(err: unknown): boolean {
-  return /classifier|auto mode/i.test(err instanceof Error ? err.message : String(err))
-}
+/** One footer line: its label part (dim) and its command part (bright); either may be empty. */
+export type FooterLine = { label: string; how: string }
 
-/**
- * What the note above the switches says when a press's call failed: never the engine's own text. A refusal by
- * the auto-mode classifier names what to ask Claude instead; anything else is a short generic line.
- */
-export function failedPressNote(to: 'pause' | 'resume' | 'off' | 'on', err: unknown): string {
-  if (!isRefusal(err)) return 'The switch could not change this just now. Try again, or ask Claude.'
-  const say = to === 'pause' ? 'pause Counterparts here' : to === 'off' ? 'turn it off here' : 'turn it back on here'
-  return `Auto mode didn't let the switch change this. Ask Claude: "${say}"`
+/** Where memory is paused or off, the pause line says how to resume instead. */
+const RESUME_ITEM = { label: 'Resume here', short: 'Resume', how: RESUME_SAY }
+
+/** The footer's lines at `w` cells; `paused`: this folder is paused or off. */
+export function footerLines(w: number, paused = false): FooterLine[] {
+  const items = paused ? FOOTER_ITEMS.map(it => (it.how === PAUSE_SAY ? RESUME_ITEM : it)) : FOOTER_ITEMS
+  const fits = (label: string, how: string): boolean => [...`${label} · ${how}`].length <= w
+  // One set of labels for every line, so they read alike: the long ones only where all of them fit.
+  const long = items.every(it => fits(it.label, it.how))
+  const out: FooterLine[] = []
+  for (const it of items) {
+    const label = long ? it.label : it.short
+    if (fits(label, it.how)) out.push({ label: `${label} · `, how: it.how })
+    else {
+      // A command is never cut: indented where that fits, else at the margin (under 25 cells the longest wraps).
+      out.push({ label: it.short, how: '' })
+      out.push({ label: [...it.how].length + 2 <= w ? '  ' : '', how: it.how })
+    }
+  }
+  return out
 }

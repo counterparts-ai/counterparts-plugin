@@ -172,6 +172,7 @@ export class McpServer {
   sessionTtlMs;
   resultCeilingChars;
   onEvent;
+  afterCall;
   nowFn;
   ring = [];
   seenBySession = new Map;
@@ -219,6 +220,7 @@ export class McpServer {
     this.codeTabOwner = opts.codeTabOwner === true;
     this.embedderGiven = opts.embedder ?? null;
     this.onEvent = opts.onEvent;
+    this.afterCall = opts.afterCall;
     this.nowFn = opts.now ?? (() => Date.now());
     this.emit("mcp.scope", undefined, {
       scope: this.scope,
@@ -383,6 +385,9 @@ export class McpServer {
       return failure(id, ERROR_CODES.INVALID_PARAMS, "arguments must be an object");
     }
     const result = await this.call(name, args ?? {});
+    try {
+      this.afterCall?.(canonicalToolName(name));
+    } catch {}
     return success(id, result);
   }
   async call(asked, args) {

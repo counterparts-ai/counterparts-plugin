@@ -31,6 +31,7 @@ import { localDate } from "../../../core/time.js";
 import { hostScope, openServer } from "../index.js";
 import { openLog } from "../../log/index.js";
 import { serveStdio } from "../stdio.js";
+import { SidebarStatusWriter, removeSidebarStatus, sidebarInstalled } from "../../sidebar-status.js";
 import { stoodDownServer } from "../stood-down.js";
 import { npmWiring } from "../../host-wiring.js";
 import { PLUGIN_ROOT_ENV, ensureFirstRun, installRoute, mcpGate, pluginOrigin, runningAsPlugin } from "../../plugin.js";
@@ -142,6 +143,9 @@ export function desktopDoctorNotice(input) {
 export function serverConfigChoice(argv = process.argv.slice(2), env = process.env) {
   return resolveConfigPath(argv, env);
 }
+export const SIDEBAR_START_MS = 3000;
+export const SIDEBAR_AFTER_CALL_MS = 1500;
+export const SIDEBAR_WATCH_MS = 15000;
 async function main() {
   const { unreadable: stanceNotices, ...opts } = launchOptions(process.argv.slice(2), process.env);
   for (const line of stanceNotices)
@@ -208,10 +212,12 @@ async function main() {
   const startedByClaudeCode = claudeCodeEnvMarker(process.env) !== null;
   const { ownerSaid, ...launch } = opts;
   const ownerSays = ownerStance({ owner: launch.owner, ownerSaid }, config, startedByClaudeCode);
+  let sidebar = null;
   const server = openServer({
     ...launch,
     ...ownerSays,
     onEvent: toLog,
+    afterCall: () => sidebar?.schedule(SIDEBAR_AFTER_CALL_MS),
     onCounterpartEvent: toLog,
     observer: opts.observer || registryObserver && startedByClaudeCode,
     ...registryObserver && !startedByClaudeCode && !opts.observer ? { launchObserver: true } : {},
@@ -252,6 +258,21 @@ async function main() {
   });
   log = opened;
   opened.start({ boundSession: server.launchedSession !== null });
+  const sidebarWanted = sidebarInstalled(process.env, homedir());
+  if (!sidebarWanted)
+    removeSidebarStatus(choice.path);
+  if (sidebarWanted && !server.observer && stance !== "off") {
+    const store = server.counterpart.store;
+    sidebar = new SidebarStatusWriter({
+      configPath: choice.path,
+      dataDir: store.dir,
+      ...timeZone === undefined ? {} : { timeZone },
+      newestSeq: () => store.eventLog({ order: "desc", limit: 1 })[0]?.seq ?? null,
+      onWrite: (w) => toLog({ name: "mcp.sidebar", data: { written: w.written, reason: w.reason, bytes: w.bytes, ms: w.ms } })
+    });
+    sidebar.schedule(SIDEBAR_START_MS);
+    sidebar.watch(SIDEBAR_WATCH_MS);
+  }
   try {
     await serveStdio(server, process.stdin, {
       write: (chunk) => {
@@ -263,6 +284,7 @@ async function main() {
     opened.threw(err);
     throw err;
   } finally {
+    sidebar?.stop();
     server.forgetLaunch();
     server.counterpart.close();
   }

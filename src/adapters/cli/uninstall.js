@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join, parse as parsePath, resolve } from
 import { Store, assertSafeDataDir, dateOf, isWithin, storeExists } from "../../core/store/index.js";
 import { isJournal } from "../../core/sleep/index.js";
 import { SCOPES_FILE_NAME, shellWord } from "../scopes.js";
+import { SIDEBAR_FILE_NAME } from "../sidebar-status.js";
 import { PLUGIN_ROOT_ENV, installRoute } from "../plugin.js";
 import { pluginInstall } from "../host-wiring.js";
 import { pluginConsoleWords } from "../runtime.js";
@@ -96,6 +97,8 @@ export function ownedKind(name, owned) {
     return "snapshots";
   if (owned.store !== null && name === owned.store)
     return "store";
+  if (name === SIDEBAR_FILE_NAME || /^sidebar\.json\.\d+\.tmp$/.test(name))
+    return "sidecar";
   const bases = [owned.config, owned.scopes, owned.snapshots, owned.store];
   for (const base of bases) {
     if (base === null || !name.startsWith(`${base}.`))

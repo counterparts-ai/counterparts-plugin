@@ -16,7 +16,7 @@ import { basename, dirname, join, resolve } from "node:path";
 export const DEFAULT_STORE_DIR = "store";
 import { EMBEDDER_KINDS } from "../config.js";
 import { CONFIG_ENV, CONFIG_FLAG, defaultConfigPath } from "../config-path.js";
-import { entryScript, parseScriptInvocation, runtimeOf, runtimePresent, scriptArgs, shellTokens } from "../runtime.js";
+import { entryScript, parseScriptInvocation, readsHostUserConfig, runtimeOf, runtimePresent, scriptArgs, shellTokens } from "../runtime.js";
 import { pluginInstall, readOurHook } from "../host-wiring.js";
 import {
   DEFAULT_DATA_DIR_NAME,
@@ -237,7 +237,7 @@ function readJsonFile(path) {
     return { state: "unreadable", value: {} };
   }
 }
-export function readHost(home, cwd, env = process.env) {
+export function readHost(home, cwd, env = process.env, readsUserConfig = readsHostUserConfig()) {
   const base = hostConfigBase(home, env);
   const events = new Set;
   const live = new Set;
@@ -309,7 +309,7 @@ export function readHost(home, cwd, env = process.env) {
     }
   }
   const mcpFile = hostMcpFile(base);
-  const mcpRead = readJsonFile(mcpFile);
+  const mcpRead = readsUserConfig ? readJsonFile(mcpFile) : { state: "absent", value: {} };
   const servers = mcpRead.value["mcpServers"];
   const mcp = servers !== null && typeof servers === "object" && !Array.isArray(servers) && MCP_SERVER_NAME in servers;
   if (mcp) {
@@ -338,6 +338,7 @@ export function readHost(home, cwd, env = process.env) {
     mcpName: MCP_SERVER_NAME,
     mcpFile,
     mcpUnreadable: mcpRead.state === "unreadable",
+    mcpRead: readsUserConfig,
     runtimes: [...runtimes.entries()].map(([exe, row]) => ({
       exe,
       kind: row.kind,

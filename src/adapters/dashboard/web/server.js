@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { ownerNames } from "../../../core/sleep/index.js";
@@ -8,9 +8,9 @@ import { zoneBeside, zoneOfConfig } from "../../config.js";
 import { Dashboard } from "../index.js";
 import { upgradePending, upgradePendingSentence } from "../upgrade.js";
 import {
+  ACTION_HEADER_NAME,
+  ACTION_META_NAME,
   MAX_BODY_BYTES,
-  TOKEN_HEADER,
-  TOKEN_META,
   checkActionRequest,
   newActionToken,
   runAction
@@ -42,8 +42,25 @@ export const DEFAULT_PORT = 4747;
 export const PORT_ENV = "COUNTERPARTS_DASHBOARD_PORT";
 const HERE = packagePath("src/adapters/dashboard/web");
 const APP_PATH = join(HERE, "app.html");
+export const BRAIN_LIBRARY = join(HERE, "shared", "vendor", "three.module.min.js");
+const BRAIN_ON = `<meta name="counterparts-brain" content="on">`;
+const BRAIN_OFF = `<meta name="counterparts-brain" content="off">`;
+export function withBrainSwitch(page, served = existsSync(BRAIN_LIBRARY)) {
+  return served ? page : page.replace(BRAIN_ON, BRAIN_OFF);
+}
 const NO_STORE = { "cache-control": "no-store" };
-const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` + `<rect width="64" height="64" rx="13" fill="#0a0e14"/>` + `<path d="M14 46 L32 32 L50 18" stroke="#00e5ff" stroke-opacity=".35" stroke-width="2.5" fill="none" stroke-linecap="round"/>` + `<circle cx="14" cy="46" r="4.5" fill="#00bfa5"/>` + `<circle cx="32" cy="32" r="7" fill="#00e5ff"/>` + `<circle cx="50" cy="18" r="4.5" fill="#b388ff"/></svg>`;
+const FAVICON_PATH = join(HERE, "favicon.svg");
+function favicon() {
+  try {
+    return {
+      status: 200,
+      headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" },
+      body: readFileSync(FAVICON_PATH, "utf8")
+    };
+  } catch {
+    return null;
+  }
+}
 const ALLOWED_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 export function isAllowedHost(host) {
   if (typeof host !== "string" || host.length === 0)
@@ -74,10 +91,10 @@ function html(body) {
 }
 function page(file, token) {
   try {
-    const text = readFileSync(file, "utf8");
+    const text = withBrainSwitch(readFileSync(file, "utf8"));
     if (token === undefined || !/^[0-9a-f]+$/.test(token))
       return html(text);
-    return html(text.replace(`<meta name="${TOKEN_META}" content="">`, `<meta name="${TOKEN_META}" content="${token}">`));
+    return html(text.replace(`<meta name="${ACTION_META_NAME}" content="">`, `<meta name="${ACTION_META_NAME}" content="${token}">`));
   } catch {
     return json({ error: `the dashboard page is missing from the install (${file}). Reinstall, or run from a checkout.` }, 500);
   }
@@ -118,11 +135,7 @@ export function router(url, host, src, opts = {}) {
     if (path === "/brain")
       return { status: 302, headers: { location: "/#home", ...NO_STORE }, body: "" };
     if (path === "/favicon.svg" || path === "/favicon.ico") {
-      return {
-        status: 200,
-        headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" },
-        body: FAVICON_SVG
-      };
+      return favicon() ?? json({ error: `not found: ${path}` }, 404);
     }
     if (path === "/api/meta")
       return json(metaView(src));
@@ -169,9 +182,9 @@ export function router(url, host, src, opts = {}) {
     if (path === "/api/flow")
       return json(flowView(src, intParam(url, "limit", 24)));
     if (path === "/api/node") {
-      const key = url.searchParams.get("key") ?? "";
-      const detail = nodeDetail(src, key, intParam(url, "limit", 8));
-      return detail.found ? json(detail) : json({ error: `no such node: ${key}` }, 404);
+      const nodeKey = url.searchParams.get("key") ?? "";
+      const detail = nodeDetail(src, nodeKey, intParam(url, "limit", 8));
+      return detail.found ? json(detail) : json({ error: `no such node: ${nodeKey}` }, 404);
     }
     if (path === "/api/health")
       return json(healthView(src));
@@ -293,7 +306,7 @@ export function startDashboard(opts = {}) {
       return;
     }
     try {
-      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      const url = new URL(req.url ?? "/", "http://localhost");
       const open = current();
       reply = open === null ? isAllowedHost(req.headers.host ?? null) ? upgradePendingReply(url.pathname, upgradePendingSentence(dir)) : forbiddenHost() : router(url, req.headers.host ?? null, open.source, { token });
     } catch (err) {
@@ -354,7 +367,7 @@ async function handleAction(req, res, name, token, boundPort, ctx) {
     host: header(req, "host"),
     origin: header(req, "origin"),
     contentType: header(req, "content-type"),
-    token: header(req, TOKEN_HEADER),
+    token: header(req, ACTION_HEADER_NAME),
     fetchSite: header(req, "sec-fetch-site")
   }, token, boundPort);
   if (refused !== null) {

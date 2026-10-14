@@ -5,7 +5,7 @@ import { RECALL_MAX_IDS } from "./deliberate.js";
 import { PRONOUN_RULE } from "../../core/onboarding.js";
 import { NO_PAGE_VERSION, pageRoomNote } from "../../core/self/index.js";
 export const SERVER_NAME = "counterparts";
-export const SERVER_VERSION = "0.3.22";
+export const SERVER_VERSION = "0.3.23";
 export function staleServerRefusal(host = DEFAULT_HOST) {
   return `Counterparts was updated and this server is still running the old version, so this tool did nothing. ${wordingFor(host).reconnect}`;
 }

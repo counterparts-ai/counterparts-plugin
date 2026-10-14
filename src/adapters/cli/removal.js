@@ -6,6 +6,7 @@ import { journalFilesFor, syncJournalCopy } from "../../core/self/journal-file.j
 import { paths, rowTombstoned } from "../../core/store/index.js";
 import { isLocked, openDb } from "../../core/store/db.js";
 import { chaseRemoved } from "../../core/store/owner-op-seam.js";
+import { chaseSidebarStatus } from "../sidebar-status.js";
 import { isSelfPageRow } from "../../core/self/page.js";
 const MEMORY_BEARING = new Set(["memory", "episode", "schema"]);
 export function removalRefusal(store, targetId) {
@@ -422,6 +423,9 @@ export function ownerRemoval(store, request, opts = {}) {
     unchased.push("cache");
   }
   chaseWriteAheadLog(store.dir, chased, unchased);
+  const sidebar = chaseSidebarStatus(store.dir, request.targetId);
+  if (sidebar !== null)
+    (sidebar.chased ? chased : unchased).push(sidebar.line);
   append("complete", unchased.length === 0 ? undefined : `${unchased.length} surface${unchased.length === 1 ? "" : "s"} unchased — see the console report`);
   emit("cli.removal.complete", {
     target: request.targetId,

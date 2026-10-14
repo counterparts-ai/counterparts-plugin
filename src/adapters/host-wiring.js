@@ -1,7 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { CONFIG_FLAG } from "./config-path.js";
-import { BUN_CONFIG_PREFIX, BUN_NO_ENV_FILE, isBinaryName, parseScriptInvocation, runtimeOf, runtimePresent, shellTokens } from "./runtime.js";
+import {
+  BUN_CONFIG_PREFIX,
+  BUN_NO_ENV_FILE,
+  isBinaryName,
+  parseScriptInvocation,
+  readsHostUserConfig,
+  runtimeOf,
+  runtimePresent,
+  shellTokens
+} from "./runtime.js";
 export const NPM_MCP_NAME = "counterparts";
 const SHELL_OPERATOR = /&&|\|\||;|\||>|<|`|\$\(/;
 export function isOurHookCommand(command) {
@@ -129,6 +138,15 @@ function mcpEntry(file, scope, servers, env) {
   const live = command.length > 0 && runtimePresent(command, env) && (run === null ? true : existsSync(isAbsolute(run.script) ? run.script : resolve(run.script)));
   return [{ file, scope, command: [command, ...args].join(" "), live }];
 }
+export function pluginStandsDown(installPath) {
+  if (installPath === null || installPath.length === 0)
+    return null;
+  if (existsSync(join(installPath, "src", "adapters", "plugin-run.sh")))
+    return true;
+  if (existsSync(join(installPath, "src", "adapters", "runtime.js")))
+    return false;
+  return null;
+}
 export function pluginInstall(input) {
   const moved = (input.env["CLAUDE_CONFIG_DIR"] ?? "").trim();
   const configDir = moved.length > 0 ? moved : join(input.home, ".claude");
@@ -154,16 +172,20 @@ export function pluginInstall(input) {
     if (isRecord(on) && typeof on[id] === "boolean")
       enabled = on[id];
   }
+  const installPath = first !== undefined && typeof first["installPath"] === "string" ? first["installPath"] : null;
   return {
     id,
-    installPath: first !== undefined && typeof first["installPath"] === "string" ? first["installPath"] : null,
+    installPath,
     version: first !== undefined && typeof first["version"] === "string" ? first["version"] : null,
     scope: first !== undefined && typeof first["scope"] === "string" ? first["scope"] : null,
     projectPath: first !== undefined && typeof first["projectPath"] === "string" ? first["projectPath"] : null,
-    enabled
+    enabled,
+    standsDown: pluginStandsDown(installPath)
   };
 }
 export function npmWiring(input) {
+  if (!(input.readsUserConfig ?? readsHostUserConfig()))
+    return { hooks: [], mcp: [] };
   const { settings, globalConfig } = claudeUserFiles(input.home, input.env);
   const cwd = input.cwd === null || input.cwd.length === 0 ? null : resolve(input.cwd);
   const hooks = [];

@@ -1,4 +1,5 @@
 import { existsSync, renameSync } from "node:fs";
+import { sidebarStatusPath, writeSidebarStatus } from "../sidebar-status.js";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -274,6 +275,9 @@ export async function startFreshCommand(parsed, io, env, home, named, now) {
     }
   }
   const created = parking ? final.storeDir : installTarget;
+  if (existsSync(sidebarStatusPath(configPath))) {
+    writeSidebarStatus({ configPath, dataDir: created, ...host.config.timeZone === undefined ? {} : { timeZone: host.config.timeZone } });
+  }
   const previous = parkedStore ?? soleParked(final);
   if (!existedBefore) {
     try {

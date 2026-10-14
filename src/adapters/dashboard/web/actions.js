@@ -8,8 +8,8 @@ const DELETE_KINDS = ["conversation-text", "backups", "activity-log"];
 export function isActionName(name) {
   return ACTIONS.includes(name);
 }
-export const TOKEN_HEADER = "x-counterparts-token";
-export const TOKEN_META = "counterparts-action-token";
+export const ACTION_HEADER_NAME = "x-counterparts-token";
+export const ACTION_META_NAME = "counterparts-action-token";
 export const MAX_BODY_BYTES = 64 * 1024;
 export const MAX_OUTPUT_BYTES = 256 * 1024;
 export const TIMEOUT_MS = {

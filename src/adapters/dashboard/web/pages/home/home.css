@@ -18,6 +18,9 @@
 .home-row{display:grid;gap:24px;align-items:start}
 .home-row>*{min-width:0}
 .home-row-a{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:center;margin:0 0 18px}
+/* No brain picture in this build (sections/brain.js#pictureServed): "Today" takes the row. */
+.home-row-a.is-solo{grid-template-columns:minmax(0,1fr)}
+.home-brain[hidden]{display:none}
 .home-row-b{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:stretch}
 .home-card{display:flex;flex-direction:column;min-width:0}
 .home-card .card{flex:1;margin-bottom:8px}

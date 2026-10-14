@@ -18,7 +18,7 @@ import { DATA_DIR_ENV, isWithin } from "../../core/store/index.js";
 import { CONFIG_ENV, CONFIG_FLAG } from "../config-path.js";
 import { isOurHookCommand } from "../host-wiring.js";
 import { claudeCodeEnvMarker } from "../hosts.js";
-import { parseScriptInvocation, scriptArgs, shellTokens } from "../runtime.js";
+import { parseScriptInvocation, readsHostUserConfig, scriptArgs, shellTokens } from "../runtime.js";
 import { installedBuild, readServerRecords, sameBuild, serverBelieved } from "../sessions.js";
 import {
   BIN,
@@ -481,8 +481,10 @@ export function mcpAddArgs(store, custom, exe, serve = MCP_SCRIPT) {
 export function mcpRemoveArgs() {
   return ["mcp", "remove", MCP_SERVER_NAME, "-s", "user"];
 }
-export function readMcp(home, env, store, custom, exe, serve = MCP_SCRIPT) {
+export function readMcp(home, env, store, custom, exe, serve = MCP_SCRIPT, readsUserConfig = readsHostUserConfig()) {
   const file = hostMcpFile(hostConfigBase(home, env));
+  if (!readsUserConfig)
+    return { file, present: false, matches: false, unreadable: false, notRead: true };
   if (!existsSync(file))
     return { file, present: false, matches: false, unreadable: false };
   let raw;
@@ -812,8 +814,8 @@ export async function unwire(input) {
     return { outcome: "refused", hooks: "refused", mcp: "skipped", backup: null, mcpConfirmed: false };
   }
   const merged = mergeHooks(sight.value, "", "unwire");
-  const mcp = readMcp(home, env, input.store, input.custom, input.exe);
-  if (!merged.changed && !mcp.present && !mcp.unreadable) {
+  const mcp = readMcp(home, env, input.store, input.custom, input.exe, MCP_SCRIPT, input.readsUserConfig);
+  if (!merged.changed && !mcp.present && !mcp.unreadable && mcp.notRead !== true) {
     u.ok("nothing to disconnect: no Counterparts hooks and no memory server were found.");
     wrappedNote(u, merged.wrapped, "left exactly as it is");
     u.hint(`looked in: ${sight.target}`);
@@ -880,10 +882,15 @@ export async function unwire(input) {
   const notThere = /not found|no .*server|does not exist|not configured/i.test(`${res.out}
 ${res.err}`);
   const stillThere = () => {
-    const fresh = readMcp(home, env, input.store, input.custom, input.exe);
-    return fresh.present || fresh.unreadable;
+    const fresh = readMcp(home, env, input.store, input.custom, input.exe, MCP_SCRIPT, input.readsUserConfig);
+    return fresh.present || fresh.unreadable || fresh.notRead === true;
   };
-  if (res.missing) {
+  if (res.missing && mcp.notRead === true) {
+    mcpConfirmed = false;
+    u.warn("`claude` is not on this PATH and this version does not read Claude Code's own configuration, so whether a memory server is still registered (an npm install's, if there is one) could not be checked.");
+    u.hint(`Remove one if it is there: claude mcp remove ${MCP_SERVER_NAME} -s user — and run this again where \`claude\` is on PATH to have it checked.`);
+    mcpWord = "printed";
+  } else if (res.missing) {
     mcpConfirmed = !stillThere();
     if (mcpConfirmed) {
       u.hint(`no MCP registration named "${MCP_SERVER_NAME}" was there to remove.`);
@@ -897,8 +904,8 @@ ${res.err}`);
     u.ok("memory server removed");
     mcpWord = "removed";
     mcpConfirmed = true;
-  } else if (notThere || !mcp.present) {
-    mcpConfirmed = !stillThere();
+  } else if (notThere || !mcp.present && mcp.notRead !== true) {
+    mcpConfirmed = mcp.notRead === true || !stillThere();
     u.hint(`no MCP registration named "${MCP_SERVER_NAME}" was there to remove.`);
     mcpWord = "absent";
   } else {

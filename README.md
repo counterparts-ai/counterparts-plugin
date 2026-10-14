@@ -32,15 +32,19 @@ Then restart Claude Code. The first session creates your memory in `~/.counterpa
 Claude offers a short first meeting: a few skippable questions to get to know you (where
 memory should be on, what you're working on, something you've loved, how you like to be
 talked to). Your answers become ordinary memories; a question you skip stores nothing.
-The sidebar never sends a message for you: its **Start the 5-minute intro** row starts the
-meeting when you press it.
-Say "later" and it is offered again another day, on three days at most; a
-**Start the 5-minute intro** row in the sidebar, or `/counterparts:meet`, starts it any time.
+Nothing sends a message for you: type `/counterparts:meet` to start it (the sidebar's
+footer says so).
+Say "later" and it is offered again another day, on three days at most;
+`/counterparts:meet` starts it any time.
 A memory that already existed is never offered it. Check its health any time with
 `/counterparts:doctor`.
 
-If you already use the npm install (`counterparts install`), the plugin notices and stands
-down, so the memory is never wired twice.
+If you also use the npm install (`counterparts install`), keep one or the other. This
+version of the plugin doesn't read Claude Code's user configuration file, where that
+install registers its memory server, so it doesn't notice the npm install and doesn't stand
+down for it: both run, on the same memory, and Claude is offered the memory tools twice.
+To keep only the plugin, run `counterparts disconnect` and restart Claude Code; to keep only
+the npm install, uninstall the plugin.
 
 ## What it adds
 
@@ -58,17 +62,25 @@ down, so the memory is never wired twice.
 
 ## What the sidebar does
 
-The sidebar is a Claude Code mod (`hooks/sidebar/`). This is everything it reaches outside
-its own pane:
+The sidebar is a Claude Code mod (`hooks/sidebar/`). It shows what memory is doing; it
+doesn't act. It runs no command, calls no tool, starts no process, makes no network
+request, and has no buttons and no links. Its
+footer says how to do the rest yourself: `/counterparts:meet` for the 5-minute intro,
+`/counterparts:dashboard` for the dashboard, say "pause memory here" to Claude to pause
+memory in a folder, and `/counterparts quiet` to hide it (`/counterparts` opens it again).
+This is everything it reaches outside its own pane:
 
-- **Your own dashboard, on this computer.** It reads the pulse, today's counts, the last
-  dream and memory cards with HTTP GET requests to the Counterparts dashboard at
-  `http://127.0.0.1:4747` (or the port in `COUNTERPARTS_DASHBOARD_PORT`), and asks it which
-  memory it serves, so it never shows another one. It sends nothing off your computer.
-- **Commands you click.** **Start the 5-minute intro** runs this plugin's `/counterparts:meet`;
-  in the desktop app, COUNTERPARTS and `more` run `/counterparts:dashboard`.
-- **One memory tool you press.** The folder switch (on, pause, off) calls Counterparts' own
-  `scope` tool when you choose and confirm; Claude Code's permission check applies.
+- **A status file Counterparts writes for it, in `~/.counterparts`.** Counterparts' own
+  background processes (the one after each reply, and the memory server) write
+  `sidebar.json` beside `~/.counterparts/claude-code.json`: the day and the count, today's
+  counts, the last dream, recent activity and the memories it names (titles and the start
+  of their text, as much as the pane shows). They write it only while this plugin is
+  installed. The sidebar reads that file every 15 to 30 seconds while it is open,
+  checks it was written by the memory this session uses (so it never shows another
+  one), and sends nothing anywhere. Before the first reply of a new install it says it
+  is waiting for the first session.
+- **Where this folder stands.** It reads the scope file the hooks read (beside
+  `~/.counterparts/claude-code.json`), to say when memory is paused or off here.
 - **What it watches.** It sees your slash commands and Counterparts' own tool calls only to
   update what it shows, and passes every one on unchanged: it never approves, denies or
   alters a command or a tool call, and never changes a setting.
@@ -94,13 +106,25 @@ You can delete any one kind of data at any time without touching the rest, from 
 dashboard or with `counterparts delete conversation-text`, `delete backups` or
 `delete activity-log`. It never leaves your computer except as above.
 
+**The sidebar's status file.** While this plugin (and so the sidebar) is installed,
+Counterparts writes `~/.counterparts/sidebar.json`, readable only by you (mode 0600): the
+day and the count, today's counts per mechanism, the last dream, the recent activity log
+and the memories it names, each with its title, kind, date and the first 800 characters of
+its text (a confidential memory's text is withheld, as everywhere). Never conversation
+text. It is rewritten as memory changes; removing a memory removes it from there too,
+`start-fresh` rewrites it for the new store, and once the plugin is gone the next
+Counterparts process deletes it. An npm-only install never writes it.
+
 **What else it reads and writes.** Besides the session transcript, it reads
-`~/.claude/settings.json`, your project's `.claude/settings.json` and `settings.local.json`,
-`~/.claude.json` and Claude Code's `plugins/installed_plugins.json`, only to tell whether
-the npm install is also set up, whether the plugin is on, and (for the sidebar) which
-configuration the hooks use. It doesn't read Claude Code's memory files, CLAUDE.md files or
-prompt history. Apart from `~/.counterparts`, it writes only to the plugin's own data
-folder (the downloaded program, if any), Claude Code's per-plugin storage (sidebar
+`~/.claude/settings.json` and `settings.local.json`, your project's `.claude/settings.json`
+and `settings.local.json`, Claude Code's `plugins/installed_plugins.json` and (for
+`/counterparts:doctor`, on a Mac) Claude Desktop's `claude_desktop_config.json`, only to
+tell whether the plugin is on, whether the npm install or Claude Desktop is also set up, and
+(for the sidebar) which configuration the hooks use. This version doesn't read Claude
+Code's user configuration file (its MCP servers and per-project state), and none of these
+files is read by the hooks or the memory server of an installed plugin. It doesn't read
+Claude Code's memory files, CLAUDE.md files or prompt history. Apart from `~/.counterparts`,
+it writes only to Claude Code's per-plugin storage (sidebar
 preferences) and small first-run files in your temp folder. The hooks start
 short-lived background processes on your computer for the slower work.
 `/counterparts:uninstall` lists running processes (`ps`) to find Counterparts' own before
@@ -161,14 +185,14 @@ The sidebar's fox is drawn from small PNG files in the plugin's own folder
 itself, and the desktop app's sidebar reads each one once. The script that builds them
 from the art is in the source repository (`tools/fox-art/`).
 
-The sidebar runs no programs. In a terminal, COUNTERPARTS and the `more` after a long
-memory are links to the dashboard, which your terminal opens (in some terminals with a
-⌘- or Ctrl-click). In the desktop app they are buttons that run `/counterparts:dashboard`,
-which starts the dashboard, or opens your browser on it when it is already running for
-your memory (it asks the page on 127.0.0.1 which memory it serves).
+The sidebar runs no programs, fetches nothing and holds no links: COUNTERPARTS and the
+`more` after a long memory are plain words. `/counterparts:dashboard` starts the
+dashboard, or opens your browser on it when it is already running for your memory (it
+asks the page on 127.0.0.1 which memory it serves).
 
 The dashboard, when you open it, is a page served on 127.0.0.1 only (port 4747 unless
 you set `COUNTERPARTS_DASHBOARD_PORT`), and runs until the session that started it ends.
+The sidebar doesn't need it running.
 
 ## Remove it
 
@@ -180,4 +204,4 @@ the plugin first, quit Claude Code, and type the confirmation yourself in a term
 ## License
 
 MIT. See [LICENSE](LICENSE). Bundled fonts (Outfit, Courier Prime) are under the SIL Open
-Font License and three.js under MIT; their licence texts sit beside them.
+Font License; their licence texts sit beside them.

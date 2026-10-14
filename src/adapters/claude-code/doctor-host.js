@@ -101,8 +101,8 @@ export function hostFindings(reading) {
     stale: stale.map((s) => `${s.event}→${s.path}`).join(","),
     settingsRead: reading.settingsRead.join(","),
     settingsUnreadable: reading.settingsUnreadable.join(","),
-    mcp: reading.mcp,
-    mcpFile: reading.mcpFile
+    mcp: reading.mcpRead === false ? null : reading.mcp,
+    mcpFile: reading.mcpRead === false ? null : reading.mcpFile
   };
   const plugin = reading.plugin !== undefined && reading.plugin !== null && reading.plugin.enabled ? reading.plugin : null;
   data["plugin"] = plugin === null ? null : plugin.id;
@@ -112,9 +112,10 @@ export function hostFindings(reading) {
       finding("host", "green", "Claude Code", `connected as the Claude Code plugin (${plugin.id}${plugin.version === null ? "" : ` ${plugin.version}`}): its ${String(total)} hooks and the memory tools load from the plugin`, "", data)
     ];
   }
-  const twiceClause = plugin === null ? "" : `ALSO installed as the Claude Code plugin (${plugin.id}), which stands down while this wiring is live`;
-  const twiceFix = plugin === null ? "" : `Installed twice: to keep only the plugin, run \`counterparts disconnect\` and restart Claude Code; to keep only this install, run \`claude plugin uninstall ${plugin.id}\`. Same memory either way.`;
-  const mcpClause = reading.mcp ? `the MCP server is registered in ${reading.mcpFile}` : reading.mcpUnreadable ? `${reading.mcpFile} could not be read, so the MCP registration could not be checked` : `no MCP server named "${reading.mcpName}" in ${reading.mcpFile}`;
+  const bothRun = plugin !== null && (reading.mcpRead === false || plugin.standsDown === false);
+  const twiceClause = plugin === null ? "" : bothRun ? `ALSO installed as the Claude Code plugin (${plugin.id}), whose build does not check for the other install, so both are running, on the same memory: every hook and memory tool is wired twice until a later version checks` : `ALSO installed as the Claude Code plugin (${plugin.id}), which stands down while this wiring is live`;
+  const twiceFix = plugin === null ? "" : `Installed twice${bothRun ? "; remove one" : ""}: to keep only the plugin, run \`counterparts disconnect\` and restart Claude Code; to keep only this install, run \`claude plugin uninstall ${plugin.id}\`. Same memory either way.`;
+  const mcpClause = reading.mcpRead === false ? "" : reading.mcp ? `the MCP server is registered in ${reading.mcpFile}` : reading.mcpUnreadable ? `${reading.mcpFile} could not be read, so the MCP registration could not be checked` : `no MCP server named "${reading.mcpName}" in ${reading.mcpFile}`;
   if (missing.length === 0 && stale.length === 0 && reading.mcp) {
     if (plugin !== null) {
       return [finding("host", "amber", "Claude Code", `connected: ${String(total)} hooks and the memory tools; ${twiceClause}`, twiceFix, data)];
@@ -129,8 +130,8 @@ export function hostFindings(reading) {
   if (stale.length > 0) {
     does.push(`replaces the ${stale.length === 1 ? "stale entry" : "stale entries"} with the path this install actually has`);
   }
-  const cannotRegister = !reading.mcp && !reading.mcpUnreadable && reading.claudeOnPath === false && reading.mcpAddLine !== undefined;
-  if (!reading.mcp && !reading.mcpUnreadable && !cannotRegister)
+  const cannotRegister = reading.mcpRead !== false && !reading.mcp && !reading.mcpUnreadable && reading.claudeOnPath === false && reading.mcpAddLine !== undefined;
+  if (reading.mcpRead !== false && !reading.mcp && !reading.mcpUnreadable && !cannotRegister)
     does.push("registers the memory tools");
   const byHand = cannotRegister ? `\`claude\` is not on this PATH, so \`counterparts connect\` cannot register the memory tools: run this where \`claude\` works — ${reading.mcpAddLine ?? ""} — then restart Claude Code.` : "";
   const fixes = [

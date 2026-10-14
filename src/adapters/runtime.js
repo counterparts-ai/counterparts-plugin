@@ -15,6 +15,9 @@ export function moduleExtOf(moduleUrl, binary = BINARY) {
 }
 export const MODULE_EXT = moduleExtOf(import.meta.url);
 export const TRANSPILED = MODULE_EXT === ".js";
+export function readsHostUserConfig(transpiled = TRANSPILED) {
+  return !transpiled;
+}
 export function entryScript(url, ext = MODULE_EXT) {
   const path = fileURLToPath(url);
   return ext === ".js" ? path.replace(/\.ts$/, ".js") : path;
