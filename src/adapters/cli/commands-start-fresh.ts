@@ -1,5 +1,6 @@
 /** `start-fresh`, its `--undo`, and `rollback` (moved out of `commands.ts`, 2026-10-11). */
 import { existsSync, renameSync } from "node:fs";
+import { sidebarStatusPath, writeSidebarStatus } from "../sidebar-status.js";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -524,6 +525,13 @@ export async function startFreshCommand(
   }
 
   const created = parking ? final.storeDir : installTarget;
+
+  // THE SIDEBAR'S STATUS FILE (2026-10-14) showed the store just set aside, a
+  // few of its memories' words included: written again, now, for the new one
+  // (which is nothing yet). Only where there is one: the sidebar is installed.
+  if (existsSync(sidebarStatusPath(configPath))) {
+    writeSidebarStatus({ configPath, dataDir: created, ...(host.config.timeZone === undefined ? {} : { timeZone: host.config.timeZone }) });
+  }
 
   // ── the record the new store keeps of its own beginning ───────────────────
   //

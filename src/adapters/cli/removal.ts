@@ -79,6 +79,7 @@ import type {
 // destruction path. It is reachable by importing the seam on purpose, never by
 // holding a `Store` (INTERFACE-GAPS §1, closed 2026-08-25).
 import { chaseRemoved } from "../../core/store/owner-op-seam.js";
+import { chaseSidebarStatus } from "../sidebar-status.js";
 // The page has its own door out (`self-page --clear`), and removal is not it.
 import { isSelfPageRow } from "../../core/self/page.js";
 
@@ -1060,6 +1061,12 @@ export function ownerRemoval(
   // true and actionable, rather than taking the removal down after the rows
   // have already gone.
   chaseWriteAheadLog(store.dir, chased, unchased);
+
+  // THE SIDEBAR'S STATUS FILE (2026-10-14) holds a few memories' words for the
+  // Claude Code sidebar, beside the configuration: deleted when it names this
+  // one, and written again without it (`adapters/sidebar-status.ts`).
+  const sidebar = chaseSidebarStatus(store.dir, request.targetId);
+  if (sidebar !== null) (sidebar.chased ? chased : unchased).push(sidebar.line);
 
   // THE DURABLE RECORD MUST NOT CLAIM MORE THAN THE CONSOLE (third review's
   // open question). The record's stages carry no surface list, so `complete`

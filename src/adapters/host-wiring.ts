@@ -35,7 +35,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { CONFIG_FLAG } from "./config-path.js";
-import { BUN_CONFIG_PREFIX, BUN_NO_ENV_FILE, isBinaryName, parseScriptInvocation, runtimeOf, runtimePresent, shellTokens } from "./runtime.js";
+import {
+  BUN_CONFIG_PREFIX,
+  BUN_NO_ENV_FILE,
+  isBinaryName,
+  parseScriptInvocation,
+  readsHostUserConfig,
+  runtimeOf,
+  runtimePresent,
+  shellTokens,
+} from "./runtime.js";
 
 /** The name `counterparts connect` registers the server under
  *  (`cli/install.ts#MCP_SERVER_NAME`), spelled again because this module may
@@ -310,6 +319,22 @@ export interface PluginInstallRead {
   /** `enabledPlugins[id]` from user, project and local settings, the last one
    *  that says anything winning (Claude Code's precedence); unset is enabled. */
   readonly enabled: boolean;
+  /** Does this build stand down beside the npm install's wiring? False for the
+   *  plugin directory's flavor (a transpiled tree, `src/adapters/runtime.js`
+   *  and no `plugin-run.sh`), which never reads `~/.claude.json` and so runs
+   *  beside it (`runtime.ts#readsHostUserConfig`); true for the launcher
+   *  flavor; null when `installPath` is unrecorded or holds neither. */
+  readonly standsDown?: boolean | null;
+}
+
+/** Which flavor sits at a plugin's `installPath`, read by its files: the
+ *  launcher flavor carries `src/adapters/plugin-run.sh`, the directory flavor
+ *  the transpiled `src/adapters/runtime.js` in its place. */
+export function pluginStandsDown(installPath: string | null): boolean | null {
+  if (installPath === null || installPath.length === 0) return null;
+  if (existsSync(join(installPath, "src", "adapters", "plugin-run.sh"))) return true;
+  if (existsSync(join(installPath, "src", "adapters", "runtime.js"))) return false;
+  return null;
 }
 
 /**
@@ -346,13 +371,15 @@ export function pluginInstall(input: {
     const on = settings === null ? undefined : settings["enabledPlugins"];
     if (isRecord(on) && typeof on[id] === "boolean") enabled = on[id] as boolean;
   }
+  const installPath = first !== undefined && typeof first["installPath"] === "string" ? first["installPath"] : null;
   return {
     id,
-    installPath: first !== undefined && typeof first["installPath"] === "string" ? first["installPath"] : null,
+    installPath,
     version: first !== undefined && typeof first["version"] === "string" ? first["version"] : null,
     scope: first !== undefined && typeof first["scope"] === "string" ? first["scope"] : null,
     projectPath: first !== undefined && typeof first["projectPath"] === "string" ? first["projectPath"] : null,
     enabled,
+    standsDown: pluginStandsDown(installPath),
   };
 }
 
@@ -375,7 +402,15 @@ export function npmWiring(input: {
    * nothing. The server, once per session, passes `{ hooks: false }`.
    */
   readonly read?: { readonly hooks?: boolean; readonly mcp?: boolean };
+  /** `runtime.ts#readsHostUserConfig` by default; a test's seam. */
+  readonly readsUserConfig?: boolean;
 }): NpmWiring {
+  // THE PLUGIN DIRECTORY'S BUILD DOES NOT LOOK (2026-10-14): it never opens
+  // `~/.claude.json`, so it has no stand-down to decide, and it reads neither
+  // half (the settings files included) rather than stand its hooks down while
+  // its server serves tools beside a registration it cannot see. No wiring
+  // found is what every caller already handles: nothing stands down.
+  if (!(input.readsUserConfig ?? readsHostUserConfig())) return { hooks: [], mcp: [] };
   const { settings, globalConfig } = claudeUserFiles(input.home, input.env);
   const cwd = input.cwd === null || input.cwd.length === 0 ? null : resolve(input.cwd);
   const hooks: WiredHook[] = [];

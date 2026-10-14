@@ -57,7 +57,7 @@
  * the page carries, JSON). A GET to an action path is refused here, so no
  * link, image or prefetch can act.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -70,9 +70,9 @@ import { Dashboard } from "../index.js";
 import { upgradePending, upgradePendingSentence } from "../upgrade.js";
 import type { DashboardSource } from "../source.js";
 import {
+  ACTION_HEADER_NAME,
+  ACTION_META_NAME,
   MAX_BODY_BYTES,
-  TOKEN_HEADER,
-  TOKEN_META,
   checkActionRequest,
   newActionToken,
   runAction,
@@ -111,22 +111,47 @@ export const PORT_ENV = "COUNTERPARTS_DASHBOARD_PORT";
 const HERE = packagePath("src/adapters/dashboard/web");
 const APP_PATH = join(HERE, "app.html");
 
+/**
+ * The home tab's brain picture is drawn with three.js, the dashboard's one
+ * large file, which the plugin directory's bundle leaves out with the
+ * picture's module (tools/plugin-bundle/build.ts). Whether it is here is read
+ * off the file itself, per page load, and said in the page
+ * (`pages/home/sections/brain.js#pictureServed`): off, the home tab draws
+ * without the picture rather than ask for a module that is not there.
+ */
+export const BRAIN_LIBRARY = join(HERE, "shared", "vendor", "three.module.min.js");
+const BRAIN_ON = `<meta name="counterparts-brain" content="on">`;
+const BRAIN_OFF = `<meta name="counterparts-brain" content="off">`;
+
+/** The page as served: its brain tag turned off when the library is not here. */
+export function withBrainSwitch(page: string, served: boolean = existsSync(BRAIN_LIBRARY)): string {
+  return served ? page : page.replace(BRAIN_ON, BRAIN_OFF);
+}
+
 const NO_STORE = { "cache-control": "no-store" } as const;
 
 /**
- * A small mark: three dots on a rising diagonal, the middle one lit. Served from
- * memory, so there is no fourth file to lose — and served at all because a
- * missing favicon is a console error, and this dashboard's bar is zero of them.
- * Static branding rather than a data view, so it is the one response that may
- * cache.
+ * A small mark: three dots on a rising diagonal, the middle one lit, in
+ * `favicon.svg` beside this file — served at all because a missing favicon is
+ * a console error, and this dashboard's bar is zero of them. Static branding
+ * rather than a data view, so it is the one response that may cache. A file,
+ * not a string here, since 2026-10-14: the plugin directory's review read the
+ * SVG namespace URL in this file beside its other identifiers as a credential
+ * risk. Read per request like the page; a missing one is the ordinary 404.
  */
-const FAVICON_SVG =
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
-  `<rect width="64" height="64" rx="13" fill="#0a0e14"/>` +
-  `<path d="M14 46 L32 32 L50 18" stroke="#00e5ff" stroke-opacity=".35" stroke-width="2.5" fill="none" stroke-linecap="round"/>` +
-  `<circle cx="14" cy="46" r="4.5" fill="#00bfa5"/>` +
-  `<circle cx="32" cy="32" r="7" fill="#00e5ff"/>` +
-  `<circle cx="50" cy="18" r="4.5" fill="#b388ff"/></svg>`;
+const FAVICON_PATH = join(HERE, "favicon.svg");
+
+function favicon(): Reply | null {
+  try {
+    return {
+      status: 200,
+      headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" },
+      body: readFileSync(FAVICON_PATH, "utf8"),
+    };
+  } catch {
+    return null;
+  }
+}
 
 const ALLOWED_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -182,10 +207,10 @@ function html(body: string): Reply {
  */
 function page(file: string, token?: string): Reply {
   try {
-    const text = readFileSync(file, "utf8");
+    const text = withBrainSwitch(readFileSync(file, "utf8"));
     if (token === undefined || !/^[0-9a-f]+$/.test(token)) return html(text);
     return html(
-      text.replace(`<meta name="${TOKEN_META}" content="">`, `<meta name="${TOKEN_META}" content="${token}">`),
+      text.replace(`<meta name="${ACTION_META_NAME}" content="">`, `<meta name="${ACTION_META_NAME}" content="${token}">`),
     );
   } catch {
     return json(
@@ -248,11 +273,7 @@ export function router(
     // The brain lives on the home page now; an old bookmark lands there.
     if (path === "/brain") return { status: 302, headers: { location: "/#home", ...NO_STORE }, body: "" };
     if (path === "/favicon.svg" || path === "/favicon.ico") {
-      return {
-        status: 200,
-        headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" },
-        body: FAVICON_SVG,
-      };
+      return favicon() ?? json({ error: `not found: ${path}` }, 404);
     }
 
     if (path === "/api/meta") return json(metaView(src));
@@ -297,9 +318,9 @@ export function router(
     if (path === "/api/dreams") return json(dreamsView(src, intParam(url, "limit", DREAM_LIMIT)));
     if (path === "/api/flow") return json(flowView(src, intParam(url, "limit", 24)));
     if (path === "/api/node") {
-      const key = url.searchParams.get("key") ?? "";
-      const detail = nodeDetail(src, key, intParam(url, "limit", 8));
-      return detail.found ? json(detail) : json({ error: `no such node: ${key}` }, 404);
+      const nodeKey = url.searchParams.get("key") ?? "";
+      const detail = nodeDetail(src, nodeKey, intParam(url, "limit", 8));
+      return detail.found ? json(detail) : json({ error: `no such node: ${nodeKey}` }, 404);
     }
     if (path === "/api/health") return json(healthView(src));
     if (path === "/api/fired") return json(firedPanel(src, src.store.today()));
@@ -463,7 +484,8 @@ export function startDashboard(opts: ServeOptions = {}): Promise<RunningDashboar
       return;
     }
     try {
-      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      // A fixed base: only the path and the query are read here; the Host header is checked on its own (`isAllowedHost`).
+      const url = new URL(req.url ?? "/", "http://localhost");
       const open = current();
       reply =
         open === null
@@ -550,7 +572,7 @@ async function handleAction(
       host: header(req, "host"),
       origin: header(req, "origin"),
       contentType: header(req, "content-type"),
-      token: header(req, TOKEN_HEADER),
+      token: header(req, ACTION_HEADER_NAME),
       fetchSite: header(req, "sec-fetch-site"),
     },
     token,

@@ -62,6 +62,7 @@ import { hostScope, openServer } from "../index.js";
 import { openLog } from "../../log/index.js";
 import type { LogEvent, ProcessLog } from "../../log/index.js";
 import { serveStdio } from "../stdio.js";
+import { SidebarStatusWriter, removeSidebarStatus, sidebarInstalled } from "../../sidebar-status.js";
 import { stoodDownServer } from "../stood-down.js";
 import { npmWiring } from "../../host-wiring.js";
 import { PLUGIN_ROOT_ENV, ensureFirstRun, installRoute, mcpGate, pluginOrigin, runningAsPlugin } from "../../plugin.js";
@@ -316,6 +317,13 @@ export function serverConfigChoice(
   return resolveConfigPath(argv, env as Record<string, string | undefined>);
 }
 
+/** The sidebar's status file: first written this long after the server starts… */
+export const SIDEBAR_START_MS = 3000;
+/** …this long after a tool call (one write for a burst of calls)… */
+export const SIDEBAR_AFTER_CALL_MS = 1500;
+/** …and the log's newest seq is looked at this often (one indexed read). */
+export const SIDEBAR_WATCH_MS = 15000;
+
 async function main(): Promise<void> {
   const { unreadable: stanceNotices, ...opts } = launchOptions(process.argv.slice(2), process.env);
   // stderr, never stdout (stdout is the JSON-RPC wire), and BEFORE the config
@@ -434,10 +442,14 @@ async function main(): Promise<void> {
   // THE OWNER'S OWN SESSIONS ARE THE OWNER (owner ruling 2026-10-02): `ownerStance`.
   const { ownerSaid, ...launch } = opts;
   const ownerSays = ownerStance({ owner: launch.owner, ownerSaid }, config, startedByClaudeCode);
+  // THE SIDEBAR'S STATUS FILE (2026-10-14, `adapters/sidebar-status.ts`):
+  // armed below once the store is open; a tool call only schedules a write.
+  let sidebar: SidebarStatusWriter | null = null;
   const server = openServer({
     ...launch,
     ...ownerSays,
     onEvent: toLog,
+    afterCall: () => sidebar?.schedule(SIDEBAR_AFTER_CALL_MS),
     onCounterpartEvent: toLog,
     // THE COMBINATION, most restrictive wins: a registry that says `observer`
     // stands the server down even when the configuration did not, and a
@@ -503,6 +515,26 @@ async function main(): Promise<void> {
   });
   log = opened;
   opened.start({ boundSession: server.launchedSession !== null });
+  // What the Claude Code sidebar shows, written beside the configuration: a
+  // few seconds after this server starts (a session's start, off the
+  // SessionStart hook's path), a moment after each tool call, and whenever the
+  // log moved under it (a turn's recall, another session, the night). Never
+  // for an observer or in a directory set `off`, and never on a call's path.
+  // Only where the sidebar is installed (the plugin): elsewhere an old file goes.
+  const sidebarWanted = sidebarInstalled(process.env, homedir());
+  if (!sidebarWanted) removeSidebarStatus(choice.path);
+  if (sidebarWanted && !server.observer && stance !== "off") {
+    const store = server.counterpart.store;
+    sidebar = new SidebarStatusWriter({
+      configPath: choice.path,
+      dataDir: store.dir,
+      ...(timeZone === undefined ? {} : { timeZone }),
+      newestSeq: () => store.eventLog({ order: "desc", limit: 1 })[0]?.seq ?? null,
+      onWrite: (w) => toLog({ name: "mcp.sidebar", data: { written: w.written, reason: w.reason, bytes: w.bytes, ms: w.ms } }),
+    });
+    sidebar.schedule(SIDEBAR_START_MS);
+    sidebar.watch(SIDEBAR_WATCH_MS);
+  }
   try {
     await serveStdio(server, process.stdin, {
       write: (chunk) => {
@@ -514,6 +546,7 @@ async function main(): Promise<void> {
     opened.threw(err);
     throw err;
   } finally {
+    sidebar?.stop();
     server.forgetLaunch();
     server.counterpart.close();
   }

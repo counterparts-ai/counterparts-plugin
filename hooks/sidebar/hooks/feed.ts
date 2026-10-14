@@ -17,14 +17,14 @@
  */
 
 import type { SidebarMeet, SidebarOnboarding, SidebarRow, SidebarSaved } from '../types';
-import { MECHS, MEMORIES_URL, mechById, mechUrl } from './mechanisms';
+import { MECHS, mechById } from './mechanisms';
 import type { MechId } from './mechanisms';
 import { cells, ellipsizeCells, headCells } from './width';
 
 /** One event the sidebar read (the contract's SidebarRow). */
 export type FeedRow = SidebarRow;
 
-/** One event as `/api/activity` narrates it. */
+/** One event as the dashboard's activity feed narrates it (the status file carries these rows). */
 export type DashEvent = {
   seq: number;
   at: number;
@@ -131,7 +131,7 @@ export function quotedTitles(text: string): string[] {
 /**
  * A dashboard event in the sidebar's terms, or null when it proves no
  * mechanism. `session` is this session's id: its own events are `here`, the
- * night's `night`, other sessions' `other` (they never light this brain).
+ * night's `night`, other sessions' `other` (they never light this header's dot).
  *
  * WHOSE IT IS. An event's `session` (or, for a settle a session made, its
  * `actorId`) names it. A look-up (`mcp.recall`), a reminder
@@ -169,8 +169,6 @@ export function classify(e: DashEvent, session = '', since = 0): FeedRow | null 
     at: e.at,
     text: e.text,
     more: [],
-    url: mechUrl(rule.mech),
-    label: `${short} on the dashboard`,
     who,
     line: `${rule.word} · ${e.text}`,
     ...(named === undefined || named.id === null ? {} : { memory: { id: named.id, title: named.title } }),
@@ -179,7 +177,7 @@ export function classify(e: DashEvent, session = '', since = 0): FeedRow | null 
   if (rule.name === 'gate.deposit' || rule.name === 'gate.chunk') {
     const accepted = num(e, 'accepted');
     const text = named?.title ?? (accepted > 1 ? `${String(accepted)} memories written down` : 'a memory');
-    return { ...base, text, url: MEMORIES_URL, label: 'open on the dashboard', line: `kept · ${text}`, ...(named?.id ? { keys: [`mem:${named.id}`] } : {}) };
+    return { ...base, text, line: `kept · ${text}`, ...(named?.id ? { twinIds: [`mem:${named.id}`] } : {}) };
   }
   if (rule.name === 'recall.decision') {
     const turn = detail(e, 'turn');
@@ -190,7 +188,7 @@ export function classify(e: DashEvent, session = '', since = 0): FeedRow | null 
       text: said,
       more: quotedTitles(e.text),
       line: said,
-      ...(from !== undefined && turn !== undefined ? { keys: [`turn:${from}:${turn}`] } : {}),
+      ...(from !== undefined && turn !== undefined ? { twinIds: [`turn:${from}:${turn}`] } : {}),
     };
   }
   return base;
@@ -252,7 +250,7 @@ export function countToday(
   return { counts, dreams: [...seenDreams] };
 }
 
-// ── a mechanism's recent firings (`/api/mechanism?id=`'s `activity`) ──────
+// ── a mechanism's recent firings (its panel's `activity`) ─────────────────
 
 /** A piece of a firing's sentence: plain words, or a memory (its id, and the title the row carried, maybe cut). */
 export type FiringPart = string | { id: string | null; title: string | null };
@@ -299,7 +297,7 @@ const DREAM_ACTION: Partial<Record<MechId, string>> = { interference: 'merge', c
  *   - a settle: which memory holds over which; revision pressure: which
  *     argued with which;
  *   - a dream: its journal's first sentence (Dreaming); its merges
- *     (Interference, Consolidation) and patterns (Gist) from `/api/dreams`'
+ *     (Interference, Consolidation) and patterns (Gist) from the dreams'
  *     changes, which name memories the event row only counts;
  *   - left out, nothing to name: a look-up (`mcp.recall` counts what it
  *     opened), a link flush (`associate.flush` counts pairs), a turn a link
@@ -451,12 +449,6 @@ export function ourTool(name: string): { server: string; tool: string } | null {
   return null;
 }
 
-/** The server a session's tool list connects, the npm one first. */
-export function resolveServer(toolNames: readonly string[]): string | null {
-  for (const server of SERVER_SPELLINGS) if (toolNames.includes(`mcp__${server}__recall`)) return server;
-  return null;
-}
-
 function firstLine(s: unknown, max = 240): string | null {
   if (typeof s !== 'string') return null;
   const line = s.trim().split('\n')[0] ?? '';
@@ -539,7 +531,7 @@ export function openedIds(tool: string, args: Record<string, unknown>): { ids: s
 
 // ── a dream ────────────────────────────────────────────────────────────────
 
-/** `/api/dreams`' newest dream, the part the sidebar reads. */
+/** A dream as the status file carries it, the part the sidebar reads. */
 export type DashDream = {
   id: string;
   date: string | null;
@@ -693,7 +685,7 @@ const MEET_STATES: readonly SidebarMeet[] = ['not_started', 'offered', 'later', 
 export const UNKNOWN_ONBOARDING: SidebarOnboarding = { meet: 'unknown', where: null, style: null };
 
 /**
- * Core's `GET /api/onboarding` answer (`{ meet, where, style }`), read
+ * Core's first-meeting state as a JSON object (`{ meet, where, style }`), read
  * strictly: anything but an object whose `meet` is one of the five states is
  * unknown, so a core from before onboarding (a 404 page, an error body, a
  * renamed field) never moves the sidebar.
@@ -729,12 +721,11 @@ export function parseOnboardingMarker(text: string): SidebarMeet | null {
 
 /**
  * WHICH STORE (core #459, 2026-10-12): the wake carries
- * `<!-- counterparts:store id=st_… -->` on its own line, and the dashboard says
- * the store it serves at `/api/whoami` (and `/api/onboarding`'s `store`). Two
- * stores on one machine can race for one port, so the sidebar shows a
- * dashboard's numbers only when the two agree; either unknown (no marker, an
- * older core, a store whose id is not minted yet: null) is "can't tell", and
- * it carries on.
+ * `<!-- counterparts:store id=st_… -->` on its own line, and the status file
+ * names the store that wrote it (`storeId`). Two stores on one machine can
+ * share one configuration folder, so the sidebar shows the file's numbers only
+ * when the two agree; either unknown (no marker, an older core, a store whose
+ * id is not minted yet: null) is "can't tell", and it carries on.
  */
 export const STORE_MARKER = /<!--\s*counterparts:store\s+id=(st_[0-9a-f]{16})\s*-->/
 
@@ -743,35 +734,9 @@ export function parseStoreMarker(text: string): string | null {
   return STORE_MARKER.exec(text)?.[1] ?? null
 }
 
-/** The `store` a dashboard answer names (`/api/whoami`, `/api/onboarding`), or null: absent, null, or not an id. */
-export function storeOf(text: string): string | null {
-  try {
-    const v = (JSON.parse(text) as { store?: unknown } | null)?.store
-    return typeof v === 'string' && /^st_[0-9a-f]{16}$/.test(v) ? v : null
-  } catch {
-    return null
-  }
-}
-
-/** Whether a dashboard serving `dash` belongs to another store than the wake's: only when both are known and differ. */
+/** Whether a status file written by `dash`'s store belongs to another store than the wake's: only when both are known and differ. */
 export function otherStore(wake: string | null, dash: string | null): boolean {
   return wake !== null && dash !== null && wake !== dash
-}
-
-/**
- * Whether the sidebar shows "Start the 5-minute intro": core says the meeting
- * never started (`not_started`), was put off (`later`), or was offered and not
- * finished (`offered`). Not while this very session's speak-first is the
- * introduction (`firedIn`, the mark `speak-first.tsx` writes: not_started and
- * fired in `session`); an earlier session's that never reached core's `meet`
- * leaves the button, and with no speak-first module (the directory build) the
- * button is the one way in. Never in a folder where the meeting can't keep
- * anything (`canMeet`), and never for an unknown state.
- */
-export function meetShows(meet: SidebarMeet, folderMode: string, firedIn: string | null = null, session = ''): boolean {
-  if (!canMeet(folderMode)) return false;
-  if (meet === 'not_started') return firedIn === null || firedIn !== session;
-  return meet === 'later' || meet === 'offered';
 }
 
 /**

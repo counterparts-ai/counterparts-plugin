@@ -66,6 +66,7 @@
  * It exits 0 on every path. Nothing about a failed run may reach the host.
  */
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -102,6 +103,8 @@ import type { LiveEmbedder } from "../embed-client.js";
 import { DATA_DIR_ENV, SCOPE_ENV, SESSION_ENV, WATCHDOG_ENV } from "../../spawn.js";
 import { backfillVectors, laggedSemantic } from "../vectors.js";
 import type { BackfillReport, LagReport } from "../vectors.js";
+import { removeSidebarStatus, sidebarInstalled, writeSidebarStatus } from "../../sidebar-status.js";
+import type { SidebarWrite } from "../../sidebar-status.js";
 import { runSnapshot } from "../../snapshots.js";
 import type { SnapshotRunReport } from "../../snapshots.js";
 
@@ -142,6 +145,9 @@ export interface RunReport {
   /** The day's retention pass, or why it did not run. Null when the run refused
    *  before it opened a store at all. */
   readonly retention: RetentionJobReport | null;
+  /** The sidebar's status file (`adapters/sidebar-status.ts`), written after the
+   *  store closed; absent when the run was not asked to (no configuration path). */
+  readonly sidebar?: SidebarWrite;
 }
 
 /** What the retention step came to on one worker run. */
@@ -310,6 +316,9 @@ export async function runOnce(input: {
   /** The package version this run is, for the wake's build stamp. Absent: the
    *  installed manifest's (`installedVersion`). Injected so a test can be an upgrade. */
   build?: string | null;
+  /** The configuration this run read: the sidebar's status file is written
+   *  beside it once the run is done (`adapters/sidebar-status.ts`). Absent: none. */
+  sidebarConfigPath?: string;
   onEvent?: (name: string, data: Record<string, string | number | boolean | null>) => void;
 }): Promise<RunReport> {
   const { config } = input;
@@ -503,7 +512,20 @@ export async function runOnce(input: {
     }
     counterpart.close();
   }
-  return { ...result, snapshot: snapshotReport, retention: retentionReport };
+  // 5. THE SIDEBAR'S STATUS FILE (2026-10-14), last: what the Claude Code
+  // sidebar shows, from what every step above left, through a handle of its
+  // own (observer) opened after this run's closed. Detached, so no hook waits
+  // on it; it never throws.
+  let sidebar: SidebarWrite | undefined;
+  if (input.sidebarConfigPath !== undefined && input.sidebarConfigPath.length > 0) {
+    sidebar = writeSidebarStatus({
+      configPath: input.sidebarConfigPath,
+      dataDir: config.dataDir,
+      ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
+    });
+    emit("runner.sidebar", { written: sidebar.written, reason: sidebar.reason, bytes: sidebar.bytes, ms: sidebar.ms });
+  }
+  return { ...result, snapshot: snapshotReport, retention: retentionReport, ...(sidebar === undefined ? {} : { sidebar }) };
 }
 
 /**
@@ -653,12 +675,16 @@ async function main(): Promise<void> {
     observer: config.observer === true,
   });
   log.start();
+  const sidebarWanted = sidebarInstalled(process.env, homedir());
+  if (!sidebarWanted && removeSidebarStatus(choice.path)) log.event({ name: "runner.sidebar", data: { removed: true } });
   try {
     const report = await runOnce({
       config,
       signal: controller.signal,
       ...(pinnedSession() === null ? {} : { session: pinnedSession() as string }),
       ...(pinnedScope() === null ? {} : { scope: pinnedScope() as string }),
+      // Only where the sidebar is installed (the plugin); otherwise an old file goes.
+      ...(sidebarWanted ? { sidebarConfigPath: choice.path } : {}),
       onEvent: (name, data) => log.event({ name, data }),
     });
     log.end(report.reason, { swept: report.swept, minted: report.minted, code: report.code });

@@ -51,6 +51,10 @@ export interface HostReading {
   readonly mcpFile: string;
   /** The MCP file exists but could not be read or parsed. */
   readonly mcpUnreadable: boolean;
+  /** False: this build does not open the MCP file at all (the plugin
+   *  directory's, `runtime.ts#readsHostUserConfig`), so there is no MCP clause,
+   *  and its plugin does not stand down beside the npm install. Absent: read. */
+  readonly mcpRead?: boolean;
   /**
    * Whether a `claude` executable is on the PATH the caller would run
    * `counterparts connect` with (the go-public Phase C walk, 2026-09-23).
@@ -281,15 +285,17 @@ export function hostFindings(reading: HostReading): Finding[] {
     stale: stale.map((s) => `${s.event}→${s.path}`).join(","),
     settingsRead: reading.settingsRead.join(","),
     settingsUnreadable: reading.settingsUnreadable.join(","),
-    mcp: reading.mcp,
-    mcpFile: reading.mcpFile,
+    // Null when this build never opened the MCP file (`mcpRead`).
+    mcp: reading.mcpRead === false ? null : reading.mcp,
+    mcpFile: reading.mcpRead === false ? null : reading.mcpFile,
   };
   // THE PLUGIN (prototype, 2026-10-09). A plugin install wires nothing in
   // these files — Claude Code loads its hooks and server from the plugin — so
   // without this the line told a plugin user "no hook of ours is connected,
   // run counterparts connect", which would wire the host twice. Enabled and
-  // alone: connected. Enabled beside live npm wiring: the plugin stands down
-  // (`adapters/plugin.ts`), which works, and is said, with both ways out.
+  // alone: connected. Enabled beside live npm wiring: the launcher flavor
+  // stands down (`adapters/plugin.ts`), the directory flavor runs beside it
+  // (below); either is said, with both ways out.
   const plugin = reading.plugin !== undefined && reading.plugin !== null && reading.plugin.enabled ? reading.plugin : null;
   data["plugin"] = plugin === null ? null : plugin.id;
   const npmAny = reading.events.length > 0 || reading.mcp;
@@ -305,13 +311,26 @@ export function hostFindings(reading: HostReading): Finding[] {
       ),
     ];
   }
+  // THE PLUGIN DIRECTORY'S BUILD DOES NOT STAND DOWN (2026-10-14): it never
+  // reads `~/.claude.json`, so it cannot tell this wiring is there, and both
+  // run, on the same memory, until a marker-based check lands (docs/plugin.md).
+  // Known two ways: this doctor IS that build (`mcpRead` false), or the
+  // installed plugin is (`standsDown` false, read from its `installPath`, the
+  // case of an npm doctor beside it). Unknown (null) keeps the launcher's word.
+  const bothRun = plugin !== null && (reading.mcpRead === false || plugin.standsDown === false);
   const twiceClause =
-    plugin === null ? "" : `ALSO installed as the Claude Code plugin (${plugin.id}), which stands down while this wiring is live`;
+    plugin === null
+      ? ""
+      : bothRun
+        ? `ALSO installed as the Claude Code plugin (${plugin.id}), whose build does not check for the other install, so both are running, on the same memory: every hook and memory tool is wired twice until a later version checks`
+        : `ALSO installed as the Claude Code plugin (${plugin.id}), which stands down while this wiring is live`;
   const twiceFix =
     plugin === null
       ? ""
-      : `Installed twice: to keep only the plugin, run \`counterparts disconnect\` and restart Claude Code; to keep only this install, run \`claude plugin uninstall ${plugin.id}\`. Same memory either way.`;
-  const mcpClause = reading.mcp
+      : `Installed twice${bothRun ? "; remove one" : ""}: to keep only the plugin, run \`counterparts disconnect\` and restart Claude Code; to keep only this install, run \`claude plugin uninstall ${plugin.id}\`. Same memory either way.`;
+  const mcpClause = reading.mcpRead === false
+    ? ""
+    : reading.mcp
     ? `the MCP server is registered in ${reading.mcpFile}`
     : reading.mcpUnreadable
       ? `${reading.mcpFile} could not be read, so the MCP registration could not be checked`
@@ -362,8 +381,8 @@ export function hostFindings(reading: HostReading): Finding[] {
   // that one case the fix is the line `connect` itself prints: run it wherever
   // `claude` works. The hooks half, if it is owed, is still `connect`'s.
   const cannotRegister =
-    !reading.mcp && !reading.mcpUnreadable && reading.claudeOnPath === false && reading.mcpAddLine !== undefined;
-  if (!reading.mcp && !reading.mcpUnreadable && !cannotRegister) does.push("registers the memory tools");
+    reading.mcpRead !== false && !reading.mcp && !reading.mcpUnreadable && reading.claudeOnPath === false && reading.mcpAddLine !== undefined;
+  if (reading.mcpRead !== false && !reading.mcp && !reading.mcpUnreadable && !cannotRegister) does.push("registers the memory tools");
   const byHand = cannotRegister
     ? `\`claude\` is not on this PATH, so \`counterparts connect\` cannot register the memory tools: run this where \`claude\` works — ${reading.mcpAddLine ?? ""} — then restart Claude Code.`
     : "";

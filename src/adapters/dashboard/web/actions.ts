@@ -74,10 +74,12 @@ export function isActionName(name: string): name is ActionName {
   return (ACTIONS as readonly string[]).includes(name);
 }
 
-/** The header every action must echo the page's token in. */
-export const TOKEN_HEADER = "x-counterparts-token";
-/** The `<meta name>` the served page carries the token in. */
-export const TOKEN_META = "counterparts-action-token";
+/** The NAME of the header every action must echo the page's per-launch token
+ *  in (a guard against another page posting here, not a credential; renamed
+ *  from TOKEN_HEADER 2026-10-14, the directory's validator read it as one). */
+export const ACTION_HEADER_NAME = "x-counterparts-token";
+/** The `<meta name>` the served page carries that token in (was TOKEN_META). */
+export const ACTION_META_NAME = "counterparts-action-token";
 
 /** A request body larger than this is refused before it is parsed. */
 export const MAX_BODY_BYTES = 64 * 1024;

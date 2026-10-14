@@ -39,7 +39,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { CONFIG_ENV } from "../config-path.js";
-import { scriptArgs } from "../runtime.js";
+import { readsHostUserConfig, scriptArgs } from "../runtime.js";
 import { BIN, desktopConfigPath, hostConfigBase, hostMcpFile, isOurDesktopEntry, MCP_SCRIPT, MCP_SERVER_NAME } from "./install.js";
 import { sightSettings, tilde, unparsedSettingsWhy, writeSettings } from "./wire.js";
 
@@ -288,15 +288,20 @@ function dataDirOf(entry: unknown): string | null {
 
 /**
  * READ DESKTOP'S CONFIG FOR DOCTOR — two small file reads, never a write:
- * Desktop's own file, and Claude Code's `~/.claude.json` for the name clash.
+ * Desktop's own file, and Claude Code's `~/.claude.json` for the name clash —
+ * not opened by the plugin directory's build (`runtime.ts#readsHostUserConfig`),
+ * which then reports no clash.
  */
-export function readDesktop(home: string, env: Record<string, string | undefined> = {}): DesktopConfigReading {
+export function readDesktop(
+  home: string,
+  env: Record<string, string | undefined> = {},
+  readsUserConfig: boolean = readsHostUserConfig(),
+): DesktopConfigReading {
   const path = desktopConfigPath(home);
   const read = readObject(path);
   const servers = read.value["mcpServers"];
   const ours = isRecord(servers) ? servers[MCP_SERVER_NAME] : undefined;
-  const code = readObject(hostMcpFile(hostConfigBase(home, env)));
-  const codeServers = code.value["mcpServers"];
+  const codeServers = readsUserConfig ? readObject(hostMcpFile(hostConfigBase(home, env))).value["mcpServers"] : undefined;
   const codeOurs = isRecord(codeServers) ? codeServers[MCP_SERVER_NAME] : undefined;
   return {
     path,

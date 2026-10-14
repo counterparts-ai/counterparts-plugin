@@ -59,7 +59,7 @@ export const DEFAULT_STORE_DIR = "store";
 import { EMBEDDER_KINDS } from "../config.js";
 import type { EmbedderKind } from "../config.js";
 import { CONFIG_ENV, CONFIG_FLAG, defaultConfigPath } from "../config-path.js";
-import { entryScript, parseScriptInvocation, runtimeOf, runtimePresent, scriptArgs, shellTokens } from "../runtime.js";
+import { entryScript, parseScriptInvocation, readsHostUserConfig, runtimeOf, runtimePresent, scriptArgs, shellTokens } from "../runtime.js";
 import type { RuntimeKind } from "../runtime.js";
 import { pluginInstall, readOurHook } from "../host-wiring.js";
 import type { PluginInstallRead } from "../host-wiring.js";
@@ -577,6 +577,10 @@ export interface HostRead {
   readonly mcpName: string;
   readonly mcpFile: string;
   readonly mcpUnreadable: boolean;
+  /** False when this build does not open the MCP file at all
+   *  (`runtime.ts#readsHostUserConfig`, the plugin directory's bundle): `mcp`
+   *  is then "not looked", never "not registered". */
+  readonly mcpRead: boolean;
   /** The runtimes our hook commands and our MCP registration name, one row
    *  per distinct executable (`adapters/runtime.ts`), and whether each is there. */
   readonly runtimes: readonly HostRuntime[];
@@ -763,6 +767,7 @@ export function readHost(
   home: string,
   cwd: string,
   env: Record<string, string | undefined> = process.env,
+  readsUserConfig: boolean = readsHostUserConfig(),
 ): HostRead {
   const base = hostConfigBase(home, env);
   const events = new Set<string>();
@@ -829,7 +834,8 @@ export function readHost(
     }
   }
   const mcpFile = hostMcpFile(base);
-  const mcpRead = readJsonFile(mcpFile);
+  // Not opened by the plugin directory's build (`runtime.ts#readsHostUserConfig`).
+  const mcpRead: ReturnType<typeof readJsonFile> = readsUserConfig ? readJsonFile(mcpFile) : { state: "absent", value: {} };
   const servers = mcpRead.value["mcpServers"];
   const mcp =
     servers !== null &&
@@ -869,6 +875,7 @@ export function readHost(
     mcpName: MCP_SERVER_NAME,
     mcpFile,
     mcpUnreadable: mcpRead.state === "unreadable",
+    mcpRead: readsUserConfig,
     runtimes: [...runtimes.entries()].map(([exe, row]) => ({
       exe,
       kind: row.kind,

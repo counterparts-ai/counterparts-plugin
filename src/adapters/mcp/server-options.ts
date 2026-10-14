@@ -168,6 +168,13 @@ export interface McpServerOptions {
    */
   launchObserver?: boolean;
   onEvent?: (e: McpEvent) => void;
+  /**
+   * Told after every tool call over the wire has its answer, before the answer
+   * is written back: the tool's name. It must only SCHEDULE work (the entry
+   * point arms the sidebar's status file this way, `adapters/sidebar-status.ts`)
+   * — anything it does inline is time the client waits. A throw is swallowed.
+   */
+  afterCall?: (tool: string) => void;
   now?: () => number;
 }
 

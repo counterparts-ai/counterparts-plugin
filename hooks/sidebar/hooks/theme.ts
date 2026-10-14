@@ -8,8 +8,8 @@
  * amber) for a warning.
  *
  * Not here: the mechanisms' stage colours (`mechanisms.ts`, the site's own,
- * on dots, bars and the brain's lights) and the brain's own body colours
- * (`brain.ts`). A theme sets the panel and the text around them; they stay.
+ * on dots and bars) and the fox's own colours (`fox.ts`). A theme sets the
+ * panel and the text around them; they stay.
  *
  * `P` is the palette in use, the one every drawing reads: `applyTheme` copies
  * a theme into it. The Pane hook applies the session's theme before each
@@ -20,11 +20,9 @@ import type { SidebarTheme } from '../types'
 
 export type Palette = {
   /**
-   * The pane's background. The brain's cells take the terminal's default
-   * background (`bg: null` in `frameCells`), so this shows through them.
-   * Measured: the engine draws a Raster's colours at 4 bits a channel, and the
-   * panel colour given to the cells came out `#000011`, a navy box round the
-   * brain.
+   * The pane's background. Measured: the engine draws a Raster's colours at
+   * 4 bits a channel, so a panel colour given to a Raster's cells comes out a
+   * shade off it (`fox.ts` gives its cells the terminal's default instead).
    */
   panel: string
   /** The brightest text: an opened item's title, a switch that is on. */
@@ -41,7 +39,7 @@ export type Palette = {
   accent: string
   /** A warning: paused, off (tron's amber). */
   accent2: string
-  /** The brainless header's dot at rest and its `↗`. */
+  /** The header's dot at rest and its `↗`. */
   accentDim: string
 }
 

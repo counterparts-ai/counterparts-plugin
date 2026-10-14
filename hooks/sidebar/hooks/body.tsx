@@ -1,11 +1,9 @@
 /**
  * The pane's body as a `Client` surface module: the lines `./sections.ts`
  * laid out, drawn as they are, and a click on one posted back to the hooks
- * module by the key it carries (`{ click: 'mem:0' }`). From a row's link
- * column on (the `more` that ends a cut text): on the terminal that piece is
- * a `Link` to the dashboard, which the terminal opens, and the click posts
- * nothing; elsewhere (no `href`) it posts the link's key (`more:mem_…`), and
- * the hooks module runs `/counterparts:dashboard`.
+ * module by the key it carries (`{ click: 'mem:0' }`). Nothing here is a
+ * link (2026-10-14): the hooks module hands every row over with none, so the
+ * `more` that ends a cut text is plain words and a click on it is the row's.
  *
  * Why not Buttons: the engine inverts a Button under the pointer and the
  * focus, so moving the mouse over a list lit row after row (v0.1, NOTES).
@@ -23,13 +21,13 @@ export type BodyProps = { lines: Line[]; prose?: boolean }
 const RULE = /^ ?─+$/
 
 const Body: ClientModule<BodyProps, never> = (props, surface: ClientSurface<never>) => {
-  const { Box, Text, Link } = surface.elements
+  const { Box, Text } = surface.elements
   surface.onPointer(ev => {
     if (ev.type !== 'down' || (ev.button !== undefined && ev.button !== 'left')) return
     const l = props.lines[ev.y]
-    // a row's link (the `more` that ends a cut text) takes the click from its column on: a Link's is the terminal's
+    // a row's link (none is drawn now) would take the click from its column on
     if (l?.link !== undefined && ev.x >= l.link.from) {
-      if (l.link.href === undefined) surface.post({ click: l.link.key })
+      surface.post({ click: l.link.key })
       return
     }
     if (l?.key !== undefined) surface.post({ click: l.key })
@@ -59,11 +57,6 @@ const Body: ClientModule<BodyProps, never> = (props, surface: ClientSurface<neve
                 <Box key={String(i)} width={s.cw}>
                   <Text color={s.c} {...(s.b === true ? { bold: true } : {})}>{s.t}</Text>
                 </Box>
-              ) : l.link?.href !== undefined && i === l.segs.length - 1 ? (
-                // the `more` that ends a cut text: a link to that memory on the dashboard
-                <Text key={String(i)} color={s.c}>
-                  <Link href={l.link.href}>{s.t}</Link>
-                </Text>
               ) : (
                 <Text key={String(i)} color={s.c} {...(s.b === true ? { bold: true } : {})} {...(s.i === true ? { italic: true } : {})}>
                   {props.prose === true && i > 0 && RULE.test(l.segs[i - 1]?.t ?? '') ? s.t.replace(/^ /, '') : s.t}

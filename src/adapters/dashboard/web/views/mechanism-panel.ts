@@ -240,6 +240,18 @@ export function mechanismPanel(src: DashboardSource, id: string): MechanismPanel
   const proof = MECHANISM_PROOFS.find((m) => m.id === id);
   if (proof === undefined) return { id, found: false, built: false, livedDay, activity: [], picture: null };
   if (proof.build === "not") return { id, found: true, built: false, livedDay, activity: [], picture: null };
+  return { id, found: true, built: true, livedDay, activity: mechanismActivity(src, id), picture: pictureOf(src, id, livedDay) };
+}
+
+/**
+ * A mechanism's panel rows alone, without its picture: what the Claude Code
+ * sidebar's status file carries (`adapters/sidebar-status.ts`), which has no
+ * use for the picture's reads. Empty for an unknown or unbuilt mechanism.
+ */
+export function mechanismActivity(src: DashboardSource, id: string): Merged[] {
+  const store = src.store;
+  const proof = MECHANISM_PROOFS.find((m) => m.id === id);
+  if (proof === undefined || proof.build === "not") return [];
 
   const backing: EventRow[] = [];
   for (const p of proof.proofs) {
@@ -265,9 +277,7 @@ export function mechanismPanel(src: DashboardSource, id: string): MechanismPanel
     }
     lines.push(line);
   }
-  const activity = mergeRepeats(lines).slice(0, PANEL_ACTIVITY);
-
-  return { id, found: true, built: true, livedDay, activity, picture: pictureOf(src, id, livedDay) };
+  return mergeRepeats(lines).slice(0, PANEL_ACTIVITY);
 }
 
 function pictureOf(src: DashboardSource, id: string, day: number): Picture | null {

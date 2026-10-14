@@ -292,6 +292,7 @@ export class McpServer {
   private readonly sessionTtlMs: number;
   private readonly resultCeilingChars: number;
   private readonly onEvent: ((e: McpEvent) => void) | undefined;
+  private readonly afterCall: ((tool: string) => void) | undefined;
   private readonly nowFn: () => number;
   private readonly ring: McpEvent[] = [];
   /**
@@ -378,6 +379,7 @@ export class McpServer {
     this.codeTabOwner = opts.codeTabOwner === true;
     this.embedderGiven = opts.embedder ?? null;
     this.onEvent = opts.onEvent;
+    this.afterCall = opts.afterCall;
     this.nowFn = opts.now ?? ((): number => Date.now());
     // LAST in the constructor — `emit` needs `nowFn`. A scope nobody chose is
     // the bug this run measured, so which default won is on the record from the
@@ -622,6 +624,11 @@ export class McpServer {
       return failure(id, ERROR_CODES.INVALID_PARAMS, "arguments must be an object");
     }
     const result = await this.call(name, (args as Record<string, unknown>) ?? {});
+    try {
+      this.afterCall?.(canonicalToolName(name));
+    } catch {
+      // a listener's trouble is never the tool's answer
+    }
     return success(id, result as unknown as Record<string, unknown>);
   }
 

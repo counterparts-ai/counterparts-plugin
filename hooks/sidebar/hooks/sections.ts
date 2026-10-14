@@ -32,6 +32,7 @@ import type {
 import { dateOf, hm, humanDates } from './feed'
 import { MECHS, STAGES, hex, stageOf } from './mechanisms'
 import type { MechId } from './mechanisms'
+import { STATUS_STALE_MS, agoWords } from './status'
 import { P } from './theme'
 import { cells, headCells } from './width'
 
@@ -74,10 +75,11 @@ export type Seg = { t: string; c: string; b?: true; i?: true; cw?: number; fill?
 /**
  * One row of the body: its pieces, and what a click on it names; `link`, a
  * click from column `from` (0-based, in cells) to the row's end names
- * another key instead (the `more` at the end of a cut text), and `href`, set
- * by the hooks module, makes that last piece a `Link` to the dashboard.
+ * another key instead (the `more` at the end of a cut text). The hooks
+ * module hands every row over without one (no links, 2026-10-14): `more` is
+ * words, the rest of the text is on the dashboard (`/counterparts:dashboard`).
  */
-export type Line = { segs: Seg[]; key?: string; link?: { from: number; key: string; href?: string } }
+export type Line = { segs: Seg[]; key?: string; link?: { from: number; key: string } }
 
 const seg = (t: string, c: string, o: { b?: boolean; i?: boolean } = {}): Seg => ({ t, c, ...(o.b ? { b: true as const } : {}), ...(o.i ? { i: true as const } : {}) })
 const line = (segs: Seg[], key?: string): Line => (key === undefined ? { segs } : { segs, key })
@@ -173,6 +175,8 @@ export type BodyState = {
   mech: SidebarMechOpen | null
   focus: string | null
   dash: 'unknown' | 'up' | 'down' | 'other'
+  /** When the status file the numbers come from was written (null: none read): an old one says its age. */
+  statusAt?: number | null
   /**
    * A surface that sets text in its own font (the desktop): a blank row between items, and the chart's rows as
    * a name column, a solid bar and a count at the edge, since padding with spaces lines nothing up there.
@@ -264,11 +268,11 @@ function ladders(s: BodyState): Readonly<Record<'default' | 'open' | 'mech' | 'd
  * word with `…` and, when `moreKey` names where the rest is, a cyan `more`
  * on that same line (its cells a link to `moreKey`).
  */
-function textLines(text: string, w: number, max: number, c: string, key: string, moreKey: string | null, o: { b?: boolean; i?: boolean } = {}): Line[] {
+function textLines(text: string, w: number, max: number, c: string, key: string, moreKey: string | null, o: { b?: boolean; i?: boolean } = {}, cut = false): Line[] {
   const all = wrapN(text, w)
-  if (all.length <= max) return plain(all, c, key, o)
+  if (all.length <= max && !(cut && moreKey !== null)) return plain(all, c, key, o)
   if (moreKey === null) return plain(wrapN(text, w, max), c, key, o)
-  const head = all.slice(0, Math.max(0, max - 1))
+  const head = all.slice(0, Math.max(0, Math.min(all.length, max) - 1))
   const room = w - cells(MORE) - 1
   const last = wrapN(all.slice(head.length).join(' '), room, 1)[0] ?? ''
   return [
@@ -290,8 +294,8 @@ function opened(s: BodyState, key: string, fallbackTitle: string, f: Fold, dot?:
   )
   if (o === null || o.key !== key) return out
   if (o.status === 'loading') return [...out, line([seg('opening…', P.dim)], key), ...extra]
-  if (o.status === 'error') return [...out, ...plain(wrapN(o.text || "couldn't read it: the dashboard isn't answering", s.w, 2), P.dim, key), ...extra]
-  if (o.text !== '') out.push(...textLines(o.text, s.w, f.text, P.text, key, o.id === null ? null : `more:${o.id}`))
+  if (o.status === 'error') return [...out, ...plain(wrapN(o.text || "couldn't read it", s.w, 2), P.dim, key), ...extra]
+  if (o.text !== '') out.push(...textLines(o.text, s.w, f.text, P.text, key, o.id === null ? null : `more:${o.id}`, {}, o.cut === true))
   if (o.meta !== null) out.push(line([seg(o.meta, P.dim)], key))
   out.push(...extra)
   return out
@@ -383,25 +387,24 @@ export function bar(v: number, max: number, width: number): string {
   return '▄'.repeat(Math.floor(halves / 2)) + (halves % 2 === 1 ? '▖' : '')
 }
 
-/** The Mechanisms section's link while the dashboard is down: a click runs /counterparts:dashboard. */
-export const DASHBOARD_LINK = 'Start the dashboard to see stats here'
+/** The Mechanisms section before any session has written the status file (`status.ts`). */
+export const WAITING = 'Waiting for the first session: memory writes what it did here after a turn.'
 
 /** What shows in place of another store's numbers. */
-export const OTHER_STORE = 'This dashboard belongs to another memory.'
+export const OTHER_STORE = 'The status file is another memory’s.'
 
 function chart(s: BodyState, f: Fold): Line[] {
   const t = s.today
   if (t === null) {
     if (s.dash === 'down') {
-      // A link that starts it (the plugin's own command, which every install that draws this sidebar has), cyan
-      // like the intro's (the owner's fox trial, 2026-10-12).
-      return [heading('Mechanisms today', '', s.w), ...wrapN(DASHBOARD_LINK, s.w).map(t => line([seg(t, P.accent)], 'dash:start'))]
+      // No status file yet (a new install, before its first turn): calm, dim, nothing to do.
+      return [heading('Mechanisms today', '', s.w), ...plain(wrapN(WAITING, s.w), P.dim)]
     }
     if (s.dash === 'other') {
-      // The dashboard on the port serves another store (core #459): none of its numbers here.
+      // The status file is another store's (core #459): none of its numbers here.
       return [heading('Mechanisms today', '', s.w), ...plain(wrapN(OTHER_STORE, s.w), P.dim)]
     }
-    return [heading('Mechanisms today', '', s.w), line([seg('reading the dashboard…', P.dim)])]
+    return [heading('Mechanisms today', '', s.w), line([seg('reading…', P.dim)])]
   }
   const fired = MECHS.filter(m => (t.counts[m.id] ?? 0) > 0).length
   if (f.chartFolded) return [heading('Mechanisms today', `${String(fired)} fired`, s.w, { folded: true, key: 'head:chart' })]
@@ -409,7 +412,9 @@ function chart(s: BodyState, f: Fold): Line[] {
   const CNT = 4
   const barW = Math.max(4, (s.cellsW ?? s.w) - NAME - CNT)
   const max = Math.max(1, ...MECHS.map(m => t.counts[m.id] ?? 0))
-  const out: Line[] = [heading('Mechanisms today', 'times fired', s.w, { key: 'head:chart' })]
+  // A file no writer has refreshed in an hour (no session running its memory server): it says how old it is.
+  const old = s.statusAt !== null && s.statusAt !== undefined && s.now - s.statusAt > STATUS_STALE_MS
+  const out: Line[] = [heading('Mechanisms today', old ? agoWords(s.now - (s.statusAt ?? s.now)) : 'times fired', s.w, { key: 'head:chart' })]
   for (const m of MECHS) {
     const v = t.counts[m.id]
     const key = `mech:${m.id}`
@@ -442,7 +447,7 @@ function mechEvents(s: BodyState, f: Fold): Line[] {
   const m = s.mech
   if (m === null) return []
   if (m.status === 'loading') return [line([seg('reading…', P.dim)], `mech:${m.id}`)]
-  if (m.status === 'error') return plain(wrapN("couldn't read it: the dashboard isn't answering", s.w), P.dim, `mech:${m.id}`)
+  if (m.status === 'error') return plain(wrapN('nothing to show yet: no status file', s.w), P.dim, `mech:${m.id}`)
   if (m.events.length === 0) {
     // Association's firings (link flushes) count the pairs they linked and name none yet: say what it does instead.
     const said = m.id === 'association' ? "links memories used together; it doesn't record which yet" : 'nothing lately names a memory'

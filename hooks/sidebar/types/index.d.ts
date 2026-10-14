@@ -2,10 +2,11 @@
 // the plugin's name. Self-contained (no imports), as a contract must be; the
 // hooks module imports these types from here.
 //
-// v0.2 (2026-10-10): the pane is what memory is doing, in 35 columns. A small
-// brain beside the title, then five sections (Memories, Subconscious, Saved
-// this session, Mechanisms today, Last Dream), then three rows of switches.
-// The v0.1 ACTIVITY list, its legend and its `feed` are gone.
+// v0.2 (2026-10-10): the pane is what memory is doing, in 35 columns: five
+// sections (Memories, Subconscious, Saved this session, Mechanisms today, Last
+// Dream). v1 (2026-10-14, the directory trim): the fox or no avatar above the
+// title (the brain is gone), and a footer of instructions where the switches
+// were. The v0.1 ACTIVITY list, its legend and its `feed` are gone.
 
 export type SidebarMechId =
   | 'salience'
@@ -23,7 +24,7 @@ export type SidebarMechId =
 
 /**
  * One event the dashboard's feed narrates, as the sidebar reads it: which
- * mechanisms it proves (for the brain's lights and the day's counts), and
+ * mechanisms it proves (for the header's dot and the day's counts), and
  * whose it is. Not kept in `$.state`; the pure feed hands these around.
  */
 export type SidebarRow = {
@@ -45,23 +46,22 @@ export type SidebarRow = {
   text: string;
   /** What opening it adds. */
   more: string[];
-  url: string;
-  label: string;
   /** Seen live in this session rather than read from the dashboard. */
   live?: true;
   /** This session's (`here`), the night's or the background's (`night`), or another session's (`other`). */
   who: 'here' | 'night' | 'other';
   /** The row in one short line. */
   line: string;
-  /** Keys a live row and its later dashboard twin share (`mem:<id>`, `turn:<session>:<n>`). */
-  keys?: string[];
+  /** Ids a live row and its later dashboard twin share (`mem:<id>`, `turn:<session>:<n>`). */
+  twinIds?: string[];
   /** The memory the event is about, when it names one: its id and its title as the feed gives it (cut at about 60 characters). */
   memory?: { id: string; title: string | null };
   /** The dream it belongs to (`drm_…`), for a dream's rows: one dream is one firing. */
   dream?: string;
 };
 
-export type SidebarPulse = { day: number; memories: number; lastSeq: number };
+/** Day, count and the log's newest seq, from the status file; `at`: when that file was written. */
+export type SidebarPulse = { day: number; memories: number; lastSeq: number; at?: number };
 
 /** A memory the sidebar names: its id when known, and its title (or, until the title is read, the words Claude was shown). */
 export type SidebarMemoryRef = {
@@ -148,6 +148,8 @@ export type SidebarOpen = {
   /** `fact · learned Oct 9`. */
   meta: string | null;
   at: number;
+  /** The text shown is not all of it (the status file carries a memory's start, or not the memory): end with `more`. */
+  cut?: boolean;
 };
 
 /**
@@ -226,9 +228,6 @@ export type SidebarOnboarding = {
   style: string | null;
 };
 
-/** A line or two the switch explains itself with, above the switches. */
-export type SidebarNote = { text: string; at: number };
-
 /** The mechanisms that fired last, and when: the newest row's own first, then every other one the same read proved. */
 export type SidebarFiring = { ids: SidebarMechId[]; at: number };
 
@@ -239,8 +238,8 @@ export type SidebarFiring = { ids: SidebarMechId[]; at: number };
  */
 export type SidebarView = 'sidebar' | 'quiet';
 
-/** The avatar: the fox at the top (`fox`, the default), the brain beside the title swaying (`turning`) or still (`still`), or none (`off`). */
-export type SidebarBrain = 'turning' | 'still' | 'off' | 'fox';
+/** The avatar: the fox at the top (`fox`, the default) or none (`off`). A stored brain (`turning`, `still`) reads as the fox. */
+export type SidebarAvatar = 'off' | 'fox';
 
 /** The pane's colours (`hooks/theme.ts`): the mockups' `tron` (the default) or the warm `cozy`. */
 export type SidebarTheme = 'tron' | 'cozy';
@@ -249,8 +248,11 @@ declare module 'claude-code' {
   interface PluginState {
     counterparts: {
       pulse: SidebarPulse | null;
-      /** Whether the dashboard answered the last time it was asked. */
-      dash: 'unknown' | 'up' | 'down';
+      /**
+       * The status file at the last look: `up` read, `down` not there yet (no session has written it),
+       * `other` another store's, `unknown` not looked at yet.
+       */
+      dash: 'unknown' | 'up' | 'down' | 'other';
       mind: SidebarMind | null;
       saved: SidebarSaved[];
       today: SidebarToday | null;
@@ -260,28 +262,16 @@ declare module 'claude-code' {
       /** A section heading the person clicked while it was folded: kept unfolded until clicked again. */
       focus: string | null;
       latest: SidebarLatest | null;
-      /** The mechanisms that fired last, and when: their regions light. */
+      /** The mechanisms that fired last, and when: the header's dot lights in the newest one's colour. */
       firing: SidebarFiring | null;
       scope: SidebarScope;
-      /** Where the first meeting stands (core's `/api/onboarding`). */
-      onboarding: SidebarOnboarding;
       view: SidebarView;
-      brain: SidebarBrain;
+      /** The avatar, for every session (`$.store` `brain`, its old name). */
+      brain: SidebarAvatar;
       /** The pane's colours, for every session (`$.store` `theme`). */
       theme: SidebarTheme;
       /** The pane is placed and showing (opened and not closed since). */
       placed: boolean;
-      /** What the Counterparts switch said about a press it would not act on. */
-      switchNote: SidebarNote | null;
-      /**
-       * The confirm row a press on the Counterparts switch opens before a
-       * pause or an off (since 2026-10-09: a press meant for the other switch
-       * paused a folder): `dir` is the folder it would change, `at` when it
-       * opened, `to` what it would set (absent: a pause, as before the
-       * three-way switch). Only its [Pause] / [Turn off] calls the scope
-       * tool; [Cancel] or 30 s closes it.
-       */
-      pauseAsk: { dir: string; at: number; to?: 'pause' | 'off' | 'on' } | null;
       /**
        * The session in which the person ran `/counterparts …` themselves (the sidebar's own
        * command answers without passing it on, so no other hook sees it): the speak-first

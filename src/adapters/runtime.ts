@@ -115,6 +115,25 @@ export const MODULE_EXT: ".ts" | ".js" = moduleExtOf(import.meta.url);
 export const TRANSPILED: boolean = MODULE_EXT === ".js";
 
 /**
+ * Does this build read Claude Code's user configuration, `~/.claude.json`
+ * (`$CLAUDE_CONFIG_DIR/.claude.json`)? Yes everywhere but the transpiled tree,
+ * the plugin directory's bundle (2026-10-14, owner's decision): there nothing
+ * opens that file. What that build gives up, every reader gated on this says:
+ * the plugin no longer stands down beside the npm install's wiring (memory
+ * wired twice until a marker-based check lands, docs/plugin.md), doctor has
+ * no MCP-registration line and no Desktop Code-tab clash, and an uninstall has
+ * only `claude mcp remove`'s word that a `-s user` registration is gone (with
+ * no `claude`, it says the line to run and does not count it gone). The
+ * stand-down check (`host-wiring.ts#npmWiring`) reads nothing at all in this
+ * build, the settings files' hooks included; doctor, connect and uninstall
+ * still read the settings files, and `plugins/installed_plugins.json` is
+ * still read. `transpiled` is a test's seam.
+ */
+export function readsHostUserConfig(transpiled: boolean = TRANSPILED): boolean {
+  return !transpiled;
+}
+
+/**
  * A script this package starts or names, written in source by its `.ts` path
  * as a `new URL` from `import.meta.url` (a literal the bundle's tracer
  * follows), as the file this tree holds: that path from source, its `.js`
