@@ -41,8 +41,6 @@ export type Palette = {
   accent: string
   /** A warning: paused, off (tron's amber). */
   accent2: string
-  /** The search box: a shade above the panel, so it reads as a field without a border. */
-  searchBg: string
   /** The brainless header's dot at rest and its `↗`. */
   accentDim: string
 }
@@ -58,7 +56,6 @@ export const tron: Palette = {
   head: '#c9d1d8',
   accent: '#00e5ff',
   accent2: '#ffb347',
-  searchBg: '#121a22',
   accentDim: '#0b6f7c',
 }
 
@@ -73,7 +70,6 @@ export const cozy: Palette = {
   head: '#efd9b6',
   accent: '#9cc65f',
   accent2: '#f0a04b',
-  searchBg: '#2a1e16',
   accentDim: '#56713a',
 }
 
@@ -97,7 +93,6 @@ export const desk: Palette = {
   head: 'text',
   accent: 'suggestion',
   accent2: 'warning',
-  searchBg: '',
   accentDim: 'inactive',
 }
 

@@ -64,6 +64,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 
 import { defaultConfigPath } from "./config-path.js";
 import { isPseudoScope } from "./hosts.js";
+import { pluginConsoleWords } from "./runtime.js";
 
 /**
  * `sessions.ts#canonicalScope`, extended by one step this rule needs and that
@@ -719,7 +720,7 @@ export function scopeCommand(folder: string, flag: string, ctx: ScopeCommandCont
   const config = ctx.configPath === null ? "" : ` --config ${shellWord(ctx.configPath, ctx.home)}`;
   return ctx.pluginRoot === null
     ? `counterparts scope ${target} ${flag}${config}`
-    : `sh ${shellWord(join(ctx.pluginRoot, "src", "adapters", "plugin-run.sh"), ctx.home)} cli scope ${target} ${flag}${config}`;
+    : `${pluginConsoleWords(ctx.pluginRoot).map((w) => shellWord(w, ctx.home)).join(" ")} scope ${target} ${flag}${config}`;
 }
 
 /** `path` with the home directory as `~`, for reading. Both spellings of home

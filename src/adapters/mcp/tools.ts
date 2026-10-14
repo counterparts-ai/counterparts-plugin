@@ -173,6 +173,51 @@ export interface ToolSpec {
    */
   readonly engine?: readonly Privilege[];
   readonly inputSchema: Record<string, unknown>;
+  /** MCP's tool annotations (`ToolAnnotations`, spec 2025-06-18): hints a host
+   *  shows or acts on — a short human name, and whether the tool writes,
+   *  destroys or reaches beyond this machine. Served in `tools/list`. */
+  readonly annotations: ToolAnnotations;
+}
+
+/**
+ * MCP TOOL ANNOTATIONS (2026-10-14, for the Software Directory's policy §5E:
+ * "provide all applicable tool annotations, in particular readOnlyHint,
+ * destructiveHint, and title"). Hints, not guarantees — a host must not trust
+ * them for safety — but they are kept true to the code:
+ *
+ * - `readOnlyHint` is true only for a tool that never changes the store, a file
+ *   or a setting. Diagnostic events (the ring, the adapter-event telemetry
+ *   rows every tool may leave) do not count as a change; anything a later
+ *   strengthening, fading or wake reads does — so `recall` is NOT read-only:
+ *   what it delivers is recorded for this session (`Counterpart#noteAsked`, a
+ *   gate record), and the boundary's credit pass strengthens a memory opened
+ *   or quoted from it.
+ * - `destructiveHint` is true only where a call can take away what was there
+ *   without keeping it. Every rewrite through the store's one door archives
+ *   what it replaces (`store#revise`, archive-on-overwrite), a merge keeps its
+ *   originals and a retired handoff stays readable by id, so the writers are
+ *   additive. `dream` is destructive: its `undo` phase removes a dream's
+ *   links and gists.
+ * - `idempotentHint` is true only where a repeat call with the same arguments
+ *   leaves nothing more behind; `openWorldHint` is false for every tool —
+ *   all of them work on this machine's store and files only.
+ */
+export interface ToolAnnotations {
+  readonly title: string;
+  readonly readOnlyHint: boolean;
+  readonly destructiveHint: boolean;
+  readonly idempotentHint: boolean;
+  readonly openWorldHint: boolean;
+}
+
+function annotate(title: string, hints: { readOnly: boolean; destructive?: boolean; idempotent?: boolean }): ToolAnnotations {
+  return {
+    title,
+    readOnlyHint: hints.readOnly,
+    destructiveHint: hints.destructive ?? false,
+    idempotentHint: hints.idempotent ?? hints.readOnly,
+    openWorldHint: false,
+  };
 }
 
 /**
@@ -553,6 +598,7 @@ const RELEVANCE_TEXT = "Optional 0-1: how much this bears on them, on you, or on
  */
 const REMEMBER: ToolSpec = {
   name: "remember",
+  annotations: annotate("Remember", { readOnly: false }),
   summary:
     "Remember something now, while it is in front of you. Memory forms only from what you write here and at the end-of-session ask — nothing reads the transcript afterwards, so what you don't write is not kept. Write what caught your attention: a line you read and why it struck you, something they said about themselves or you, news you passed on, a decision, a work event. One idea per call; keep the exact words when the words matter.",
   admission:
@@ -704,6 +750,7 @@ const REMEMBER: ToolSpec = {
 
 const RECALL: ToolSpec = {
   name: "recall",
+  annotations: annotate("Recall memories", { readOnly: false }),
   summary:
     "Deliberate retrieval: a look you take on purpose, beyond the ambient reminding you already get. Three kinds of ask, one per call — a question with a mode (facts or meaning), ids to read memories whole, or a handle (an id or an exact title) to read one.",
   admission:
@@ -854,6 +901,7 @@ const RECALL: ToolSpec = {
 
 const STATUS: ToolSpec = {
   name: "status",
+  annotations: annotate("Memory status", { readOnly: true }),
   summary:
     "The census: how much is held, of what kinds, in which bands, how much has left, and how much was removed. Counts and dates only.",
   admission:
@@ -913,6 +961,7 @@ const DREW_ON_PRIVILEGE = {
 
 const SESSION_END: ToolSpec = {
   name: "session_end",
+  annotations: annotate("End session", { readOnly: false }),
   summary:
     "The memories half of the end-of-session ask: hand back what caught your attention since you last wrote, one idea per entry, in your own words. With `remember`, this is the only road from conversation to memory — nothing sweeps the transcript. The other half is `chapter`.",
   admission:
@@ -1126,6 +1175,7 @@ const SESSION_END: ToolSpec = {
  */
 const CHAPTER: ToolSpec = {
   name: "chapter",
+  annotations: annotate("Write a chapter", { readOnly: false }),
   summary:
     "The episode's return channel: write this stretch of the session into your first-person journal — a diary of what happened, in your own voice, at any length. The journal stays open — when something significant happens later, append to it in the moment.",
   admission:
@@ -1218,6 +1268,7 @@ const CHAPTER: ToolSpec = {
  */
 const SCOPE: ToolSpec = {
   name: "scope",
+  annotations: annotate("Directory scope", { readOnly: false }),
   summary:
     "Which directories this memory is for. Read what this one is set to — on, observer (reads only), off, paused, or unset — and set it when the user says. It changes the host's own configuration; it writes no memory and reads none.",
   admission:
@@ -1290,6 +1341,7 @@ const SCOPE: ToolSpec = {
  */
 const SELF_PAGE: ToolSpec = {
   name: "self_page",
+  annotations: annotate("Self page", { readOnly: false }),
   summary: `Your own page — the prose that opens every wake under 'Who I am'. No arguments: read it and when it was last revised. With \`body\`: write the whole page anew — a stable \`## Core\` that has to be earned and a \`## Lately\` for what the last while has been like, by convention; any other \`##\` section is kept too. Aim under ${String(PAGE_ROOM_BYTES)} bytes: a longer page is kept whole, but on a day the wake has no room for it, sessions read a short version instead — so with a longer page send \`short\` too (under ${String(PAGE_ROOM_BYTES)}), or add one later with \`short\` alone.`,
   admission:
     "Call it to READ when you want the page as it stands rather than as the wake abridged it. Call it to WRITE when something you now know about yourself is not on the page and will still be true next month: a way of working that has held up, a correction the user made about you, a standing preference of theirs you keep rediscovering. Date the claims that need dating, say what made you believe them, and phrase what you have learned as practice — what you do now — rather than as praise.",
@@ -1399,6 +1451,7 @@ const SELF_PAGE: ToolSpec = {
  */
 const DREAM: ToolSpec = {
   name: "dream",
+  annotations: annotate("Dream", { readOnly: false, destructive: true }),
   summary:
     "Dreaming, in the nightly run: a few minutes of replay over what was lived since the last dream — merging near-copies, linking what belongs together, replaying what matters, writing a pattern you notice, flagging a contradiction, recording how an old feeling sits now — kept in a dream journal and reversible as a whole — with the page writer before it and a reflection after it, in one background run. Phases: `launch` (the prompt for the background run), `begin` / `propose` / `journal` (the dreamer's), `writer` (the night's page writer: the day to read), `decline` (not today), `setting` (auto, ask or off — 'no dreams' is off).",
   admission:
@@ -1541,6 +1594,7 @@ const DREAM: ToolSpec = {
  */
 const REFLECT: ToolSpec = {
   name: "reflect",
+  annotations: annotate("Reflect", { readOnly: false }),
   summary:
     "Reflection: a few quiet, awake minutes — usually at the end of the nightly run, after the dream — answering two or three questions about yourself, the owner and the two of you, citing the memories your thoughts rest on. It keeps a lived entry, may rewrite your self page from the memories it cites, leaves a short morning share for the owner, can record how a memory feels to you now and what a memory is about. Phases: `launch` (a reflection on its own, for a background agent), `begin` / `part` / `finish` (the reflecting mind's — `part` fetches the rest of a bundle that came in parts), `settle` (two memories it was shown that disagree, when the reason is plain), `told` (the share was told).",
   admission:
@@ -1700,6 +1754,7 @@ const REFLECT: ToolSpec = {
  */
 const MEET: ToolSpec = {
   name: "meet",
+  annotations: annotate("Meet", { readOnly: false }),
   summary: "The first meeting with the person. No step: the script, and where it stands. With step: record that step.",
   admission: "the wake says you haven't met, or they ask to.",
   negativeExamples: ["Do NOT start it unasked mid-task: offer it once."],
@@ -1747,6 +1802,7 @@ export const TOOLS: readonly ToolSpec[] = [
  */
 export const WAKE: ToolSpec = {
   name: "wake",
+  annotations: annotate("Wake", { readOnly: false }),
   summary:
     "Start here in Claude Desktop: wakes this chat's memory. Returns the same briefing a Claude Code session gets when it starts — who I am, what is nearby and arriving, any reminder due today — and a session id for this chat.",
   admission:
@@ -1869,7 +1925,9 @@ export function renderDescription(spec: ToolSpec): string {
 export function toolDefinitions(desktop = false): Record<string, unknown>[] {
   return (desktop ? DESKTOP_TOOLS : TOOLS).map((spec) => ({
     name: spec.name,
+    title: spec.annotations.title,
     description: renderDescription(spec),
     inputSchema: spec.inputSchema,
+    annotations: spec.annotations,
   }));
 }

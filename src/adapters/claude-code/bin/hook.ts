@@ -61,7 +61,7 @@ import {
 } from "../standdown.js";
 import type { SaysSoHook, StandDownFault } from "../standdown.js";
 import { readTranscript } from "../transcript.js";
-import { BINARY, scriptArgs } from "../../runtime.js";
+import { BINARY, entryScript, scriptArgs } from "../../runtime.js";
 import type { Binary } from "../../runtime.js";
 import { npmWiring } from "../../host-wiring.js";
 import {
@@ -168,9 +168,9 @@ export const CONFIG_PATH = defaultConfigPath();
 
 /** The worker script this hook's spawn runs. Resolved from THIS file's location,
  *  never from a working directory the host chose. */
-export const RUNNER_PATH = fileURLToPath(new URL("./runner.ts", import.meta.url));
+export const RUNNER_PATH = entryScript(new URL("./runner.ts", import.meta.url));
 /** The headless nightly run's own process (2026-09-29, `night-run.ts`). */
-export const NIGHTLY_PATH = fileURLToPath(new URL("./nightly.ts", import.meta.url));
+export const NIGHTLY_PATH = entryScript(new URL("./nightly.ts", import.meta.url));
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];

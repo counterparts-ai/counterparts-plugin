@@ -17,5 +17,5 @@
       { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
     ]
   },
-  "modules": ["./sidebar/hooks/register.tsx"]
+  "modules": ["./sidebar/hooks/full.tsx"]
 }

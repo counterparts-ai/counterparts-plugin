@@ -15,7 +15,7 @@ import { Brain } from './brain'
 import { encodeCells } from './cells'
 import { mechById, stageOf } from './mechanisms'
 import type { MechId } from './mechanisms'
-import { searchBox, titleButton } from './pane'
+import { titleButton } from './pane'
 import type { PaneActions, PaneEls } from './pane'
 import { run } from './state'
 import { P } from './theme'
@@ -48,23 +48,18 @@ export const look = { mono: false, still: false, sel: null as MechId | null, fir
 export const fps = {
   target: DEFAULT_FPS,
   inFlight: false,
+  /** A tick is reading the clock: the next one is skipped (`register.tsx#tick`). */
+  ticking: false,
   lastTick: 0,
-  /** `performance.now()` of each blit the surface took: the measurement. */
+  /** The engine's clock (`$.clock.now()`) at each blit the surface took: the measurement. */
   blits: [] as number[],
-  frameMs: [] as number[],
 }
 
-export function achievedFps(): number {
-  const now = performance.now()
+export function achievedFps(now: number): number {
   const recent = fps.blits.filter(t => now - t < 10000)
   if (recent.length < 2) return 0
   const span = (recent[recent.length - 1] ?? 0) - (recent[0] ?? 0)
   return span <= 0 ? 0 : ((recent.length - 1) * 1000) / span
-}
-
-export function meanFrameMs(): number {
-  if (fps.frameMs.length === 0) return 0
-  return fps.frameMs.reduce((a, b) => a + b, 0) / fps.frameMs.length
 }
 
 export function paceWords(mode: SidebarBrain): string {
@@ -74,11 +69,11 @@ export function paceWords(mode: SidebarBrain): string {
   return run.brainPace === 'burst' ? `in a burst (${String(fps.target)} fps)` : `swaying (${(1000 / paceMs('calm')).toFixed(0)} fps)`
 }
 
-export function fpsReport(mode: SidebarBrain): string {
+export function fpsReport(mode: SidebarBrain, now: number): string {
   if (fps.blits.length < 2) {
     return `Brain: no frames measured yet (target ${String(fps.target)} fps), now ${paceWords(mode)}. It draws only while the sidebar shows in a terminal and something moves; ask again in a few seconds.`
   }
-  return `Brain: ${achievedFps().toFixed(1)} fps achieved over the last 10 s (target ${String(fps.target)}), now ${paceWords(mode)}; a frame takes ${meanFrameMs().toFixed(2)} ms to compute.`
+  return `Brain: ${achievedFps(now).toFixed(1)} fps achieved over the last 10 s (target ${String(fps.target)}), now ${paceWords(mode)}.`
 }
 
 /** What the brain shows besides its turning: a frame drawn under another look is not reused. */
@@ -98,11 +93,7 @@ export function frameCells(cols: number, rows: number, now: number): string {
     const m = mechById(look.sel)
     if (m !== undefined) brain.light(m.region, stageOf(m.id).col)
   }
-  const t0 = performance.now()
-  const cells = encodeCells(brain.frame(cols, rows, now, { mono: look.mono, tag: null, bg: null, dimRest: DIM_REST }))
-  fps.frameMs.push(performance.now() - t0)
-  if (fps.frameMs.length > 120) fps.frameMs.shift()
-  return cells
+  return encodeCells(brain.frame(cols, rows, now, { mono: look.mono, tag: null, bg: null, dimRest: DIM_REST }))
 }
 
 export function fireBrain(mech: MechId, now: number): void {
@@ -121,14 +112,15 @@ export function paceMs(pace: 'burst' | 'calm'): number {
 
 /**
  * The terminal's header: the brain (a `Raster`, reusing the last frame while
- * its look is the same) and beside it the title, the day, the count and the
- * search box; then a blank row. BRAIN_ROWS + 1 rows.
+ * its look is the same) and beside it the title, the day and the count (a
+ * blank row under them, where the search box was); then a blank row.
+ * BRAIN_ROWS + 1 rows.
  */
 export function brainHeader(
   els: PaneEls,
   Raster: Elements['terminal']['Raster'],
   actions: PaneActions,
-  s: { w: number; paused: boolean; day: number | null; count: string },
+  s: { w: number; paused: boolean; day: number | null; count: string; now: number },
 ): JSX.Element[] {
   const { Box, Text } = els
   const { w } = s
@@ -138,7 +130,7 @@ export function brainHeader(
   const gap = cells(countText) > w - HEAD_X ? 1 : 2
   const headW = w - BRAIN_COLS - gap
   const reuse = raster.cols === BRAIN_COLS && raster.rows === BRAIN_ROWS && raster.cells !== '' && raster.look === lookKey()
-  const cells0 = reuse ? raster.cells : frameCells(BRAIN_COLS, BRAIN_ROWS, Date.now())
+  const cells0 = reuse ? raster.cells : frameCells(BRAIN_COLS, BRAIN_ROWS, s.now)
   raster.cols = BRAIN_COLS
   raster.rows = BRAIN_ROWS
   raster.cells = cells0
@@ -154,7 +146,7 @@ export function brainHeader(
         <Text> </Text>
         <Text color={P.dim}>{s.day === null ? ' ' : `day ${String(s.day)}`}</Text>
         <Text color={P.dim}>{s.day === null ? ' ' : countText}</Text>
-        {searchBox(els, actions, headW)}
+        <Box width={headW} />
       </Box>
     </Box>,
     <Text key="head-gap"> </Text>,

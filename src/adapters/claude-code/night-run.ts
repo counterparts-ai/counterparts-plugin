@@ -75,14 +75,13 @@
  * written in the PR, not claimed here.
  */
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 
 import { Counterpart, MCP_SPILLED_EVENT } from "../../core/counterpart.js";
 import type { CounterpartEvent } from "../../core/counterpart.js";
 import { CATCH_UP_ONLY_REASONS } from "../../core/dream/index.js";
 import type { CatchUpOnlyReason, NightChildRun, NightPart, NightRun } from "../../core/dream/index.js";
 import { CONFIG_ENV as CONFIG_PATH_ENV } from "../config-path.js";
-import { scriptArgs } from "../runtime.js";
+import { entryScript, scriptArgs } from "../runtime.js";
 import { TOOL_RESULT_CEILING } from "../../core/fit/index.js";
 import { installedVersion } from "../sessions.js";
 import { OBSERVER_ENV, OWNER_ENV } from "../stance-env.js";
@@ -173,7 +172,7 @@ export const DREAM_CHILD_DENIED = ["mcp__counterparts__reflect"] as const;
 export const NIGHT_MCP_SERVER = "counterparts";
 
 /** The MCP entry point beside this adapter — what the install registers (`cli/install.ts#MCP_SCRIPT`). */
-export const NIGHT_MCP_SCRIPT = fileURLToPath(new URL("../mcp/bin/serve.ts", import.meta.url));
+export const NIGHT_MCP_SCRIPT = entryScript(new URL("../mcp/bin/serve.ts", import.meta.url));
 
 /**
  * THE ONE MCP SERVER THE CHILD LOADS (owner decision B): counterparts, as the

@@ -88,20 +88,23 @@ export function isOurHookCommand(command: string): boolean {
   // `<runtime> --import <node-hooks.mjs> <our hook script>`, or the single
   // binary's `<binary> hook` (`runtime.ts`).
   const run = parseScriptInvocation(tokens);
-  if (run !== null && (run.mode === "hook" || (run.mode === undefined && /claude-code[/\\]bin[/\\]hook\.ts$/.test(run.script)))) {
+  // The transpiled tree's `.js` only anchored at `adapters/` (as `HOOK_ENTRY`,
+  // review of #355): a bare `claude-code/bin/hook.js` is a path another tool's
+  // build may well have (review of #475). `.ts` reads as it always has.
+  if (run !== null && (run.mode === "hook" || (run.mode === undefined && /((^|[/\\])adapters[/\\]claude-code[/\\]bin[/\\]hook\.js|claude-code[/\\]bin[/\\]hook\.ts)$/.test(run.script)))) {
     return tail(tokens.length - run.rest.length);
   }
   return false;
 }
 
-/** Our hook's entry by its path, as a runtime's script: the TypeScript entry
- *  or its `.mjs` shim. (The installed `counterparts-hook` shim runs itself,
+/** Our hook's entry by its path, as a runtime's script: the TypeScript entry,
+ *  its `.mjs` shim, or the transpiled tree's `.js` (`runtime.ts#entryScript`). (The installed `counterparts-hook` shim runs itself,
  *  so it is read only as the command's first token.) Anchored at
  *  `adapters/`, where the entry has lived since it was written (review of
  *  #355): a bare `claude-code/bin/hook.ts` is a path any tool with a Claude
  *  Code adapter may have, and this reading accepts any runtime before it —
  *  `tsx`, `deno run`, `node` — so a match here stands the plugin down. */
-const HOOK_ENTRY = /(^|[/\\])adapters[/\\]claude-code[/\\]bin[/\\]hook\.(ts|mjs)$/;
+const HOOK_ENTRY = /(^|[/\\])adapters[/\\]claude-code[/\\]bin[/\\]hook\.(ts|mjs|js)$/;
 
 /** Our hook command, read for WHAT IT RUNS (`readOurHook`). */
 export interface OurHookRead {

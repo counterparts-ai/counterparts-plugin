@@ -14,9 +14,9 @@ please open issues and pull requests there.
 
 ## Install
 
-Counterparts is built for Claude Code in the terminal, on macOS and Linux; Windows is not yet
-supported. The Code tab of the Claude desktop app runs the same hooks and memory server (checked
-with the npm install); the plugin's own install there is still being tested.
+Counterparts is for Claude Code only (the terminal and the Desktop app's Code tab), on macOS
+and Linux; Windows is not yet supported. The Code tab runs the same hooks and memory server
+(checked with the npm install); the plugin's own install there is still being tested.
 
 In Claude Code:
 
@@ -28,10 +28,11 @@ In Claude Code:
 Then restart Claude Code. The first session creates your memory in `~/.counterparts`, and
 Claude offers a short first meeting: a few skippable questions to get to know you (where
 memory should be on, what you're working on, something you've loved, how you like to be
-talked to). Your answers become ordinary memories; a question you skip stores nothing. In
-that first session the sidebar starts it: it sends one message, shown as from the plugin,
-and Claude introduces itself (once per install, never in a `claude -p` run, a paused
-folder, or after you've typed). Say "later" and it is offered again another day, on three days at most; a
+talked to). Your answers become ordinary memories; a question you skip stores nothing.
+In that first session the sidebar starts it: it sends one message, shown as from the
+plugin, and Claude introduces itself (once per install, never in a `claude -p` run, a
+paused folder, or after you've typed).
+Say "later" and it is offered again another day, on three days at most; a
 **Start the 5-minute intro** row in the sidebar, or `/counterparts:meet`, starts it any time.
 A memory that already existed is never offered it. Check its health any time with
 `/counterparts:doctor`.
@@ -52,6 +53,25 @@ down, so the memory is never wired twice.
 - **A sidebar** in the terminal showing what came to mind and what was saved.
 - **Commands:** `/counterparts:doctor` (a health check), `/counterparts:dashboard` (opens the
   dashboard), `/counterparts:meet` (the first meeting) and `/counterparts:uninstall`.
+
+## What the sidebar does
+
+The sidebar is a Claude Code mod (`hooks/sidebar/`). This is everything it reaches outside
+its own pane:
+
+- **Your own dashboard, on this computer.** It reads the pulse, today's counts, the last
+  dream and memory cards with HTTP GET requests to the Counterparts dashboard at
+  `http://127.0.0.1:4747` (or the port in `COUNTERPARTS_DASHBOARD_PORT`), and asks it which
+  memory it serves, so it never shows another one. It sends nothing off your computer.
+- **Commands you click.** **Start the 5-minute intro** runs this plugin's `/counterparts:meet`;
+  in the desktop app, COUNTERPARTS and `more` run `/counterparts:dashboard`.
+- **One memory tool you press.** The folder switch (on, pause, off) calls Counterparts' own
+  `scope` tool when you choose and confirm; Claude Code's permission check applies.
+- **What it watches.** It sees your slash commands and Counterparts' own tool calls only to
+  update what it shows, and passes every one on unchanged: it never approves, denies or
+  alters a command or a tool call, and never changes a setting.
+- **One message, once.** On a new install, before you type anything, it sends "Meet your
+  new counterpart." so Claude can introduce itself (see Install).
 
 ## What it runs, sends and fetches
 
@@ -139,9 +159,16 @@ roughly 20k generated tokens and 155k of fresh input, plus about 1M tokens read 
 cache, on your default model. Turning dreaming off removes that part. Your numbers will
 differ with how much you use it.
 
-The sidebar's fox is drawn from small PNG frames embedded as text (base64) in the
-sidebar's code, so it needs no file reads; the source images and the script that embeds
-them are in the source repository (`hooks/sidebar/art/fox/`, `tools/fox-art/`).
+The sidebar's fox is drawn from small PNG files in the plugin's own folder
+(`hooks/sidebar/art/fox/`): a terminal that shows pictures (kitty, Ghostty) reads them
+itself, and the desktop app's sidebar reads each one once. The script that builds them
+from the art is in the source repository (`tools/fox-art/`).
+
+The sidebar runs no programs. In a terminal, COUNTERPARTS and the `more` after a long
+memory are links to the dashboard, which your terminal opens (in some terminals with a
+⌘- or Ctrl-click). In the desktop app they are buttons that run `/counterparts:dashboard`,
+which starts the dashboard, or opens your browser on it when it is already running for
+your memory (it asks the page on 127.0.0.1 which memory it serves).
 
 The dashboard, when you open it, is a page served on 127.0.0.1 only (port 4747 unless
 you set `COUNTERPARTS_DASHBOARD_PORT`), and runs until the session that started it ends.

@@ -2,15 +2,14 @@
  * The desktop view, and any surface with no `Raster`: the header without the
  * brain. Its place is a dot before the title, lit in the stage colour of
  * whatever fires; the terminal draws this same header when the brain is set
- * off. Two rows: the title and the day, then the search box and the count.
+ * off. Two rows: the title with the count and the day, then a blank row.
  * No `$`.
  */
 
 import type { MechId } from './mechanisms'
 import { hex, stageOf } from './mechanisms'
-import { searchBox, titleButton } from './pane'
+import { titleButton } from './pane'
 import type { PaneActions, PaneEls } from './pane'
-import { searchFlag } from './state'
 import { P, SURFACE } from './theme'
 import { cells } from './width'
 
@@ -43,7 +42,7 @@ export function litDot(id: MechId): string {
   return st.id === 'retrieval' ? P.accent : hex(st.col, 0.95)
 }
 
-/** The brainless header and the blank row under it: two rows, three with the search box (`searchFlag`). */
+/** The brainless header and the blank row under it: two rows. */
 export function brainlessHeader(
   els: PaneEls,
   actions: PaneActions,
@@ -56,7 +55,6 @@ export function brainlessHeader(
       {titleButton(els, actions, { lead: true, paused: s.paused, dot: s.lit === null ? null : litDot(s.lit) })}
       <Text color={P.dim}>{headRight(s.day, s.count, w)}</Text>
     </Box>,
-    ...(searchFlag.on ? [<Box key="head2" flexDirection="row" width={w}>{searchBox(els, actions, w)}</Box>] : []),
     <Text key="head-gap"> </Text>,
   ]
 }

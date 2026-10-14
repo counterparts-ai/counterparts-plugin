@@ -2643,7 +2643,7 @@ export class Dreams {
       const raise = theirs(a) || theirs(b) ? ` It is about ${who}, or the two of you: raise it with ${who}.` : "";
       const when = c.dream_id === null ? "" : ` a dream on ${this.store.dream(c.dream_id)?.date ?? "a recent night"} flagged them;`;
       out.push(
-        `Counterparts: two memories disagree —${when} ${c.a} (the older) and ${c.b}. Look them up (recall by id) and settle which holds, awake: the remember tool with settle {pair: ${c.id}, holds, how, why} — changed, corrected or open.${raise}`,
+        `Counterparts: two memories disagree —${when} ${c.a} (the older) and ${c.b}. You can look them up (recall by id) and settle which holds, awake, with the remember tool's settle {pair: ${c.id}, holds, how, why} — changed, corrected or open.${raise}`,
       );
       if (out.length >= 2) return out;
     }

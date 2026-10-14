@@ -1022,10 +1022,12 @@ export type ProcessLister = () => ProcessSighting;
  * segment included, plus the two installed shims anchored at a boundary.
  */
 const PROCESS_MARKS: readonly { readonly re: RegExp; readonly what: string }[] = [
-  { re: /mcp[/\\]bin[/\\]serve\.(ts|mjs)/, what: "an MCP server" },
+  // Ended at the extension, and the transpiled tree's `.js` read only under
+  // `adapters/` (review of #475): those names are names other tools' builds have too.
+  { re: /(adapters[/\\]mcp[/\\]bin[/\\]serve\.js|mcp[/\\]bin[/\\]serve\.(ts|mjs))(?=$|["'\s])/, what: "an MCP server" },
   { re: /(^|[\s"'/\\])counterparts-mcp(\s|$|")/, what: "an MCP server" },
-  { re: /claude-code[/\\]bin[/\\]runner\.ts/, what: "the worker" },
-  { re: /dashboard[/\\]bin[/\\]dashboard\.(ts|mjs)/, what: "a dashboard" },
+  { re: /(adapters[/\\]claude-code[/\\]bin[/\\]runner\.js|claude-code[/\\]bin[/\\]runner\.ts)(?=$|["'\s])/, what: "the worker" },
+  { re: /(adapters[/\\]dashboard[/\\]bin[/\\]dashboard\.js|dashboard[/\\]bin[/\\]dashboard\.(ts|mjs))(?=$|["'\s])/, what: "a dashboard" },
   { re: /(^|[\s"'/\\])counterparts-dashboard(\s|$|")/, what: "a dashboard" },
   // The single binary (`runtime.ts#BINARY_MODES`): `…/counterparts mcp`.
   { re: /(^|[/\\])counterparts(\.exe)?"?\s+mcp(\s|$)/, what: "an MCP server" },

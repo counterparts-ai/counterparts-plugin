@@ -1,14 +1,15 @@
 /**
  * The Counterparts sidebar (v0.2): what memory is doing, in 35 columns.
  *
- * A small brain beside the title, the day, the count and a search box; then
+ * A small brain beside the title, the day and the count; then
  * what was put in front of Claude for the last message (Memories, said in
  * full; Subconscious, titles only), what this session saved, how often each
  * mechanism fired today, and the last dream; then three rows of switches
  * (Counterparts here, on · paused · off; the view; the brain), and Claude
  * Code's own memory for whoever opted in. While core's first meeting is put
- * off, "Start the 5-minute intro" tops the body; at the first start after an
- * install, the sidebar asks Claude to speak first (once). Closed
+ * off or not yet started, "Start the 5-minute intro" tops the body (the
+ * speak-first, asking Claude to begin once per install, is `speak-first.tsx`,
+ * a hooks module of its own). Closed
  * (`quiet`), it is only a dim tail under the prompt, ending with how to open
  * it again. The design is the round-3 mockups Mike chose on 2026-10-10
  * (`~/counterparts-notes/mockups/2026-10-10-mod-round3/`); ../NOTES.md says
@@ -26,7 +27,7 @@
  *   - the scope registry file the hooks read (`scopes.json` beside the
  *     configuration, read-only, `./scopes.ts`): where this folder stands;
  *   - the memory server over MCP, whichever this session connected: `scope`
- *     to pause or resume, after the confirm; `recall` (facts) for search;
+ *     to pause or resume, after the confirm;
  *   - this session: the recall block the classic UserPromptSubmit hook
  *     injects (Memories, Subconscious), and `tool.call` on remember (or
  *     its old name note) / session_end (Saved) and on recall by id (`↗ opened`).
@@ -67,7 +68,6 @@ import {
   RULES,
   RULE_NAMES,
   UNKNOWN_ONBOARDING,
-  canMeet,
   classify,
   countToday,
   dateOf,
@@ -82,7 +82,6 @@ import {
   openedIds,
   otherStore,
   ourTool,
-  parseFacts,
   parseOnboarding,
   parseOnboardingMarker,
   parseRecallBlock,
@@ -120,7 +119,8 @@ import {
   newDirector,
   normDetail,
   pickTier,
-  pngOf,
+  PNG_DIRS,
+  pngName,
   runs,
   stage,
   stageRows,
@@ -128,23 +128,22 @@ import {
   trigger,
 } from './fox'
 import type { FoxDetail, FoxEvent, FoxTier, Step } from './fox'
-import { aboveSwitches, footer, frame, meetRow, pausedBanner, plainBody, searchBox } from './pane'
+import { aboveSwitches, footer, frame, meetRow, pausedBanner, plainBody } from './pane'
 import type { PaneActions, PaneEls } from './pane'
 import { lookup, parentOf, parseRegistry, settingsHookConfig } from './scopes'
 import type { RegistryMode } from './scopes'
 import { layoutBody } from './sections'
+import type { Line } from './sections'
 import {
   AUTO_CLOSE_MS,
   COUNT_EVENTS,
   FALLBACK_LIMIT,
   FALLBACK_MAX,
   FIRING_MS,
-  IDLE_SEARCH,
   DASHBOARD_COMMAND,
   MEET_COMMAND,
   MEET_FLAG,
   MEET_PRESS_MS,
-  MEET_PROMPT,
   NAMES_NOTHING,
   OPEN_COLUMNS,
   POLL_IDLE_MS,
@@ -158,7 +157,6 @@ import {
   UNKNOWN_SCOPE,
   quiet,
   run,
-  searchFlag,
 } from './state'
 import { CLASSIC_HINT, NARROW_HINT, TAIL_HINT, TAIL_SPARE, narrowHint, quietTail } from './tail'
 import { BRAIN_COLS, BRAIN_ROWS, brain, brainHeader, fireBrain, fps, fpsReport, frameCells, look, lookKey, paceMs, raster } from './terminal'
@@ -167,7 +165,6 @@ import { cells } from './width'
 import {
   CONFIRM_FROM,
   bodyOf,
-  firedIn,
   isAbsolutePath,
   isPaused,
   memoriesCount,
@@ -178,10 +175,10 @@ import {
   statusFor,
   stoodDownNote,
   failedPressNote,
+  firedIn,
   isRefusal,
   storedWords,
   switchExplains,
-  truthy,
   words,
 } from './words'
 
@@ -203,7 +200,6 @@ const mechA = atom({ plugin: 'counterparts', key: 'mech' } as const, null)
 const focusA = atom({ plugin: 'counterparts', key: 'focus' } as const, null)
 const latestA = atom({ plugin: 'counterparts', key: 'latest' } as const, null)
 const firingA = atom({ plugin: 'counterparts', key: 'firing' } as const, null)
-const searchA = atom({ plugin: 'counterparts', key: 'search' } as const, IDLE_SEARCH)
 const scopeA = atom({ plugin: 'counterparts', key: 'scope' } as const, UNKNOWN_SCOPE)
 const onboardingA = atom({ plugin: 'counterparts', key: 'onboarding' } as const, UNKNOWN_ONBOARDING as SidebarOnboarding)
 const viewA = atom({ plugin: 'counterparts', key: 'view' } as const, 'sidebar')
@@ -212,6 +208,8 @@ const themeA = atom({ plugin: 'counterparts', key: 'theme' } as const, 'tron')
 const placedA = atom({ plugin: 'counterparts', key: 'placed' } as const, false)
 const noteA = atom({ plugin: 'counterparts', key: 'switchNote' } as const, null)
 const pauseAskA = atom({ plugin: 'counterparts', key: 'pauseAsk' } as const, null)
+/** The person ran `/counterparts …` in this session: written here, read by `speak-first.tsx` (which never sees it). */
+const typedInA = atom({ plugin: 'counterparts', key: 'typedIn' } as const, null)
 
 // ── the brain's pulses ──────────────────────────────────────────────────────
 
@@ -221,7 +219,7 @@ const pauseAskA = atom({ plugin: 'counterparts', key: 'pauseAsk' } as const, nul
  * the same arc (one region in one stage colour: Dreaming and Consolidation)
  * pulse once.
  */
-function firePulses($: EngineInterface, ids: readonly MechId[]): void {
+function firePulses($: EngineInterface, ids: readonly MechId[], now: number): void {
   const arcs = new Set<string>()
   for (const id of ids) {
     const m = mechById(id)
@@ -230,8 +228,8 @@ function firePulses($: EngineInterface, ids: readonly MechId[]): void {
     if (arcs.has(arc)) continue
     const delay = Math.min(arcs.size, PULSE_SLOTS - 1) * PULSE_STAGGER_MS
     arcs.add(arc)
-    if (delay === 0) fireBrain(id, Date.now())
-    else $.clock.after(delay, () => fireBrain(id, Date.now()))
+    if (delay === 0) fireBrain(id, now)
+    else $.clock.after(delay, () => fireBrain(id, now + delay))
   }
 }
 
@@ -262,6 +260,15 @@ async function fetchJson($: EngineInterface, path: string): Promise<unknown> {
   return JSON.parse(r.text) as unknown
 }
 
+/** The rows of a dashboard `/api/activity` read, or none when it fails. */
+async function eventsOf($: EngineInterface, path: string): Promise<DashEvent[]> {
+  try {
+    return ((await fetchJson($, path)) as { events?: DashEvent[] }).events ?? []
+  } catch {
+    return []
+  }
+}
+
 // ── the first meeting (core owns its steps and state; this triggers and draws) ──
 
 /**
@@ -270,23 +277,12 @@ async function fetchJson($: EngineInterface, path: string): Promise<unknown> {
  * the dashboard's `/api/onboarding` (a refresh while it is up). Only a known
  * state moves it: a missing marker or endpoint leaves what is known, and with
  * neither ever seen it stays `unknown` (an older core): nothing happens.
- *
- * KEYED TO THE STORE without a store id: core says `not_started` only for a
- * store that never got past it (`start-fresh` resets it). So every known
- * state past it is written over the once-only mark as `{ settled }`, and a
- * settled mark doesn't block the speak-first: a `not_started` after it is a
- * new store, which gets its own first meeting.
  */
 async function takeOnboarding($: EngineInterface, next: SidebarOnboarding): Promise<void> {
   if (next.meet === 'unknown') return
   const before = await read($, onboardingA)
   if (before.meet === next.meet && before.where === next.where && before.style === next.style) return
   await update($, onboardingA, () => next)
-  if (next.meet !== 'not_started') {
-    const mark = (await $.store.get(MEET_FLAG)) as { settled?: unknown } | undefined
-    if (mark?.settled !== next.meet) await $.store.set(MEET_FLAG, { settled: next.meet, at: await $.clock.now() })
-    run.meetFiredIn = null
-  }
 }
 
 /** The dashboard's `/api/onboarding`, a refresh: a 404, a refusal or another shape changes nothing, and never marks the dashboard down. */
@@ -302,57 +298,17 @@ async function readOnboarding($: EngineInterface): Promise<void> {
 }
 
 /**
- * SPEAK FIRST: once per store (`MEET_FLAG` in `$.store`, shared by every
- * session and restart, settled when core moves on: `takeOnboarding`), at an
- * interactive start, while the wake's marker says `not_started`, the sidebar
- * submits MEET_PROMPT, which the engine runs once the session is idle. Run
- * after the start's registry read and again when the marker arrives,
- * whichever is last decides. Never headless, never where the folder is
- * paused, off, observer or unknown, never once the person has typed a prompt
- * (or is typing one), and never over a binding mark. The mark is written
- * before the submit, so a crash between them loses the trigger rather than
- * repeating it.
- */
-async function speakFirst($: EngineInterface): Promise<void> {
-  if (!run.interactive || run.meetTried) return
-  const scope = await read($, scopeA)
-  // Not read yet (another read was on its way): the next registry read tries again.
-  if (scope.mode === 'unknown' && scope.unread === null) return
-  // No state yet: the wake's marker, when it comes, tries again (no marker at all: an older core, nothing).
-  const { meet } = await read($, onboardingA)
-  if (meet === 'unknown') return
-  run.meetTried = true
-  if (meet !== 'not_started' || run.typed || !canMeet(scope.mode)) return
-  if (firedIn(await $.store.get(MEET_FLAG)) !== null) return
-  // The last looks, right before: no prompt sent or typed, no other session got there meanwhile.
-  if (run.typed || (await $.session.turns().catch(() => 1)) > 0) return
-  const draft = await $.prompt.read().then(
-    b => b.text,
-    () => '',
-  )
-  if (draft.trim() !== '') return
-  if (firedIn(await $.store.get(MEET_FLAG)) !== null) return
-  if (run.session === '') run.session = await $.session.id()
-  await $.store.set(MEET_FLAG, { session: run.session, at: await $.clock.now() })
-  run.meetFiredIn = run.session
-  run.spokeFirst = true
-  await foxEvent($, 'hello')
-  // Not awaited inside a hook: the engine queues it until the session is idle.
-  $.clock.after(0, () => quiet($.prompt.submit({ text: MEET_PROMPT })))
-}
-
-
-/**
  * "Start the 5-minute intro", once a minute at most: the plugin's `/counterparts:meet`, as if
- * typed. Not the speak-first's line: in a later session nothing tells Claude what that line
- * means (the owner's fox trial: Claude was confused), and the command carries its own
- * instructions. Run from a timer: `command.run` is refused inside a hook the turn waits on.
+ * typed; the command carries its own instructions. This module never starts the meeting by
+ * itself: the speak-first is a hooks module of its own (`speak-first.tsx`), which the
+ * directory build leaves out. Run from a timer: `command.run` is refused inside a hook the
+ * turn waits on.
  */
 async function pressMeet($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   if (now - run.meetPressedAt < MEET_PRESS_MS) return
-  const [onb, scope] = await Promise.all([read($, onboardingA), read($, scopeA)])
-  if (!meetShows(onb.meet, scope.mode, run.meetFiredIn, run.session)) return
+  const [onb, scope, mark] = await Promise.all([read($, onboardingA), read($, scopeA), $.store.get(MEET_FLAG)])
+  if (!meetShows(onb.meet, scope.mode, firedIn(mark), run.session)) return
   run.meetPressedAt = now
   $.clock.after(0, () => quiet(runCommand($, MEET_COMMAND)))
 }
@@ -425,7 +381,7 @@ async function callMemory($: EngineInterface, tool: string, args: Record<string,
 async function fire($: EngineInterface, ids: readonly MechId[]): Promise<void> {
   if (ids.length === 0) return
   const now = await $.clock.now()
-  firePulses($, ids)
+  firePulses($, ids, now)
   await update($, firingA, () => ({ ids: [...ids], at: now }))
   $.clock.after(FIRING_MS + 100, () => $.ui.invalidate('ui.render'))
 }
@@ -526,7 +482,7 @@ async function readDream($: EngineInterface): Promise<void> {
     await update($, dreamA, () => null)
     return
   }
-  const journaled = await fetchJson($, '/api/activity?name=dream.journaled&limit=5').then(a => (a as { events?: DashEvent[] }).events ?? [], () => [] as DashEvent[])
+  const journaled = await eventsOf($, '/api/activity?name=dream.journaled&limit=5')
   const atOf = journaled.find(e => e.subject === d.id)?.at ?? null
   const { first, rest } = firstSentence(d.journal)
   const next: SidebarDream = { id: d.id, at: atOf, date: d.date, first, rest }
@@ -554,7 +510,7 @@ async function poll($: EngineInterface): Promise<boolean> {
   run.polling = true
   try {
     if (!(await storeMatches($))) return false
-    const now = Date.now()
+    const now = await $.clock.now()
     const stale = run.lastPollAt > 0 && now - run.lastPollAt > STALE_MS
     run.lastPollAt = now
     if (!run.cold || run.lastSeq < 0 || stale) {
@@ -780,11 +736,12 @@ async function onSaved($: EngineInterface, items: readonly SidebarSaved[]): Prom
     if (it.replacesId === null) continue
     const id = it.replacesId
     quiet(
-      fetchJson($, `/api/memory?id=${encodeURIComponent(id)}`).then(async d => {
+      (async () => {
+        const d = await fetchJson($, `/api/memory?id=${encodeURIComponent(id)}`)
         const title = (d as { found?: boolean; title?: string }).found === true ? (d as { title?: string }).title : undefined
         if (typeof title !== 'string' || title === '') return
         await update($, savedA, list => list.map(s => (s.key === it.key ? { ...s, replaces: title } : s)))
-      }),
+      })(),
     )
   }
 }
@@ -898,7 +855,7 @@ async function deeperFirings($: EngineInterface, id: MechId, panel: readonly Das
   if (names.length === 0) return firings
   for (let limit = FALLBACK_LIMIT; ; limit *= 2) {
     const answers = await Promise.all(
-      names.map(n => fetchJson($, `/api/activity?name=${encodeURIComponent(n)}&limit=${String(limit)}`).then(a => (a as { events?: DashEvent[] }).events ?? [], () => [] as DashEvent[])),
+      names.map(n => eventsOf($, `/api/activity?name=${encodeURIComponent(n)}&limit=${String(limit)}`)),
     )
     const seen = new Set<number>()
     const rows = [...panel, ...answers.flat()].filter(e => (seen.has(e.seq) ? false : (seen.add(e.seq), true)))
@@ -910,18 +867,10 @@ async function deeperFirings($: EngineInterface, id: MechId, panel: readonly Das
 /** A click on a row of the body, by the key the layout gave it. */
 async function clickBody($: EngineInterface, key: string): Promise<void> {
   // The Mechanisms section's link while the dashboard is down: the plugin's command starts it.
-  if (key === 'dash:start') {
+  // ... and off the terminal, the `more` that ends a cut text (no Link opens there): the same command, which opens
+  // the dashboard when it is already up.
+  if (key === 'dash:start' || key.startsWith('more:')) {
     $.clock.after(0, () => quiet(runCommand($, DASHBOARD_COMMAND)))
-    return
-  }
-  if (key === 'search:clear') {
-    await runSearch($, '')
-    return
-  }
-  // The `more` that ends a cut text: the one click that opens the dashboard, on that memory.
-  if (key.startsWith('more:')) {
-    const id = key.slice(5)
-    if (/^mem_[A-Za-z0-9]+$/.test(id)) await openUrl($, memoryUrl(id, await dashUrl($)))
     return
   }
   if (key.startsWith('head:')) {
@@ -963,11 +912,6 @@ async function clickBody($: EngineInterface, key: string): Promise<void> {
       await update($, openA, () => (cur?.key === key ? null : { key, id: null, status: 'ready' as const, title: null, text: '', meta: null, at }))
     }
     return
-  }
-  if (key.startsWith('hit:')) {
-    const cur = await read($, openA)
-    const at = await $.clock.now()
-    await update($, openA, () => (cur?.key === key ? null : { key, id: key.slice(4), status: 'ready' as const, title: null, text: '', meta: null, at }))
   }
 }
 
@@ -1040,10 +984,12 @@ async function canonicalPath($: EngineInterface, path: string): Promise<string> 
   let head = path.length > 1 ? path.replace(/[/\\]+$/, '') : path
   const tail: string[] = []
   for (let i = 0; i < 64; i += 1) {
-    const real = await $.fs.stat(head, { resolve: true }).then(
-      st => st.realPath,
-      () => undefined,
-    )
+    let real: string | undefined
+    try {
+      real = (await $.fs.stat(head, { resolve: true })).realPath
+    } catch {
+      real = undefined
+    }
     if (real !== undefined) {
       if (tail.length === 0) {
         if (run.canon.size > 200) run.canon.clear()
@@ -1225,35 +1171,6 @@ async function setScope($: EngineInterface, to: 'pause' | 'resume' | 'off' | 'on
   await refreshStatus($)
 }
 
-async function runSearch($: EngineInterface, raw: string): Promise<void> {
-  const query = raw.trim()
-  await update($, openA, o => (o !== null && o.key.startsWith('hit:') ? null : o))
-  if (query.length === 0) {
-    await update($, searchA, () => IDLE_SEARCH)
-    return
-  }
-  await update($, searchA, () => ({ ...IDLE_SEARCH, query, status: 'running' as const }))
-  try {
-    const { payload, isError } = await callMemory($, 'recall', { question: query, mode: 'facts' })
-    const answer = payload?.['answer']
-    if (isError || typeof answer !== 'string') {
-      // the memory server's own reason, in its words (an auto-mode refusal throws, below)
-      const why = String(payload?.['detail'] ?? payload?.['reason'] ?? 'the search was refused')
-      await update($, searchA, () => ({ ...IDLE_SEARCH, query, status: 'error' as const, error: why }))
-      return
-    }
-    const { header, total, hits } = parseFacts(answer)
-    await update($, searchA, () => ({ query, status: 'done' as const, header, total, hits: hits.slice(0, 12), error: null }))
-  } catch (err) {
-    await update($, searchA, () => ({ ...IDLE_SEARCH, query, status: 'error' as const, error: searchWhy(err) }))
-  }
-}
-
-/** A search call that threw, in plain words: the engine's refusal text is never shown. */
-function searchWhy(err: unknown): string {
-  return isRefusal(err) ? "Auto mode didn't let the search run. Ask Claude to look it up." : 'The search failed. Try again.'
-}
-
 // ── views and the brain's mode ─────────────────────────────────────────────
 
 /**
@@ -1359,9 +1276,19 @@ function redrawAfterRefusal($: EngineInterface): void {
  * the measurement. The burst rate only while a pulse's arc is in flight, the
  * calm rate while it sways, and no timer at all at rest.
  */
-function tick($: EngineInterface, gen: number): void {
+async function tick($: EngineInterface, gen: number): Promise<void> {
   if (gen !== run.brainGen) return
-  const now = Date.now()
+  // The engine's clock, read once a frame (a round trip to the host). One read at a time: a tick that comes while
+  // one waits is skipped, so ticks never overlap and the time never runs backwards.
+  if (fps.ticking) return
+  fps.ticking = true
+  let now: number
+  try {
+    now = await $.clock.now()
+  } finally {
+    fps.ticking = false
+  }
+  if (gen !== run.brainGen) return
   const pace = run.brainPace === 'burst' ? 'burst' : 'calm'
   const dt = fps.lastTick === 0 ? paceMs(pace) : Math.min(250, Math.max(now - fps.lastTick, paceMs(pace)))
   fps.lastTick = now
@@ -1387,8 +1314,18 @@ function tick($: EngineInterface, gen: number): void {
   if (!brain.fresh) return // nothing moved a fifth of a dot: the frame on screen stands, no blit
   fps.inFlight = true
   const blitGen = run.brainGen
-  void $.ui.blit({ requestId: PANE, key: 'brain', cells, columns: raster.cols, rows: raster.rows }).then(
-    r => {
+  // Not awaited: the next tick runs on its timer whatever the blit's answer (`inFlight` holds the next blit back).
+  quiet(
+    (async () => {
+      let r: Awaited<ReturnType<EngineInterface['ui']['blit']>>
+      try {
+        r = await $.ui.blit({ requestId: PANE, key: 'brain', cells, columns: raster.cols, rows: raster.rows })
+      } catch {
+        if (blitGen !== run.brainGen) return
+        stopBrain()
+        redrawAfterRefusal($)
+        return
+      }
       if (blitGen !== run.brainGen) return
       fps.inFlight = false
       if (r.deny !== undefined) {
@@ -1397,14 +1334,10 @@ function tick($: EngineInterface, gen: number): void {
         return
       }
       run.redraws = 0
-      fps.blits.push(performance.now())
+      // The frame's time (the clock read once): the measurement.
+      fps.blits.push(now)
       if (fps.blits.length > 240) fps.blits.shift()
-    },
-    () => {
-      if (blitGen !== run.brainGen) return
-      stopBrain()
-      redrawAfterRefusal($)
-    },
+    })(),
   )
 }
 
@@ -1417,7 +1350,7 @@ function startBrain($: EngineInterface, pace: 'burst' | 'calm' = 'calm'): void {
   fps.inFlight = false
   if (fresh) fps.lastTick = 0
   run.brainPace = pace
-  run.brainTimer = $.clock.every(paceMs(pace), () => tick($, gen))
+  run.brainTimer = $.clock.every(paceMs(pace), () => quiet(tick($, gen)))
 }
 
 // ── the fox (fox.ts holds what it does and how each frame looks) ──
@@ -1465,9 +1398,17 @@ async function stageStep($: EngineInterface, gen: number): Promise<void> {
       const args =
         tier === 'basic'
           ? { requestId: PANE, key: 'stage', cells: halfCells(step), columns: STAGE_COLS, rows: stageRows('basic') }
-          : { requestId: PANE, key: 'stage', source: { png: pngOf(step) }, columns: IMAGE_COLS, rows: IMAGE_ROWS }
-      void $.ui.blit(args).then(
-        r => {
+          : { requestId: PANE, key: 'stage', source: pngFile(step), columns: IMAGE_COLS, rows: IMAGE_ROWS }
+      // Not awaited: the next wait is set below at once, whatever the blit's answer.
+      quiet(
+        (async () => {
+          let r: Awaited<ReturnType<EngineInterface['ui']['blit']>>
+          try {
+            r = await $.ui.blit(args)
+          } catch {
+            if (gen === stage.gen) stopStage()
+            return
+          }
           if (gen !== stage.gen) return
           if (r.deny === undefined) {
             run.redraws = 0
@@ -1480,10 +1421,7 @@ async function stageStep($: EngineInterface, gen: number): Promise<void> {
           }
           stopStage()
           redrawAfterRefusal($)
-        },
-        () => {
-          if (gen === stage.gen) stopStage()
-        },
+        })(),
       )
     } else $.ui.invalidate('ui.render')
   }
@@ -1507,8 +1445,43 @@ function startStage($: EngineInterface): void {
 const STAGE_MIN_PROSE_COLS = 22
 const prosePane = { w: STAGE_COLS }
 
-/** The stage's element in a tier, for the step on screen. */
-function stageElement(els: ReturnType<EngineInterface['ui']['resolve']>, tier: FoxTier, step: Step): JSX.Element {
+/** The Image's source for a step: the PNG file, which the terminal reads itself. */
+function pngFile(step: Step): { file: string; format: 'png' } {
+  return { file: `${stage.pngDir ?? ''}/${pngName(step)}`, format: 'png' }
+}
+
+/** The folder of the fox's PNGs under the plugin's, or null when neither place holds them. */
+async function findPngDir($: EngineInterface): Promise<string | null> {
+  const root = $.plugin.root.replace(/[/\\]+$/, '')
+  for (const rel of PNG_DIRS) {
+    const dir = `${root}/${rel}`
+    try {
+      if (await $.fs.exists(`${dir}/idle.png`)) return dir
+    } catch {
+      // not readable: the next place
+    }
+  }
+  return null
+}
+
+/** A PNG's bytes (base64) for the desktop's Svg, read once from the plugin's folder; '' when it can't be. */
+async function pngData($: EngineInterface, name: string): Promise<string> {
+  const known = stage.pngData.get(name)
+  if (known !== undefined) return known
+  let data = ''
+  if (stage.pngDir !== null) {
+    try {
+      data = (await $.fs.read(`${stage.pngDir}/${name}`, { as: 'bytes' })).base64
+    } catch {
+      data = ''
+    }
+  }
+  stage.pngData.set(name, data)
+  return data
+}
+
+/** The stage's element in a tier, for the step on screen (`png`: the desktop's picture, base64). */
+function stageElement(els: ReturnType<EngineInterface['ui']['resolve']>, tier: FoxTier, step: Step, png: string): JSX.Element {
   if (tier === 'basic' && 'Raster' in els) {
     const { Raster } = els
     return <Raster key="stage" columns={STAGE_COLS} rows={stageRows('basic')} cells={halfCells(step)} />
@@ -1517,13 +1490,13 @@ function stageElement(els: ReturnType<EngineInterface['ui']['resolve']>, tier: F
     const { Box, Image } = els
     return (
       <Box key="stage-box" flexDirection="row" paddingLeft={IMAGE_X0}>
-        <Image key="stage" source={{ png: pngOf(step) }} columns={IMAGE_COLS} rows={IMAGE_ROWS} alt="a small fox" />
+        <Image key="stage" source={pngFile(step)} columns={IMAGE_COLS} rows={IMAGE_ROWS} alt="a small fox" />
       </Box>
     )
   }
   if (tier === 'svg' && 'Svg' in els) {
     const { Svg } = els
-    const svg = foxSvg(step)
+    const svg = foxSvg(step, png)
     // A pane dragged narrower than the fox: the fox scales down with it (about 7 px a cell on the desktop).
     const k = Math.min(1, (prosePane.w * 7) / svg.width)
     return <Svg key="stage" source={svg.source} alt="a small fox" width={Math.round(svg.width * k)} height={Math.round(svg.height * k)} />
@@ -1578,41 +1551,26 @@ function wake($: EngineInterface, turning: boolean): void {
   })
 }
 
-/** How this machine opens a URL, found once: `open` (macOS), `xdg-open` (Linux), `start` (Windows). */
-async function opener($: EngineInterface): Promise<readonly string[]> {
-  if (run.opener !== null) return run.opener
-  let os = ''
-  try {
-    os = (await $.process.run(['uname', '-s'], { timeoutMs: 3000 })).stdout.trim()
-  } catch {
-    os = 'Windows'
-  }
-  // Never `cmd /c start`: cmd would read & | ^ % in a URL as its own.
-  run.opener = os === 'Darwin' ? ['open'] : os === 'Windows' ? ['rundll32', 'url.dll,FileProtocolHandler'] : ['xdg-open']
-  return run.opener
-}
-
 /**
- * A plain click opens the dashboard in the browser (an OSC 8 link opens only
- * on ⌘-click in iTerm2). A new tab each time: no browser lets a page bring an
- * already-open tab forward without the person's click there, and finding the
- * tab from here (AppleScript) needs an automation permission (NOTES).
+ * The links the sidebar draws (`Link`): the dashboard's, on localhost and the
+ * port it read (`isDashboardUrl`), or none. A click opens what the surface
+ * opens: on the terminal an OSC 8 link (⌘-click in iTerm2), on the desktop
+ * plain text, since a remote surface links only `https:`. The sidebar runs no
+ * process to open one (the plugin directory build, 2026-10-14).
  */
-async function openUrl($: EngineInterface, url: string): Promise<void> {
-  // The only links the sidebar opens: the dashboard's, on localhost and the port it read (`isDashboardUrl`).
-  if (!isDashboardUrl(url, await dashPort($))) return
-  try {
-    const argv = await opener($)
-    const r = await $.process.run([...argv, url], { timeoutMs: 10000 })
-    if (r.exitCode !== 0) $.ui.toast(`counterparts: couldn't open ${url}`)
-  } catch {
-    $.ui.toast(`counterparts: couldn't open ${url}`)
-  }
+async function dashboardHref($: EngineInterface, path: string): Promise<string | null> {
+  const url = `${await dashUrl($)}${path}`
+  return isDashboardUrl(url, await dashPort($)) ? url : null
 }
 
-/** A dashboard page (`/`, `/#memories`), on the port the sidebar read. */
-async function openDashboard($: EngineInterface, path: string): Promise<void> {
-  await openUrl($, `${await dashUrl($)}${path}`)
+/** The body's lines, each `more` that ends a cut text given the link to its memory on the dashboard. */
+function linkMore(lines: readonly Line[], base: string, port: number): Line[] {
+  return lines.map(l => {
+    const id = l.link?.key.startsWith('more:') === true ? l.link.key.slice(5) : null
+    if (l.link === undefined || id === null || !/^mem_[A-Za-z0-9]+$/.test(id)) return l
+    const href = memoryUrl(id, base)
+    return isDashboardUrl(href, port) ? { ...l, link: { ...l.link, href } } : l
+  })
 }
 
 // ── hooks ───────────────────────────────────────────────────────────────────
@@ -1629,21 +1587,22 @@ export const register: Register = on => {
       argumentHint: '[quiet | avatar animal|brain|off | avatar detail auto|images|fine|basic | theme tron|cozy | resume | fps [n]]',
     })
     // (A `claudeMemory` or `claudeMemorySwitch` left in the store by an older version is never read.)
-    const [viewPref, brainPref, fpsPref, meetMark, themePref, detailPref, searchEnv] = await Promise.all([
+    const [viewPref, brainPref, fpsPref, themePref, detailPref] = await Promise.all([
       $.store.get('view'),
       $.store.get('brain'),
       $.store.get('fps'),
-      $.store.get(MEET_FLAG),
       $.store.get('theme'),
       $.store.get('avatarDetail'),
-      $.env.get('COUNTERPARTS_SIDEBAR_SEARCH').catch(() => undefined),
     ])
     // A new module life's fox starts fresh: still, awake, trying pictures again where they may show.
     stage.director = null
     stage.noImages = false
     stage.imageDenies = 0
     stage.detail = normDetail(detailPref)
-    searchFlag.on = truthy(searchEnv)
+    // The PNGs ship as files beside the module (art/fox/): found once; none found, the terminal draws no pictures.
+    stage.pngDir = await findPngDir($)
+    stage.pngData.clear()
+    if (stage.pngDir === null) stage.noImages = true
     // What this terminal can draw the fox with, read once (fox.ts, `pickTier`).
     // (Each name spelled out: the engine lists the variables a module reads.)
     const envVals = await Promise.all([
@@ -1657,7 +1616,6 @@ export const register: Register = on => {
     ])
     stage.env = Object.fromEntries(TIER_ENV.map((k, i) => [k, envVals[i]]).filter(([, v]) => typeof v === 'string'))
     await update($, themeA, () => normTheme(themePref))
-    run.meetFiredIn = firedIn(meetMark)
     await update($, viewA, () => normView(viewPref))
     const mode = normBrain(brainPref)
     await update($, brainA, () => mode)
@@ -1671,25 +1629,21 @@ export const register: Register = on => {
     // stands, so a session started in a paused folder says so at once.
     quiet(refreshStatus($))
     if (run.interactive) {
-      // Where this folder stands, then (once per install, while core says not_started) the speak-first.
-      $.clock.after(0, () => quiet(refreshScope($).then(() => speakFirst($))))
+      // Where this folder stands, now and every few minutes.
+      $.clock.after(0, () => quiet(refreshScope($)))
       run.scopeTimer?.cancel()
-      // (The speak-first again too: a no-op once considered, a retry if the start's read had not landed.)
-      run.scopeTimer = $.clock.every(SCOPE_RECHECK_MS, () => quiet(refreshScope($).then(() => speakFirst($))))
+      run.scopeTimer = $.clock.every(SCOPE_RECHECK_MS, () => quiet(refreshScope($)))
     }
     return next(e)
   })
 
-  // A slash command the person ran (any: /model, /counterparts…) counts as having spoken: no
-  // command starts a turn, so `session.turns()` would not see it. Registered before the
-  // /counterparts hook, which answers without `next`.
-  on('command.run', async ($, e, next) => {
-    const kind = (e as { origin?: { kind?: string } }).origin?.kind
-    if (kind === 'composer' || kind === 'bridge') run.typed = true
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
   on('command.run', { command: 'counterparts' }, async ($, e) => {
+    // This hook answers without `next`, so no hook beneath sees the command: the speak-first learns it from here.
+    const kind = (e.origin as { kind?: string } | undefined)?.kind
+    if (kind === 'composer' || kind === 'bridge') {
+      if (run.session === '') run.session = await $.session.id()
+      await update($, typedInA, () => run.session)
+    }
     const [verb = '', arg = ''] = e.args.trim().split(/\s+/)
     await refreshScope($, true)
     if (verb === 'fps') {
@@ -1700,9 +1654,9 @@ export const register: Register = on => {
         fps.target = n
         await $.store.set('fps', n)
         if (run.brainTimer !== null) startBrain($)
-        return { text: `Brain target set to ${String(n)} fps. ${fpsReport(mode)}` }
+        return { text: `Brain target set to ${String(n)} fps. ${fpsReport(mode, await $.clock.now())}` }
       }
-      return { text: fpsReport(mode) }
+      return { text: fpsReport(mode, await $.clock.now()) }
     }
     // `strip` (dropped 2026-10-10) is quiet now: an older term-loop's put-back can still type it.
     if (verb === 'quiet' || verb === 'hide' || verb === 'rail' || verb === 'strip') {
@@ -1802,18 +1756,10 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => next(e))
 
-  // A prompt the person sent: the speak-first stands down for good in this session. If the
-  // speak-first was already queued behind it, it is dropped: their prompt comes first, and
-  // core offers the meeting in that reply instead.
+  // A prompt the person sent: the fox looks up.
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin.kind
-    if (kind === 'composer' || kind === 'bridge') {
-      run.typed = run.prompted = true
-      await foxEvent($, 'prompt')
-    }
-    if (kind === 'plugin' && e.origin.name === 'counterparts' && e.text === MEET_PROMPT && run.prompted && run.spokeFirst && run.meetPressedAt === -Infinity) {
-      return { drop: 'the person spoke first' }
-    }
+    if (kind === 'composer' || kind === 'bridge') await foxEvent($, 'prompt')
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -1831,12 +1777,9 @@ export const register: Register = on => {
       // The wake's store marker: which store this session's hooks opened (the dashboard must serve the same).
       const storeId = parseStoreMarker(text)
       if (storeId !== null) run.wakeStore = storeId
-      // The wake's onboarding marker: where the first meeting stands, then the speak-first's look.
+      // The wake's onboarding marker: where the first meeting stands (the button shows or hides).
       const meet = parseOnboardingMarker(text)
-      if (meet !== null) {
-        await takeOnboarding($, { meet, where: null, style: null })
-        $.clock.after(0, () => quiet(speakFirst($)))
-      }
+      if (meet !== null) await takeOnboarding($, { meet, where: null, style: null })
     } catch {
       // the row is stored whatever the sidebar made of it
     }
@@ -1911,13 +1854,11 @@ export const register: Register = on => {
   // ── the pane ──────────────────────────────────────────────────────────────
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
-    const { Box, Text, Button } = els
-    const Input = 'Input' in els ? els.Input : null
-    const Client = 'Client' in els ? els.Client : null
+    const { Box, Text, Button, Link } = els
     const now = await $.clock.now()
-    const [pulse, dash, mind, saved, today, dreamNow, open, mech, focus, firing, search, scope, view, brainMode, note, pauseAsk] = await Promise.all([
+    const [pulse, dash, mind, saved, today, dreamNow, open, mech, focus, firing, scope, view, brainMode, note, pauseAsk] = await Promise.all([
       read($, pulseA), read($, dashA), read($, mindA), read($, savedA), read($, todayA), read($, dreamA), read($, openA), read($, mechA),
-      read($, focusA), read($, firingA), read($, searchA), read($, scopeA), read($, viewA), read($, brainA), read($, noteA), read($, pauseAskA),
+      read($, focusA), read($, firingA), read($, scopeA), read($, viewA), read($, brainA), read($, noteA), read($, pauseAskA),
     ])
     const [onboarding, theme] = await Promise.all([read($, onboardingA), read($, themeA)])
     // Every colour below (and in the body's lines) is read from the palette in use: this session's theme.
@@ -1942,7 +1883,7 @@ export const register: Register = on => {
     const hasRaster = e.surface === 'terminal' && mode !== 'off'
     // The fox's stage: on a pane tall and wide enough (shorter, the brain's header, standing still), in the
     // tier this surface draws (fox.ts); on a surface with no way to draw it, the header with no avatar.
-    const tier = pickTier(e.surface, stage.detail, stage.env, stage.noImages)
+    const tier = pickTier(e.surface, stage.detail, stage.env, stage.noImages, stage.pngDir !== null)
     const drawsStage = tier === 'svg' ? 'Svg' in els : 'Raster' in els
     const hasStage = mode === 'fox' && drawsStage && !inline && fill >= STAGE_MIN_PANE_ROWS && W >= (SURFACE.prose ? STAGE_MIN_PROSE_COLS : STAGE_COLS)
     // While the pane holds the keyboard the brain and the fox hold still.
@@ -1956,8 +1897,8 @@ export const register: Register = on => {
     const lit = firingNow[0] ?? look.sel
     // Every press in the pane, as a closure over this hook's `$` (the views take no `$`).
     const actions: PaneActions = {
-      search: value => runSearch($, value),
-      openDashboard: () => openDashboard($, '/'),
+      dashboardHref: e.surface === 'terminal' ? await dashboardHref($, '/') : null,
+      openDashboard: async () => $.clock.after(0, () => quiet(runCommand($, DASHBOARD_COMMAND))),
       pressScope: to => pressScope($, to),
       pressMeet: () => pressMeet($),
       confirmChange: () => confirmChange($),
@@ -1965,7 +1906,7 @@ export const register: Register = on => {
       view: v => (v === 'sidebar' ? openPane($) : closeQuiet($)),
       brain: b => setBrain($, b),
     }
-    const paneEls: PaneEls = { Box, Text, Button, Input }
+    const paneEls: PaneEls = { Box, Text, Button, Link }
     const rows: JSX.Element[] = []
     let used = 0
     if (roomy) {
@@ -1979,32 +1920,30 @@ export const register: Register = on => {
     let stageTop: JSX.Element[] | null = null
     if (hasStage) {
       // The title row (the count and the day on its right), the stage edge to edge (outside the frame's
-      // padding), a thin rule, and the search box when it is on.
+      // padding) and a thin rule.
       stage.director ??= newDirector(now)
       const step = advance(stage.director, now).step
       // An Image's first frame is blitted once mounted too: a refusal says it draws its alt here.
       stage.shown = tier === 'image' ? '' : stepKey(step)
       const [title] = brainlessHeader(paneEls, actions, { w, paused, lit, day, count: countText })
-      stageTop = [...rows, ...(title === undefined ? [] : [title]), stageElement(els, tier, step)]
+      const png = tier === 'svg' ? await pngData($, pngName(step)) : ''
+      stageTop = [...rows, ...(title === undefined ? [] : [title]), stageElement(els, tier, step, png)]
       rows.length = 0
-      rows.push(
-        SURFACE.prose ? <Text key="stage-rule"> </Text> : <Text key="stage-rule" color={P.faint}>{'─'.repeat(w)}</Text>,
-        ...(searchFlag.on ? [<Box key="head2" flexDirection="row" width={w}>{searchBox(paneEls, actions, w)}</Box>] : []),
-      )
+      rows.push(SURFACE.prose ? <Text key="stage-rule"> </Text> : <Text key="stage-rule" color={P.faint}>{'─'.repeat(w)}</Text>)
       // The desktop's Svg is 180 px tall, about ten of its text rows (measured 2026-10-13), not the cells' fifteen;
       // fewer when a narrow pane scales it down (stageElement's factor).
-      used += 1 + (tier === 'svg' ? (SURFACE.prose ? Math.ceil(10 * Math.min(1, (W * 7) / (STAGE_COLS * 6))) : 15) : stageRows(tier)) + 1 + (searchFlag.on ? 1 : 0)
+      used += 1 + (tier === 'svg' ? (SURFACE.prose ? Math.ceil(10 * Math.min(1, (W * 7) / (STAGE_COLS * 6))) : 15) : stageRows(tier)) + 1
       if (!holding) startStage($)
     } else if (mode === 'fox' && !hasRaster) {
       rows.push(...brainlessHeader(paneEls, actions, { w, paused, lit, day, count: countText }))
-      used += searchFlag.on ? 3 : 2
+      used += 2
     } else if (hasRaster) {
       const { Raster } = $.ui.resolve(e)
-      rows.push(...brainHeader(paneEls, Raster, actions, { w, paused, day, count: countText }))
+      rows.push(...brainHeader(paneEls, Raster, actions, { w, paused, day, count: countText, now }))
       used += BRAIN_ROWS + 1
     } else {
       rows.push(...brainlessHeader(paneEls, actions, { w, paused, lit, day, count: countText }))
-      used += searchFlag.on ? 3 : 2
+      used += 2
     }
 
     // ── a paused folder says so before anything else in the pane ──
@@ -2013,8 +1952,9 @@ export const register: Register = on => {
       used += 3
     }
 
-    // ── the first meeting, put off or not finished: one cyan row at the top of the body ──
-    if (meetShows(onboarding.meet, scope.mode, run.meetFiredIn, run.session)) {
+    // ── the first meeting, not started, put off or not finished: one cyan row at the top of the body ──
+    // (The speak-first's mark, when that module is loaded and fired in this session: it is the introduction.)
+    if (meetShows(onboarding.meet, scope.mode, firedIn(await $.store.get(MEET_FLAG)), run.session)) {
       rows.push(...meetRow(paneEls, actions, w))
       used += 2
     }
@@ -2031,9 +1971,15 @@ export const register: Register = on => {
     // The desktop sets the body in its own font, about a fifth narrower than the cells the pane is measured in:
     // wrap to that, and a blank row between items there (2026-10-13, Mike: "hard to read").
     const bodyW = SURFACE.prose ? Math.floor(w * 1.2) : w
-    const { lines } = layoutBody({ w: bodyW, rows: bodyRows, now, mind, saved, today, dream: dreamNow, open, mech, focus, dash, search, prose: SURFACE.prose, cellsW: w })
-    // The Client tag stays here: the engine reads a hooks module's surface modules off its own source.
-    rows.push(Client !== null ? <Client key="body" module="./body.tsx" width={w} props={{ lines, prose: SURFACE.prose } satisfies BodyProps} /> : plainBody(paneEls, lines))
+    const { lines } = layoutBody({ w: bodyW, rows: bodyRows, now, mind, saved, today, dream: dreamNow, open, mech, focus, dash, prose: SURFACE.prose, cellsW: w })
+    // The body's surface module stays here, its module a literal on the tag's own line: the engine reads a hooks
+    // module's surface modules off its own source.
+    if ('Client' in els) {
+      // A Link only on the terminal: the desktop draws a non-https link as plain text, so `more` posts its key there.
+      const bodyLines = e.surface === 'terminal' ? linkMore(lines, await dashUrl($), await dashPort($)) : lines
+      const bodyProps: BodyProps = { lines: bodyLines, prose: SURFACE.prose }
+      rows.push(<els.Client key="body" module="./body.tsx" width={w} props={bodyProps} />)
+    } else rows.push(plainBody(paneEls, lines))
     rows.push(<Box key="spacer" flexGrow={1} />)
     rows.push(...above)
 

@@ -2,7 +2,9 @@
  * WHICH RUNTIME RUNS A SCRIPT, and the arguments that say so — the one place
  * that knows the difference between Bun and Node.
  *
- * The sources are TypeScript and there is no build step. Bun runs them as they
+ * The sources are TypeScript and there is no build step (one exception: the
+ * plugin directory's bundle carries them transpiled to `.js`, `TRANSPILED`
+ * below, and its scripts follow `entryScript`). Bun runs them as they
  * are (`bun run <script.ts>`); Node runs them with `node-hooks.mjs` loaded first
  * (`node --import <node-hooks.mjs> <script.ts>`), which resolves the sources'
  * `./x.js` imports to `./x.ts` and strips the types. Every command this package
@@ -88,6 +90,41 @@ export function binaryOf(moduleUrl: string, self: string): Binary | null {
 /** This process, if it is the compiled binary; null from source. */
 export const BINARY: Binary | null = binaryOf(import.meta.url, process.execPath);
 
+// ── the transpiled tree (tools/plugin-bundle/build.ts --flavor directory) ──
+//
+// The plugin directory's bundle carries these sources transpiled one for one,
+// `src/x.ts` → `src/x.js`, types and comments stripped, its entries started by
+// their own shebang (2026-10-14: the directory's validator times out on ~7 MB
+// of commented TypeScript). A tree is all one or all the other, so a script
+// another process runs is named in source by its `.ts` path and takes the
+// extension of the tree it is in from this module's own URL.
+
+/** `.js` in the transpiled tree; `.ts` from source and in the single binary
+ *  (whose entries are found by name, `binaryModeOf`). Pure: a test hands it a
+ *  URL of either shape. */
+export function moduleExtOf(moduleUrl: string, binary: Binary | null = BINARY): ".ts" | ".js" {
+  return binary === null && /\.js$/.test(moduleUrl) ? ".js" : ".ts";
+}
+
+/** The extension this package's modules carry where they run now. */
+export const MODULE_EXT: ".ts" | ".js" = moduleExtOf(import.meta.url);
+
+/** Is this process running the transpiled tree? It exists only as the plugin
+ *  directory's bundle, which has no `plugin-run.sh`: Claude Code starts its
+ *  entries by their shebang. */
+export const TRANSPILED: boolean = MODULE_EXT === ".js";
+
+/**
+ * A script this package starts or names, written in source by its `.ts` path
+ * as a `new URL` from `import.meta.url` (a literal the bundle's tracer
+ * follows), as the file this tree holds: that path from source, its `.js`
+ * sibling in the transpiled tree.
+ */
+export function entryScript(url: URL, ext: ".ts" | ".js" = MODULE_EXT): string {
+  const path = fileURLToPath(url);
+  return ext === ".js" ? path.replace(/\.ts$/, ".js") : path;
+}
+
 /** Is this process (or the binary a test names) the compiled binary? */
 export function isCompiled(binary: Binary | null = BINARY): boolean {
   return binary !== null;
@@ -134,6 +171,12 @@ export function isBinaryName(exe: string): boolean {
   return /^counterparts([-.][\w.-]*)?$/i.test(name) && !/^counterparts-(hook|mcp|dashboard)(\.exe)?$/i.test(name);
 }
 
+/** An entry script's mode by its file name: the source `.ts` name, or the
+ *  transpiled tree's `.js` (`BINARY_MODE_OF` keeps the source names). */
+export function binaryModeOf(script: string): BinaryMode | undefined {
+  return BINARY_MODE_OF[basename(script).replace(/\.js$/, ".ts")];
+}
+
 function isBinaryMode(word: string | undefined): word is BinaryMode {
   return (BINARY_MODES as readonly string[]).includes(word ?? "");
 }
@@ -150,7 +193,22 @@ export const BUN_CONFIG_PREFIX = "--config=";
 export const NODE_HOOKS = fileURLToPath(new URL("./node-hooks.mjs", import.meta.url));
 
 /** The console's own entry, for a command line that must name Node explicitly. */
-export const CLI_SCRIPT = fileURLToPath(new URL("./cli/bin/counterparts.ts", import.meta.url));
+export const CLI_SCRIPT = entryScript(new URL("./cli/bin/counterparts.ts", import.meta.url));
+
+/**
+ * The plugin's console by the plugin's root, as the words typed before its
+ * arguments (`doctor`, `scope …`), for a line a person or a Bash call runs:
+ * the launcher, `sh <root>/src/adapters/plugin-run.sh cli`, which finds a
+ * runtime; or, in the plugin directory's transpiled bundle, which has no
+ * launcher, the console's own entry, started by its shebang. Read off the
+ * disk; a root holding neither gets the launcher's words.
+ */
+export function pluginConsoleWords(root: string): string[] {
+  const launcher = join(root, "src", "adapters", "plugin-run.sh");
+  const entry = join(root, "src", "adapters", "cli", "bin", "counterparts.js");
+  if (!existsSync(launcher) && existsSync(entry)) return [entry];
+  return ["sh", launcher, "cli"];
+}
 
 /** The oldest Node this has been made to run on: `module.registerHooks`
  *  (22.15 / 23.5), `stripTypeScriptTypes` and unflagged `node:sqlite` (22.13). */
@@ -182,7 +240,7 @@ export function runtimeOf(exe: string): RuntimeKind {
  *  `.env` or `bunfig.toml` (it is built with both off). */
 export function scriptArgs(script: string, exe: string = process.execPath, binary: Binary | null = BINARY): string[] {
   // The compiled binary runs ITSELF in another mode: `<binary> runner`.
-  const mode = binary !== null && exe === binary.self ? BINARY_MODE_OF[basename(script)] : undefined;
+  const mode = binary !== null && exe === binary.self ? binaryModeOf(script) : undefined;
   if (mode !== undefined) return [mode];
   return runtimeOf(exe) === "node"
     ? ["--import", NODE_HOOKS, script]

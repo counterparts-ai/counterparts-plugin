@@ -1511,8 +1511,8 @@ export class Reflections {
       return `${head}\n${reflectionOpener(row.id)} I reflected afterwards${nothingMuch ? " — nothing much tonight" : ""}; nothing to share this morning.${pageLine}${also}`;
     }
     return (
-      `${head}\n${reflectionOpener(row.id)} I reflected afterwards.${pageLine} Morning share for ${who} — tell it in your own words, as a telling ("While I slept I dreamed…", "I've been thinking…"), tentatively where it is about ${who};` +
-      `then call the counterparts reflect tool with phase "told", reflection: ${row.id}.\n${share}`
+      `${head}\n${reflectionOpener(row.id)} I reflected afterwards.${pageLine} Morning share for ${who} — tell it in your own words, as a telling ("While I slept I dreamed…", "I've been thinking…"), tentatively where it is about ${who}. ` +
+      `Once you have told it, the counterparts reflect tool's phase "told", reflection: ${row.id}, marks it told, so another session does not carry it and tell it again.\n${share}`
     );
   }
 
@@ -1556,7 +1556,8 @@ export class Reflections {
   /**
    * CARRY A SHARE the session that reflected never told — its session ended
    * (the adapter checks that). Claimed once (`carried`); the line asks the
-   * model to tell it and then call `told`. Null when there is none to carry.
+   * model to tell it and notes that `told` marks it (a note, not an order:
+   * Software Directory Policy §2D, 2026-10-14). Null when there is none to carry.
    */
   carryLine(input: { session: string; reflection: string }): string | null {
     if (this.ctx.observer) return null;
@@ -1571,8 +1572,8 @@ export class Reflections {
     const who = this.ctx.ownerName() ?? "the owner";
     const when = row.date ?? "recently";
     return (
-      `Counterparts: after reflecting on ${when}, you left a morning share for ${who} that was never told. At a natural moment — not mid-task — tell it in your own words, as a telling ("When I last reflected…"), tentatively where it is about ${who},` +
-      `then call the counterparts reflect tool with phase "told", reflection: ${row.id}. The share: ${row.share}`
+      `Counterparts: after reflecting on ${when}, you left a morning share for ${who} that was never told. At a natural moment — not mid-task — tell it in your own words, as a telling ("When I last reflected…"), tentatively where it is about ${who}. ` +
+      `Once you have told it, the counterparts reflect tool's phase "told", reflection: ${row.id}, marks it told. The share: ${row.share}`
     );
   }
 

@@ -29,14 +29,15 @@
  * rather than resolving as an answer nobody gave.
  */
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BINARY } from "../../runtime.js";
+import { BINARY, TRANSPILED } from "../../runtime.js";
 import type { Binary } from "../../runtime.js";
 import { npmWiring } from "../../host-wiring.js";
-import { npmDoctorCommand, pluginDoctorLine, pluginOrigin, runningAsPlugin } from "../../plugin.js";
+import { PACKAGE_ROOT, PLUGIN_ROOT_ENV, npmDoctorCommand, pluginDoctorLine, pluginOrigin, runningAsPlugin } from "../../plugin.js";
 
 import { run } from "../commands.js";
 import { echoPrompt, hiddenPrompt } from "../ui.js";
@@ -151,6 +152,12 @@ export function isEntryPoint(argv1: string | undefined, url: string, binary: Bin
 /** Run one console command and exit — what this file does as a script, and
  *  what the single binary's `cli` mode calls. */
 export function start(): void {
+  // THE PLUGIN DIRECTORY'S BUNDLE (transpiled, no `plugin-run.sh`): this entry
+  // is what its commands run, from a Bash call that carries no
+  // CLAUDE_PLUGIN_ROOT, so it says what `plugin-run.sh cli` says for the full
+  // bundle: this console is the plugin's copy (`plugin.ts#runningAsPlugin`).
+  // The transpiled tree exists only as that bundle (`runtime.ts#TRANSPILED`).
+  if (TRANSPILED) process.env[PLUGIN_ROOT_ENV] = realpathSync(PACKAGE_ROOT);
   void main().then(
     (code) => process.exit(code),
     (err: unknown) => {

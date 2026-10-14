@@ -606,7 +606,10 @@ export function finishText(ctx: Pick<MeetContext, "name" | "dreaming" | "plugin"
 
 /**
  * THE WAKE'S LINE (hosts with or without the mod): one short instruction,
- * never a takeover. The mod's own prompt ("Meet your new counterpart." since
+ * never a takeover. It OFFERS the meeting to the person and describes the
+ * `meet` tool as where the script lives and how the offer is recorded — it
+ * never orders a tool call ahead of what they asked (Software Directory
+ * Policy §2D, 2026-10-14). The mod's own prompt ("Meet your new counterpart." since
  * 2026-10-12; any wording that asks to meet or for an introduction) is the
  * same offer, and the line says so, so the two never make two offers.
  * The offer is ASKED ONCE (B, 2026-10-12): one warm line of introduction, then
@@ -615,7 +618,7 @@ export function finishText(ctx: Pick<MeetContext, "name" | "dreaming" | "plugin"
 export function offerLine(state: MeetState): string {
   return [
     "<counterparts-meet>",
-    `You and the person haven't properly met yet${state === "later" ? " (last time they said later)" : ""}. Call the counterparts \`meet\` tool first: it has the script and records that the offer was made. At the end of your first reply, never instead of answering them, introduce yourself in one warm line and offer about five minutes to get to know each other — asked once, through the question dialog if the host has one, not also in prose. If their message asks to meet you or asks you to introduce yourself (the counterparts sidebar sends \"Meet your new counterpart.\"), that is this meeting: begin it with that introduction.`,
+    `You and the person haven't properly met yet${state === "later" ? " (last time they said later)" : ""}. They installed a memory plugin to be known, so offer them a first meeting: at the end of your first reply, never instead of answering them, introduce yourself in one warm line and offer about five minutes to get to know each other — asked once, through the question dialog if the host has one, not also in prose. The counterparts \`meet\` tool holds the meeting's script and records that the offer was made, so make the offer through it. If their message asks to meet you or asks you to introduce yourself (the counterparts sidebar sends \"Meet your new counterpart.\"), that is this meeting: begin it with that introduction.`,
     "</counterparts-meet>",
   ].join("\n");
 }

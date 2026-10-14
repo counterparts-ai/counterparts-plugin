@@ -282,8 +282,9 @@ export function npmDoctorCommand(wiring: NpmWiring): { readonly exe: string; rea
     const config = at >= 0 && call.rest[at + 1] !== undefined ? ["--config", call.rest[at + 1] as string] : [];
     // The single binary is its own install: `<binary> cli doctor`.
     if (call.runtime === "binary") return { exe: call.exe, args: ["cli", "doctor", ...config] };
-    // `<root>/src/adapters/claude-code/bin/hook.ts` or `<root>/src/adapters/mcp/bin/serve.ts`.
-    const cli = join(dirname(call.script), "..", "..", "cli", "bin", "counterparts.ts");
+    // `<root>/src/adapters/claude-code/bin/hook.ts` or `<root>/src/adapters/mcp/bin/serve.ts`
+    // (`.js`, both, in a transpiled tree: runtime.ts#entryScript).
+    const cli = join(dirname(call.script), "..", "..", "cli", "bin", `counterparts${call.script.endsWith(".js") ? ".js" : ".ts"}`);
     if (!existsSync(cli)) continue;
     // Whatever the wiring put between the runtime and its script, as written:
     // Bun's `--no-env-file "--config=…/empty-bunfig.toml" run`, or Node's

@@ -52,7 +52,6 @@ import {
 import { isDay } from "../../core/time.js";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 /** The store directory under the base. Named, because three files agree on it. */
 export const DEFAULT_STORE_DIR = "store";
@@ -60,7 +59,7 @@ export const DEFAULT_STORE_DIR = "store";
 import { EMBEDDER_KINDS } from "../config.js";
 import type { EmbedderKind } from "../config.js";
 import { CONFIG_ENV, CONFIG_FLAG, defaultConfigPath } from "../config-path.js";
-import { parseScriptInvocation, runtimeOf, runtimePresent, scriptArgs, shellTokens } from "../runtime.js";
+import { entryScript, parseScriptInvocation, runtimeOf, runtimePresent, scriptArgs, shellTokens } from "../runtime.js";
 import type { RuntimeKind } from "../runtime.js";
 import { pluginInstall, readOurHook } from "../host-wiring.js";
 import type { PluginInstallRead } from "../host-wiring.js";
@@ -112,8 +111,8 @@ export const MCP_SERVER_NAME = "counterparts";
  * RUNNER_PATH]`). The short names stay on PATH for a human at a terminal; they
  * are not what goes into a host's configuration.
  */
-export const HOOK_SCRIPT = fileURLToPath(new URL("../claude-code/bin/hook.ts", import.meta.url));
-export const MCP_SCRIPT = fileURLToPath(new URL("../mcp/bin/serve.ts", import.meta.url));
+export const HOOK_SCRIPT = entryScript(new URL("../claude-code/bin/hook.ts", import.meta.url));
+export const MCP_SCRIPT = entryScript(new URL("../mcp/bin/serve.ts", import.meta.url));
 
 /** Double-quote a path so a shell keeps it whole. Paths with `"` are refused
  *  by being escaped rather than silently mangled. */
@@ -620,7 +619,7 @@ export function isOurDesktopEntry(entry: unknown): entry is { command: string; a
   if (typeof command !== "string" || !Array.isArray(args) || !args.every((a) => typeof a === "string")) return false;
   const run = parseScriptInvocation([command, ...(args as string[])]);
   if (run === null || run.rest.length > 0) return false;
-  return run.mode === "mcp" || (run.mode === undefined && /mcp[/\\]bin[/\\]serve\.ts$/.test(run.script));
+  return run.mode === "mcp" || (run.mode === undefined && /((^|[/\\])adapters[/\\]mcp[/\\]bin[/\\]serve\.js|mcp[/\\]bin[/\\]serve\.ts)$/.test(run.script));
 }
 
 /** One runtime a host's configuration launches us with. */
@@ -649,10 +648,12 @@ export interface HostRuntime {
  * (`"<…>/counterparts" hook`, `runtime.ts#parseScriptInvocation`). It matches
  * the entry's `.mjs` shim as well as `hook.ts` (2026-10-09, with
  * `host-wiring.ts#readOurHook`): a line that runs our hook is ours to report,
- * whatever flags or entry file a later version writes.
+ * whatever flags or entry file a later version writes. The entry ends at its
+ * extension, and the transpiled tree's `.js` is read only under `adapters/`
+ * (review of #475): a bare `claude-code/bin/hook.js` is another tool's.
  */
 export const HOOK_COMMAND_MARK =
-  /(^|[\s"'=/\\])counterparts-hook(\s|$|")|claude-code[/\\]bin[/\\]hook\.(ts|mjs)|[/\\]counterparts(\.exe)?"?\s+hook(\s|$)/;
+  /(^|[\s"'=/\\])counterparts-hook(\s|$|")|(adapters[/\\]claude-code[/\\]bin[/\\]hook\.js|claude-code[/\\]bin[/\\]hook\.(ts|mjs))(?=$|["'\s])|[/\\]counterparts(\.exe)?"?\s+hook(\s|$)/;
 
 /**
  * The absolute path a hook command runs, when it names one — the first token

@@ -57,6 +57,7 @@ import { installedVersion } from "../sessions.js";
 import { EXIT, hostConfigFor, openStoreAt, snapshotsDirBeside } from "./commands-shared.js";
 import type { Parsed, Io, RunOptions } from "./commands-shared.js";
 import { installCommand } from "./commands-install.js";
+import { MODULE_EXT } from "../runtime.js";
 
 // ── start-fresh ─────────────────────────────────────────────────────────────
 
@@ -309,8 +310,8 @@ export async function startFreshCommand(
     io.out("");
     io.out("  What you CAN check, in another terminal:");
     io.out("    pgrep -fl counterparts");
-    io.out("  Look for lines running one of OURS — serve.ts (an MCP server), dashboard.ts,");
-    io.out("  hook.ts, runner.ts (the worker). Every one of those is holding the store open.");
+    io.out(`  Look for lines running one of OURS — serve${MODULE_EXT} (an MCP server), dashboard${MODULE_EXT},`);
+    io.out(`  hook${MODULE_EXT}, runner${MODULE_EXT} (the worker). Every one of those is holding the store open.`);
     io.out("  IGNORE anything that merely has the word in a path: `pgrep -f` matches the");
     io.out("  whole command line, so an editor, a `tail`, a dev server in a directory with");
     io.out("  this name in it will all show up and none of them matters. This command will");

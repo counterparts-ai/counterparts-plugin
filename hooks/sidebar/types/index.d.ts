@@ -61,32 +61,6 @@ export type SidebarRow = {
   dream?: string;
 };
 
-/** One memory a search found. */
-export type SidebarHit = {
-  id: string;
-  title: string;
-  /** `memory` or `journal`. */
-  kind: string;
-  /** When it happened, else when it was learned, as `Oct 9`; empty when unknown. */
-  date: string;
-  /** Who said it, only when that is known (`you said it`, `I said it`, `inferred`). */
-  who: string | null;
-  /** `memory · Oct 9`, with who said it when known. */
-  meta: string;
-  excerpt: string;
-};
-
-export type SidebarSearch = {
-  query: string;
-  status: 'idle' | 'running' | 'done' | 'error';
-  /** The answer's first line (`12 match · showing 10 …`). */
-  header: string;
-  /** How many matched in all, from that header; the hits are the page shown. */
-  total: number;
-  hits: SidebarHit[];
-  error: string | null;
-};
-
 export type SidebarPulse = { day: number; memories: number; lastSeq: number };
 
 /** A memory the sidebar names: its id when known, and its title (or, until the title is read, the words Claude was shown). */
@@ -156,7 +130,7 @@ export type SidebarDream = {
 
 /**
  * The one item opened in place: `key` names it (`mem:0`, `sub:1`,
- * `saved:<key>`, `ev:<key>`, `hit:<id>`, `dream`), with what opening it
+ * `saved:<key>`, `ev:<key>`, `dream`), with what opening it
  * shows, read from the dashboard (`/api/memory?id=`, a read that writes
  * nothing). Every click opens in place, whatever the length (v0.2 polish,
  * 2026-10-10): the layout shows up to 20 lines of the text, and past that
@@ -288,7 +262,6 @@ declare module 'claude-code' {
       latest: SidebarLatest | null;
       /** The mechanisms that fired last, and when: their regions light. */
       firing: SidebarFiring | null;
-      search: SidebarSearch;
       scope: SidebarScope;
       /** Where the first meeting stands (core's `/api/onboarding`). */
       onboarding: SidebarOnboarding;
@@ -309,6 +282,12 @@ declare module 'claude-code' {
        * tool; [Cancel] or 30 s closes it.
        */
       pauseAsk: { dir: string; at: number; to?: 'pause' | 'off' | 'on' } | null;
+      /**
+       * The session in which the person ran `/counterparts …` themselves (the sidebar's own
+       * command answers without passing it on, so no other hook sees it): the speak-first
+       * (`speak-first.tsx`) reads it as having spoken first. Null until then.
+       */
+      typedIn: string | null;
     };
   }
 }

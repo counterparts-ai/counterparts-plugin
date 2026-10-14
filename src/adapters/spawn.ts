@@ -44,7 +44,6 @@
  * testing is in the pure half.
  */
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 
 import { TUNABLES as REMEMBER, validateWatchdog } from "../core/remember/index.js";
 
@@ -52,6 +51,7 @@ import { CONFIG_ENV as CONFIG_PATH_ENV } from "./config-path.js";
 
 import { TUNABLES } from "./config.js";
 import type { AdapterConfig } from "./config.js";
+import { entryScript } from "./runtime.js";
 
 /**
  * THE WORKER SCRIPT, resolved from THIS file's location — never from a working
@@ -60,7 +60,7 @@ import type { AdapterConfig } from "./config.js";
  * server — Claude Desktop's `wake` starts the worker too — can name it without
  * importing that adapter. `claude-code/bin/hook.ts#RUNNER_PATH` is this value.
  */
-export const WORKER_RUNNER_PATH = fileURLToPath(new URL("./claude-code/bin/runner.ts", import.meta.url));
+export const WORKER_RUNNER_PATH = entryScript(new URL("./claude-code/bin/runner.ts", import.meta.url));
 
 export const DATA_DIR_ENV = "COUNTERPARTS_DATA_DIR";
 /** The child is told its own watchdog, so the worker can arm one internally too. */

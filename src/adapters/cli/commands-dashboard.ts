@@ -15,6 +15,7 @@ import { tilde } from "./wire.js";
 import { upgradeWords } from "../hosts.js";
 import { hostsSeen } from "../sessions.js";
 import { EXIT, hostConfigFor } from "./commands-shared.js";
+import { storeId } from "../store-id.js";
 import type { Parsed, Io, RunOptions } from "./commands-shared.js";
 
 // ── dashboard ───────────────────────────────────────────────────────────────
@@ -70,6 +71,12 @@ export interface DashboardSeam {
   open?(url: string): void;
   /** Resolves when the person stops it. Ctrl-C, in a real run. */
   until?(): Promise<void>;
+  /**
+   * Which store the dashboard already holding `port` serves (its `/api/whoami`, on
+   * 127.0.0.1), or null: nothing answered, or not with a store id. Asked only when
+   * the port is taken.
+   */
+  storeAt?(port: number): Promise<string | null>;
 }
 
 /** The default port, restated rather than imported: naming it here costs one
@@ -157,9 +164,26 @@ export async function dashboardCommand(
     });
   } catch (err) {
     if ((err as { code?: string }).code === "EADDRINUSE") {
+      // THE PORT IS TAKEN. When what holds it is this store's own dashboard (the
+      // sidebar's button runs this command whether or not one is up), open the
+      // browser on it and succeed; anything else fails as before, said plainly.
+      const errPort = (err as { port?: unknown }).port;
+      const taken = typeof errPort === "number" && errPort > 0 ? errPort : (port ?? DASHBOARD_DEFAULT_PORT);
+      const serving = (await seam.storeAt?.(taken)) ?? null;
+      const ours = storeId(dir);
+      if (serving !== null && ours !== null && serving === ours) {
+        const url = `http://127.0.0.1:${String(taken)}`;
+        io.out(`Dashboard: ${url}  (already running for this store; this command started nothing)`);
+        io.out(`reading ${tilde(dir, home_)}`);
+        if (parsed.flags["no-open"] !== true) seam.open?.(url);
+        return EXIT.ok;
+      }
       io.err(
-        `Port ${String(port ?? DASHBOARD_DEFAULT_PORT)} is already in use — a dashboard may ` +
-          "already be running. Pass --port <n> to use another one.",
+        serving !== null
+          ? `Port ${String(taken)} is already in use by a dashboard serving another store. ` +
+              "Pass --port <n> to use another one."
+          : `Port ${String(taken)} is already in use — a dashboard may ` +
+              "already be running. Pass --port <n> to use another one.",
       );
       return EXIT.failed;
     }
@@ -207,6 +231,11 @@ function realDashboard(env: Record<string, string | undefined>): DashboardSeam {
       openInBrowser(url, env);
     },
     until: untilInterrupted,
+    async storeAt(port: number): Promise<string | null> {
+      // LAZY for the same reason as the server: only a taken port pulls it in.
+      const { dashboardStoreAt } = await import("../dashboard/web/probe.js");
+      return dashboardStoreAt(port);
+    },
   };
 }
 

@@ -713,7 +713,7 @@ export const WAKE_HEAD_MAX_LINES = 40;
  * and the cost of missing it is a session that reads `not-found`, which is
  * INTERFACE-GAPS §11's residual.
  */
-export const COUNTERPARTS_HOOK_COMMAND = /claude-code[/\\]bin[/\\]hook\.ts|counterparts-hook/;
+export const COUNTERPARTS_HOOK_COMMAND = /(adapters[/\\]claude-code[/\\]bin[/\\]hook\.js|claude-code[/\\]bin[/\\]hook\.ts)(?=$|["'\s])|counterparts-hook/;
 
 /**
  * The wake's two sentinels, recognised INSIDE a larger string rather than as a

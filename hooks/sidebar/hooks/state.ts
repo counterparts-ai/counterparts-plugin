@@ -1,7 +1,7 @@
 /**
  * The sidebar's own state and timings (shared core, no drawing): the
  * timings and limits the hooks keep, the first meeting's line and its
- * once-only mark, the empty search and the unknown folder, and `run`, what
+ * once-only mark, the unknown folder, and `run`, what
  * this module life knows (a reload starts it over; the host keeps `$.state`).
  *
  * The `$.state` atoms themselves stay in `register.tsx`: the engine's scan
@@ -9,7 +9,7 @@
  * file (NOTES, "The split").
  */
 
-import type { SidebarScope, SidebarSearch } from '../types'
+import type { SidebarScope } from '../types'
 
 /**
  * Body columns the sidebar asks for: 34, which the dock draws 35 wide with its
@@ -66,19 +66,26 @@ export const FALLBACK_LIMIT = 150
 export const FALLBACK_MAX = 1200
 
 /**
- * The first meeting's line: what the sidebar submits, once per install at the
- * first idle start while core says `not_started`, and on each press of "Start
- * the 5-minute intro". Framed as the plugin's (not `asUser`): the model reads
- * "The counterparts plugin sent a message: …", and core's wake carries the
- * meeting's instructions. Claude Code shows this line to the person ("Prompt
- * from the counterparts plugin"), so it reads as a sentence to them, and still
- * tells the model to introduce itself (2026-10-12, owner's onboarding trial).
- * Since the fox trial it is "Meet your new counterpart." (the owner: Claude
- * already has a memory of its own), which core's wake names as this meeting.
- * Only the automatic speak-first sends it: the button runs `/counterparts:meet`,
- * which carries its own instructions in any later session (MEET_COMMAND).
+ * The speak-first's line (`speak-first.tsx`, a hooks module of its own): what it
+ * submits, once per install at the first idle start while core says
+ * `not_started`. Framed as the plugin's (not `asUser`): the model reads "The
+ * counterparts plugin sent a message: …", and core's wake carries the meeting's
+ * instructions. Claude Code shows this line to the person ("Prompt from the
+ * counterparts plugin"), so it reads as a sentence to them, and still tells the
+ * model to introduce itself (2026-10-12, owner's onboarding trial). Since the fox
+ * trial it is "Meet your new counterpart." (the owner: Claude already has a
+ * memory of its own), which core's wake names as this meeting. The button runs
+ * `/counterparts:meet` instead, which carries its own instructions in any later
+ * session (MEET_COMMAND).
  */
 export const MEET_PROMPT = 'Meet your new counterpart.'
+
+/**
+ * `$.store`: the speak-first went out (`{ session, at }`), never again while it is there; or
+ * `{ settled }` once core moved past not_started. Written by `speak-first.tsx`; the sidebar
+ * reads it to hide its button in the session whose speak-first is introducing.
+ */
+export const MEET_FLAG = 'meetTriggered'
 
 /** "Start the 5-minute intro": the plugin's command (commands/meet.md), run as if typed. */
 export const MEET_COMMAND = 'counterparts:meet'
@@ -86,23 +93,10 @@ export const MEET_COMMAND = 'counterparts:meet'
 /** The Mechanisms section's link when the dashboard is down: the plugin's command (commands/dashboard.md). */
 export const DASHBOARD_COMMAND = 'counterparts:dashboard'
 
-/**
- * The search box, hidden for 0.3.20 (2026-10-12): in the owner's real sessions a
- * click never put the keyboard in it (fox trial rounds 1 and 2), and it could not
- * be checked live here (NOTES). `COUNTERPARTS_SIDEBAR_SEARCH=1` brings it back,
- * read at session start.
- */
-export const searchFlag = { on: false }
-
-/** `$.store`: the speak-first went out (`{ session, at }`); never again while it is there. */
-export const MEET_FLAG = 'meetTriggered'
-
 /** A second press of "Start the 5-minute intro" this soon after the first submits nothing. */
 export const MEET_PRESS_MS = 60000
 
-// ── the empty search, the unknown folder, and what this module life knows ──
-
-export const IDLE_SEARCH: SidebarSearch = { query: '', status: 'idle', header: '', total: 0, hits: [], error: null }
+// ── the unknown folder, and what this module life knows ──
 
 export const UNKNOWN_SCOPE: SidebarScope = { mode: 'unknown', own: false, setBy: null, dir: null, error: null, busy: false, unread: null }
 
@@ -147,8 +141,6 @@ export const run = {
   brainPace: 'calm' as 'burst' | 'calm' | 'rest',
   /** When this session began: an event naming no session, from after it, is taken as this session's. */
   startedAt: 0,
-  /** The command that opens a URL here, once found. */
-  opener: null as readonly string[] | null,
   /** Fresh drawings asked for after refused blits since the last blit that was taken. */
   redraws: 0,
   /** The body's text width at the last drawing: what the expand threshold is measured at. */
@@ -163,23 +155,6 @@ export const run = {
   countedOn: '',
   /** This session's rows were looked for on the dashboard (`seedSession`), once a module life. */
   seeded: false,
-  /** The person sent a prompt of their own, or ran a slash command, this session: the speak-first stands down. */
-  typed: false,
-  /**
-   * The person sent a PROMPT of their own (`prompt.submit`), not only a command: only this drops a
-   * speak-first already queued, since only a prompt gets a reply where core can offer the meeting.
-   */
-  prompted: false,
-  /** The speak-first was considered this module life (it goes out at most once per install, `MEET_FLAG`). */
-  meetTried: false,
-  /** The session whose start sent the speak-first, as stored; null when it never went out. */
-  meetFiredIn: null as string | null,
-  /**
-   * This module life submitted the speak-first. Unlike `meetFiredIn`, core's state moving on
-   * never clears it: the person's reply calling `meet` (state `offered`) must not let a
-   * speak-first still queued behind it through (`prompt.submit`).
-   */
-  spokeFirst: false,
   /** When "Start the 5-minute intro" was last pressed (`$.clock`). */
   meetPressedAt: -Infinity,
   /** The store this session's hooks opened, from the wake's `counterparts:store` marker; null until it says. */

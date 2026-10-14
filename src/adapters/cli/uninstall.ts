@@ -93,6 +93,7 @@ import { isJournal } from "../../core/sleep/index.js";
 import { SCOPES_FILE_NAME, shellWord } from "../scopes.js";
 import { PLUGIN_ROOT_ENV, installRoute } from "../plugin.js";
 import { pluginInstall } from "../host-wiring.js";
+import { pluginConsoleWords } from "../runtime.js";
 import type { PluginInstallRead } from "../host-wiring.js";
 import { SNAPSHOTS_DIR_NAME, resolveSnapshotsDir } from "../snapshots.js";
 import type { AdapterConfig } from "../config.js";
@@ -139,8 +140,9 @@ export const REMOVE_PLUGIN = "in Claude Code, /plugin → Installed → counterp
  */
 export function consoleName(env: Record<string, string | undefined>, home: string): string {
   if (installRoute(env) !== "plugin") return BIN.cli;
-  const launcher = join((env[PLUGIN_ROOT_ENV] ?? "").trim(), "src", "adapters", "plugin-run.sh");
-  return `sh ${shellWord(launcher, home)} cli`;
+  return pluginConsoleWords((env[PLUGIN_ROOT_ENV] ?? "").trim())
+    .map((w) => shellWord(w, home))
+    .join(" ");
 }
 
 export function removeProgram(env: Record<string, string | undefined>): string {
