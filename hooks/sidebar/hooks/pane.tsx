@@ -1,6 +1,6 @@
 /**
- * The pane's tree, on every surface: the title and the search box (each
- * view's header places them), a paused folder's banner, "Meet your
+ * The pane's tree, on every surface: the title (each view's header places
+ * it), a paused folder's banner, "Meet your
  * counterpart", the confirm row and a switch's note, the body, and the
  * footer's switches. No `$`: the Pane hook in `register.tsx` reads the state,
  * builds the body (its `Client` tag must stay in the hooks module's own
@@ -14,16 +14,19 @@ import type { SidebarBrain, SidebarScope, SidebarView } from '../types'
 import { shortDir, wrap } from './feed'
 import { clip } from './sections'
 import type { Line } from './sections'
-import { HOVER_CP, searchFlag } from './state'
+import { HOVER_CP } from './state'
 import { P, SURFACE, bg } from './theme'
 import { CONFIRM_FROM, scopeHover, switchAt } from './words'
 
-/** The constructors the pane draws with: every surface has these three; `Input` all but mobile. */
-export type PaneEls = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'> & { Input: Elements['terminal']['Input'] | null }
+/** The constructors the pane draws with: every surface has these four. */
+export type PaneEls = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Link'>
 
-/** What a press does: closures the Pane hook makes over its `$`. */
+/**
+ * What a press does: closures the Pane hook makes over its `$`; and where the title links (`dashboardHref`, the
+ * terminal only; null: the title is a Button that runs `/counterparts:dashboard`, `openDashboard`).
+ */
 export type PaneActions = {
-  search: (value: string) => Promise<unknown>
+  dashboardHref: string | null
   openDashboard: () => Promise<unknown>
   pressScope: (to: 'on' | 'paused' | 'off') => Promise<unknown>
   pressMeet: () => Promise<unknown>
@@ -33,35 +36,35 @@ export type PaneActions = {
   brain: (b: SidebarBrain) => Promise<unknown>
 }
 
-// ── the title and the search box, which each view's header places ──
+// ── the title, which each view's header places ──
 
-/** The search box: a shade above the panel, a fainter `search` inside. Hidden (`searchFlag`): an empty box as wide. */
-export function searchBox(els: PaneEls, actions: PaneActions, width: number): JSX.Element {
-  const { Box, Text, Input } = els
-  if (!searchFlag.on) return <Box key="search" width={width} />
-  return (
-    <Box key="search" flexDirection="row" width={width} {...bg(P.searchBg)}>
-      <Text color={P.mid} {...bg(P.searchBg)}>⌕ </Text>
-      <Box flexGrow={1}>
-        {Input === null ? (
-          <Text color={P.dim} {...bg(P.searchBg)}>search</Text>
-        ) : (
-          <Input key="q" placeholder="search" value="" submitLabel="find" onSubmit={(value: string) => actions.search(value)} />
-        )}
-      </Box>
-    </Box>
-  )
-}
-
-/** COUNTERPARTS, a link to the dashboard; `lead` (the brainless header) puts a dot before it and `↗` after. */
+/**
+ * COUNTERPARTS, the way to the dashboard: on the terminal a `Link` the terminal opens; elsewhere a Button running
+ * `/counterparts:dashboard`. `lead` (the brainless header) puts a dot before it and `↗` after.
+ */
 export function titleButton(els: PaneEls, actions: PaneActions, o: { lead: boolean; paused: boolean; dot: string | null }): JSX.Element {
-  const { Text, Button } = els
+  const { Box, Text, Link, Button } = els
+  const words = [
+    ...(o.lead ? [<Text key="dot" color={o.dot ?? P.accentDim}>◉ </Text>] : []),
+    <Text key="name" color={o.paused ? P.dim : P.accent} bold>COUNTERPARTS</Text>,
+    ...(o.lead ? [<Text key="arrow" color={P.accentDim}> ↗</Text>] : []),
+  ]
+  const href = actions.dashboardHref
+  // Off the terminal (the desktop draws a non-https Link as plain text): a Button, which starts the dashboard or,
+  // already up, opens it (`/counterparts:dashboard`).
+  if (href === null) {
+    return (
+      <Button key="title" plain onPress={() => actions.openDashboard()}>
+        {words}
+      </Button>
+    )
+  }
   return (
-    <Button key="title" plain onPress={() => actions.openDashboard()}>
-      {o.lead ? <Text color={o.dot ?? P.accentDim}>◉ </Text> : ''}
-      <Text color={o.paused ? P.dim : P.accent} bold>COUNTERPARTS</Text>
-      {o.lead ? <Text color={P.accentDim}> ↗</Text> : ''}
-    </Button>
+    <Box key="title" flexDirection="row">
+      <Text>
+        <Link href={href}>{words}</Link>
+      </Text>
+    </Box>
   )
 }
 

@@ -1,6 +1,6 @@
 /**
  * The pane's body, laid out as lines: Memories, Subconscious, Saved this
- * session, Mechanisms today and Last Dream (or a search's results), at the
+ * session, Mechanisms today and Last Dream, at the
  * pane's width, folded to its height. Pure: no `$`, no engine. The hooks
  * module hands the result to the `Client` surface module (`./body.tsx`),
  * which draws the lines and reads clicks by row.
@@ -27,7 +27,6 @@ import type {
   SidebarMind,
   SidebarOpen,
   SidebarSaved,
-  SidebarSearch,
   SidebarToday,
 } from '../types'
 import { dateOf, hm, humanDates } from './feed'
@@ -75,9 +74,10 @@ export type Seg = { t: string; c: string; b?: true; i?: true; cw?: number; fill?
 /**
  * One row of the body: its pieces, and what a click on it names; `link`, a
  * click from column `from` (0-based, in cells) to the row's end names
- * another key instead (the `more` at the end of a cut text).
+ * another key instead (the `more` at the end of a cut text), and `href`, set
+ * by the hooks module, makes that last piece a `Link` to the dashboard.
  */
-export type Line = { segs: Seg[]; key?: string; link?: { from: number; key: string } }
+export type Line = { segs: Seg[]; key?: string; link?: { from: number; key: string; href?: string } }
 
 const seg = (t: string, c: string, o: { b?: boolean; i?: boolean } = {}): Seg => ({ t, c, ...(o.b ? { b: true as const } : {}), ...(o.i ? { i: true as const } : {}) })
 const line = (segs: Seg[], key?: string): Line => (key === undefined ? { segs } : { segs, key })
@@ -173,7 +173,6 @@ export type BodyState = {
   mech: SidebarMechOpen | null
   focus: string | null
   dash: 'unknown' | 'up' | 'down' | 'other'
-  search: SidebarSearch
   /**
    * A surface that sets text in its own font (the desktop): a blank row between items, and the chart's rows as
    * a name column, a solid bar and a count at the edge, since padding with spaces lines nothing up there.
@@ -487,26 +486,6 @@ function dream(s: BodyState, f: Fold): Line[] {
   return out
 }
 
-function searchResults(s: BodyState): Line[] {
-  const q = s.search
-  const right = q.status === 'running' ? 'searching' : q.status === 'done' ? `${String(q.total)} found ✕` : '✕'
-  const out: Line[] = [heading(clip(`“${q.query}”`, Math.max(6, s.w - cells(right) - 4)), right, s.w, { key: 'search:clear' })]
-  if (q.status === 'error') return [...out, ...plain(wrapN(q.error ?? 'the search was refused', s.w), P.dim)]
-  if (q.status === 'done' && q.hits.length === 0) return [...out, line([seg('nothing matches', P.dim)])]
-  for (const h of q.hits) {
-    const key = `hit:${h.id}`
-    if (s.open?.key === key) {
-      out.push(...plain(wrapN(humanDates(h.title, s.now), s.w, 4), P.hi, key, { b: true }))
-      if (h.excerpt !== '') out.push(...textLines(h.excerpt, s.w, OPEN_MAX_LINES - 2, P.text, key, h.id.startsWith('mem_') ? `more:${h.id}` : null))
-      out.push(line([seg(clip(h.meta, s.w), P.dim)], key))
-    } else {
-      out.push(...plain(wrapN(humanDates(h.title, s.now), s.w, 2), P.hi, key))
-      out.push(line([seg(clip(h.meta, s.w), P.dim)], key))
-    }
-  }
-  return out
-}
-
 // ── the ladder ───────────────────────────────────────────────────────────────
 
 function sectionsOf(s: BodyState, f: Fold): Line[][] {
@@ -558,7 +537,6 @@ function ladderFor(s: BodyState): readonly Step[] {
  * it stands and the pane scrolls.
  */
 export function layoutBody(s: BodyState): { lines: Line[]; folds: string[] } {
-  if (s.search.status !== 'idle') return { lines: searchResults(s), folds: [] }
   // The focused section never folds to its heading, and shortens only after every other section has folded.
   const mine = (st: Step): boolean => st.section === s.focus || (s.focus === 'mind' && st.section === 'sub')
   const ladder = ladderFor(s).filter(st => !(mine(st) && (st.fold || st.label === 'subconscious 0')))

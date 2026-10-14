@@ -16,7 +16,7 @@
  * disagree.
  */
 
-import type { SidebarHit, SidebarMeet, SidebarOnboarding, SidebarRow, SidebarSaved } from '../types';
+import type { SidebarMeet, SidebarOnboarding, SidebarRow, SidebarSaved } from '../types';
 import { MECHS, MEMORIES_URL, mechById, mechUrl } from './mechanisms';
 import type { MechId } from './mechanisms';
 import { cells, ellipsizeCells, headCells } from './width';
@@ -559,24 +559,7 @@ export function firstSentence(journal: string): { first: string; rest: string } 
   return { first, rest: text.slice(m[0].length).trim() };
 }
 
-// ── a facts answer ─────────────────────────────────────────────────────────
-
-export type SearchHit = SidebarHit;
-
-/**
- * The labeled lines `adapters/mcp/facts.ts#renderFacts` writes: a header,
- * then per result `N. <title> · <id>[ (chapter …)] · <ways>` and indented
- * lines under it, the last of which is the excerpt. Read from the RIGHT: a
- * title may hold ` · ` and words shaped like an id (`Sidebar · npm_install ·
- * notes`), the ways (`words, meaning`, or nothing) never do.
- */
-const ITEM = /^(\d+)\.\s+(?:\[journal\]\s+)?(.*)\s+·\s+([A-Za-z]+_[A-Za-z0-9]+)(?:\s+\(chapter \d+ of \d+\))?\s+·\s*([^·]*)$/
-
-/** `14 match · showing 5 · …` → 14; 0 when the header says no count. */
-export function factsTotal(header: string): number {
-  const m = /^(\d+) match/.exec(header.trim())
-  return m === null ? 0 : Number(m[1])
-}
+// ── dates ──────────────────────────────────────────────────────────────────
 
 /** `10-09` or `2025-10-09` as `Oct 9` (with the year when one is given). */
 export function shortDay(s: string): string {
@@ -585,55 +568,6 @@ export function shortDay(s: string): string {
   const month = MONTHS[Number(m[2]) - 1];
   if (month === undefined) return '';
   return `${month} ${String(Number(m[3]))}${m[1] === undefined ? '' : ` ${m[1]}`}`;
-}
-
-const SAID_BY: Readonly<Record<string, string>> = { 'you said': 'you said it', 'I said': 'I said it', inferred: 'inferred' };
-
-/**
- * From a result's labeled lines: when (happened, else for, else learned or
- * written) and who said it, only when that is known.
- */
-function whenAndWho(journal: boolean, under: readonly string[]): { date: string; who: string | null } {
-  const first = under[0] ?? '';
-  if (journal) {
-    const w = /written (\d{4}-\d{2}-\d{2}|\d{2}-\d{2})/.exec(first);
-    return { date: w === null ? '' : shortDay(w[1] ?? ''), who: null };
-  }
-  const parts = first.split(' · ').map(p => p.trim());
-  const who = SAID_BY[parts[0] ?? ''] ?? null;
-  const happened = /(?:happened|for) (\d{4}-\d{2}-\d{2}|\d{2}-\d{2})/.exec(first);
-  const learned = /^learned (\d{4}-\d{2}-\d{2}|\d{2}-\d{2})/.exec(under[1] ?? '');
-  const day = happened?.[1] ?? learned?.[1] ?? '';
-  return { date: day === '' ? '' : shortDay(day), who };
-}
-
-export function parseFacts(answer: string): { header: string; total: number; hits: SearchHit[] } {
-  const lines = answer.split('\n');
-  const header = lines[0] ?? '';
-  const hits: SearchHit[] = [];
-  let cur: { id: string; title: string; journal: boolean; under: string[] } | null = null;
-  const flush = (): void => {
-    if (cur === null) return;
-    const excerpt = cur.under.length > 1 ? (cur.under[cur.under.length - 1] ?? '') : '';
-    const { date, who } = whenAndWho(cur.journal, cur.under);
-    const kind = cur.journal ? 'journal' : 'memory';
-    const meta = [kind, date, who].filter((x): x is string => x !== null && x !== '').join(' · ');
-    hits.push({ id: cur.id, title: cur.title, kind, date, who, meta, excerpt });
-    cur = null;
-  };
-  for (const line of lines.slice(1)) {
-    const item = ITEM.exec(line);
-    if (item !== null) {
-      flush();
-      cur = { id: item[3] ?? '', title: item[2] ?? '', journal: /^\d+\.\s+\[journal\]/.test(line), under: [] };
-      continue;
-    }
-    if (cur !== null && /^\s{2,}\S/.test(line)) cur.under.push(line.trim());
-    else if (cur !== null && line.trim() === '') flush();
-    else if (/^faded \(\d+\):/.test(line)) flush();
-  }
-  flush();
-  return { header, total: Math.max(factsTotal(header), hits.length), hits };
 }
 
 // ── words and times ────────────────────────────────────────────────────────
@@ -826,16 +760,18 @@ export function otherStore(wake: string | null, dash: string | null): boolean {
 
 /**
  * Whether the sidebar shows "Start the 5-minute intro": core says the meeting
- * was put off (`later`) or offered and not finished (`offered`), or it never
- * started though this install's one speak-first went out in an EARLIER
- * session (the turn ended before Claude reached core's `meet`: a dead end
- * otherwise). Never in a folder where the meeting can't keep anything
- * (`canMeet`), and never for an unknown state.
+ * never started (`not_started`), was put off (`later`), or was offered and not
+ * finished (`offered`). Not while this very session's speak-first is the
+ * introduction (`firedIn`, the mark `speak-first.tsx` writes: not_started and
+ * fired in `session`); an earlier session's that never reached core's `meet`
+ * leaves the button, and with no speak-first module (the directory build) the
+ * button is the one way in. Never in a folder where the meeting can't keep
+ * anything (`canMeet`), and never for an unknown state.
  */
-export function meetShows(meet: SidebarMeet, folderMode: string, firedIn: string | null, session: string): boolean {
+export function meetShows(meet: SidebarMeet, folderMode: string, firedIn: string | null = null, session = ''): boolean {
   if (!canMeet(folderMode)) return false;
-  if (meet === 'later' || meet === 'offered') return true;
-  return meet === 'not_started' && firedIn !== null && firedIn !== session;
+  if (meet === 'not_started') return firedIn === null || firedIn !== session;
+  return meet === 'later' || meet === 'offered';
 }
 
 /**

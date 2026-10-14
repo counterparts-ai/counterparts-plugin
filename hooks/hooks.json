@@ -2,20 +2,62 @@
   "description": "Counterparts: memory hooks on five Claude Code events (session start, each prompt, each reply, session end, before compaction), started from the plugin folder; and the sidebar mod (hooks/sidebar/).",
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/bin/hook.js",
+            "args": []
+          }
+        ]
+      }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/bin/hook.js",
+            "args": []
+          }
+        ]
+      }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/bin/hook.js",
+            "args": []
+          }
+        ]
+      }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/bin/hook.js",
+            "args": []
+          }
+        ]
+      }
     ],
     "PreCompact": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/src/adapters/claude-code/bin/hook.js",
+            "args": []
+          }
+        ]
+      }
     ]
   },
-  "modules": ["./sidebar/hooks/register.tsx"]
+  "modules": [
+    "./sidebar/hooks/register.tsx"
+  ]
 }

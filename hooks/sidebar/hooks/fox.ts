@@ -4,11 +4,12 @@
  * engine. The timer that drives it lives in `register.tsx` beside the brain's.
  *
  * ONE DESIGN, FOUR WAYS TO DRAW IT. The art (`fox-art.ts`, the art agent's
- * data module, and `fox-png.ts`, generated from its PNGs by
+ * data module, and the PNGs in `../art/fox/`, built from its export by
  * `tools/fox-art/build.ts`) holds every frame three times over, and the
  * moments and schedule once:
  *
- * - `image`: an `Image` of the PNG frame, where the terminal draws pictures
+ * - `image`: an `Image` of the PNG file, which the terminal reads itself
+ *   (`{ file, format: 'png' }`), where the terminal draws pictures
  *   (kitty, Ghostty). Elsewhere an Image draws its alt text, dim, so this is
  *   chosen only where the environment says so, and a blit refused because the
  *   Image draws its alt drops to `fine` for the session (register.tsx).
@@ -20,7 +21,8 @@
  *   else (Apple Terminal, tmux, anything unknown). A frame change is a blit.
  * - `svg`: the desktop app (no Raster, no Image): an `Svg` of rects from the
  *   half-block pixels, with the PNG frame over them as a data URI (the rects
- *   are what shows if the surface drops the image).
+ *   are what shows if the surface drops the image, or the file can't be read);
+ *   the hooks module reads each PNG's bytes once (`$.fs.read`) and keeps them.
  *
  * `/counterparts avatar detail auto|images|fine|basic` overrides the choice.
  */
@@ -28,7 +30,6 @@
 import { DEFAULT_COLOR } from './brain'
 import { encodeCells } from './cells'
 import { FOX_FINAL } from './fox-art'
-import { FOX_PNG, FOX_PNG_SIZE } from './fox-png'
 
 const ART = FOX_FINAL
 
@@ -77,13 +78,14 @@ export function sextantsLikely(env: TierEnv): boolean {
  * The tier for a drawing: the desktop and the other remote surfaces draw the
  * Svg; a terminal, the override or else the environment's answer. `noImages`:
  * an Image here drew its alt (a refused blit said so), so `auto` stops trying.
+ * `hasPngs` false (no PNG folder found): never a picture, whatever was asked.
  */
-export function pickTier(surface: string, detail: FoxDetail, env: TierEnv, noImages = false): FoxTier {
+export function pickTier(surface: string, detail: FoxDetail, env: TierEnv, noImages = false, hasPngs = true): FoxTier {
   if (surface !== 'terminal') return 'svg'
-  if (detail === 'images') return 'image'
+  if (detail === 'images' && hasPngs) return 'image'
   if (detail === 'fine') return 'fine'
   if (detail === 'basic') return 'basic'
-  if (!noImages && imagesLikely(env)) return 'image'
+  if (detail !== 'images' && !noImages && hasPngs && imagesLikely(env)) return 'image'
   return sextantsLikely(env) ? 'fine' : 'basic'
 }
 
@@ -588,20 +590,36 @@ export function runs(line: readonly FineCell[]): FineCell[] {
   return out
 }
 
-// ── image: the PNG ──────────────────────────────────────────────────────────
+// ── image: the PNG files ────────────────────────────────────────────────────
 
-/** The PNG for a step (base64): the frame with its effects, or the frame alone, or the idle frame. */
-export function pngOf(step: Pick<Step, 'frame' | 'fx'>): string {
-  return FOX_PNG[stepKey(step)] ?? FOX_PNG[step.frame] ?? FOX_PNG['idle'] ?? ''
+/**
+ * The PNGs `tools/fox-art/build.ts` writes to `art/fox/<key>.png`: every frame, and every frame + effects pair a
+ * moment draws (`frame+fx+fx`, as `stepKey` spells it).
+ */
+export const PNG_KEYS: ReadonlySet<string> = new Set([
+  ...Object.keys(ART.png.frames),
+  ...Object.values(MOMENTS).flatMap(m => m.filter(s => s.length > 2).map(([frame, , ...fx]) => stepKey({ frame, fx }))),
+])
+
+/** Where the PNGs sit, from the plugin's folder: the repository's plugin, or this folder as a plugin of its own. */
+export const PNG_DIRS = ['hooks/sidebar/art/fox', 'art/fox'] as const
+
+/** The PNG's file name for a step: the frame with its effects, or the frame alone, or the idle frame. */
+export function pngName(step: Pick<Step, 'frame' | 'fx'>): string {
+  const key = stepKey(step)
+  return `${PNG_KEYS.has(key) ? key : PNG_KEYS.has(step.frame) ? step.frame : 'idle'}.png`
 }
+
+/** The scale the build writes the PNGs at: art pixels x 3. */
+export const PNG_SCALE = 3
 
 // ── svg: the desktop ────────────────────────────────────────────────────────
 
 /** CSS pixels a half-block pixel takes on the desktop. */
 export const SVG_PX = 6
 
-/** The desktop's drawing: rects from the half-block pixels, run-length per row, then the PNG over them. */
-export function foxSvg(step: Pick<Step, 'frame' | 'fx'>): { source: string; width: number; height: number } {
+/** The desktop's drawing: rects from the half-block pixels, run-length per row, then the PNG (`png`, base64; '' for none) over them. */
+export function foxSvg(step: Pick<Step, 'frame' | 'fx'>, png: string): { source: string; width: number; height: number } {
   const cols = STAGE_COLS
   const H = stageRows('basic') * 2
   const px = halfPixels(step, cols)
@@ -620,7 +638,6 @@ export function foxSvg(step: Pick<Step, 'frame' | 'fx'>): { source: string; widt
       x += n
     }
   }
-  const png = pngOf(step)
   // The PNG's box over the half-block fox's (the art lines both up: the same footprint, feet on the bottom line).
   const [bw, bh] = ART.half.box
   const image = png === '' ? '' : `<image x="${String(HALF_X0)}" y="${String(H - bh)}" width="${String(bw + 2)}" height="${String(bh)}" preserveAspectRatio="xMidYMax meet" style="image-rendering:pixelated" href="data:image/png;base64,${png}"/>`
@@ -631,7 +648,7 @@ export function foxSvg(step: Pick<Step, 'frame' | 'fx'>): { source: string; widt
 }
 
 /** The PNGs' pixel size, for a test. */
-export const PNG_SIZE = FOX_PNG_SIZE
+export const PNG_SIZE = [ART.png.box[0] * PNG_SCALE, ART.png.box[1] * PNG_SCALE] as const
 
 // ── the module's own ────────────────────────────────────────────────────────
 
@@ -653,4 +670,8 @@ export const stage = {
   noImages: false,
   /** Image blits refused in a row. */
   imageDenies: 0,
+  /** The folder holding the PNGs (absolute), found at session start; null: none found, no pictures. */
+  pngDir: null as string | null,
+  /** Each PNG's bytes (base64) once read, for the desktop's Svg; '' for one that could not be read. */
+  pngData: new Map<string, string>(),
 }

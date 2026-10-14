@@ -1,0 +1,12 @@
+export { GATES, CHANNELS, SELF_SUBJECT, EncodeError } from "./types.js";
+export { TUNABLES } from "./tunables.js";
+export { escapeRegExp, wholeWordRegex, occursAsWholeWord, countWholeWord } from "./words.js";
+export { REDACTION_MARK, SECRET_FAMILIES, scanSecrets, redactSecrets, containsSecret } from "./secrets.js";
+export { hedgePrecision } from "./precision.js";
+export { gateAliases } from "./aliases.js";
+export { gateEmotion, emotionClassifierRecord } from "./emotion.js";
+export { contentFloor, floorRefusals } from "./floor.js";
+export { computeNovelty, tagSalience } from "./salience.js";
+export { preselectSchemas, renderSchemaContext } from "./preselect.js";
+export { assertNoBypassOption, gateProposal } from "./battery.js";
+export { encodeChunk, mentionsSchema } from "./chunk.js";

@@ -178,7 +178,7 @@ export function stoodDownNote(scope: SidebarScope, to: 'pause' | 'resume' | 'off
 /**
  * Whether an engine error is the auto-mode classifier declining a pane press (a press is not a request from the
  * person). Not the bare word "refused": the memory server's own errors use it (`scopeOf`'s fallback is
- * "refused", a search's "the search was refused"), and those are not auto mode's.
+ * "refused"), and those are not auto mode's.
  */
 export function isRefusal(err: unknown): boolean {
   return /classifier|auto mode/i.test(err instanceof Error ? err.message : String(err))
