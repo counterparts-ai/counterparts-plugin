@@ -66,14 +66,15 @@ export interface UpgradeCensus {
  * The lived day a memory would reach the prune floor with no further use, or
  * null when it never will (identity, protected, a held date). On the shipped
  * curve (`physics#daysUntilBelow`; power-law since 2026-10-10 — it was the
- * exponential's closed form until then), and never before its dwell.
+ * exponential's closed form until then), and `D_FLOOR_DAYS` after it went
+ * under the floor (2026-10-14: the wait runs from the floor, not the anchor).
  */
 export function projectedPruneDay(m: MemoryPhysics): number | null {
   if (m.promotedIdentity || m.protected) return null;
   const anchor = decayAnchor(m);
   const t = daysUntilBelow(m, PHYSICS.PHI_PRUNE);
   if (t === null) return null;
-  return Math.max(anchor + t, anchor + PHYSICS.D_FLOOR_DAYS);
+  return anchor + t + PHYSICS.D_FLOOR_DAYS;
 }
 
 /**

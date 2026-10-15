@@ -291,7 +291,7 @@ export function factLines(m) {
     if (m.occurredOn && m.learned && m.learned !== m.occurredOn) said.push("learned " + dateOr(m.learned));
   }
   const parts = said.map(esc);
-  if (m.faded) parts.push(esc("faded: not used for a long while"));
+  if (m.faded) parts.push(esc("faded: weak, below reach"));
   if (!m.current) {
     parts.push(/^(mem|epi|sch)_/.test(m.now || "") ? "an earlier version — now " + withIdMarks(m.now) : "an earlier version — a later one holds now");
   }
@@ -426,7 +426,7 @@ export function meaningRows(r) {
     p.feelings.length > 0 ? "feelings: " + p.feelings.map((x) => x.label + " (" + x.entries + " of " + x.of + ")").join(", ") : "",
   ].filter(Boolean);
   return r.arc.map((l) => (l.fold ? foldRow(l, r.page) : arcRow(l.entry, r.whose))).join("") +
-    part("Faded", plural(r.counts.faded, "moment") + " not used for a long while", r.faded.map((m) => plain(m)).join("")) +
+    part("Faded", plural(r.counts.faded, "moment") + " weak, below reach", r.faded.map((m) => plain(m)).join("")) +
     part("What I made of it before", "dreams and reflections", r.readings.map((g) => plain(g, g.by === "dreamed" ? "from a dream" : "from a reflection")).join("")) +
     part("Still open", "", r.open.map((o) => plain(o, o.why === "dated" ? "a date still ahead" : "not settled yet")).join("")) +
     part("Recurring", "across the entries of the arc", recurring.map((x) => '<div class="mfold">' + esc(x) + "</div>").join(""));

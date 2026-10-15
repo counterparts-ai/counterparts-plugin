@@ -220,6 +220,10 @@ export interface WiredMcp {
   readonly scope: "user" | "local";
   readonly command: string;
   readonly live: boolean;
+  /** The program it names, and the script a runtime is given (null when it
+   *  names none), so a reader can tell WHOSE it is (`wire.ts#leftWhy`). */
+  readonly exe?: string;
+  readonly script?: string | null;
 }
 
 export interface NpmWiring {
@@ -243,10 +247,20 @@ function readObject(path: string): Record<string, unknown> | null {
   }
 }
 
+/** A leading `~/` or `$HOME/` (`${HOME}/`) as the host's shell would expand
+ *  it, from `env`'s HOME; anything else as it is. */
+export function expandHome(path: string, env: Record<string, string | undefined>): string {
+  const home = (env["HOME"] ?? "").trim();
+  if (home.length === 0) return path;
+  const m = /^(~|\$HOME|\$\{HOME\})(?=[/\\])/.exec(path);
+  return m === null ? path : `${home}${path.slice(m[0].length)}`;
+}
+
 /**
  * Would this hook command actually run? The shim must be on PATH (or at the
  * absolute path named), and so must the single binary; a runtime given our
- * hook entry needs both the runtime and the entry on disk. `env` is the hook
+ * hook entry needs both the runtime and the entry on disk. A leading `~/` or
+ * `$HOME/` is expanded first: the host runs the line through a shell. `env` is the hook
  * process's own, which is the host's — the PATH that counts is the one the
  * host will run the command with. Read by `readOurHook`, so a flag this build
  * has never heard of does not make a live entry read as dead (a dead one is
@@ -255,8 +269,9 @@ function readObject(path: string): Record<string, unknown> | null {
 export function hookCommandLive(command: string, env: Record<string, string | undefined>): boolean {
   const ours = readOurHook(command);
   if (ours === null) return false;
-  if (ours.shape !== "script") return runtimePresent(ours.exe, env);
-  return runtimePresent(ours.exe, env) && existsSync(ours.script);
+  const exe = expandHome(ours.exe, env);
+  if (ours.shape !== "script") return runtimePresent(exe, env);
+  return runtimePresent(exe, env) && existsSync(expandHome(ours.script, env));
 }
 
 /** Every hook entry of ours in one settings object, by event. */
@@ -302,7 +317,7 @@ function mcpEntry(
     command.length > 0 &&
     runtimePresent(command, env) &&
     (run === null ? true : existsSync(isAbsolute(run.script) ? run.script : resolve(run.script)));
-  return [{ file, scope, command: [command, ...args].join(" "), live }];
+  return [{ file, scope, command: [command, ...args].join(" "), live, exe: command, script: run?.script ?? null }];
 }
 
 /** The Counterparts plugin as Claude Code records it, for `doctor`. */

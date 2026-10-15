@@ -131,6 +131,7 @@ export const LANES = {
   "mcp.result.spilled": "flow",
   "prospective.fire.refused": "flow",
   "recall.decision": "flow",
+  "recall.rated": "flow",
   "remember.prune": "flow",
   "coverage.owed": "flow",
   "coverage.written": "flow",

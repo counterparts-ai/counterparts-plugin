@@ -478,8 +478,19 @@ export const TUNABLES = {
    *  is no measurement to inherit (open question 5). */
   PHI_PRUNE: 0.02,
   /**
-   * Lived days of dwell (since the last use, return or replay — `decayAnchor`)
-   * before a memory under `PHI_PRUNE` may be archived. 90 until 2026-10-10,
+   * Lived days a memory must spend UNDER `PHI_PRUNE` before it may be
+   * archived (2026-10-14): counted from the day it went under the floor
+   * (`floorDay`), or from the day this build's curve first read the store
+   * when that is later (`pruneVerdict`'s `curveSince`) — not from the last
+   * use. Until 2026-10-14 the count ran from the anchor (the last use, return
+   * or replay — `decayAnchor`), so a long-unused memory left the night it
+   * crossed the floor, with no wait at all.
+   * Decided by Mike, 2026-10-14, lightly held; review 2026-10-18.
+   * Why: "a memory exits after 14 lived days under the floor" was the rule
+   * meant; a curve change (the era's scale-down) must not empty the store
+   * the same night.
+   *
+   * 90 until 2026-10-10,
    * which made the first possible exit lived day 91 on every store (review 03
    * §3). Exit is ARCHIVAL, never deletion: an archived row keeps its words and
    * stays readable by id (`sleep/prune.ts`; synthesis §8 A).
@@ -650,10 +661,32 @@ export function sal(s: Salience): number {
  * Extended by Mike, 2026-10-11, lightly held: an old DEFAULT reads at today's
  * default for what it is about, up or down, so an upgrader reads what a fresh
  * install writes.
+ *
+ * WHERE THE ERA LOWERS A CLAIM, IT IS THE WHOLE SALIENCE (2026-10-14): the
+ * curve reads `eraClaim` alone, not `max(mean of the dimensions, eraClaim)`.
+ * Memories written before Group 1 carry author-scored relevance and
+ * predictive (mean ~0.29 / ~0.21 on the live store; ~0.02 since), written
+ * under the same old field text as their claims, and that mean held 103 of
+ * 485 lowered memories exactly where they were (median 0.395 against the
+ * 0.25 meant). A fresh install's memory reads its claim, which is what the
+ * era says an upgrader should read. Where the era RAISES a default, the
+ * dimensions still count (`sal` with the era's claim), as before. The exempt
+ * (`eraExempt`: the core, protected, the owner's, a pending or repeating date)
+ * carry an era only for an old default, and read it as before too.
+ * Decided by Mike, 2026-10-14, lightly held; review 2026-10-18.
  */
-export function curveSal(m: { readonly salience: Salience; readonly eraClaim?: number | null | undefined }): number {
+export function curveSal(m: {
+  readonly salience: Salience;
+  readonly eraClaim?: number | null | undefined;
+  readonly eraExempt?: boolean | undefined;
+}): number {
   const era = m.eraClaim;
-  return typeof era === "number" && Number.isFinite(era) ? sal({ ...m.salience, claimed: era }) : sal(m.salience);
+  if (typeof era !== "number" || !Number.isFinite(era)) return sal(m.salience);
+  // A SCALE-DOWN IS THE WHOLE READING (2026-10-14): the era's value alone, so
+  // the old dimensions' mean cannot floor it back up — except on the era's
+  // exempt (a default on the core, a protected row…), read as before.
+  if (era < (m.salience.claimed ?? 0) && m.eraExempt !== true) return clamp01(era);
+  return sal({ ...m.salience, claimed: era });
 }
 
 /** The mean of the stored dimensions alone, ignoring any claimed floor. */
@@ -877,7 +910,7 @@ export function emotionalIntensity(m: { salience: Salience; feelingPeak?: number
  * The repetition arm gets no lift at all, so "repetition is capped below
  * identity" (§3) is untouched.
  */
-export function salArm(m: Pick<MemoryPhysics, "salience" | "feelingPeak"> & Partial<Pick<MemoryPhysics, "eraClaim">>): number {
+export function salArm(m: Pick<MemoryPhysics, "salience" | "feelingPeak"> & Partial<Pick<MemoryPhysics, "eraClaim" | "eraExempt">>): number {
   const own = curveSal(m);
   const lifted = clamp01(own + TUNABLES.EMO_LIFT * emotionalIntensity(m));
   // Feeling sets stability, not the band (2026-10-10, `FELT_HEIGHT_CAP`): below
@@ -909,7 +942,7 @@ export function feelingSofteningDays(valence?: number): number {
  * (`sal`, the claimed floor included) plus half its emotional intensity,
  * clamped to [0, 1]. Height is `base` (with `EMO_LIFT`); this is the slope.
  */
-export function steepnessInput(m: Pick<MemoryPhysics, "salience" | "feelingPeak"> & Partial<Pick<MemoryPhysics, "eraClaim">>): number {
+export function steepnessInput(m: Pick<MemoryPhysics, "salience" | "feelingPeak"> & Partial<Pick<MemoryPhysics, "eraClaim" | "eraExempt">>): number {
   return clamp01(curveSal(m) + TUNABLES.EMO_Q * emotionalIntensity(m));
 }
 
@@ -934,7 +967,7 @@ export function steepnessInput(m: Pick<MemoryPhysics, "salience" | "feelingPeak"
  */
 export function stability(
   m: Pick<MemoryPhysics, "kind" | "uses" | "salience"> &
-    Partial<Pick<MemoryPhysics, "feelingPeak" | "returns" | "promotedIdentity" | "eraClaim">>,
+    Partial<Pick<MemoryPhysics, "feelingPeak" | "returns" | "promotedIdentity" | "eraClaim" | "eraExempt">>,
 ): number {
   const kappa = kindPhysics(m.kind).kappa;
   if (m.promotedIdentity === true || !(kappa > 0)) return Number.POSITIVE_INFINITY;
@@ -980,7 +1013,8 @@ export function decayCurve(
  * reflection that cited it, a dream that replayed it — now re-anchors it too,
  * which is how a replay "revives" a memory below reach without being a use
  * (no `uses`, no rep arm, no credit-today latch: `creditUse` still reads
- * `lastUsedDay` alone). The prune's dwell counts from the same day.
+ * `lastUsedDay` alone). The curve counts from it, so the day a memory goes
+ * under the prune's floor (`floorDay`) does too.
  * Decided by g1a-builder, 2026-10-10, lightly held; revisit after ~5 lived
  * days. Why: the synthesis says a dream replay revives; a return's ×(1 +
  * ln 1.4) on S alone lifts a faded default note by ~0.01 — not back in reach.
@@ -1066,6 +1100,22 @@ export function daysUntilBelow(m: MemoryPhysics, theta: number, shape: DecayShap
   return null;
 }
 
+/**
+ * THE LIVED DAY THIS MEMORY WENT UNDER THE PRUNE'S FLOOR (2026-10-14): its
+ * anchor plus `daysUntilBelow(PHI_PRUNE)` — read off the curve, never
+ * stored, so a replayed day reads the same. A day after `d` when it is still
+ * above; `null` when it never gets there (the core, a held date above the
+ * floor). It reads the curve AS IT IS NOW: a memory whose inputs were lowered
+ * (a `changed` fade, a smaller claim) reads as if it had always been on the
+ * lower curve, so its day can land in the past. A whole new curve (a build
+ * whose constants or era reading differ) is the prune's `curveSince` instead.
+ * Decided by Mike, 2026-10-14, lightly held; review 2026-10-18.
+ */
+export function floorDay(m: MemoryPhysics, shape: DecayShape = TUNABLES.DECAY_SHAPE): number | null {
+  const t = daysUntilBelow(m, TUNABLES.PHI_PRUNE, shape);
+  return t === null ? null : decayAnchor(m) + t;
+}
+
 /** `next_change_day`'s "nothing will change": a lived day no store reaches. */
 export const NEVER_CHANGES = 1_000_000_000;
 
@@ -1081,7 +1131,7 @@ export const NEVER_CHANGES = 1_000_000_000;
  *     looks at it, finds no hold, and gives it its normal day below;
  *   - otherwise the first day it falls under the next of `THETA_SEM`, `REACH`
  *     and `PHI_PRUNE` below where it stands, or — once under the floor — the
- *     day its dwell reaches `D_FLOOR_DAYS`.
+ *     day it has been under the floor `D_FLOOR_DAYS` (2026-10-14).
  *
  * Every input change (a use, a return, a feeling, a fade) is the WRITER's to
  * signal by clearing the stored day (store v13's trigger does it for all of
@@ -1098,10 +1148,12 @@ export function nextChangeDay(m: MemoryPhysics, d: number, shape: DecayShape = T
     const t = daysUntilBelow(m, theta, shape);
     if (t !== null) candidates.push(anchor + t);
   }
-  // The prune's eligibility turns when BOTH halves hold: under the floor, and
-  // dwelt `D_FLOOR_DAYS` since the anchor — the later of the two days.
-  const floor = now < TUNABLES.PHI_PRUNE ? 0 : daysUntilBelow(m, TUNABLES.PHI_PRUNE, shape);
-  if (floor !== null) candidates.push(anchor + Math.max(floor, TUNABLES.D_FLOOR_DAYS));
+  // The prune's eligibility turns `D_FLOOR_DAYS` after the day it went under
+  // the floor (2026-10-14: the wait runs from the floor, not the anchor). A
+  // curve change can push it later (`pruneVerdict`'s `curveSince`), never
+  // earlier, so this day is looked at no later than the turn.
+  const floor = daysUntilBelow(m, TUNABLES.PHI_PRUNE, shape);
+  if (floor !== null) candidates.push(anchor + floor + TUNABLES.D_FLOOR_DAYS);
   const next = candidates.filter((x) => x > d).sort((a, b) => a - b)[0];
   return next === undefined ? NEVER_CHANGES : next;
 }
@@ -1136,8 +1188,9 @@ export interface FadeOutcome {
  * ONE STRENGTH CUT FOR A MEMORY SETTLED AS `changed` (2026-09-29; reworked
  * after the review of #284): the memory's `fade` multiplier is multiplied by
  * `factor`, so its strength today — and on every later day — is `factor` x
- * what it would have been. Nothing else moves: not `lastUsedDay` (the prune's
- * dwell still counts from the real last use, and the history stays true), not
+ * what it would have been. Nothing else moves: not `lastUsedDay` (the curve
+ * still counts from the real last use, and the history stays true; the day it
+ * went under the prune's floor is read off the cut curve — `floorDay`), not
  * `base`, not the uses. Ordinary decay carries on; a use resets decay as always
  * and leaves the fade alone, so a used "earlier" memory is held at the cut
  * height. Two settles multiply; an undo divides its own factor back out, in
@@ -2173,7 +2226,14 @@ export interface PruneVerdict {
   blockedBy: PruneReason[];
   strength: number;
   band: Band;
+  /** Lived days since the curve's anchor (the last use, return or replay). Not the prune's wait — see `belowFloorDays`. */
   dwellDays: number;
+  /**
+   * Lived days under the floor as the prune counts them (2026-10-14): `d`
+   * less the later of `floorDay` and the ctx's `curveSince`; 0 while it is
+   * still above. The `dwell-too-short` gate reads this.
+   */
+  belowFloorDays: number;
   record: PruneRecord | null;
 }
 
@@ -2200,17 +2260,30 @@ export interface PruneVerdict {
 export function pruneVerdict(
   m: MemoryPhysics,
   d: number,
-  ctx: { inLiveRevisionChain: boolean; recurring?: boolean },
+  ctx: { inLiveRevisionChain: boolean; recurring?: boolean; curveSince?: number | null },
   shape: DecayShape = TUNABLES.DECAY_SHAPE,
 ): PruneVerdict {
   const s = strength(m, d, shape);
   const b = band(m, d, shape);
-  // Dwell from the curve's own anchor (2026-10-10): a dream replay or a
-  // reflection that revived a memory restarts its dwell as a use does.
   const dwellDays = d - decayAnchor(m);
+  // THE WAIT UNDER THE FLOOR (2026-10-14; decided by Mike, lightly held,
+  // review 2026-10-18). Counted from the day the curve went under the floor
+  // (`floorDay`; a use, return or replay moves the anchor and so that day),
+  // and never from before `ctx.curveSince` — the lived day this build's curve
+  // first read the store (`sleep/decay.ts#curveSinceDay`). Without that, a
+  // new curve that lowers a memory reads it as under the floor for weeks
+  // already, and the night it arrives would let go of all of them at once.
+  // Absent: no curve change to wait out.
+  const under = floorDay(m, shape);
+  const since = typeof ctx.curveSince === "number" && Number.isFinite(ctx.curveSince) ? ctx.curveSince : Number.NEGATIVE_INFINITY;
+  const belowFloorDays = under === null || under > d ? 0 : d - Math.max(under, since);
   const blockedBy: PruneReason[] = [];
+  // The wait is named only for a memory under the floor (2026-10-14): one
+  // above it has not started waiting, and `above-floor` already says so. So
+  // the night's `blocked:dwell-too-short` counts exactly the memories waiting
+  // out their 14 days, not every young one.
   if (s >= TUNABLES.PHI_PRUNE) blockedBy.push("above-floor");
-  if (dwellDays < TUNABLES.D_FLOOR_DAYS) blockedBy.push("dwell-too-short");
+  else if (belowFloorDays < TUNABLES.D_FLOOR_DAYS) blockedBy.push("dwell-too-short");
   if (b !== "episodic") blockedBy.push("band-not-episodic");
   // The three floor conditions above are arithmetic ("not yet"); the rest are
   // named rules.
@@ -2241,6 +2314,7 @@ export function pruneVerdict(
     strength: s,
     band: b,
     dwellDays,
+    belowFloorDays,
     record: prune
       ? {
           event: "memory.pruned",

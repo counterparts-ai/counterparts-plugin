@@ -84,7 +84,7 @@
  *      corrected (was wrong): "gym on Tuesdays" (learned 09-10), corrected 09-11 · mem_…
  *      <the body whole when short, else a 300-character excerpt>
  *
- *   2. Old gym schedule · mem_… · words · faded: not used for a long while
+ *   2. Old gym schedule · mem_… · words · faded: weak, below reach
  *      …its lines and body, as for any result
  *
  * The header counts DISTINCT facts (folded versions are not counted apart).
@@ -1083,7 +1083,7 @@ function itemLines(m: FactItem, i: number, today: string, excerptChars: number, 
   const out: string[] = [];
   const mark = m.journal ? "[journal] " : "";
   const ch = m.chapter === undefined ? "" : ` (chapter ${String(m.chapter.n)} of ${String(m.chapter.of)})`;
-  out.push(`${String(i)}. ${mark}${m.line} · ${m.id}${ch} · ${m.ways.join(", ")}${m.faded ? " · faded: not used for a long while" : ""}`);
+  out.push(`${String(i)}. ${mark}${m.line} · ${m.id}${ch} · ${m.ways.join(", ")}${m.faded ? " · faded: weak, below reach" : ""}`);
   if (m.journal) {
     out.push(`   my journal · written ${shortDate(m.learned, today)}${m.lastWritten === undefined || m.lastWritten === null ? "" : `..${shortDate(m.lastWritten, today)}`}${m.where === null ? "" : ` in ${m.where}`}${m.who === null ? "" : ` · ${m.who}`}`);
   } else {

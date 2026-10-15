@@ -16,10 +16,12 @@ import {
   readWriteFacts,
   MEMORY_KINDS,
   reminderEcho,
+  titleEcho,
   undatedReminderWarning,
   factsEcho,
   threadOf,
 } from "./server-args.js";
+import { TITLE_ASKED_NOTE } from "./server-words.js";
 import type { FeelingsRead, ReminderRead, AboutRead, TraitsRead, FactsRead } from "./server-args.js";
 import type { McpServer } from "./server.js";
 
@@ -50,7 +52,12 @@ export async function sessionEndTool(server: McpServer, args: Record<string, unk
   // reads. It is credited whatever the rest of the call does, and its
   // outcome rides out on every answer below.
   const drewOn = server["drewOnField"](args["drewOn"], "session_end");
-  if (typeof args["writeUp"] === "string" && args["writeUp"].length > 0) return server["writeUpField"](args, drewOn);
+  // `rated` (2026-10-14, tracking only) is read in the same place and for the
+  // same reasons, after `drewOn` so each rating can say whether its id was
+  // drawn on. It changes nothing but its own row, and rides out beside it.
+  const rated = server["ratedField"](args["rated"], drewOn);
+  const extra: Record<string, unknown> = { ...(drewOn === null ? {} : { drewOn }), ...(rated === null ? {} : { rated }) };
+  if (typeof args["writeUp"] === "string" && args["writeUp"].length > 0) return server["writeUpField"](args, extra);
 
   // THE HANDOFF FIRST, and before the memories check on purpose (E1). It is a
   // FIELD on this call and not one of the entries, so a dump whose `memories`
@@ -162,7 +169,7 @@ export async function sessionEndTool(server: McpServer, args: Record<string, unk
         recorded: marked,
         ...(handoff === null ? {} : { handoff }),
         ...(retired === null ? {} : { retired }),
-        ...(drewOn === null ? {} : { drewOn }),
+        ...extra,
       },
       handoffFailed,
     );
@@ -171,7 +178,7 @@ export async function sessionEndTool(server: McpServer, args: Record<string, unk
     return server["refuse"]("session_end", "memories-required", {
       ...(handoff === null ? {} : { handoff }),
       ...(retired === null ? {} : { retired }),
-      ...(drewOn === null ? {} : { drewOn }),
+      ...extra,
     });
   }
   const { outcomes, deposited, entries } = await server["depositEntries"](raw, session);
@@ -192,7 +199,7 @@ export async function sessionEndTool(server: McpServer, args: Record<string, unk
       ...(outcomes.some((o) => o["neighbours"] !== undefined) ? { neighboursHint: NEIGHBOURS_HINT } : {}),
       ...(handoff === null ? {} : { handoff }),
       ...(retired === null ? {} : { retired }),
-      ...(drewOn === null ? {} : { drewOn }),
+      ...extra,
     },
     deposited === 0,
   );
@@ -335,12 +342,14 @@ export async function depositEntries(
       ...server["recordAbout"](result, about.mark),
       ...server["recordTraits"](result, traits.inputs, model),
       ...reminderEcho(result, dated, server["today"]()),
+      ...titleEcho(result, TITLE_ASKED_NOTE),
       ...undatedReminderWarning(result, dated, draft["title"], draft["content"]),
       ...factsEcho(result, facts),
       ...server["settledOf"](result, draft["how"] !== undefined),
       ...threadOf(result),
       ...(neighbours.length === 0 ? {} : { neighbours }),
       ...server["slotOf"](result),
+      ...server["stillDatedNear"](result, dated, facts.sent.status, batch, session),
     });
   }
   return { outcomes, deposited, duplicates, entries };
@@ -351,7 +360,7 @@ export async function depositEntries(
  * decisions are `write-up.ts#writeUpDoor`'s; this only binds it to this
  * server's store, scope, registry and bound session, and renders the answer.
  */
-export async function writeUpField(server: McpServer, args: Record<string, unknown>, drewOn: Record<string, unknown> | null): Promise<ToolResult> {
+export async function writeUpField(server: McpServer, args: Record<string, unknown>, extra: Record<string, unknown>): Promise<ToolResult> {
   const session = server.session as string;
   const out = await writeUpDoor({
     counterpart: server.counterpart,
@@ -381,7 +390,8 @@ export async function writeUpField(server: McpServer, args: Record<string, unkno
   if (out.isError && body["stored"] === false && out.reason !== "nothing-landed") {
     server["emit"]("mcp.refused", undefined, { tool: "session_end", reason: out.reason });
   }
-  return server["result"](drewOn === null ? body : { ...body, drewOn }, out.isError);
+  // `drewOn` and `rated`, when sent, ride out beside the write-up's answer.
+  return server["result"](Object.keys(extra).length === 0 ? body : { ...body, ...extra }, out.isError);
 }
 
 /**
@@ -456,6 +466,59 @@ export function drewOnField(server: McpServer, raw: unknown, via: "session_end" 
       ? {}
       : { actedOn: out.actedOn, actedOnNote: "Dated memories you acted on: they will not come back as footnotes around this date again." }),
   };
+}
+
+/**
+ * THE `rated` FIELD on `session_end` (2026-10-14; Mike's call, TRACKING ONLY,
+ * lightly held): the session scores the memories it was shown, 0–3. Every
+ * rule is `Counterpart#rateShown`'s and `core/recall/rated.ts`'s; this binds
+ * the session and supplies what only this server knows — what its tools
+ * handed the session (`seenBySession`: by-address opens, question answers,
+ * a `remember` result's neighbours), which the core files under `opened`
+ * unless an ambient lane or an `asked` record has it first.
+ *
+ * `drewOn` is the same call's `drewOn` outcome: only the ids it CREDITED mark
+ * a rating as drawn on (review of #492) — a refused id, a capped one or a
+ * malformed field marks nothing. The core adds what was credited as drawn on
+ * at this boundary by `chapter`.
+ *
+ * Null when the field was not sent or sent empty. A value that is not a list
+ * rates nothing and says so; a refused rating never fails its siblings or the
+ * call. Nothing here changes strength, ranking or credit.
+ */
+export function ratedField(server: McpServer, raw: unknown, drewOnOutcome: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) {
+    return { rated: 0, reason: "rated-malformed", detail: "rated is a list of {id, score} objects, score an integer 0 to 3." };
+  }
+  if (raw.length === 0) return null;
+  // A DESKTOP CALL THAT NAMED NO SESSION rates nothing, as it credits nothing
+  // through `drewOn`: the shown set it would read may be another chat's.
+  if (server["callBoundBy"] === "most-recent") {
+    return { rated: 0, reason: "session-unnamed", detail: "Name your session to rate what you were shown: session: <the id wake gave this chat>." };
+  }
+  const session = server.session as string;
+  try {
+    const seen = server["seenBySession"];
+    const opened = new Set<string>([...(seen.get(server["seenKey"]()) ?? []), ...(seen.get(session) ?? [])]);
+    const credited = drewOnOutcome?.["credited"];
+    const drewOn = Array.isArray(credited) ? credited.filter((x): x is string => typeof x === "string") : [];
+    const out = server.counterpart.rateShown(session, raw, { opened, drewOn, at: server["today"]() });
+    return {
+      rated: out.rated.length,
+      ...(out.refused.length === 0
+        ? {}
+        : { refused: out.refused.map((r) => (r.id.length === 0 ? { index: r.index, reason: r.reason } : { id: r.id, reason: r.reason })) }),
+      ...(out.replaced.length === 0 ? {} : { replaced: out.replaced, replacedNote: "Rated twice in this call: the last score counts." }),
+      // Footnotes only: a loud line shows no id, so it is not asked for (review of #492).
+      coverage: `${String(out.coverage.rated)} of ${String(out.coverage.shown)} footnotes shown since you last rated`,
+      ...(out.drewOnUnrated.length === 0 ? {} : { drewOnUnrated: out.drewOnUnrated }),
+      // A call whose every entry was refused writes no row, so its silence is not a lost write.
+      ...(out.recorded || out.rated.length === 0 ? {} : { recorded: false }),
+    };
+  } catch (err) {
+    return { rated: 0, reason: "threw", detail: String((err as Error).message ?? err) };
+  }
 }
 
 /**

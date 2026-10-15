@@ -227,6 +227,12 @@ export interface MemoryPhysics {
    * null: the curve reads the stored claim.
    */
   eraClaim?: number | null;
+  /**
+   * The row is one of the era's exempt (2026-10-14; `store/operational.ts#eraExemptRow`):
+   * an `eraClaim` on it (a default's) is floored by its dimensions as before
+   * (`physics#curveSal`), never read alone. Computed at the read seam, never stored.
+   */
+  eraExempt?: boolean;
   /** Set only by the explicit promotion crossing or revision inheritance (§5.3). */
   promotedIdentity: boolean;
   protected: boolean;

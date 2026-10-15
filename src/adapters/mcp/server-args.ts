@@ -206,6 +206,13 @@ function dateNote(eventDate: string, today: string, recurring: Recurrence | null
 /** The reminder half of a deposit's answer: what was RECORDED — after a
  *  revision's carry-over, not merely what was sent — or why `remind` had
  *  nothing to shape. Nothing when neither field was sent or nothing minted. */
+/** What a revision did with its title (2026-10-14, `counterpart-deposit.ts#carryTitle`). */
+export function titleEcho(deposit: DepositResult, askedNote: string): Record<string, unknown> {
+  if (!deposit.deposited) return {};
+  if (deposit.titleAsked === true) return { titleAsked: askedNote };
+  return deposit.titleCarried === undefined ? {} : { titleCarried: { title: deposit.titleCarried.title, from: deposit.titleCarried.from } };
+}
+
 export function reminderEcho(deposit: DepositResult, dated: ReminderRead, today: string): Record<string, unknown> {
   if ("refused" in dated || !deposit.deposited) return {};
   const carried = deposit.reminder;
@@ -217,7 +224,12 @@ export function reminderEcho(deposit: DepositResult, dated: ReminderRead, today:
           cleared: true,
           from: carried.from,
           ...unmoved,
-          note: "The date is dropped: neither this memory nor the one it revises will come back as a reminder.",
+          // The rest of its chain, closed with it (2026-10-14).
+          ...(carried.alsoClosed === undefined ? {} : { alsoClosed: [...carried.alsoClosed] }),
+          note:
+            carried.alsoClosed === undefined
+              ? "The date is dropped: neither this memory nor the one it revises will come back as a reminder."
+              : "The date is dropped: neither this memory nor the one it revises will come back as a reminder, nor the earlier memories of the same reminder in `alsoClosed`.",
         },
       };
     }

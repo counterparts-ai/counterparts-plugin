@@ -575,9 +575,13 @@ const SETTLE_SERVED: readonly Privilege[] = SETTLE_PRIVILEGES.slice(2);
  * days. Why: f8 asked for attention, not category, and these are 01's anchors
  * with f8's three lines (struck or engaged ≥ 0.4, skimmed not, routine
  * 0.1–0.2) folded in; "they", not a name (01 D5).
+ * 2026-10-14 (Group 1 check-in, lightly held): of 494 new work memories only 40
+ * claimed ≤ 0.25 (median 0.40, ~9 lived days in reach), so routine work and
+ * ordinary work facts are now told to stay UNSET unless they changed something.
+ * The default floors in code are unchanged.
  */
 const SALIENCE_TEXT =
-  "Optional, 0-1: how much this caught your attention, as you felt it — not what category it is. About 0.2 a routine work event or status change (merged, cut, deployed); 0.3 an ordinary fact or step, or a reading you only skimmed; 0.4 or more a line that struck you or a reading you engaged with; 0.5 a lesson or decision that changes how you'll work; 0.7 something they told you about their life, a line or moment that moved you; 0.9 rare. Their rulings, preferences and corrections stay high even about work. A floor: unset, a default by what it is about applies.";
+  "Optional, 0-1: how much this caught your attention, as you felt it — not what category it is. Leave it UNSET for a routine work event (merged, cut, deployed) or an ordinary work fact or step unless it changed something: the default applies and fading chooses what stays. 0.3 a reading you only skimmed; 0.4 or more only for what struck you — a line, a reading you engaged with — or changed how you'll work (0.5 a lesson or decision); 0.7 something they told you about their life, a line or moment that moved you; 0.9 rare. Their rulings, preferences and corrections stay high even about work. A floor: unset, a default by what it is about applies.";
 
 /** `relevance`, redefined (01 C3, 2026-10-10): it used to read "how much this
  *  bears on what is being worked on" — a work bias in one of the averaged
@@ -865,6 +869,7 @@ const RECALL: ToolSpec = {
         description:
           "What you are trying to remember, in words. Needs mode. A time in it (\"last week\", \"in September\", \"around the cut-over\", \"where did we leave off\") filters a facts answer to that window.",
       },
+      query: { type: "string", description: "Another name for question." },
       mode: {
         type: "string",
         enum: ["facts", "meaning"],
@@ -941,9 +946,10 @@ const STATUS: ToolSpec = {
 /**
  * `drewOn` on `session_end` and `chapter` (2026-10-11): the session says which
  * memories it was shown that shaped what it did or said, and each earns the
- * engaged tier (`Counterpart#creditDrewOn`). The field text is the only prompt
- * for it — the Stop ask says nothing (its 480-character pin). Built by the
- * drewOn builder, 2026-10-11, from Mike's 10-10 direction, lightly held.
+ * engaged tier (`Counterpart#creditDrewOn`). The field text is the main prompt
+ * for it; since 2026-10-14 the Stop ask names it only to say its ids are rated
+ * too (`rated`). Built by the drewOn builder, 2026-10-11, from Mike's 10-10
+ * direction, lightly held.
  */
 const DREW_ON_PROPERTY = {
   type: "array",
@@ -957,6 +963,33 @@ const DREW_ON_PRIVILEGE = {
   claim:
     "`drewOn` credits only memories this session was shown — its footnotes, loud memories and recall answers — at half a use, at most 3 per boundary and once a day each. An id it was not shown, a handoff, a superseded memory or one faded under a newer one is refused by name, and nothing is credited for it. A dated memory it names stops coming back as a footnote for that date.",
   mechanizedBy: "src/core/counterpart.ts#creditDrewOn -> src/core/prospective/index.ts#Prospective.actedOn",
+};
+
+/**
+ * `rated` on `session_end` (2026-10-14; Mike's call, TRACKING ONLY, lightly
+ * held): the session scores what it was shown, 0–3, so every footnote gets a
+ * feedback signal. The anchors are `core/recall/rated.ts#RATING_ANCHORS`,
+ * said here in the model's own voice. Nothing reads the rows to act yet.
+ */
+const RATED_PROPERTY = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "A memory id this session was shown." },
+      score: { type: "integer", minimum: 0, maximum: 3, description: "0 = noise (unrelated), 1 = on topic but I didn't need it, 2 = useful background, 3 = changed what I did or said." },
+    },
+    required: ["id", "score"],
+  },
+  description:
+    "Optional: rate each footnote shown to you since you last wrote — and recall answers or ones you opened by id, if you like — and every id you name in `drewOn` (expected a 2 or 3). score: 0 = noise (unrelated), 1 = on topic but I didn't need it, 2 = useful background, 3 = changed what I did or said. Tracking only: a rating changes nothing about the memory. An id this session was not shown is refused; rated twice, the last score counts.",
+} as const;
+
+/** The claim `session_end` makes about `rated`. */
+const RATED_PRIVILEGE = {
+  claim:
+    "`rated` is recorded and changes nothing: no strength, ranking, credit or fading. Only a memory this session was shown — a footnote, a loud memory, a recall answer, one it opened — can be rated; any other id, a score that is not an integer 0 to 3, or an entry with no id is refused by name, and its siblings still count. A call whose every rating is refused records nothing.",
+  mechanizedBy: "src/core/counterpart.ts#rateShown -> src/core/recall/rated.ts#readRatings (one recall.rated row)",
 };
 
 const SESSION_END: ToolSpec = {
@@ -1065,6 +1098,7 @@ const SESSION_END: ToolSpec = {
     },
     ...SETTLE_ENGINE,
     DREW_ON_PRIVILEGE,
+    RATED_PRIVILEGE,
   ],
   inputSchema: {
     type: "object",
@@ -1100,6 +1134,7 @@ const SESSION_END: ToolSpec = {
         description: "Catch-up only, with `writeUp` and `memories: []`: one line on why nothing in the part is worth keeping.",
       },
       drewOn: DREW_ON_PROPERTY,
+      rated: RATED_PROPERTY,
       memories: {
         type: "array",
         description:

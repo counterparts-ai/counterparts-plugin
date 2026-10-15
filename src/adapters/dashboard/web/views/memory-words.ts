@@ -10,7 +10,7 @@
 import { wheelEntry } from "../../../../core/feelings-wheel.js";
 import { readChapterLead } from "../../../../core/self/index.js";
 import { recurrenceOfRow } from "../../../../core/store/index.js";
-import type { MemoryRow, ReadOnlyStore } from "../../../../core/store/index.js";
+import type { FeelingRow, MemoryRow, ReadOnlyStore } from "../../../../core/store/index.js";
 import { readableRecurrence } from "../../../../core/time.js";
 
 /** Where the date shown beside a row came from. */
@@ -168,10 +168,15 @@ export function feelingsShown(store: ReadOnlyStore, id: string): FeelingShown[] 
   } catch {
     return [];
   }
-  return rows.map((f) => ({
+  return rows.map(shownFeeling);
+}
+
+/** One feeling row in words — for a caller that already read the rows (`store.feelingsOn`). */
+export function shownFeeling(f: FeelingRow): FeelingShown {
+  return {
     core: f.core,
     word: f.emotion === "other" ? (f.other_word ?? "other") : (wheelEntry(f.emotion)?.word ?? f.emotion),
     whose: f.whose,
     strength: f.strength,
-  }));
+  };
 }

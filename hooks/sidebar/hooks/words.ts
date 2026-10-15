@@ -135,7 +135,7 @@ export function shellQuote(path: string): string {
  */
 export const FOOTER_ITEMS: readonly { label: string; short: string; how: string }[] = [
   { label: '5-minute intro', short: 'Intro', how: '/counterparts:meet' },
-  { label: 'Dashboard', short: 'Dashboard', how: '/counterparts:dashboard' },
+  { label: 'Dashboard', short: 'Dash', how: '/counterparts:dashboard' },
   { label: 'Pause here', short: 'Pause', how: PAUSE_SAY },
   { label: 'Hide this', short: 'Hide', how: '/counterparts quiet' },
 ]

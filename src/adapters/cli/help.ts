@@ -377,6 +377,9 @@ export const COMMAND_DETAIL: Record<string, readonly string[]> = {
   "probe-oq4": [
     "recall CONTRACT §7. The footnote header is the one string the probe varies",
     "(recall/render.ts).",
+    "",
+    "Then the ratings: what sessions scored, 0 to 3, of what they were shown, by",
+    "date and lane, beside drewOn and the hit rate. Tracking only.",
   ],
   mechanisms: [
     "One line per memory mechanism: ● working this week, ◐ built but not firing,",

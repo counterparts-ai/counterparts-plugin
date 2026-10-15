@@ -394,6 +394,8 @@ export const EVENT_NODE = {
   "adapter.injection.overbudget": "wake",
   // Reference resolution: the boundary's credit decision (recall §9.2).
   "recall.credit": "recall",
+  // The session's own scores of what recall showed it (2026-10-14, tracking only).
+  "recall.rated": "recall",
   // The wiring that follows that decision: what the reply used together got
   // linked together, by the worker the boundary spawned. `recall.credit` says
   // which memories; this says what the graph did about it.

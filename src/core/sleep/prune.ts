@@ -36,6 +36,7 @@ import type { MemoryRow, PhaseCtx, PhaseOutcome, PrunedRecord } from "./types.js
 import { countSkip, emptyOutcome, isEntityCard, isJournal, isJournalCopy, isLiveHandoffRow, isSelfPageRow } from "./types.js";
 import type { Phase } from "./types.js";
 import { readCursor, resumeIndex, writeCursor } from "./markers.js";
+import { curveSinceDay } from "./decay.js";
 
 /** This phase's own name, for the cursor it keeps (typed: a rename fails `tsc`). */
 const PRUNE_PHASE: Phase = "prune";
@@ -90,6 +91,9 @@ export function runPrune(ctx: PhaseCtx): PruneResult {
 
   const { store, day } = ctx;
   const denied = new Set(store.deniedIds());
+  // The day a new curve arrived (2026-10-14): the wait under the floor never
+  // starts before it (`decay.ts#curveSinceDay`, `physics#pruneVerdict`).
+  const curveSince = curveSinceDay(store, day);
   const ids = store.list();
   // WHERE THE LAST RUN STOPPED (2026-09-28, build B; the audit's #4). `store.list()`
   // is `ORDER BY id` and ids are random, so without a resume point a budget
@@ -168,6 +172,7 @@ export function runPrune(ctx: PhaseCtx): PruneResult {
       // A reminder date that still repeats (2026-10-09): physics refuses it by
       // name. The meta is the row's, read here because physics cannot see it.
       recurring: recurrenceOfRow(row) !== null,
+      curveSince,
     });
     if (!verdict.prune || verdict.record === null) {
       // EVERY failing gate, not just the first — physics names all six, and a
@@ -210,6 +215,7 @@ export function runPrune(ctx: PhaseCtx): PruneResult {
       strength: verdict.record.strength,
       uses: verdict.record.uses,
       dwellDays: verdict.dwellDays,
+      belowFloorDays: verdict.belowFloorDays,
       day,
     });
     ctx.step("item", { index, id });

@@ -73,6 +73,7 @@ import {
   mkdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -83,7 +84,8 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { DATA_DIR_ENV, isWithin } from "../../core/store/index.js";
 import { CONFIG_ENV, CONFIG_FLAG } from "../config-path.js";
-import { isOurHookCommand } from "../host-wiring.js";
+import { expandHome, hookCommandLive, isOurHookCommand, npmWiring, readOurHook } from "../host-wiring.js";
+import { PACKAGE_ROOT, PLUGIN_DATA_ENV, PLUGIN_ROOT_ENV } from "../plugin.js";
 import { claudeCodeEnvMarker } from "../hosts.js";
 import { parseScriptInvocation, readsHostUserConfig, scriptArgs, shellTokens } from "../runtime.js";
 import { installedBuild, readServerRecords, sameBuild, serverBelieved } from "../sessions.js";
@@ -593,6 +595,10 @@ export interface MergeResult {
    *  wrapper. Left exactly as they are, by event, so the one line that says so
    *  can name them (review m1). */
   readonly wrapped: readonly { readonly event: string; readonly command: string }[];
+  /** Entries of ours an `unwire` left because `spare` said so (the plugin's
+   *  uninstall: a hook that still runs is a live npm install's). Not counted in
+   *  `foreignKept`: they are ours, and say so in their own line. */
+  readonly spared: number;
 }
 
 /**
@@ -629,12 +635,15 @@ function isWrapped(entry: unknown): boolean {
  * same event, a stale path, a duplicate, an event we do not use, a `hooks` key
  * with other tools' events in it.
  *
- * `command` is the string a `wire` installs; `unwire` ignores it.
+ * `command` is the string a `wire` installs; `unwire` ignores it. `spare`, on
+ * `unwire` only, keeps an entry of ours it answers true for (counted in
+ * `spared`).
  */
 export function mergeHooks(
   settings: Record<string, unknown>,
   command: string,
   direction: "wire" | "unwire",
+  spare?: (command: string) => boolean,
 ): MergeResult {
   const next = structuredClone(settings) as Record<string, unknown>;
   const existing = next["hooks"];
@@ -642,6 +651,7 @@ export function mergeHooks(
   const events: EventChange[] = [];
   const wrapped: { event: string; command: string }[] = [];
   let foreignKept = 0;
+  let spared = 0;
   let changed = false;
 
   for (const event of HOST_EVENTS) {
@@ -673,6 +683,11 @@ export function mergeHooks(
           if (isWrapped(entry)) {
             wrapped.push({ event, command: String((entry as Record<string, unknown>)["command"]) });
           }
+          continue;
+        }
+        if (direction === "unwire" && spare !== undefined && spare(String(entry["command"]))) {
+          kept.push(entry);
+          spared += 1;
           continue;
         }
         seen += 1;
@@ -765,7 +780,7 @@ export function mergeHooks(
   } else {
     next["hooks"] = hooks;
   }
-  return { value: next, events, changed, foreignKept, wrapped };
+  return { value: next, events, changed, foreignKept, wrapped, spared };
 }
 
 // ── writing it ──────────────────────────────────────────────────────────────
@@ -1142,6 +1157,13 @@ export interface WireInput {
   /** Whether `unwire` may read `~/.claude.json`: `runtime.ts#readsHostUserConfig`
    *  by default; a test's seam. */
   readonly readsUserConfig?: boolean;
+  /** FOR `unwire` ONLY: remove a Counterparts hook, or the `-s user`
+   *  registration, only when what it runs is gone. The plugin's uninstall
+   *  sets it on the arms that keep the memory (`uninstall.ts`): the plugin
+   *  writes neither (its hooks and server are its own files), so a live one is
+   *  a running npm install's, and a dead one is what `npm rm` without
+   *  `counterparts uninstall` left behind. */
+  readonly onlyDead?: boolean;
 }
 
 export interface WireResult {
@@ -1161,6 +1183,10 @@ export interface WireResult {
    * session start, and that is as true of the server as of the hooks.
    */
   readonly mcpConfirmed: boolean;
+  /** FOR `unwire` WITH `onlyDead` ONLY: why the registration was left, when it
+   *  was (`mcp` is then "skipped"). A caller that removes it later needs to
+   *  know whether that removal will need `claude` (`uninstall.ts#offerDelete`). */
+  readonly mcpLeft?: LeftWhy;
 }
 
 /**
@@ -1628,6 +1654,141 @@ export function serverCensus(
   return { other, otherVersions, current, unplaced, mine, knowsMine: input.parents !== undefined };
 }
 
+/** Why `unwire` leaves the registration alone (`onlyDead`): what it runs is
+ *  still there (`live`), the file could not be read to tell (`unread`), the
+ *  build never reads it and an npm install's `counterparts` is on PATH
+ *  (`npm`), or a read shows none to remove (`absent`). */
+export type LeftWhy = "live" | "unread" | "npm" | "absent";
+
+function realOrResolved(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * THE PLUGIN'S OWN FOLDERS: its root (`CLAUDE_PLUGIN_ROOT`, and this package's
+ * own, which on the plugin's route is the same), its data directory (where
+ * the single binary lives) and Claude Code's plugins directory. The plugin's
+ * console can run `connect`, which writes hooks and a registration naming its
+ * own runtime and scripts; they run while it is installed and are dead the
+ * moment it is not, so on its uninstall they count as gone — never as an npm
+ * install's.
+ */
+function pluginDirs(env: UiEnv, home: string): string[] {
+  const moved = (env["CLAUDE_CONFIG_DIR"] ?? "").trim();
+  const cache = (env["CLAUDE_CODE_PLUGIN_CACHE_DIR"] ?? "").trim();
+  const dirs = [
+    env[PLUGIN_ROOT_ENV] ?? "",
+    PACKAGE_ROOT,
+    env[PLUGIN_DATA_ENV] ?? "",
+    cache.length > 0 ? cache : join(moved.length > 0 ? moved : join(home, ".claude"), "plugins"),
+  ];
+  return dirs.map((d) => d.trim()).filter((d) => d.length > 0).map((d) => realOrResolved(d).replace(/\/+$/, ""));
+}
+
+/** Is this path (absolute, after `~/` expansion) inside one of the plugin's own folders? */
+function inPlugin(path: string | null | undefined, env: UiEnv, dirs: readonly string[]): boolean {
+  if (path === null || path === undefined) return false;
+  const p = expandHome(path, env);
+  if (!isAbsolute(p)) return false;
+  const real = realOrResolved(p);
+  return dirs.some((d) => real === d || real.startsWith(`${d}/`));
+}
+
+/**
+ * THE PLUGIN'S RULE FOR A HOOK (`onlyDead`): does this entry of ours still run
+ * something that is not the plugin's own? A line this build cannot read for
+ * what it runs, or whose script is relative, is not known dead and is kept.
+ */
+function hookStillRuns(command: string, env: UiEnv, dirs: readonly string[]): boolean {
+  const ours = readOurHook(command);
+  if (ours === null) return true;
+  if (inPlugin(ours.exe, env, dirs) || inPlugin(ours.script, env, dirs)) return false;
+  if (ours.shape === "script" && !isAbsolute(expandHome(ours.script, env))) return true;
+  return hookCommandLive(command, env);
+}
+
+/** The npm install's `counterparts` on this PATH — one in the plugin's own
+ *  folders does not count. */
+function npmCliOnPath(env: UiEnv, dirs: readonly string[]): boolean {
+  const path = (env["PATH"] ?? "").split(process.platform === "win32" ? ";" : ":").filter((d) => d.length > 0);
+  return path.some((d) => isFileAt(join(d, BIN.cli)) && !inPlugin(join(d, BIN.cli), env, dirs));
+}
+
+/** A file, not a folder: a `~/counterparts` checkout on PATH is no npm install. */
+function isFileAt(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * THE PLUGIN'S RULE FOR THE REGISTRATION (`onlyDead`): removed only when what
+ * it runs is gone. Read by `host-wiring.ts#npmWiring` — the stand-down's own
+ * reader, so the two cannot disagree about live. The directory flavor never
+ * opens `~/.claude.json` (`notRead`), so it asks the next best things: is the
+ * npm install's `counterparts` on this PATH, or does one of our hooks in
+ * `settings.json` still run (`liveHooks`)? The plugin never puts either there
+ * (the bundle refuses a top-level `bin/`, and its hooks are hooks.json's), so
+ * either is a live npm install, whose `connect` registered its server from
+ * the same package, and the registration is taken as live. Neither: whatever
+ * is registered under the name runs nothing of an npm install's, so it goes,
+ * through `claude mcp remove`, which tolerates its absence. (A checkout's own
+ * registration, with no npm install and no hook, reads as gone here.) A
+ * registration that runs something in the plugin's own folders is gone with
+ * the plugin, whatever is on disk now (`pluginDirs`).
+ */
+function leftWhy(input: WireInput, mcp: McpReading, liveHooks: boolean, dirs: readonly string[]): LeftWhy | null {
+  if (mcp.notRead === true) return liveHooks || npmCliOnPath(input.env, dirs) ? "npm" : null;
+  if (mcp.unreadable) return "unread";
+  if (!mcp.present) return "absent";
+  const user = npmWiring({
+    home: input.home,
+    env: input.env,
+    cwd: null,
+    read: { hooks: false },
+    readsUserConfig: input.readsUserConfig,
+  }).mcp.find((m) => m.scope === "user");
+  if (user !== undefined && (inPlugin(user.exe, input.env, dirs) || inPlugin(user.script, input.env, dirs))) return null;
+  return user === undefined || user.live ? "live" : null;
+}
+
+/** What `unwire` says when it leaves the registration alone: nothing when a
+ *  read shows none, one line otherwise. */
+function leftMcpNote(u: Ui, mcp: McpReading, why: LeftWhy, home: string): void {
+  if (why === "absent") return;
+  const where = `"${MCP_SERVER_NAME}" memory server in ${tilde(mcp.file, home)}`;
+  if (why === "unread") {
+    u.hint(
+      `Any ${where} was left as it is: the file could not be read to tell whether it still runs. ` +
+        `If it is an npm install's and that install is gone: claude mcp remove ${MCP_SERVER_NAME} -s user`,
+    );
+    return;
+  }
+  u.hint(
+    why === "live"
+      ? `The ${where} was left as it is: what it runs is still there, so it is the npm install's, and \`${BIN.cli} uninstall\` removes it.`
+      : `Any ${where} was left as it is: an npm install of Counterparts is still here, so it is that install's, and \`${BIN.cli} uninstall\` removes it.`,
+  );
+}
+
+/** The Counterparts hooks an `onlyDead` unwire left, said once (every hook
+ *  that survives gets a sentence). */
+function sparedNote(u: Ui, spared: number): void {
+  if (spared === 0) return;
+  const one = spared === 1;
+  u.hint(
+    `${one ? "1 Counterparts hook was" : `${String(spared)} Counterparts hooks were`} left as ` +
+      `${one ? "it is: what it runs" : "they are: what they run"} is still there, so ` +
+      `${one ? "it is" : "they are"} the npm install's, and \`${BIN.cli} uninstall\` removes ${one ? "it" : "them"}.`,
+  );
+}
+
 /**
  * `counterparts unwire` — take OUR hooks out and deregister the server.
  *
@@ -1650,21 +1811,35 @@ export async function unwire(input: WireInput): Promise<WireResult> {
     return { outcome: "refused", hooks: "refused", mcp: "skipped", backup: null, mcpConfirmed: false };
   }
 
-  const merged = mergeHooks(sight.value, "", "unwire");
+  // THE PLUGIN'S RULE (`onlyDead`): a hook that still runs stays.
+  const dirs = input.onlyDead === true ? pluginDirs(env, home) : [];
+  const spare = input.onlyDead === true ? (command: string): boolean => hookStillRuns(command, env, dirs) : undefined;
+  const merged = mergeHooks(sight.value, "", "unwire", spare);
   const mcp = readMcp(home, env, input.store, input.custom, input.exe, MCP_SCRIPT, input.readsUserConfig);
 
   // `mcp.unreadable` is NOT "nothing there": that file is the host's own and a
   // read that failed is no evidence either way, which is the same stance the
   // removal below takes.
   // A file this build never opens (`notRead`) is no evidence either: the
-  // removal below asks `claude`.
-  if (!merged.changed && !mcp.present && !mcp.unreadable && mcp.notRead !== true) {
-    u.ok("nothing to disconnect: no Counterparts hooks and no memory server were found.");
+  // removal below asks `claude`. A registration left alone (`onlyDead`, and
+  // it still runs or cannot be told) is not ours to disconnect.
+  const why = input.onlyDead === true ? leftWhy(input, mcp, merged.spared > 0, dirs) : null;
+  const leave = why !== null;
+  if (!merged.changed && (leave || (!mcp.present && !mcp.unreadable && mcp.notRead !== true))) {
+    u.ok(
+      `nothing to disconnect: no Counterparts hooks${merged.spared > 0 ? " whose program is gone" : ""}` +
+        `${leave ? "" : " and no memory server"} were found.`,
+    );
     // SAID EVEN HERE: a wrapper is exactly the case where "nothing of ours"
     // needs a sentence, because the person can see a hook that mentions us and
     // would otherwise have no account of why it survived.
     wrappedNote(u, merged.wrapped, "left exactly as it is");
     u.hint(`looked in: ${sight.target}`);
+    if (why !== null) {
+      sparedNote(u, merged.spared);
+      leftMcpNote(u, mcp, why, home);
+      return { outcome: "ok", hooks: "none", mcp: "skipped", backup: null, mcpConfirmed: false, mcpLeft: why };
+    }
     u.hint(`and in:    ${mcp.file}`);
     return { outcome: "ok", hooks: "none", mcp: "absent", backup: null, mcpConfirmed: true };
   }
@@ -1674,7 +1849,8 @@ export async function unwire(input: WireInput): Promise<WireResult> {
   if (input.dryRun) {
     u.hint("dry run — nothing below has been written.");
     for (const e of merged.events) u.hint(`${e.event}: would remove ${e.was ?? "our hook"}`);
-    u.hint(`would run: claude mcp remove ${MCP_SERVER_NAME} -s user`);
+    if (merged.spared > 0) u.hint(`${String(merged.spared)} Counterparts hook(s) that still run would stay.`);
+    if (!leave) u.hint(`would run: claude mcp remove ${MCP_SERVER_NAME} -s user`);
     if (merged.foreignKept > 0) {
       u.hint(
         merged.foreignKept === 1
@@ -1698,9 +1874,9 @@ export async function unwire(input: WireInput): Promise<WireResult> {
       sight,
       home,
       merged.changed ? "(backup first)" : "(none of ours are there)",
-      "removed via `claude mcp remove`",
+      leave ? "left as it is" : "removed via `claude mcp remove`",
     );
-    const go = await confirm(io, "Remove the Counterparts hooks and the MCP server?", {
+    const go = await confirm(io, leave ? "Remove the Counterparts hooks?" : "Remove the Counterparts hooks and the MCP server?", {
       default: true,
     });
     if (!go) {
@@ -1717,7 +1893,7 @@ export async function unwire(input: WireInput): Promise<WireResult> {
       io.err(`refused after re-reading the file: ${fresh.refusal}`);
       return { outcome: "refused", hooks: "refused", mcp: "skipped", backup: null, mcpConfirmed: false };
     }
-    const again = mergeHooks(fresh.value, "", "unwire");
+    const again = mergeHooks(fresh.value, "", "unwire", spare);
     // THE SAME RACE, THE OTHER WAY ROUND (review n3): the hooks went while the
     // question was up. Nothing to write, no backup, and the line says so.
     if (!again.changed) {
@@ -1749,8 +1925,19 @@ export async function unwire(input: WireInput): Promise<WireResult> {
           : `${String(again.foreignKept)} hooks belonging to something else were left exactly as they were.`,
       );
     }
+    sparedNote(u, again.spared);
   } else {
-    u.ok(`no Counterparts hooks were in ${tilde(sight.target, home)}.`);
+    u.ok(`no Counterparts hooks${merged.spared > 0 ? " whose program is gone" : ""} were in ${tilde(sight.target, home)}.`);
+    sparedNote(u, merged.spared);
+  }
+
+  // LEFT ALONE: not removed, so not confirmed gone either. Only the plugin's
+  // uninstall asks for this, on the arms that keep the memory; one that goes
+  // on to delete it removes the registration first (`uninstall.ts`).
+  if (why !== null) {
+    leftMcpNote(u, mcp, why, home);
+    u.hint("An open Claude Code session keeps working until you close it.");
+    return { outcome: "ok", hooks: hooksWord, mcp: "skipped", backup, mcpConfirmed: false, mcpLeft: why };
   }
 
   // THE REMOVE IS ATTEMPTED WHETHER OR NOT OUR READ SAW A REGISTRATION.
@@ -1789,11 +1976,12 @@ export async function unwire(input: WireInput): Promise<WireResult> {
     return fresh.present || fresh.unreadable || fresh.notRead === true;
   };
   if (res.missing && mcp.notRead === true) {
-    // NOT LOOKED, AND NOBODY TO ASK (the plugin directory's build): that
-    // build never registers a server there itself, but an npm install's may
-    // be there, pointing at this same store, and nothing was looked at. Not
-    // confirmed, so uninstall stops before deleting or moving the store (M2):
-    // unknown is not absent (review of #481).
+    // NOT LOOKED, AND NOBODY TO ASK (the plugin directory's build, with no
+    // npm install's `counterparts` on PATH, or on an arm that deletes or
+    // moves the store): that build never registers a server there itself,
+    // but an npm install's may be there, pointing at this same store, and
+    // nothing was looked at. Not confirmed, so uninstall stops before deleting
+    // or moving the store (M2): unknown is not absent (review of #481).
     mcpConfirmed = false;
     u.warn(
       "`claude` is not on this PATH and this version does not read Claude Code's own configuration, so whether a memory server is still registered (an npm install's, if there is one) could not be checked.",

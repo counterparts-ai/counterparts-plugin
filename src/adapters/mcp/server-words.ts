@@ -19,7 +19,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.23";
+export const SERVER_VERSION = "0.3.24";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -127,9 +127,16 @@ export function desktopBindNote(session: string): string {
 export const NO_DESKTOP_SESSION =
   "No Claude Desktop session is live. Call the `wake` tool first: it starts this chat's session and returns its id. (In a Claude Code session — Desktop's Code tab — do not call wake: pass the session id your wake or Stop ask names.)";
 
+/**
+ * The ratings clause (2026-10-14; Mike's call, tracking only) — the same words
+ * the Claude Code Stop ask carries (`claude-code/hooks.ts#RATE_CLAUSE`; the
+ * adapters do not import each other, so a test holds the two equal).
+ */
+export const RATE_ASK_CLAUSE = "`rated` 0–3 each footnote shown since you last wrote, and each `drewOn` id";
+
 /** The write-up ask a Desktop tool result carries once the session is due one. */
 export function desktopWriteUpAsk(session: string): string {
-  return `Counterparts: this chat has gone on a while since it was last written up. At a natural pause, hand back what caught your attention, one idea each, with session_end (session: ${session}; memories: [] only if nothing held your attention; \`updates\` anything dated or open now done), and add a chapter with the chapter tool (session: ${session}) if the chat was about something. ${PRONOUN_RULE}`;
+  return `Counterparts: this chat has gone on a while since it was last written up. At a natural pause, hand back what caught your attention, one idea each, with session_end (session: ${session}; memories: [] only if nothing held your attention; \`updates\` anything dated or open now done; ${RATE_ASK_CLAUSE}), and add a chapter with the chapter tool (session: ${session}) if the chat was about something. ${PRONOUN_RULE}`;
 }
 
 /** What `status` says `owner: false` means — the confused Desktop chats' question (2026-09-30). */
@@ -224,3 +231,14 @@ export function dreamHow(bundle: Pick<DreamBundle, "queue" | "shownAs">): string
  */
 export const RECALL_MODE_WORDS =
   'A question needs mode: "facts" — what happened, who said it, when, and whether it still holds (every match, ranked, with dates and speaker); or "meaning" — how something went, felt, and what it adds up to (a person, a project, us).';
+
+/** At most this many still-dated memories are listed beside a close (2026-10-14). */
+export const STILL_DATED_SHOWN = 5;
+
+/** The line beside them (`McpServer#stillDatedNear`, 2026-10-14). */
+export const STILL_DATED_HINT =
+  "These nearby memories still hold a date. If one is the same obligation as the one you just closed, close it too now: remember with updates: its id and eventDate: null (or status: done). If it is something else, leave it.";
+
+/** Beside a write that closed a dated memory and sent no title (2026-10-14). */
+export const TITLE_ASKED_NOTE =
+  "No title was given, and the old memory's was not carried over: this closes it, and the old title would read as still open. A title is asked for: give a memory that closes something its own short one (\"Taxes filed\").";

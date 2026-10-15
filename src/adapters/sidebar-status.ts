@@ -40,12 +40,13 @@ import { dirname, isAbsolute, join } from "node:path";
 import { Dashboard } from "./dashboard/index.js";
 import type { DashboardSource } from "./dashboard/source.js";
 import { dreamsView } from "./dashboard/web/views/dreams.js";
-import { narrate } from "./dashboard/web/narrate.js";
+import { feltDetail, narrate } from "./dashboard/web/narrate.js";
 import { mechanismActivity } from "./dashboard/web/views/mechanism-panel.js";
 import { mechanismsView } from "./dashboard/web/views/mechanisms.js";
 import { memoriesHeld } from "./dashboard/web/views/shared.js";
 import { memoryDetail } from "./dashboard/web/views.js";
 import { pluginInstall } from "./host-wiring.js";
+import { FELT_EVENTS, feltScope, payloadOf, primeFelt } from "./mechanism-evidence.js";
 import { PLUGIN_ROOT_ENV } from "./plugin.js";
 import { installedVersion } from "./sessions.js";
 import { storeId } from "./store-id.js";
@@ -158,7 +159,7 @@ export interface SidebarStatus {
  * dashboard page's, and most of a row's bytes.
  */
 export const DETAIL_KEYS: ReadonlySet<string> = new Set([
-  "accepted", "actor", "actorId", "applied", "challengerId", "credited", "deposited", "direction", "faded",
+  "accepted", "actor", "actorId", "applied", "challengerId", "credited", "deposited", "direction", "faded", "felt",
   "footnoteCount", "footnotes", "gist", "holds", "how", "id", "ids", "linksReached", "memoryId", "merge",
   "moodMatched", "over", "replayLinks", "session", "site", "source", "surfaced", "surfacedCount", "targetId", "turn",
 ]);
@@ -178,11 +179,28 @@ const MEMORY_ID = /\bmem_[A-Za-z0-9]+\b/g;
 
 /** The status, from an open observer source. Pure but for the reads. */
 export function buildSidebarStatus(src: DashboardSource, now: number, build: string | null = installedVersion()): SidebarStatus {
+  // One feeling read per batch of rows for the whole build (`feltScope`): the
+  // counts, the panels and the rows below all ask which memories carry one.
+  return feltScope(src.store, () => statusOf(src, now, build));
+}
+
+function statusOf(src: DashboardSource, now: number, build: string | null): SidebarStatus {
   const store = src.store;
   // The newest rows, narrated as the activity feed narrates them, read by name
   // and limit alone (the feed's own view also counts the whole log per call).
-  const newest = (filter: { name?: string; limit: number }): Row[] =>
-    store.eventLog({ ...filter, order: "desc" }).map((row) => narrate(store, row) as unknown as Row);
+  // A deposit or a turn also says which of its memories carry a feeling
+  // (`felt`, 2026-10-14): what lights Emotion for it in the sidebar's feed,
+  // as the Emotion panel's own rows say it (`narrateForPanel`).
+  const newest = (filter: { name?: string; limit: number }): Row[] => {
+    const rows = store.eventLog({ ...filter, order: "desc" });
+    primeFelt(store, rows);
+    return rows.map((row) => {
+      const line = narrate(store, row);
+      if (!FELT_EVENTS.has(row.name)) return line as unknown as Row;
+      const felt = feltDetail(store, payloadOf(row));
+      return (felt === null ? line : { ...line, detail: [...line.detail, felt] }) as unknown as Row;
+    });
+  };
   const recent = newest({ limit: RECENT_ROWS });
   const p = { day: store.livedDay(), memories: memoriesHeld(src), lastSeq: recent[0]?.seq ?? 0 };
   let today: SidebarStatus["today"] = null;

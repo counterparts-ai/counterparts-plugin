@@ -46,10 +46,15 @@ import type { RenderResult, Resolve, Resolved } from "./render.js";
 import { withTunables } from "./tunables.js";
 import type { RecallTunables } from "./tunables.js";
 
+/** At most this many mood-lifted ids on a decision (`moodMatchedIds`) — the
+ *  same cap the credit row puts on `shownNotUsed` (2026-10-14). */
+export const MOOD_MATCHED_IDS_CAP = 64;
+
 export * from "./cues.js";
 export * from "./feeling-ask.js";
 export * from "./gate.js";
 export * from "./mood.js";
+export * from "./rated.js";
 export * from "./render.js";
 export * from "./session.js";
 export * from "./standing.js";
@@ -201,6 +206,14 @@ export interface RecallDecision {
    * mood, and on every quiet turn.
    */
   readonly moodMatched: number;
+  /**
+   * WHICH admitted memories the mood lifted (2026-10-14, lightly held): the ids
+   * behind `moodMatched`, in verdict order, at most `MOOD_MATCHED_IDS_CAP` (the
+   * cap `shownNotUsed` has on the credit row) — so a later re-test with mood
+   * matching on can compare their use. Ids only; empty whenever `moodMatched`
+   * is 0, which is every turn while the mood weights stay 0.
+   */
+  readonly moodMatchedIds: string[];
   /**
    * What spreading did this turn (association build 1, 2026-09-28): seeds,
    * nodes expanded, where and why it stopped, contributions computed and how
@@ -366,6 +379,7 @@ export class Recall {
         affectFlag: false,
         affectReason: "no-feeling-in-turn",
         moodMatched: 0,
+        moodMatchedIds: [],
         spread: null,
         dropped: 0,
         bytes: 0,
@@ -507,6 +521,11 @@ export class Recall {
         ? "budget-quiet"
         : "rendered";
 
+    // The admitted memories the mood lifted, by id (2026-10-14): `moodMatched`
+    // counts them all, `moodMatchedIds` names the first MOOD_MATCHED_IDS_CAP.
+    const moodLifted = gated.verdicts
+      .filter((v) => (v.verdict === "surfaced" || v.verdict === "footnoted") && (v.mood ?? 0) > 0)
+      .map((v) => v.id);
     const decision: RecallDecision = {
       sessionId: turn.sessionId,
       turn: turnNo,
@@ -531,9 +550,8 @@ export class Recall {
       footnotes: rendered.footnotes,
       affectFlag: rendered.affectFlag,
       affectReason: gated.affectReason,
-      moodMatched: gated.verdicts.filter(
-        (v) => (v.verdict === "surfaced" || v.verdict === "footnoted") && (v.mood ?? 0) > 0,
-      ).length,
+      moodMatched: moodLifted.length,
+      moodMatchedIds: moodLifted.slice(0, MOOD_MATCHED_IDS_CAP),
       // What the gate SHOWED of the pointers activation handed it, after the
       // render's trim: the pointer lane's last number (2026-09-28).
       spread:

@@ -8,12 +8,12 @@ import { TUNABLES, band, emotionalIntensity, promotionEligibility, rep, sal, str
 import type { PromotionVerdict } from "../../../../core/physics/index.js";
 import { DREAM_MERGE_REASON } from "../../../../core/dream/index.js";
 import { feelingsLine } from "../../../feelings-line.js";
-import { coreContextFor, isJournal } from "../../../../core/sleep/index.js";
+import { coreContextFor, curveSinceDay, isJournal } from "../../../../core/sleep/index.js";
 import type { Band, Kind } from "../../../../core/types.js";
 import type { DashboardSource } from "../../source.js";
 import { WITHHELD, gistOfDoc, reveal, revealHere } from "../reveal.js";
 import { archiveWords } from "./archive-words.js";
-import { fadeCurve } from "./mechanism-panel.js";
+import { fadeCurve, putAwayDay } from "./mechanism-panel.js";
 import { chapterDate, feelingsShown, isChapterMemory, liftDate, repeatsOf, stripChapterLead } from "./memory-words.js";
 import { readChapterLead } from "../../../../core/self/index.js";
 import type { FeelingShown } from "./memory-words.js";
@@ -96,8 +96,10 @@ export interface MemoryCurve {
   readonly from: number;
   readonly to: number;
   readonly points: readonly (readonly [number, number])[];
-  /** The first lived day ahead on which it falls below the archive line if
-   *  unused — the day the prune could put it away. Null for a date that still
+  /** The lived day the prune would put it away if unused (2026-10-14:
+   *  `mechanism-panel.ts#putAwayDay` — 14 lived days under the archive line,
+   *  never before 14 after a new curve; within the drawn window, else null —
+   *  not the day it crosses the line). Null for a date that still
    *  repeats: the prune keeps it for its next occurrence (2026-10-09). Null for
    *  a protected memory too: the prune never lets one go (review of #343). */
   readonly archiveDay: number | null;
@@ -340,10 +342,15 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
     // a let-go day. A put-away row is past the question.
     const repeats = row === undefined || row.archived === 1 ? null : repeatsOf(row);
     const kept = physics.protected === true;
+    // The day the prune would put it away (2026-10-14): 14 lived days after it
+    // goes under the archive line, never before 14 after a new curve arrived —
+    // not the day it crosses the line, which the Forgetting panel names. Inside
+    // the drawn window, as before.
+    const away = putAwayDay(physics, day, curveSinceDay(store, day));
     curve = {
       day,
       ...c,
-      archiveDay: repeats === null && !kept ? c.archiveDay : null,
+      archiveDay: repeats === null && !kept && away !== null && away <= c.to ? away : null,
       archiveLine: TUNABLES.PHI_PRUNE,
       semanticFloor: TUNABLES.THETA_SEM,
       repeats,

@@ -512,6 +512,14 @@ export const MECHANISMS: readonly Mechanism[] = [
     evidence: { kind: "event", names: ["recall.credit"] },
   },
   {
+    // Mike's call, 2026-10-14: tracking only. Nothing reads the rows to act.
+    id: "rated",
+    label: "a session scored the memories it was shown, 0 to 3 — recorded only, nothing changes",
+    module: "recall/rated.ts, mcp/server-session-end.ts",
+    evidence: { kind: "event", names: ["recall.rated"] },
+    since: "2026-10-14",
+  },
+  {
     id: "gate-session",
     label: "what a session has already been shown, so it is not shown the same thing twice",
     module: "recall/session.ts",
@@ -1874,6 +1882,7 @@ const REFUSAL_READERS: Record<string, (p: Record<string, unknown>) => [string, n
   "gate.chunk": (p) => countsIn(p, "refusalsByReason"),
   "gate.deposit": (p) => countsIn(p, "refusalsByReason"),
   "recall.credit": (p) => countsIn(p, "refused"),
+  "recall.rated": (p) => countsIn(p, "refused"),
   // Every `snapshot.failed` row IS a refusal — a copy that should have happened
   // and did not — so the reason it carries is the whole column.
   "snapshot.failed": (p) => {

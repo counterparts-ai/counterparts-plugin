@@ -66,7 +66,7 @@ export {
 } from "./strength-cache.js";
 export type { StrengthCache, StrengthRow } from "./strength-cache.js";
 
-export { DECAY_SKIPS, runDecay } from "./decay.js";
+export { CURVE_SINCE_KEY, DECAY_SKIPS, curveSinceDay, runDecay } from "./decay.js";
 export type { DecayResult, DecaySkip } from "./decay.js";
 
 export {

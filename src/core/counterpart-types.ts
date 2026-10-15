@@ -565,6 +565,16 @@ export interface DepositResult {
    * one of the memory it revises (2026-10-11, `Counterpart#carryAbout`).
    */
   readonly aboutCarried?: { readonly mark: AboutMark; readonly from: string };
+  /**
+   * The title, when the writer sent none and this revision took the one of
+   * the memory it revises (2026-10-14, `counterpart-deposit.ts#carryTitle`).
+   */
+  readonly titleCarried?: { readonly title: string; readonly from: string };
+  /**
+   * True when this write CLOSED a dated memory without a title: the old one
+   * was not carried (it would read as still open), and the reply asks for one.
+   */
+  readonly titleAsked?: true;
 }
 
 /**
@@ -593,6 +603,20 @@ export interface DepositReminder {
   readonly inherited: readonly ("eventDate" | "remind" | "recurring")[];
   /** False only when clearing `from`'s date failed (evented). */
   readonly moved: boolean;
+  /**
+   * On a CLOSE (the date dropped, or a `done` that spent it; 2026-10-14):
+   * the other memories of the same reminder chain — `reminderFrom` and
+   * `reminderMovedTo`, both ways from `from` — that still held a date and
+   * had it cleared too (`counterpart-deposit.ts#closeReminderChain`). Absent
+   * when there were none.
+   */
+  readonly alsoClosed?: readonly string[];
+  /**
+   * Memories of that chain still holding a date that this write could not
+   * close (`closeThread`'s guards: protected, or confidential / another
+   * directory's for a session that is not the owner's). Listed in the reply.
+   */
+  readonly chainSkipped?: readonly string[];
 }
 
 /** `carryReminder`'s answer: the proposal to mint, and what it took from where. */

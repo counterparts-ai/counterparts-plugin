@@ -121,9 +121,11 @@ export const TRANSPILED: boolean = MODULE_EXT === ".js";
  * opens that file. What that build gives up, every reader gated on this says:
  * the plugin no longer stands down beside the npm install's wiring (memory
  * wired twice until a marker-based check lands, docs/plugin.md), doctor has
- * no MCP-registration line and no Desktop Code-tab clash, and an uninstall has
- * only `claude mcp remove`'s word that a `-s user` registration is gone (with
- * no `claude`, it says the line to run and does not count it gone). The
+ * no MCP-registration line and no Desktop Code-tab clash, and an uninstall
+ * that may delete or move the store has only `claude mcp remove`'s word that a
+ * `-s user` registration is gone (with no `claude`, it says the line to run and
+ * does not count it gone; one that keeps the store removes it only when no
+ * npm install's `counterparts` is on PATH, `wire.ts#leftWhy`). The
  * stand-down check (`host-wiring.ts#npmWiring`) reads nothing at all in this
  * build, the settings files' hooks included; doctor, connect and uninstall
  * still read the settings files, and `plugins/installed_plugins.json` is

@@ -42,6 +42,27 @@ function num(e: DashEvent, key: string): number {
   const v = Number(detail(e, key));
   return Number.isFinite(v) ? v : 0;
 }
+/**
+ * Of the memories a deposit or a turn names, the ones carrying a recorded
+ * feeling, with their feeling words (`detail.felt`, JSON `[{ id, words }]`,
+ * 2026-10-14). The status file's writer reads them off the store; a row
+ * without it carries none.
+ */
+export function feltOf(e: DashEvent): { id: string; words: string[] }[] {
+  try {
+    const list: unknown = JSON.parse(detail(e, 'felt') ?? '[]');
+    if (!Array.isArray(list)) return [];
+    return list.flatMap(x => {
+      if (x === null || typeof x !== 'object') return [];
+      const { id, words } = x as { id?: unknown; words?: unknown };
+      if (typeof id !== 'string' || !id.startsWith('mem_')) return [];
+      return [{ id, words: Array.isArray(words) ? words.filter((w): w is string => typeof w === 'string' && w !== '') : [] }];
+    });
+  } catch {
+    return [];
+  }
+}
+
 /** `"Title…" [mem_abc]` → the title and the id. */
 export function titled(value: string | null | undefined): { title: string | null; id: string | null } {
   if (value === undefined || value === null) return { title: null, id: null };
@@ -62,6 +83,11 @@ export const RULES: readonly Rule[] = [
   { name: 'gate.deposit', mech: 'salience', word: 'kept', when: e => num(e, 'accepted') > 0 },
   { name: 'gate.chunk', mech: 'salience', word: 'kept', when: e => num(e, 'accepted') > 0 },
   { name: 'recall.decision', mech: 'retrieval', word: 'recalled', when: e => num(e, 'surfacedCount') + num(e, 'footnoteCount') > 0 },
+  // Emotion (2026-10-14): a memory saved with a feeling, a turn that brought one
+  // carrying a feeling to mind (`felt`). The mood match, off by decision since
+  // 2026-10-10, still lights it the day it is back on.
+  { name: 'gate.deposit', mech: 'emotional', word: 'saved with a feeling', when: e => feltOf(e).length > 0 },
+  { name: 'recall.decision', mech: 'emotional', word: 'came to mind', when: e => feltOf(e).length > 0 },
   { name: 'recall.decision', mech: 'emotional', word: 'brought closer', when: e => num(e, 'moodMatched') > 0 },
   // A memory a link put in front of the model (2026-10-11, Group 4).
   { name: 'recall.decision', mech: 'association', word: 'brought to mind by a link', when: e => num(e, 'linksReached') > 0 },
@@ -293,6 +319,8 @@ const DREAM_ACTION: Partial<Record<MechId, string>> = { interference: 'merge', c
  *   - a recall's decision: each memory that came to mind or sat in the
  *     footnotes (`surfaced`, `footnotes` ids); a credit: each memory it
  *     strengthened (`ids`);
+ *   - Emotion's deposits and turns: only the memories that carry a feeling
+ *     (`felt`), each as its title and its feeling words (`Title (curious)`);
  *   - a deposit, a fade, a rise, a promotion, a prune, a reminder: its memory;
  *   - a settle: which memory holds over which; revision pressure: which
  *     argued with which;
@@ -317,6 +345,17 @@ export function mechFirings(events: readonly DashEvent[], mech: MechId, dreams: 
     // A turn a link reached recall on counts only (2026-10-11): its row does not
     // say WHICH shown memory the link brought, so naming them all would be wrong.
     if (e.name === 'recall.decision' && mech === 'association') continue;
+    // Emotion names only the memories that carry a feeling, each with its words.
+    const felt = mech === 'emotional' ? feltOf(e) : [];
+    if (felt.length > 0) {
+      const quoted = quotedTitles(e.text);
+      const own = e.name === 'gate.deposit' ? classify(e)?.memory : undefined;
+      felt.forEach((f, i) => {
+        const title = own?.id === f.id ? own.title : quoted.length === felt.length ? (quoted[i] ?? null) : null;
+        push(e, rule.word, f.words.length > 0 ? [{ id: f.id, title }, ` (${f.words.join(', ')})`] : [{ id: f.id, title }], f.id);
+      });
+      continue;
+    }
     if (e.name === 'recall.decision' || e.name === 'recall.credit') {
       const ids = e.name === 'recall.decision' ? [...surfacedIds(e), ...idList(e, 'footnotes')] : idList(e, 'ids');
       const quoted = quotedTitles(e.text);

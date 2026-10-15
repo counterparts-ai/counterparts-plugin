@@ -1,7 +1,7 @@
 /** `Counterpart`'s deposit: the gate's record, the update guard, and carrying facts, reminders and threads onto what is written (bodies moved out of `counterpart.ts`, 2026-10-11; the class keeps a delegate for each). */
 import { batteryGate } from "./bridge.js";
 import { mintProposal, UNRESOLVED_META_KEY } from "./mint.js";
-import { cueModeOf, recurrenceOf, DATE_LINEAGE_MAX, DATE_MOVED_TO_META } from "./prospective/index.js";
+import { cueModeOf, recurrenceOf, DATE_FROM_META, DATE_LINEAGE_MAX, DATE_MOVED_TO_META } from "./prospective/index.js";
 import { errCode, submitProposal } from "./remember/index.js";
 import type { Proposal, SubmitResult, ProposalSource } from "./remember/index.js";
 import {
@@ -13,6 +13,7 @@ import {
   guardBar,
   heldView,
   CONTRADICTION_HELD_EVENT,
+  REMINDER_SPENT_BY_META,
 } from "./reconsolidation.js";
 import type { SlotOutcome, HeldUpdate } from "./reconsolidation.js";
 import { isDay } from "./time.js";
@@ -199,7 +200,14 @@ export async function deposit(
   const carry = cp["carryReminder"](held === null ? result.proposal : withoutUpdates(result.proposal), ctx.facts?.status ?? null);
   // v12: the writer's three fields, a revision's carried over where unsent.
   const facts = cp["carryFacts"](carry.proposal, ctx.facts);
-  const proposal: Proposal = facts === null ? carry.proposal : { ...carry.proposal, facts: { ...(facts.occurredOn === null ? {} : { occurredOn: facts.occurredOn }), ...(facts.saidBy === null ? {} : { saidBy: facts.saidBy }), ...(facts.status === null ? {} : { status: facts.status }) } };
+  const withFacts: Proposal = facts === null ? carry.proposal : { ...carry.proposal, facts: { ...(facts.occurredOn === null ? {} : { occurredOn: facts.occurredOn }), ...(facts.saidBy === null ? {} : { saidBy: facts.saidBy }), ...(facts.status === null ? {} : { status: facts.status }) } };
+  // Its title, a revision's carried over when none was sent — unless this
+  // write closes a dated memory (2026-10-14).
+  // A `done` revision closes too, for the title (review of #493): "Plan: X"
+  // on the memory that says X was done reads as still open.
+  const closes = (carry.from !== null && carry.proposal.eventDate === null) || ctx.facts?.status === "done";
+  const titled = carryTitle(cp, withFacts, closes);
+  const proposal: Proposal = titled.carried === undefined ? withFacts : { ...withFacts, title: titled.carried.title };
   // What it is about, a revision's carried over when none was sent (2026-10-11).
   const about = cp["carryAbout"](carry.proposal, ctx.about);
   const mint = mintProposal(cp.store, proposal, {
@@ -212,7 +220,17 @@ export async function deposit(
   });
   // BEFORE the revision dispatch: a current-state target is superseded there,
   // and the date must leave the row while it is still the live one.
-  const reminder = carry.from === null ? null : cp["moveReminder"](carry, mint.id);
+  // A CLOSE CLOSES THE WHOLE CHAIN (2026-10-14): the date dropped, or spent
+  // by a `done` — every other memory the reminder moved through that still
+  // holds a date has it cleared too, so one "done" ends one obligation. The
+  // chain is read BEFORE the move, which rewrites the holder's forward pointer.
+  const chain = carry.from !== null && carry.proposal.eventDate === null && !cp.observer ? reminderChain(cp, carry.from) : [];
+  const moved = carry.from === null ? null : cp["moveReminder"](carry, mint.id);
+  const ended = moved === null ? { closed: [], skipped: [] } : closeReminderChain(cp, chain, mint.id, { owner: ctx.owner === undefined ? cp["owner"] : ctx.owner && !cp.observer, scope: proposal.scope });
+  const reminder =
+    moved === null
+      ? null
+      : { ...moved, ...(ended.closed.length === 0 ? {} : { alsoClosed: ended.closed }), ...(ended.skipped.length === 0 ? {} : { chainSkipped: ended.skipped }) };
   const thread = cp["closeThread"](proposal, mint.id, ctx.owner === undefined ? cp["owner"] : ctx.owner && !cp.observer);
   cp["emit"]("counterpart.deposit", mint.id, {
     source,
@@ -274,6 +292,8 @@ export async function deposit(
     ...(thread === null ? {} : { thread }),
     ...(facts === null ? {} : { facts }),
     ...(about === null ? {} : { aboutCarried: { mark: about.about, from: about.from } }),
+    ...(titled.carried === undefined ? {} : { titleCarried: titled.carried }),
+    ...(titled.asked ? { titleAsked: true as const } : {}),
     ...(slot === null ? {} : { slot }),
   };
 }
@@ -460,6 +480,36 @@ export function carryAbout(cp: Counterpart, p: Proposal, sent: string | null | u
     return null;
   }
   return row === undefined ? null : inheritFrom([row]).about;
+}
+
+/**
+ * A REVISION'S TITLE WHEN ITS WRITER SENT NONE (2026-10-14, Group 1 check-in,
+ * lightly held): 5 of 7 untitled live memories since 10-05 were revisions
+ * that carried `about`, `saidBy`, `status` and the date but not the title.
+ * Now the title of the memory it revises (declared and resolved, as
+ * `carryFacts` reads it) is carried — EXCEPT when the write closes something
+ * (a dated memory's date dropped or spent, or any `status: done`): "Pay
+ * taxes by the 15th" on the memory that says it was paid reads as still
+ * open, so nothing is carried and the reply asks for a title. A sent title
+ * always wins; a confidential memory's title is never carried (the new
+ * memory is not confidential). The old title passed the gate when stored.
+ */
+export function carryTitle(cp: Counterpart, p: Proposal, closes: boolean): { carried?: { title: string; from: string }; asked: boolean } {
+  if (p.title !== null && p.title.trim().length > 0) return { asked: false };
+  const target = p.updates?.method === "declared" ? p.updates.resolved : null;
+  if (target === null) return { asked: false };
+  if (closes) return { asked: true };
+  try {
+    const row = cp.store.row(target);
+    const title = row?.title ?? null;
+    if (row === undefined || title === null || title.trim().length === 0) return { asked: false };
+    // A confidential memory's title never moves onto a new memory, which is
+    // not confidential when it is written — for any session, the owner's too.
+    if (row.confidential === 1) return { asked: false };
+    return { carried: { title, from: target }, asked: false };
+  } catch {
+    return { asked: false };
+  }
 }
 
 /**
@@ -681,6 +731,87 @@ export function moveReminder(cp: Counterpart, carry: ReminderCarryPlan, successo
     inherited: carry.inherited,
     moved,
   };
+}
+
+/**
+ * CLOSING A REMINDER CHAIN (2026-10-14, Group 1 check-in, lightly held). One
+ * obligation can sit on several memories of one chain — `reminderFrom`
+ * backwards, `reminderMovedTo` forwards — and a "done" that `updates` one of
+ * them cleared only the holder's date, so the rest kept theirs and kept
+ * coming back. This walks both ways from `from` (raw pointer ids, cycle-safe,
+ * at most `DATE_LINEAGE_MAX` memories) and returns the chain without `from`;
+ * it is read before the move, which rewrites `from`'s forward pointer. Then
+ * `closeReminderChain` clears every live one that still holds a date, kept in
+ * its version like any revise. Only the chain: a separate memory of the same
+ * obligation is listed in the reply for the writer to close, never closed
+ * here. Each clear on its own; a failed one is emitted and skipped.
+ */
+export function reminderChain(cp: Counterpart, from: string): string[] {
+  const seen = new Set<string>([from]);
+  const chain: string[] = [];
+  const queue: string[] = [from];
+  // The RAW id each pointer names, never `Store#resolve`d (review of #493):
+  // resolving follows supersession and merges, which can land on another
+  // obligation's memory. A pointer at a superseded, archived or missing row
+  // ends that branch there.
+  const pointer = (id: string, key: string): string | null => {
+    try {
+      const next = cp.store.readProse(id).meta[key];
+      if (typeof next !== "string") return null;
+      const row = cp.store.row(next);
+      return row === undefined || row.superseded_by !== null || row.archived === 1 ? null : next;
+    } catch {
+      return null;
+    }
+  };
+  while (queue.length > 0) {
+    const id = queue.shift() as string;
+    for (const next of [pointer(id, DATE_FROM_META), pointer(id, DATE_MOVED_TO_META)]) {
+      if (next === null || seen.has(next)) continue;
+      if (chain.length >= DATE_LINEAGE_MAX) return chain;
+      seen.add(next);
+      chain.push(next);
+      queue.push(next);
+    }
+  }
+  return chain;
+}
+
+/**
+ * The other half of `reminderChain`: each of its memories that still holds a
+ * date has it cleared, marked spent by the closing memory
+ * (`REMINDER_SPENT_BY_META`, as a `done` holder marks the one it spends).
+ * `closeThread`'s guards first (review of #493): a protected memory, and —
+ * for a session that is not the owner's — a confidential one or one written
+ * in another directory keep their date and come back as `skipped`, for the
+ * reply to list. An undo of the write's settle puts back the holder's date
+ * only, not these (the settle records one reminder).
+ */
+export function closeReminderChain(
+  cp: Counterpart,
+  chain: readonly string[],
+  successor: string,
+  who: { owner: boolean; scope: string },
+): { closed: string[]; skipped: string[] } {
+  const closed: string[] = [];
+  const skipped: string[] = [];
+  for (const id of chain) {
+    if (id === successor) continue;
+    const row = cp.store.row(id);
+    if (row === undefined || row.archived === 1 || row.event_date === null) continue;
+    if (row.protected === 1 || (!who.owner && (row.confidential === 1 || (row.origin_scope ?? "") !== who.scope))) {
+      skipped.push(id);
+      continue;
+    }
+    try {
+      cp.store.revise(id, { eventDate: null, meta: { [REMINDER_SPENT_BY_META]: successor }, reason: "reminder-spent" });
+      closed.push(id);
+    } catch (err) {
+      cp["emit"]("counterpart.reminder.chain.failed", id, { successor, error: errCode(err) });
+    }
+  }
+  if (closed.length + skipped.length > 0) cp["emit"]("counterpart.reminder.chain.closed", successor, { closed: closed.length, skipped: skipped.length });
+  return { closed, skipped };
 }
 
 /**

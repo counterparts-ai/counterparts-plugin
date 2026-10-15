@@ -3,8 +3,8 @@ import { existsSync, statSync } from "node:fs";
 import { isDay, localDate, localTime, resolveZone, todayIn } from "../../core/time.js";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { BOUNDARY_EVENT, RECALL_CREDIT_EVENT, RECALL_DECISION_EVENT } from "../../core/counterpart.js";
-import { PROBE_ROW_CEILING, probeOQ4, renderProbe } from "../../core/recall/probe.js";
+import { BOUNDARY_EVENT, MCP_RECALL_EVENT, RECALL_CREDIT_EVENT, RECALL_DECISION_EVENT, RECALL_RATED_EVENT } from "../../core/counterpart.js";
+import { PROBE_ROW_CEILING, probeOQ4, probeRatings, renderProbe, renderRatings } from "../../core/recall/probe.js";
 // `band` is imported rather than mirrored: the dashboard computes the live
 // band with this exact function, and two implementations of "which band is this
 // row in today" is how the two surfaces disagreed in the first place.
@@ -117,9 +117,18 @@ export function probeCommand(dir: string, io: Io, namedDir: boolean): number {
     const credits = store.eventLog({ name: RECALL_CREDIT_EVENT, order: "desc", limit: PROBE_ROW_CEILING }).reverse();
     const rows = [...decisions, ...credits].map((r) => ({ name: r.name, day: r.day, payload: r.payload }));
     for (const line of renderProbe(probeOQ4(rows))) io.out(line);
+    // THE RATINGS (2026-10-14; Mike's call, tracking only): what sessions
+    // scored of what they were shown, beside the hit rate above.
+    const ratings = store.eventLog({ name: RECALL_RATED_EVENT, order: "desc", limit: PROBE_ROW_CEILING }).reverse();
+    const lookups = store.eventLog({ name: MCP_RECALL_EVENT, order: "desc", limit: PROBE_ROW_CEILING }).reverse();
+    io.out("");
+    const rated = [...rows, ...[...ratings, ...lookups].map((r) => ({ name: r.name, day: r.day, payload: r.payload }))];
+    for (const line of renderRatings(probeRatings(rated))) io.out(line);
     for (const [name, got] of [
       [RECALL_DECISION_EVENT, decisions.length],
       [RECALL_CREDIT_EVENT, credits.length],
+      [RECALL_RATED_EVENT, ratings.length],
+      [MCP_RECALL_EVENT, lookups.length],
     ] as const) {
       if (got >= PROBE_ROW_CEILING) {
         io.err(`warning: ${name} hit the ${PROBE_ROW_CEILING}-row ceiling; the oldest rows are missing from this table`);

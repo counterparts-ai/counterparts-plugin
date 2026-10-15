@@ -120,16 +120,23 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
     id: "emotional",
     evidence: ["feelings", "emotion-weight", "mood-match"],
     // Emotion part A (2026-09-26): a memory's strongest feeling lifts it and
-    // slows its fading, and a recorded mood lifts matching memories in recall.
+    // slows its fading. Since 2026-10-14 it fires when a memory is saved with
+    // a feeling or one carrying a feeling comes to mind; the mood match (off
+    // by decision since 2026-10-10) is said only when it counted.
     read: (v, rows) => {
       const weighted = rows("emotion-weight")?.total ?? 0;
       const withFeelings = rows("feelings")?.total ?? 0;
+      const felt = part(v, "felt");
+      const feltRecalled = part(v, "feltRecalled");
       const newWeighted = part(v, "weighted");
       const matched = part(v, "moodMatched");
       const held = `${plural(weighted, "memory", "memories")} held higher and fading slower (${String(withFeelings)} with recorded feelings)`;
       if (v.fired) {
         const parts: string[] = [];
-        if (newWeighted > 0) parts.push(`${plural(newWeighted, "new memory", "new memories")} carrying feeling`);
+        // Saved with a feeling and new memories carrying one overlap: the first is said when it counted.
+        if (felt > 0) parts.push(`${plural(felt, "memory", "memories")} saved with a feeling`);
+        else if (newWeighted > 0) parts.push(`${plural(newWeighted, "new memory", "new memories")} carrying feeling`);
+        if (feltRecalled > 0) parts.push(`${plural(feltRecalled, "turn", "turns")} brought one carrying a feeling to mind`);
         if (matched > 0) parts.push(`${plural(matched, "memory", "memories")} a matching mood brought closer`);
         return { light: LIGHT.working, says: `${parts.join("; ")}; ${held}` };
       }

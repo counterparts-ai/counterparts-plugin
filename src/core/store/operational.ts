@@ -2395,7 +2395,9 @@ export function eraCarriedFrom(
  *     and grace still ahead) or a repeating date (a `recurring` rule).
  *
  * The 10-11 reading of defaults is `sleep/decay.ts#curveSignature`'s
- * `eraReads: 2`. Pure: the caller hands it the row, the cutoff and the hold it
+ * `eraReads: 2`; since 2026-10-14 (`eraReads: 3`) a value here below the
+ * stored claim is the whole salience the curve reads (`physics#curveSal`).
+ * Pure: the caller hands it the row, the cutoff and the hold it
  * computed.
  */
 export function eraClaimOf(
@@ -2418,13 +2420,28 @@ export function eraClaimOf(
   const claim = defaultClaimFor({ about, status: row.status ?? null, saidBy: row.said_by ?? null, kind: row.kind }).claim;
   // A default: today's, either way, exempt or not (2026-10-11).
   if (meta !== null && meta[CLAIMED_DEFAULT_SPELLED] === true) return claim === row.claimed ? null : claim;
-  if (row.promoted_identity === 1 || row.protected === 1) return null;
-  if (about === "owner" || about === "us" || (row.said_by ?? null) === "owner") return null;
-  if (hold !== null && hold.state === "pending") return null;
-  if (row.event_date !== null && row.event_date !== undefined && row.event_date !== "" && meta !== null && isRecurrence(meta[RECURRING_META])) {
-    return null;
-  }
+  if (eraExemptRow(row, meta, hold)) return null;
   return claim < row.claimed ? claim : null;
+}
+
+/**
+ * THE ERA'S EXEMPT (2026-10-10): the core, `protected`, about the owner or us,
+ * said by the owner, a pending date, a repeating date. Their explicit claims
+ * are read as stored; a DEFAULT on one is still read at today's default
+ * (2026-10-11), but the way it was before 2026-10-14 — floored by the row's
+ * own dimensions (`MemoryPhysics.eraExempt`, `physics#curveSal`), never the
+ * era's value alone.
+ */
+function eraExemptRow(
+  row: Pick<MemoryRow, "about" | "said_by" | "promoted_identity" | "protected" | "event_date">,
+  meta: Record<string, unknown> | null,
+  hold: DatedHold | null,
+): boolean {
+  if (row.promoted_identity === 1 || row.protected === 1) return true;
+  const about = row.about ?? null;
+  if (about === "owner" || about === "us" || (row.said_by ?? null) === "owner") return true;
+  if (hold !== null && hold.state === "pending") return true;
+  return row.event_date !== null && row.event_date !== undefined && row.event_date !== "" && meta !== null && isRecurrence(meta[RECURRING_META]);
 }
 
 /**
@@ -2438,9 +2455,12 @@ export function eraClaimOf(
 export function rowToPhysics(row: MemoryRow & FeelingPeak, today?: string | null): MemoryPhysics {
   const hold = datedHold(row, today ?? row.today_date ?? null);
   const eraClaim = eraClaimOf(row, row.claims_era_cutoff, hold);
+  // An exempt row's era (a default's, 2026-10-11) keeps its dimensions' floor (2026-10-14).
+  const eraExempt = eraClaim !== null && eraExemptRow(row, metaObjectOf(row.meta), hold);
   return {
     hold,
     ...(eraClaim === null ? {} : { eraClaim }),
+    ...(eraExempt ? { eraExempt } : {}),
     kind: row.kind,
     salience: rowToSalience(row),
     birthDay: row.birth_day,

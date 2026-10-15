@@ -129,9 +129,14 @@ watches Counterparts' own tool calls to show what was saved). It leaves Claude C
 memory (MEMORY.md and its prompt section) as it is. At the end of a
 reply the hooks may ask Claude, in a line you can see, to take one more short turn to
 write the session up as memories. The one exception for settings is
-`/counterparts:uninstall`, and only if you also had the npm install: it removes that
-install's own Counterparts hook lines from `~/.claude/settings.json` (after saving a backup
-next to it) and runs `claude mcp remove counterparts -s user`. It touches nothing else.
+`/counterparts:uninstall`, and only if you also had the npm install and removed it without
+running `counterparts uninstall`: the Counterparts hook lines it left in
+`~/.claude/settings.json` point at a program that is gone, so it removes them (after saving a
+backup next to it), and runs `claude mcp remove counterparts -s user` for that install's
+memory server. While the npm install is still there, its hooks and server keep working, and
+`counterparts uninstall` is what removes them, unless you choose to delete or set aside the
+memories: those both point at that memory, so then they are removed too. It touches nothing
+else.
 
 **Turning it off.** In a folder it hasn't been told about, Counterparts remembers, and the
 first session there asks whether it should. Telling Claude "not here" (or "just read", or

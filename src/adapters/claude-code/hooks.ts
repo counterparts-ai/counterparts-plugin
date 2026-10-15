@@ -511,10 +511,17 @@ export const PAGE_WRITER_TOOL = "counterparts self_page";
  * capture (`ritual`, CONTRACT §5 G11) whichever emission shape carried it —
  * today's `additionalContext`, or the stderr and `reason` shapes older
  * transcripts hold.
+ *
+ * RATINGS (2026-10-14; Mike's call, tracking only): one clause asks the
+ * session to score the footnotes shown since it last wrote, and every `drewOn`
+ * id — `session_end`'s `rated` field says the anchors and the rest. The ids
+ * are not listed here: every Stop's injection is noise someone pays for.
  */
+export const RATE_CLAUSE = "`rated` 0–3 each footnote shown since you last wrote, and each `drewOn` id";
+
 export function stopAsk(sessionId: string, chapter: number): string {
   return [
-    `${STOP_ASK_OPENER} 1) hand back what caught your attention since you last wrote, one idea each — what you read, what they said, what happened — with the counterparts session_end tool, session: ${sessionId}. \`handoff\` only if work here is unfinished; \`retireHandoff\` any now done; \`updates\` anything dated or open now done. ${PRONOUN_RULE}`,
+    `${STOP_ASK_OPENER} 1) hand back what caught your attention since you last wrote, one idea each — what you read, what they said, what happened — with the counterparts session_end tool, session: ${sessionId}. \`handoff\` only if work here is unfinished; \`retireHandoff\` any now done; \`updates\` anything dated or open now done; ${RATE_CLAUSE}. ${PRONOUN_RULE}`,
     `2) Write chapter ${String(chapter)} with the counterparts chapter tool, session: ${sessionId}.`,
   ].join("\n");
 }

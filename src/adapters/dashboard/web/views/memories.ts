@@ -8,7 +8,7 @@
  */
 import { CORE_EMOTIONS } from "../../../../core/feelings-wheel.js";
 import { TUNABLES as PHYSICS, band as bandOf, strength as strengthOf } from "../../../../core/physics/index.js";
-import { isEntityCard, isJournal, ownerNames } from "../../../../core/sleep/index.js";
+import { curveSinceDay, isEntityCard, isJournal, ownerNames } from "../../../../core/sleep/index.js";
 import { rowToPhysics } from "../../../../core/store/index.js";
 import type { Band, Kind, MemoryPhysics } from "../../../../core/types.js";
 import { NEVER, NONE } from "../../layout.js";
@@ -110,12 +110,18 @@ export const FIRM_AHEAD_DAYS = 30;
  * here. Nor is a memory whose date still repeats (`opts.recurring`, the row's
  * `recurrenceOfRow` — 2026-10-09): the prune keeps it for its next occurrence,
  * so it is firm or settling by its strength like any other, and the row says
- * how often it comes round (`ListRow.repeats`). Firm is still settled
+ * how often it comes round (`ListRow.repeats`). `opts.curveSince` is the
+ * prune's (`sleep/decay.ts#curveSinceDay`, 2026-10-14): during the 14 lived
+ * days after a new curve nothing is let go, so nothing reads fading for it. Firm is still settled
  * `FIRM_AHEAD_DAYS` from now if unused. The rest are settling.
  */
-export function holdOf(physics: MemoryPhysics, day: number, opts: { prunable: boolean; recurring?: boolean }): Hold {
+export function holdOf(
+  physics: MemoryPhysics,
+  day: number,
+  opts: { prunable: boolean; recurring?: boolean; curveSince?: number | null },
+): Hold {
   if (physics.promotedIdentity === true || physics.protected === true) return "firm";
-  if (opts.prunable && letGoDay(physics, day, NEAR_LET_GO_DAYS, opts.recurring === true) !== null) return "fading";
+  if (opts.prunable && letGoDay(physics, day, NEAR_LET_GO_DAYS, opts.recurring === true, opts.curveSince ?? null) !== null) return "fading";
   if (strengthOf(physics, day + FIRM_AHEAD_DAYS) >= PHYSICS.THETA_SEM) return "firm";
   return "settling";
 }
@@ -174,6 +180,7 @@ export function memoriesView(src: DashboardSource, opts: { limit?: number } = {}
   }
 
   const hold = { firm: 0, settling: 0, fading: 0, journal: 0 };
+  const curveSince = curveSinceDay(store, day);
   for (const m of rows) {
     const row = store.row(m.id);
     if (row !== undefined && isChapterMemory(row)) hold.journal += 1;
@@ -184,6 +191,7 @@ export function memoriesView(src: DashboardSource, opts: { limit?: number } = {}
           holdOf(store.physicsOf(m.id), day, {
             prunable: row === undefined || !isEntityCard(row),
             recurring: row !== undefined && repeatsOf(row) !== null,
+            curveSince,
           })
         ] += 1;
       } catch {
@@ -462,6 +470,7 @@ export function memoryListView(
 ): MemoryListView {
   const store = src.store;
   const day = store.livedDay();
+  const curveSince = curveSinceDay(store, day);
   const state: ListState = opts.state === "archived" || opts.state === "all" ? opts.state : "live";
   const kind = KINDS.includes(opts.kind as Kind) ? (opts.kind as Kind) : null;
   const band = BANDS.includes(opts.band as Band) ? (opts.band as Band) : null;
@@ -522,7 +531,7 @@ export function memoryListView(
       const physics = rowToPhysics(row);
       b = bandOf(physics, day);
       s = strengthOf(physics, day);
-      if (!isArchived && !chapter) hold = holdOf(physics, day, { prunable: !isEntityCard(row), recurring: repeats !== null });
+      if (!isArchived && !chapter) hold = holdOf(physics, day, { prunable: !isEntityCard(row), recurring: repeats !== null, curveSince });
     } catch {
       /* a row whose physics will not compute still lists, at zero */
       if (!isArchived && !chapter) hold = "settling";

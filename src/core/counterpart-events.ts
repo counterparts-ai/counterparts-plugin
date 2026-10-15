@@ -276,6 +276,18 @@ export const SEMANTIC_LAG_EVENT = "adapter.semantic.lag";
 export const RECALL_CREDIT_EVENT = "recall.credit";
 
 /**
+ * RATINGS OF WHAT A SESSION WAS SHOWN (2026-10-14; Mike's call, tracking
+ * only): one row per `session_end` call that sent `rated`, written by
+ * `Counterpart#rateShown`, `ref` the session. Per rating its id, score (0–3),
+ * lane (`loud` / `footnotes` / `pointers` / `asked` / `opened`) and whether
+ * it was also named in `drewOn` at that boundary; the coverage since the
+ * session's previous rating row; the refusals by reason. Ids and scores only,
+ * never text. Nothing reads it to act; `recall/probe.ts#probeRatings` reads it
+ * to report.
+ */
+export const RECALL_RATED_EVENT = "recall.rated";
+
+/**
  * ONE ROW PER APPLY OF CARRIED CO-ACTIVATION, written by the process that
  * applies it — the boundary's detached worker.
  *
@@ -864,6 +876,8 @@ export const RECALL_DECISION_FIELDS = [
   "affectReason",
   // Emotion part A (2026-09-26): admitted memories the current mood lifted.
   "moodMatched",
+  // 2026-10-14: WHICH admitted memories the mood lifted, ids only, capped.
+  "moodMatchedIds",
   "sentinelRendered",
   "surfaced",
   "footnotes",
@@ -943,6 +957,7 @@ export function recallDecisionRecord(
     affectFlag: d.affectFlag,
     affectReason: d.affectReason,
     moodMatched: d.moodMatched,
+    moodMatchedIds: d.moodMatchedIds,
     sentinelRendered: d.sentinel !== null,
     surfaced: tierRows(d.surfaced, d.verdicts),
     footnotes: tierRows(d.footnotes, d.verdicts),

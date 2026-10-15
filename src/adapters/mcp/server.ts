@@ -185,6 +185,9 @@ import {
   memoryHomeWords,
   RECALL_MODE_WORDS,
   DESKTOP_DREAM_NOTE,
+  STILL_DATED_HINT,
+  STILL_DATED_SHOWN,
+  TITLE_ASKED_NOTE,
 } from "./server-words.js";
 import { resolveScope, SEEN_SESSIONS, EVENT_RING } from "./server-options.js";
 import type {
@@ -203,13 +206,14 @@ import {
   readTraits,
   readWriteFacts,
   reminderEcho,
+  titleEcho,
   undatedReminderWarning,
   factsEcho,
   threadOf,
   addressBlocked,
   resolvedIdOf,
 } from "./server-args.js";
-import type { RecallRowFields } from "./server-args.js";
+import type { RecallRowFields, ReminderRead } from "./server-args.js";
 import * as sessionEndPart from "./server-session-end.js";
 import * as selfTools from "./server-self-tools.js";
 
@@ -1682,6 +1686,7 @@ export class McpServer {
       ...this.recordAbout(deposit, about.mark),
       ...this.recordTraits(deposit, traits.inputs, model),
       ...reminderEcho(deposit, dated, this.today()),
+      ...titleEcho(deposit, TITLE_ASKED_NOTE),
       ...undatedReminderWarning(deposit, dated, args["title"], text),
       ...factsEcho(deposit, facts),
       ...this.settledOf(deposit, args["how"] !== undefined),
@@ -1690,6 +1695,7 @@ export class McpServer {
       // Claude Code hands the model (the #282 lesson, f387f55).
       ...(neighbours.length === 0 ? {} : { neighbours, neighboursHint: NEIGHBOURS_HINT }),
       ...this.slotOf(deposit),
+      ...this.stillDatedNear(deposit, dated, facts.sent.status, [], session),
       ...(settle === null ? {} : { settle }),
       ...(feltNow === null ? {} : { feelingsNow: feltNow }),
       // AN ERROR ONLY WHEN NOTHING LANDED (review of #316): a refused note
@@ -1992,6 +1998,58 @@ export class McpServer {
   }
 
   /**
+   * OTHER OPEN DATED MEMORIES NEAR A CLOSE (2026-10-14, Group 1 check-in,
+   * lightly held). One obligation was found on several memories — a plain
+   * reminder, a moved chain, a list — and a "done" that `updates` one left the
+   * others dated. When a write closes a dated memory, or meant to (`updates`
+   * with `eventDate: null` or `status: done`), the nearest memories of the
+   * new one and of the one it closed that still hold a date are LISTED, by id
+   * and title, so the writer can close them in the same step. Never closed
+   * here: a nearby date can be another obligation. Empty when none.
+   */
+  private stillDatedNear(deposit: DepositResult, dated: ReminderRead, sentStatus: unknown, siblings: readonly string[], session: string | null): Record<string, unknown> {
+    if (!deposit.deposited || deposit.memoryId === null) return {};
+    const closed = deposit.reminder !== undefined && deposit.reminder.eventDate === null;
+    const declared = (deposit.proposal?.updates?.declared ?? null) !== null;
+    const meant = declared && (("fields" in dated && dated.fields.eventDate === null) || sentStatus === "done");
+    if (!closed && !meant) return {};
+    const exclude = [
+      deposit.memoryId,
+      deposit.mint?.updates,
+      deposit.revision?.targetId,
+      deposit.reminder?.from,
+      ...(deposit.reminder?.alsoClosed ?? []),
+      ...siblings,
+    ].filter((x): x is string => typeof x === "string");
+    const anchors = [deposit.memoryId, deposit.reminder?.from, deposit.mint?.updates].filter((x): x is string => typeof x === "string");
+    const out: { id: string; title: string | null; eventDate: string; skipped?: true }[] = [];
+    const seen = new Set<string>(exclude);
+    // The chain's own memories this write could not close (protected, or not
+    // this session's to close) come first, marked; a confidential one's title
+    // only for the owner (review of #493).
+    for (const id of deposit.reminder?.chainSkipped ?? []) {
+      seen.add(id);
+      const row = this.counterpart.store.row(id);
+      if (row === undefined || row.event_date === null) continue;
+      const hidden = row.confidential === 1 && !this.owner;
+      out.push({ id, title: hidden ? null : row.title ?? lineOf({ body: row.body }), eventDate: row.event_date, skipped: true });
+    }
+    for (const anchor of [...new Set(anchors)]) {
+      const near = this.counterpart.writeNeighbours(anchor, { exclude, owner: this.owner, session, limit: CONTRADICTION_TUNABLES.NEIGHBOURS_PER_CALL });
+      for (const n of near) {
+        if (seen.has(n.id) || out.filter((x) => x.skipped !== true).length >= STILL_DATED_SHOWN) continue;
+        seen.add(n.id);
+        const row = this.counterpart.store.row(n.id);
+        if (row === undefined || row.archived === 1 || row.event_date === null) continue;
+        out.push({ id: n.id, title: n.title, eventDate: row.event_date });
+      }
+    }
+    if (out.length === 0) return {};
+    this.markSeen(out.map((n) => n.id));
+    return { stillDated: out, stillDatedHint: STILL_DATED_HINT };
+  }
+
+  /**
    * THE SLOT THE DETECTOR PROPOSED for a write (2026-10-11, Group 2): the
    * older memory, by id and title, and the ask — settle it now or let the
    * dream. Empty when none was proposed.
@@ -2024,8 +2082,12 @@ export class McpServer {
    * boundary as quoting a loud surfacing does; and one durable `mcp.recall`
    * row (`noteRecall`).
    */
-  private async recallTool(args: Record<string, unknown>): Promise<ToolResult> {
+  private async recallTool(sent: Record<string, unknown>): Promise<ToolResult> {
     if (this.observer) return this.standDown("recall");
+    // `query` IS `question` (2026-10-14, lightly held): the model sent `query`
+    // about twice a day and was refused `no-argument`. Read at the root rather
+    // than refused; `question` wins when both are sent. A mode is still required.
+    const args = sent["question"] === undefined && sent["query"] !== undefined ? { ...sent, question: sent["query"] } : sent;
     const handle = args["handle"];
     // THE LAST EXCHANGE (2026-10-11): a read of this directory's span buffer.
     // It stands down under observer like the rest of recall (G5, review of #392).
@@ -2876,12 +2938,16 @@ export class McpServer {
     return sessionEndPart.depositEntries(this, raw, session, cover, scope, writeUp);
   }
 
-  private writeUpField(args: Record<string, unknown>, drewOn: Record<string, unknown> | null): Promise<ToolResult> {
-    return sessionEndPart.writeUpField(this, args, drewOn);
+  private writeUpField(args: Record<string, unknown>, extra: Record<string, unknown>): Promise<ToolResult> {
+    return sessionEndPart.writeUpField(this, args, extra);
   }
 
   private drewOnField(raw: unknown, via: "session_end" | "chapter"): Record<string, unknown> | null {
     return sessionEndPart.drewOnField(this, raw, via);
+  }
+
+  private ratedField(raw: unknown, drewOn: Record<string, unknown> | null): Record<string, unknown> | null {
+    return sessionEndPart.ratedField(this, raw, drewOn);
   }
 
   private writeHandoffField(raw: unknown): Record<string, unknown> | null {

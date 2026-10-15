@@ -42,6 +42,7 @@ import {
   PRIMACY_DELIVER_EVENT,
   PRIMACY_STANDDOWN_EVENT,
   RECALL_CREDIT_EVENT,
+  RECALL_RATED_EVENT,
   RECALL_DECISION_EVENT,
   RECALL_DELIVERED_EVENT,
   RUNNER_FAILED_EVENT,
@@ -189,6 +190,7 @@ export type DurableEventName =
   | typeof HANDOFF_CLEARED_EVENT
   | typeof LAST_HERE_NOROOM_EVENT
   | typeof RECALL_CREDIT_EVENT
+  | typeof RECALL_RATED_EVENT
   | typeof ASSOCIATE_FLUSH_EVENT
   | typeof BAND_TRANSITION_EVENT
   | typeof PRIMACY_STANDDOWN_EVENT
@@ -335,6 +337,8 @@ export const DURABLE_EVENTS = {
   // Durable since 2026-10-02: "Work here" had more lines than the wake carried.
   "self.work.overflow": "a session start had more \"Work here\" lines for its project than it carried — more than the wake shows, so they rotate, or fewer fitted the room (how many, how many shown)",
   "recall.credit": "a boundary decided which memories the replies actually used, and credited them",
+  // Ratings (2026-10-14; Mike's call, tracking only): recorded, acted on by nothing.
+  "recall.rated": "a session scored the memories it was shown, 0 to 3 (by lane, whether each was also drawn on, and how many of the footnotes since its last rating it scored) — tracking only, nothing changes",
   // Learned association had no line in the log at all: an edge is its own
   // record, so a flush that never happened read exactly like a credit pass with
   // nothing to wire (2026-09-17, mechanism inventory §3 S3).

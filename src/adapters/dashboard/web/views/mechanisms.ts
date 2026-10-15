@@ -133,9 +133,14 @@ interface LeadCandidate {
 const lead = (keys: readonly string[], one: string, many: string, week = true): LeadCandidate => ({ keys, says: [one, many], week });
 export const LEADS: Readonly<Record<string, readonly LeadCandidate[]>> = {
   salience: [lead(["deposit", "chunk"], "memory scored as it was written", "memories scored as they were written")],
+  // What a feeling did first (2026-10-14): saved with one, then came to mind
+  // carrying one. The mood match is last: off by decision since 2026-10-10,
+  // so a week of zeros never leads with it.
   emotional: [
-    lead(["moodMatched"], "memory a matching mood brought closer", "memories a matching mood brought closer"),
+    lead(["felt"], "memory saved with a feeling", "memories saved with a feeling"),
+    lead(["feltRecalled"], "turn brought a memory carrying a feeling to mind", "turns brought memories carrying a feeling to mind"),
     lead(["weighted"], "new memory held higher for its feeling", "new memories held higher for their feeling"),
+    lead(["moodMatched"], "memory a matching mood brought closer", "memories a matching mood brought closer"),
   ],
   // Below reach first, then exits, apart (2026-10-10, review 03 C3): below
   // reach is a state now; an exit is archived.

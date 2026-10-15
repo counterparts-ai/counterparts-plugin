@@ -60,12 +60,18 @@ import {
   loadSessionSemantic,
   markJudged,
   saveSessionSemantic,
+  RATED_MAX_PER_CALL,
+  RATED_ROW_IDS_MAX,
+  rateableSet,
+  ratedCoverage,
+  readRatings,
 } from "./recall/index.js";
 import { DREW_ON_MAX_PER_BOUNDARY, resolveReferences } from "./recall/reference.js";
 import type { ReferenceCandidate } from "./recall/reference.js";
 import type {
   CreditResult,
   GateState,
+  RatedResult,
   RecallDecision,
   Turn as RecallTurn,
   RecallResult,
@@ -187,6 +193,7 @@ import {
   CAPTURE_FAILED_EVENT,
   SEMANTIC_LAG_EVENT,
   RECALL_DECISION_EVENT,
+  RECALL_RATED_EVENT,
   recallDecisionRecord,
   ASSOCIATE_FLUSH_EVENT,
   SUBJECTS_BACKFILL_META,
@@ -255,6 +262,7 @@ export {
   EMBED_BACKFILL_EVENT,
   SEMANTIC_LAG_EVENT,
   RECALL_CREDIT_EVENT,
+  RECALL_RATED_EVENT,
   ASSOCIATE_FLUSH_EVENT,
   CONTIGUITY_CURSOR_META,
   SUBJECTS_BACKFILL_META,
@@ -2517,6 +2525,127 @@ export class Counterpart {
   }
 
   /**
+   * THE `rated` FIELD (2026-10-14; Mike's call, TRACKING ONLY, lightly held):
+   * the session scores the memories it was shown, 0–3, on `session_end` —
+   * `recall/rated.ts` holds the anchors, the lanes and the validation. One
+   * durable `recall.rated` row per call; NOTHING ELSE. No strength, ranking,
+   * credit, decay, link, judged mark or reminder window moves: this method
+   * never calls `resolveUse`, physics, `publishCoactivation`, `markJudged` or
+   * `Prospective`. How the signal is used is decided later, from the rows.
+   *
+   * The one guard is the shown set: the gate state's `surfaced` (loud,
+   * footnotes, pointers), the session's `asked` records, and `opened` — what
+   * the adapter's tools handed this session (by-address opens; a `remember`
+   * result's neighbours). Unlike `creditDrewOn` it checks nothing about the
+   * row itself (archived, superseded, faded): a rating credits nothing, so a
+   * memory shown and since replaced can still be scored.
+   *
+   * `drewOn` is what the same call's `drewOn` CREDITED (the adapter passes its
+   * credited ids, never what was merely named — review of #492); an id
+   * credited as drawn on at this boundary (the gate state's engaged credit on
+   * this turn, this day — what `chapter`'s field did) counts too. Each rating
+   * says whether its id was one.
+   *
+   * Coverage: the footnotes and quiet pointers whose turn is past the
+   * session's previous rating row's `turn` (0 when none) — every footnote
+   * shown since it last rated — and how many of those this call rated. Loud
+   * lines show no id, so they are rateable but not counted.
+   *
+   * A call whose every entry is refused writes no row (and so moves no
+   * coverage window). Under observer stance nothing is read or written: every
+   * entry comes back refused `observer`. A lost write costs the row
+   * (`recorded: false`), never the call.
+   */
+  rateShown(
+    sessionId: string,
+    entries: readonly unknown[],
+    opts: { opened?: Iterable<string>; drewOn?: Iterable<string>; at?: string } = {},
+  ): RatedResult {
+    const day = this.store.livedDay();
+    if (this.observer) {
+      return {
+        day,
+        sent: entries.length,
+        rated: [],
+        refused: entries.map((e, index) => {
+          const raw = e !== null && typeof e === "object" ? (e as { id?: unknown }).id : undefined;
+          return { id: typeof raw === "string" ? raw.trim() : "", index, reason: "observer" as const };
+        }),
+        replaced: [],
+        coverage: { shown: 0, rated: 0 },
+        drewOnUnrated: [],
+        recorded: false,
+      };
+    }
+    const state = this.recall.gateState(sessionId);
+    let asked: string[] = [];
+    try {
+      asked = this.store.gateRecords(sessionId, ASKED_KIND).map((r) => r.ref);
+    } catch {
+      // An unreadable `asked` record narrows what may be rated; never wider.
+    }
+    const shown = rateableSet(state.surfaced, asked, opts.opened ?? []);
+    const drewOn = new Set([...(opts.drewOn ?? [])].map((id) => id.trim()).filter((id) => id.length > 0));
+    for (const [id, c] of Object.entries(state.credited)) {
+      if (c.tier === "engaged" && c.day === day && c.turn === state.turn) drewOn.add(id);
+    }
+    const { rated, refused, replaced } = readRatings(entries, shown, drewOn);
+    let floor = 0;
+    try {
+      const prev = this.store.eventLog({ name: RECALL_RATED_EVENT, ref: sessionId, order: "desc", limit: 1 })[0];
+      const p = prev === undefined ? null : (JSON.parse(prev.payload ?? "null") as { turn?: unknown } | null);
+      if (p !== null && typeof p.turn === "number" && Number.isFinite(p.turn)) floor = p.turn;
+    } catch {
+      // Unreadable: coverage counts from the session's start — more shown, never fewer.
+    }
+    const coverage = ratedCoverage(shown, rated, floor);
+    const ratedIds = new Set(rated.map((r) => r.id));
+    const drewOnUnrated = [...drewOn].filter((id) => !ratedIds.has(id));
+    const byReason: Record<string, number> = {};
+    for (const r of refused) byReason[r.reason] = (byReason[r.reason] ?? 0) + 1;
+    let recorded = false;
+    // NOTHING KEPT, NO ROW (review of #492): a call whose every entry was
+    // refused writes nothing, so it cannot move the next call's coverage
+    // window. Its refusals ride on the answer and the in-process event.
+    if (rated.length > 0) try {
+      const seq = this.store.appendEvent({
+        name: RECALL_RATED_EVENT,
+        day,
+        ref: sessionId,
+        payload: {
+          session: sessionId,
+          ...(opts.at === undefined ? {} : { date: opts.at }),
+          day,
+          turn: state.turn,
+          // What the coverage below counts from: the previous rating row's turn.
+          since: floor,
+          ratings: rated.slice(0, RATED_MAX_PER_CALL),
+          ratingsTotal: rated.length,
+          refused: byReason,
+          refusedIds: refused.slice(0, RATED_ROW_IDS_MAX).map((r) => r.id),
+          replaced: replaced.length,
+          coverage: { shown: coverage.shown, rated: coverage.rated },
+          drewOnNamed: drewOn.size,
+          drewOnUnrated: drewOnUnrated.slice(0, RATED_ROW_IDS_MAX),
+        },
+      });
+      recorded = seq > 0;
+    } catch (err) {
+      this.emit("counterpart.rated.failed", sessionId, { code: errCode(err) });
+    }
+    this.emit("counterpart.rated", sessionId, {
+      day,
+      sent: entries.length,
+      rated: rated.length,
+      refused: refused.length,
+      shown: coverage.total.shown,
+      covered: coverage.total.rated,
+      recorded,
+    });
+    return { day, sent: entries.length, rated, refused, replaced, coverage: coverage.total, drewOnUnrated, recorded };
+  }
+
+  /**
    * One boundary's score of recall's ambient showings (2026-10-09; Hawkins
    * "2a", measurement only). The stretch is every memory this session's gate
    * state records as shown after the session's `judged` mark — loud,
@@ -2918,11 +3047,12 @@ export class Counterpart {
    * The nearest few live memories of one just written (`reconsolidation.ts
    * #writeNeighbours`), for the write's result — minus the memory it updates.
    */
-  writeNeighbours(id: string, opts: { exclude?: readonly string[]; owner: boolean; session?: string | null }): Neighbour[] {
+  writeNeighbours(id: string, opts: { exclude?: readonly string[]; owner: boolean; session?: string | null; limit?: number }): Neighbour[] {
     try {
       return writeNeighbours(this.store, {
         id,
         owner: opts.owner,
+        ...(opts.limit === undefined ? {} : { limit: opts.limit }),
         ...(opts.exclude === undefined ? {} : { exclude: opts.exclude }),
         ...(opts.session === undefined ? {} : { session: opts.session }),
       });

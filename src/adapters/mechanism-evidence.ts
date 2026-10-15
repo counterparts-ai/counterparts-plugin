@@ -23,11 +23,12 @@
  * part A, prospective reminders, the entity-card fade). A working default,
  * revisable.
  *
- * Read-only: `eventLog`, two counts and one meta read. No row text.
+ * Read-only: `eventLog`, two counts, one meta read, and which named memories
+ * carry a feeling (Emotion). No row text.
  */
 import { cadenceFor, readMarker, MARKER_UNSET } from "../core/sleep/index.js";
 import type { Phase } from "../core/sleep/index.js";
-import type { EventRow, ReadOnlyStore } from "../core/store/index.js";
+import type { EventRow, FeelingRow, ReadOnlyStore } from "../core/store/index.js";
 import type { DurableEventName } from "./dashboard/registries.js";
 
 /** How many backing event seqs a verdict keeps. */
@@ -67,6 +68,14 @@ export interface Proof {
    * asked of a row only after `where` and `sum` said it counts.
    */
   readonly stands?: (store: ReadOnlyStore, row: EventRow) => boolean;
+  /**
+   * A CONDITION ONLY THE STORE CAN ANSWER (2026-10-14, Emotion): the row
+   * counts only when this says so — a deposit whose memory carries a recorded
+   * feeling, a turn that brought one to mind. Asked after `where` and `sum`,
+   * before `stands`. The row names the memories; whether they carry a feeling
+   * is on the store, not in the payload.
+   */
+  readonly reads?: (store: ReadOnlyStore, p: Payload) => boolean;
 }
 
 export interface MechanismEvidence {
@@ -143,12 +152,27 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
   },
   {
     // PARTLY: emotion part A (2026-09-26) weighs recorded feelings — the lift
-    // and the slower fade are arithmetic on the row (the census), the mood
-    // match is a count on the turn's row. Nothing reads feeling from words yet.
+    // and the slower fade are arithmetic on the row (the census). Nothing
+    // reads feeling from words yet.
+    //
+    // WHAT COUNTS AS IT FIRING (2026-10-14): a memory SAVED with a feeling,
+    // and a turn that brought a memory CARRYING a feeling to mind (either
+    // tier). Before, the only event proof was the mood match, which was
+    // switched off on purpose on 2026-10-10 (recall's MOOD_*_WEIGHT at 0), so
+    // Emotion read 0 every day while feelings were recorded every day. The
+    // mood match stays a proof, for the day it comes back on.
     id: "emotional",
     family: "encoding",
     build: "partly",
     proofs: [
+      { key: "felt", event: "gate.deposit", sum: "accepted", reads: carriesFeeling, says: ["memory saved with a feeling", "memories saved with a feeling"] },
+      {
+        key: "feltRecalled",
+        event: "recall.decision",
+        where: (p) => num(p["surfacedCount"]) + num(p["footnoteCount"]) > 0,
+        reads: carriesFeeling,
+        says: ["turn brought a memory carrying a feeling to mind", "turns brought memories carrying a feeling to mind"],
+      },
       { key: "moodMatched", event: "recall.decision", sum: "moodMatched", says: ["memory a matching mood brought closer", "memories a matching mood brought closer"] },
     ],
     census: {
@@ -357,6 +381,11 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
   },
 ];
 
+/** The events a proof asks the store about (`Proof.reads`): whose memories may carry a feeling. */
+export const FELT_EVENTS: ReadonlySet<string> = new Set(
+  MECHANISM_EVIDENCE.flatMap((m) => m.proofs.filter((p) => p.reads !== undefined).map((p) => p.event)),
+);
+
 /** The window a surface judges over. */
 export interface EvidenceWindow {
   /** The lowest lived day a row may carry — the SQL bound, and the census's. */
@@ -448,15 +477,106 @@ export function firingKey(row: EventRow): string {
 }
 
 /** The amount this row contributes, or 0 when it does not count. */
-/** `amount`, and zero for a row whose act no longer stands (`Proof.stands`). */
+/** `amount`, and zero for a row the store says does not count (`Proof.reads`)
+ *  or whose act no longer stands (`Proof.stands`). */
 export function counted(proof: Proof, row: EventRow, store: ReadOnlyStore): number {
-  const n = amount(proof, payloadOf(row));
-  if (n <= 0 || proof.stands === undefined) return n;
+  const p = payloadOf(row);
+  const n = amount(proof, p);
+  if (n <= 0) return n;
+  if (proof.reads !== undefined) {
+    try {
+      if (!proof.reads(store, p)) return 0;
+    } catch {
+      // A store that cannot answer is no evidence the row counts.
+      return 0;
+    }
+  }
+  if (proof.stands === undefined) return n;
   try {
     return proof.stands(store, row) ? n : 0;
   } catch {
     return n;
   }
+}
+
+/**
+ * The memories a row names: a deposit's `memoryId`, a turn's two tiers
+ * (`surfaced`, `footnotes`: `{ id }` each). No other field is read.
+ */
+export function memoryIdsOf(p: Payload): string[] {
+  const out: string[] = [];
+  if (typeof p["memoryId"] === "string") out.push(p["memoryId"]);
+  for (const key of ["surfaced", "footnotes"]) {
+    const list = p[key];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const id: unknown = item !== null && typeof item === "object" ? (item as { id?: unknown }).id : item;
+      if (typeof id === "string" && !out.includes(id)) out.push(id);
+    }
+  }
+  return out;
+}
+
+/**
+ * THE FEELINGS ONE BUILD HAS READ (review of #488). Whether a row's memories
+ * carry a feeling is asked of hundreds of rows in one build: the week's, a
+ * panel's lookback, the "last fired" search, the sidebar's newest rows. Inside
+ * `feltScope` the answer is kept per memory id, and each batch of rows is read
+ * in ONE `feelingsOn` (`primeFelt`) before its rows are asked. Outside a
+ * scope a row reads its own, and nothing is kept between calls, so a
+ * long-lived dashboard never answers from a stale read.
+ */
+const FELT_SCOPES = new WeakMap<ReadOnlyStore, Map<string, readonly FeelingRow[]>>();
+
+/** `fn`, with one feeling read per memory for everything it asks; a scope already open is reused. */
+export function feltScope<T>(store: ReadOnlyStore, fn: () => T): T {
+  if (FELT_SCOPES.has(store)) return fn();
+  FELT_SCOPES.set(store, new Map());
+  try {
+    return fn();
+  } finally {
+    FELT_SCOPES.delete(store);
+  }
+}
+
+/** In one read, the feelings of every memory `rows` name that the open scope has not read yet. No scope: nothing. */
+export function primeFelt(store: ReadOnlyStore, rows: readonly EventRow[]): void {
+  const known = FELT_SCOPES.get(store);
+  if (known === undefined) return;
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (!FELT_EVENTS.has(row.name)) continue;
+    for (const id of memoryIdsOf(payloadOf(row))) if (!known.has(id)) ids.add(id);
+  }
+  // A failed batch leaves the scope unprimed: each row then asks for itself,
+  // inside `counted`'s own catch, so one bad read costs one row, not the build.
+  try {
+    readFelt(store, known, [...ids]);
+  } catch {
+    // unprimed
+  }
+}
+
+function readFelt(store: ReadOnlyStore, into: Map<string, readonly FeelingRow[]>, ids: readonly string[]): void {
+  if (ids.length === 0) return;
+  const on = store.feelingsOn(ids);
+  for (const id of ids) into.set(id, on.get(id) ?? []);
+}
+
+/** Of the memories a row names, the ones carrying a recorded feeling, with those feelings, in the row's order. */
+export function feltOn(store: ReadOnlyStore, p: Payload): { id: string; feelings: readonly FeelingRow[] }[] {
+  const ids = memoryIdsOf(p);
+  if (ids.length === 0) return [];
+  const known = FELT_SCOPES.get(store) ?? new Map<string, readonly FeelingRow[]>();
+  readFelt(store, known, ids.filter((id) => !known.has(id)));
+  return ids.flatMap((id) => {
+    const feelings = known.get(id) ?? [];
+    return feelings.length > 0 ? [{ id, feelings }] : [];
+  });
+}
+
+function carriesFeeling(store: ReadOnlyStore, p: Payload): boolean {
+  return feltOn(store, p).length > 0;
 }
 
 /** A settle's row counts while its pair is still settled — an undo takes it back. */
@@ -508,6 +628,11 @@ export function mechanismEvidence(
   store: ReadOnlyStore,
   window: EvidenceWindow,
 ): { verdicts: Verdict[]; truncated: boolean } {
+  // One feeling read per batch of rows, not per row (`feltScope`).
+  return feltScope(store, () => judge(store, window));
+}
+
+function judge(store: ReadOnlyStore, window: EvidenceWindow): { verdicts: Verdict[]; truncated: boolean } {
   const contains = window.contains ?? ((row: EventRow) => row.day >= window.sinceDay);
   const isToday = window.isToday ?? ((row: EventRow) => row.day === window.today);
   let truncated = false;
@@ -518,6 +643,7 @@ export function mechanismEvidence(
       const read = store.eventLog({ name, sinceDay: window.sinceDay, limit: WINDOW_CEILING, order: "desc" });
       if (read.length >= WINDOW_CEILING) truncated = true;
       rows = read.filter(contains);
+      primeFelt(store, rows);
       windowRows.set(name, rows);
     }
     return rows;
@@ -580,7 +706,9 @@ export function mechanismEvidence(
     if (!fired) {
       // Only the newest LOOKBACK rows of each name are searched.
       for (const proof of m.proofs) {
-        for (const row of store.eventLog({ name: proof.event, order: "desc", limit: LOOKBACK })) {
+        const rows = store.eventLog({ name: proof.event, order: "desc", limit: LOOKBACK });
+        if (proof.reads !== undefined) primeFelt(store, rows);
+        for (const row of rows) {
           if (counted(proof, row, store) > 0) {
             if (lastFiredDay === null || row.day > lastFiredDay) lastFiredDay = row.day;
             break;
