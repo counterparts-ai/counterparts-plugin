@@ -31,6 +31,7 @@ import type { Kind } from "../types.js";
 import { USE_TIER_WEIGHT, strength } from "../physics/index.js";
 import type { CreditOutcome, UseTier } from "../physics/index.js";
 import type { ProseDoc, Store } from "../store/index.js";
+import { isChapterSummary } from "../store/index.js";
 import { activate } from "./activate.js";
 import type { Candidate, SpreadFn, SpreadStats } from "./activate.js";
 import type { FeelingAskInput } from "./feeling-ask.js";
@@ -269,6 +270,8 @@ interface BuildOutput {
    * ambient turn and on a quiet build.
    */
   feeling?: ActivationResult["feeling"];
+  /** The journal rows each chapter absorbed (`ActivationResult.folded`), for the record step. Absent on a quiet build. */
+  folded?: ActivationResult["folded"];
   injection: string;
   state: GateState;
   /** Cue tokens to carry into the next turn. State, not telemetry (see NOTES.md). */
@@ -579,6 +582,7 @@ export class Recall {
       render: rendered,
       gateStatus: loaded.status,
       semantic: act.semantic,
+      folded: act.folded,
       ...(act.feeling === null ? {} : { feeling: act.feeling }),
     };
   }
@@ -624,6 +628,14 @@ export class Recall {
         trains: trainsOf(d.verdicts, id),
         ...(via === "link" ? { via } : {}),
       };
+    }
+    // WHICH JOURNAL ROWS A SHOWN CHAPTER ABSORBED (2026-10-15): a chapter's
+    // use credits these and no others (`creditCopies`) — the summaries of the
+    // chapters the turn's cues actually reached, not every chapter's.
+    if (built.folded !== undefined && built.folded.size > 0) {
+      const folded: Record<string, string> = { ...(next.folded ?? {}) };
+      for (const id of [...d.surfaced, ...d.footnotes]) for (const row of built.folded.get(id) ?? []) folded[row] = id;
+      next.folded = folded;
     }
     this.persist(next, "recall");
 
@@ -786,7 +798,16 @@ export class Recall {
     let copies: string[];
     try {
       if (this.store.row(memoryId)?.type !== "episode") return 0;
-      copies = this.store.list({ type: "memory", source: "episode", originRef: memoryId, archived: false });
+      // A frozen full copy stands for the whole episode and is credited as
+      // before; a chapter's SUMMARY only when recall folded it into this
+      // chapter this session (2026-10-15) — one use of a long session must
+      // not keep every chapter's summary from fading.
+      copies = this.store
+        .list({ type: "memory", source: "episode", originRef: memoryId, archived: false })
+        .filter((id) => {
+          const row = this.store.row(id);
+          return row !== undefined && (!isChapterSummary(row) || state.folded?.[id] === memoryId);
+        });
     } catch {
       return 0;
     }

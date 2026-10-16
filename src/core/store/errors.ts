@@ -56,6 +56,14 @@ export type StoreErrorCode =
    */
   | "MEMORY_BODY_MISSING"
   /**
+   * `Store#appendBody` was handed a body that does not begin with the stored
+   * one whole (or adds nothing). An append keeps no version row because its
+   * prior state is the new body's prefix; a body that is not one would lose
+   * words silently, so it is refused and nothing is written. `detail` carries
+   * `{ id, stored, offered }` — lengths, never text.
+   */
+  | "APPEND_NOT_PREFIX"
+  /**
    * A reminder date (`PutInput.eventDate`, schema v7) that `time.ts` cannot
    * read as a day, month, year or range. Refused rather than stored: a date
    * nothing can parse is a reminder that silently never comes up.

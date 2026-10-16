@@ -533,9 +533,10 @@ export function readChapterLead(text: string): ChapterLead {
 
 /**
  * Append a chapter to the session's episode, creating the episode on the first
- * one. `store.revise` archives the prior version FIRST, so an appended-to
- * episode keeps every earlier state of itself — never-destroy comes free from
- * the store seam rather than being re-implemented here.
+ * one. `store.appendBody` refuses any body that does not begin with the stored
+ * one, so every earlier state of the episode is its current body's prefix —
+ * never-destroy by construction, with no version row holding the same words a
+ * second time (2026-10-15; until then `store.revise` kept one per append).
  *
  * **Appending twice inside one chapter is the doctrine's headline case**, not an
  * edge: "when something significant happens later, append to it in the moment"
@@ -551,6 +552,30 @@ export function readChapterLead(text: string): ChapterLead {
  * has no `about` column of its own to set, being a journal row, not a memory.
  */
 export const EPISODE_ABOUT_META = "about";
+
+/**
+ * EACH CHAPTER'S OWN `about` (2026-10-15): `{ "1": "us", "3": "work" }`, the
+ * mark the chapter call gave, carried whole like `models`. A chapter's summary
+ * takes its own chapter's mark — an automatic one, written later at the
+ * boundary, reads it here — where `EPISODE_ABOUT_META` holds only the latest.
+ */
+export const CHAPTER_ABOUT_META = "abouts";
+
+/** The mark the chapter call gave chapter `n`, or null. */
+export function chapterAbout(meta: Record<string, unknown>, n: number): string | null {
+  const raw = meta[CHAPTER_ABOUT_META];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const v = (raw as Record<string, unknown>)[String(n)];
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+function chapterAbouts(meta: Record<string, unknown>): Record<string, string> {
+  const raw = meta[CHAPTER_ABOUT_META];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (/^\d+$/.test(k) && typeof v === "string") out[k] = v;
+  return out;
+}
 
 export function appendChapter(
   store: Store,
@@ -575,7 +600,7 @@ export function appendChapter(
         chapters: chapter,
         ...(model === undefined ? {} : { models: { [String(chapter)]: model } }),
         [CHAPTER_AT_META]: { [String(chapter)]: store.now() },
-        ...(opts.about === undefined ? {} : { [EPISODE_ABOUT_META]: opts.about }),
+        ...(opts.about === undefined ? {} : { [EPISODE_ABOUT_META]: opts.about, [CHAPTER_ABOUT_META]: { [String(chapter)]: opts.about } }),
       },
       // The experiencer writing its own journal is the "episode" channel —
       // consistent with the memory its ingestion mints (PR-2 review nit).
@@ -606,68 +631,40 @@ export function appendChapter(
   // v12: the moment each chapter opened, carried whole like `models`.
   const moments = chapterMoments(prior.meta);
   if (opensChapter) moments[String(num)] = store.now();
-  store.revise(state.episodeId, {
-    body: `${prior.body.trimEnd()}\n\n${opensChapter ? chapterHeading(num, opts.day, opts.date, model) + `\n\n${text.trim()}\n` : `${text.trim()}\n`}`,
+  // Each chapter's own mark, carried whole too (2026-10-15).
+  const abouts = chapterAbouts(prior.meta);
+  if (opts.about !== undefined) abouts[String(num)] = opts.about;
+  // AN APPEND, NOT A REVISION (2026-10-15): the stored body is kept whole as
+  // the new one's prefix — a blank line is added to reach the next paragraph,
+  // never taken away — so `appendBody` can hold the prefix as its guarantee
+  // and keep no version row (store CONTRACT §5 G5's named deviation).
+  const gap = prior.body.endsWith("\n\n") ? "" : prior.body.endsWith("\n") ? "\n" : "\n\n";
+  store.appendBody(state.episodeId, {
+    body: `${prior.body}${gap}${opensChapter ? chapterHeading(num, opts.day, opts.date, model) + `\n\n${text.trim()}\n` : `${text.trim()}\n`}`,
     meta: {
       sessionId: state.sessionId,
       chapters: Math.max(num, recorded),
       ...(Object.keys(models).length === 0 ? {} : { models }),
       ...(Object.keys(moments).length === 0 ? {} : { [CHAPTER_AT_META]: moments }),
       ...(opts.about === undefined ? {} : { [EPISODE_ABOUT_META]: opts.about }),
+      ...(Object.keys(abouts).length === 0 ? {} : { [CHAPTER_ABOUT_META]: abouts }),
     },
-    reason: opensChapter ? "episode-chapter" : "episode-append",
     // The row's `model` is the LAST writer's (a body change with none is NULL).
     ...(model === undefined ? {} : { model }),
   });
   return { episodeId: state.episodeId, chapter: num, created: false, heading: opensChapter };
 }
 
-// ── ingestion (§13 G6, G10, G11) ────────────────────────────────────────────
+// ── ingestion (§13 G6; summaries since 2026-10-15) ────────────────────────────────────────────
 
 /** Identity for idempotency: the episode plus WHAT IT SAYS, never a timestamp. */
 export function ingestKey(episodeId: string, body: string): string {
   return `${episodeId}:${hashText(body)}`;
 }
 
-/**
- * Idempotent by identity, against active AND archived memories, so
- * consolidation's archival decisions are not resurrected by a stray touch
- * (contract §5 G10). `list()` with no `archived` filter returns both.
- */
-export function findIngested(
-  store: Store,
-  key: string,
-): { id: string; doc: ProseDoc } | null {
-  for (const id of store.list({ type: "memory" })) {
-    let doc: ProseDoc;
-    try {
-      doc = store.readProse(id);
-    } catch {
-      continue;
-    }
-    if (doc.meta["episodeKey"] === key) return { id, doc };
-  }
-  return null;
-}
-
-/** Every live memory minted from this episode, whatever its current text. */
-export function memoriesForEpisode(store: Store, episodeId: string): string[] {
-  const out: string[] = [];
-  for (const id of store.list({ type: "memory", archived: false })) {
-    try {
-      if (store.readProse(id).meta["episodeId"] === episodeId) out.push(id);
-    } catch {
-      continue;
-    }
-  }
-  return out;
-}
-
 export type IngestReason =
   | "ingested"
-  | "regrown"
   | "already-ingested"
-  | "window-closed"
   | "no-episode"
   | "gate-refused"
   | "observer"
@@ -683,8 +680,10 @@ export interface IngestResult {
   readonly memoryId: string | null;
   readonly episodeId: string | null;
   readonly key: string | null;
-  /** Ids archived by an add-first regrowth — the OLD memory, never deleted. */
+  /** Always empty since 2026-10-15: nothing regrows, so nothing is archived. Kept for the shape. */
   readonly archived: string[];
+  /** The automatic summaries written, one per chapter that owed one (2026-10-15). */
+  readonly summaries: string[];
   /** Set when the gate refused: which gate, and why. */
   readonly gate: { gate: string; reason: string } | null;
   /** Set when intake refused: its own reason, never collapsed into the above. */

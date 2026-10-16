@@ -450,11 +450,15 @@ export function healthView(src: DashboardSource): HealthView {
   const reasons: HealthView["archive"]["reasons"] = [];
   type Item = HealthView["archive"]["reasons"][number]["items"][number];
   /** Which MEMORY a row is a copy of: a chapter's journal copies share the
-   *  chapter's `episodeId` (`self/episodes.ts#memoriesForEpisode`); any other
-   *  row is its own memory. Never the words, which two memories can share. */
+   *  chapter's `episodeId`; a chapter's SUMMARY (2026-10-15) is its own
+   *  chapter's (`meta.chapter`); any other row is its own memory. Never the
+   *  words, which two memories can share. */
   const memoryOf = (id: string): string => {
     try {
-      const ep = store.readProse(id).meta["episodeId"];
+      const meta = store.readProse(id).meta;
+      const ep = meta["episodeId"];
+      const chapter = meta["chapterSummary"] === undefined ? null : meta["chapter"];
+      if (typeof ep === "string" && ep.length > 0 && typeof chapter === "number") return `episode:${ep}#${String(chapter)}`;
       return typeof ep === "string" && ep.length > 0 ? `episode:${ep}` : id;
     } catch {
       return id;

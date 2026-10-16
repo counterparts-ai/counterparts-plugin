@@ -28,20 +28,32 @@ import type { Recurrence } from "./time.js";
 export interface BriefingRenderer {
   boundary(req: {
     day: number;
+    at?: string;
     budgetBytes: number;
     ceilingBytes?: number;
     horizon?: readonly { id: string }[];
     horizonMore?: readonly string[];
+    horizonMoreItems?: readonly { id: string }[];
     yesterday?: string;
   }): { briefing: { bytes: number; elements: number } };
+}
+
+/** One arrival as `Prospective.horizon()` hands it, structurally. */
+interface HorizonArrival {
+  memoryId: string;
+  eventDate?: string;
+  anchor?: string;
+  recurring?: Recurrence;
+  mode?: "quiet" | "plain";
 }
 
 /** Structurally `Prospective.horizon()`. */
 export interface HorizonSource {
   horizon(input: { at: string; day?: number }): {
-    items: readonly { memoryId: string; eventDate?: string; anchor?: string; recurring?: Recurrence; mode?: "quiet" | "plain" }[];
-    /** Past `HORIZON_ITEMS`, by id (review of #367). */
-    more?: readonly { memoryId: string }[];
+    items: readonly HorizonArrival[];
+    /** Past `HORIZON_ITEMS` (review of #367): by id, and since 2026-10-16
+     *  with their dates, so a date due today past the count is still today's. */
+    more?: readonly HorizonArrival[];
   };
 }
 
@@ -88,10 +100,11 @@ export function selfRenderer(self: BriefingRenderer, opts: RendererOptions = {})
     const horizon = asked?.items;
     const result = self.boundary({
       day: ctx.day,
+      ...(opts.at === undefined ? {} : { at: opts.at }),
       budgetBytes: ctx.budgetBytes,
       ...(opts.ceilingBytes === undefined ? {} : { ceilingBytes: opts.ceilingBytes }),
       ...(horizon === undefined ? {} : { horizon }),
-      ...(horizonMore.length === 0 ? {} : { horizonMore }),
+      ...(horizonMore.length === 0 ? {} : { horizonMore, horizonMoreItems: asked?.moreItems ?? [] }),
       ...(opts.yesterday === undefined ? {} : { yesterday: opts.yesterday }),
       ...(opts.yesterday === undefined || opts.yesterdayShorter === undefined ? {} : { yesterdayShorter: opts.yesterdayShorter }),
       ...(opts.lendBytes === undefined || opts.lendBytes <= 0 ? {} : { lendBytes: opts.lendBytes }),
@@ -109,6 +122,8 @@ export interface HorizonLine {
   readonly every?: string;
   readonly past?: boolean;
   readonly plainDue?: boolean;
+  /** Due on the very date asked about (2026-10-16, "Coming up" = today). */
+  readonly today?: boolean;
 }
 
 /**
@@ -118,17 +133,21 @@ export interface HorizonLine {
  * start for the session's own date (`Counterpart#assembleWake`), so the two
  * hand the lane the same thing.
  */
-export function horizonFor(prospective: HorizonSource, at: string, day?: number): { items: HorizonLine[]; more: string[] } {
+export function horizonFor(
+  prospective: HorizonSource,
+  at: string,
+  day?: number,
+): { items: HorizonLine[]; more: string[]; moreItems: HorizonLine[] } {
   const asked = prospective.horizon({ at, ...(day === undefined ? {} : { day }) });
   // What the count left out, by id: the lane names them in its "N more"
   // line rather than leave a dated item silently missing (review of #367).
   const more = (asked.more ?? []).map((i) => i.memoryId);
+  const line = (i: HorizonArrival): HorizonLine => {
   // The date it is due rides along, so the line can say it (2026-10-01),
   // how often it comes round when it repeats (2026-10-09), and whether
   // that date is already behind the day asked about — a one-off in its
   // grace days says it WAS due (2026-10-09). Both are `YYYY-MM-DD`
   // here, so the strings compare as the dates do.
-  const items = asked.items.map((i): HorizonLine => {
     if (i.eventDate === undefined) return { id: i.memoryId };
     const every = i.anchor === undefined || i.recurring === undefined ? "" : readableRecurrence(i.anchor, i.recurring);
     return {
@@ -139,7 +158,11 @@ export function horizonFor(prospective: HorizonSource, at: string, day?: number)
       // A plain reminder due the day this wake is read (2026-10-10):
       // it leads the lane and outranks the page's borrowing.
       ...(plainDueOn(i, at) ? { plainDue: true } : {}),
+      // Due on the very day asked about (2026-10-16): "Coming up" lists
+      // what is due today or past, and counts the rest (`Self`).
+      ...(isDay(i.eventDate) && isDay(at) && i.eventDate === at ? { today: true } : {}),
     };
-  });
-  return { items, more };
+  };
+  const items = asked.items.map(line);
+  return { items, more, moreItems: (asked.more ?? []).map(line) };
 }

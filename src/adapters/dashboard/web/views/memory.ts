@@ -447,7 +447,7 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
     ...writtenWhen(row?.created_at ?? null, doc.learnedOn, store.zone()),
     archivedWords: row?.archived === 1 ? archiveWords(row.archived_reason ?? null, row.superseded_by !== null) : null,
     timeline: timelineOf(src, headId, doc.meta["updates"]),
-    ...cardWords(doc.body.trim(), chapter, g.confidential),
+    ...cardWords(doc.body.trim(), chapter, g.confidential, row?.happened_on ?? null),
     about: row?.about ?? null,
     aboutBy: row?.about === null || row?.about === undefined ? null : row.about_by ?? null,
   };
@@ -556,12 +556,14 @@ function barFor(src: DashboardSource, id: string): number | null {
 }
 
 /** The card's words with a written date lifted off the front — display only. */
-function cardWords(body: string, chapter: boolean, confidential: boolean): { shownText: string; writtenDate: string | null } {
+function cardWords(body: string, chapter: boolean, confidential: boolean, chapterDay: string | null = null): { shownText: string; writtenDate: string | null } {
   if (confidential) return { shownText: WITHHELD, writtenDate: null };
   if (chapter) {
     const lead = readChapterLead(body);
     const bare = stripChapterLead(lead.rest.trim());
-    return { shownText: bare.rest || lead.rest.trim() || body, writtenDate: chapterDate(lead.date) ?? bare.date };
+    // A chapter SUMMARY (2026-10-15) has no heading: its own `happened_on` is the chapter's day.
+    const day = chapterDay !== null && /^\d{4}-\d{2}-\d{2}$/.test(chapterDay) ? chapterDay : null;
+    return { shownText: bare.rest || lead.rest.trim() || body, writtenDate: chapterDate(lead.date) ?? bare.date ?? day };
   }
   const lifted = liftDate(body);
   return { shownText: lifted.rest, writtenDate: lifted.date };

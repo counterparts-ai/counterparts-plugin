@@ -38,6 +38,12 @@ export type Status = {
   storeId: string | null
   writtenAt: number
   build: string | null
+  /**
+   * Where the dashboard serves when it runs, as core wrote it (2026-10-16): data, never spelled or built
+   * here. Only the full plugin draws it, as a link (`actions.tsx`, which checks it is this machine's). Null:
+   * a file from before, or no address known.
+   */
+  dashboard: string | null
   pulse: { day: number; memories: number; lastSeq: number }
   today: { date: string; counts: Record<string, number> } | null
   dreams: DashDream[]
@@ -93,6 +99,7 @@ export function parseStatus(text: string): Status | null {
     storeId: typeof v.storeId === 'string' && /^st_[0-9a-f]{16}$/.test(v.storeId) ? v.storeId : null,
     writtenAt: v.writtenAt,
     build: typeof v.build === 'string' ? v.build : null,
+    dashboard: typeof v.dashboard === 'string' && v.dashboard.length <= 64 ? v.dashboard : null,
     pulse: { day: p.day, memories: p.memories, lastSeq: p.lastSeq },
     today,
     dreams: Array.isArray(v.dreams) ? (v.dreams.filter(d => isObj(d) && typeof d.id === 'string') as DashDream[]) : [],
@@ -100,6 +107,24 @@ export function parseStatus(text: string): Status | null {
     panels,
     memories,
   }
+}
+
+/**
+ * How much newer a file must be to stand over a higher seq of its own store.
+ * Two writers racing land an older file a few milliseconds late, its
+ * `writtenAt` older too; a store put back (a rollback, a snapshot restored:
+ * same id, a lower seq) is written later than that, so its file is taken.
+ */
+export const PUT_BACK_MS = 5000
+
+/**
+ * Does the file read before stand over the one just read? Only for the same
+ * store, at a higher seq, when the new one is not newer by {@link PUT_BACK_MS}.
+ */
+export function keepsBefore(before: Status | null, next: Status): boolean {
+  if (before === null || next.storeId === null || next.storeId !== before.storeId) return false
+  if (next.pulse.lastSeq >= before.pulse.lastSeq) return false
+  return next.writtenAt - before.writtenAt < PUT_BACK_MS
 }
 
 /** The rows named `name`, newest first, at most `limit`. */

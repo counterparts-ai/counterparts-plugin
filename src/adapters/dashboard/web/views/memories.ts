@@ -618,6 +618,7 @@ export function memoryListView(
     const shown = shownOf(row?.body ?? "", {
       chapter: r.journal,
       learnedOn: r.learnedOn,
+      chapterDay: row?.happened_on ?? null,
       confidential: here.confidential || !here.present,
       withheld: text,
     });

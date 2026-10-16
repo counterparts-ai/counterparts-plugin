@@ -49,7 +49,13 @@ export const GATE_STATE_VERSION = 1;
 
 /** The `gate_session.kind` vocabulary this module owns. `window` is
  *  `prospective/`'s (INTERFACE-GAPS.md §3) and is deliberately not read here. */
-export const GATE_KINDS = ["surfaced", "credited", "scalar", "semantic", "asked", "judged"] as const;
+export const GATE_KINDS = ["surfaced", "credited", "scalar", "semantic", "asked", "judged", "folded"] as const;
+/**
+ * `folded` (2026-10-15): a journal row (a chapter's summary, or a frozen
+ * copy) recall folded into a chapter it showed — `ref` the row, `value` the
+ * chapter. A use of the chapter credits these and no others.
+ */
+export const FOLDED_KIND = "folded";
 /**
  * `asked` (Release B, 2026-10-03): a memory a deliberate QUESTION's answer
  * showed with its words, for this session — quotable at the boundary
@@ -141,6 +147,8 @@ export interface GateState {
   carriedCues: string[];
   /** The turn `carriedCues` came from; they expire after exactly one turn. */
   carriedFromTurn: number;
+  /** Journal rows recall folded into a chapter it showed: row id → chapter id (2026-10-15). */
+  folded?: Record<string, string>;
 }
 
 export function freshGateState(sessionId: string): GateState {
@@ -202,7 +210,9 @@ export function loadGateState(store: Store, sessionId: string, max = Infinity): 
 
   const surfaced: Record<string, SurfaceRecord> = {};
   const credited: Record<string, CreditRecord> = {};
+  const foldedRows: Record<string, string> = {};
   for (const row of rows) {
+    if (row.kind === FOLDED_KIND && typeof row.value === "string" && row.value.length > 0) foldedRows[row.ref] = row.value;
     if (row.kind === "surfaced") {
       surfaced[row.ref] = {
         turn: row.turn,
@@ -215,17 +225,21 @@ export function loadGateState(store: Store, sessionId: string, max = Infinity): 
     }
   }
 
+  const kept = bound(surfaced, max);
+  // A fold is kept while the chapter it was folded into is: the same bound.
+  const folded = Object.fromEntries(Object.entries(foldedRows).filter(([, chapter]) => kept[chapter] !== undefined));
   return {
     state: {
       v: GATE_STATE_VERSION,
       sessionId,
       turn: scalarRow.turn,
       lastDay: scalarRow.last_day,
-      surfaced: bound(surfaced, max),
+      surfaced: kept,
       credited: bound(credited, max),
       affectFiredTurn: scalar.affectFiredTurn,
       carriedCues: scalar.carriedCues,
       carriedFromTurn: scalar.carriedFromTurn,
+      ...(Object.keys(folded).length === 0 ? {} : { folded }),
     },
     status: "loaded",
   };
@@ -273,6 +287,12 @@ export function saveGateState(store: Store, state: GateState, max: number): void
       trains: rec.trains,
       ...(rec.via === "link" ? { value: POINTER_VALUE } : {}),
     });
+  }
+  const keptSurfaced = bound(state.surfaced, max);
+  for (const [id, chapter] of Object.entries(state.folded ?? {})) {
+    const at = keptSurfaced[chapter];
+    if (at === undefined) continue;
+    rows.push({ sessionId: state.sessionId, kind: FOLDED_KIND, ref: id, turn: at.turn, lastDay: state.lastDay, value: chapter });
   }
   for (const [id, rec] of Object.entries(bound(state.credited, max))) {
     rows.push({

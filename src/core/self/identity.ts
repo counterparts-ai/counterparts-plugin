@@ -59,6 +59,12 @@ export interface Ranked {
   /** Horizon only, at session start (2026-10-12): due within the next few
    *  days (`HorizonItem.near`, `briefing.ts#ROOM_ORDER`'s `arrivingNear`). */
   readonly near?: boolean;
+  /**
+   * Set by the render alone (#489 C, 2026-10-16): the first item of "Still
+   * open" or "Coming up", upgraded from its line to whole text because the
+   * room was left over (`briefing.ts#asLine`).
+   */
+  readonly whole?: boolean;
 }
 
 /**
@@ -349,6 +355,15 @@ export interface Lanes {
    * which ids recall can fetch whole — `briefing.ts#moreLine`.
    */
   overflow?: Record<LaneName, string[]>;
+  /**
+   * "COMING UP"'S LATER DATES, by id (2026-10-16, `COMING_UP_TODAY_ONLY`):
+   * the arriving items counted rather than listed because they are not due
+   * today — later or overdue — in the horizon overflow, and named here so
+   * its line can say so.
+   */
+  later?: readonly string[];
+  /** Those of `later` past their date (review of #511): counted as overdue. */
+  overdue?: readonly string[];
 }
 
 /**
@@ -412,6 +427,9 @@ export function rankLanes(
     /** Arriving ids past the caller's own count (review of #367): the lane's
      *  overflow, after its cap's, filtered as the lane is. */
     readonly horizonMore?: readonly string[];
+    /** "Coming up"'s later dates (`Lanes.later`, 2026-10-16): counted under
+     *  that lane, so in no other — as a listed arriving item is in none. */
+    readonly later?: readonly string[];
   } = {},
 ): Lanes {
   const identity: Ranked[] = [];
@@ -423,6 +441,7 @@ export function rankLanes(
   const inIdentity = new Set(scanned.filter((s) => s.band === "identity").map((s) => s.id));
   const horizon = horizonIn.filter((h) => !inIdentity.has(h.id) && !settledOver.has(h.id));
   const arriving = new Set(horizon.map((h) => h.id));
+  const later = new Set(opts.later ?? []);
 
   for (const s of scanned) {
     // A core memory being reconsidered waits on a decision: "Still open" (2026-10-11).
@@ -434,7 +453,7 @@ export function rankLanes(
       identity.push(rankedAs(s, "identity"));
       continue;
     }
-    if (arriving.has(s.id) || settledOver.has(s.id)) continue;
+    if (arriving.has(s.id) || later.has(s.id) || settledOver.has(s.id)) continue;
     if (s.unresolved) {
       threads.push(rankedAs(s, "threads"));
       continue;
@@ -452,7 +471,8 @@ export function rankLanes(
     }
     if (s.strength < t.WARM_FLOOR) continue;
     if (s.kind === "skill") {
-      craft.push(rankedAs(s, "craft"));
+      // Out of the wake by default (`CRAFT_IN_WAKE`, 2026-10-16): in no lane.
+      if (t.CRAFT_IN_WAKE) craft.push(rankedAs(s, "craft"));
       continue;
     }
     // What the page already says is not "nearby" (2026-10-01, `covered.ts`).

@@ -9,6 +9,7 @@ import type { PromotionVerdict } from "../../../../core/physics/index.js";
 import { isConfidential } from "../../../../core/recall/index.js";
 import {
   FRAMING,
+  LEGACY_CONTEXT,
   LANE_ORDER,
   collapsedLane,
   headingsOf,
@@ -1172,7 +1173,7 @@ export function wakeParts(text: string, hasPage: boolean): WakePart[] {
       return;
     }
     // The lanes' lines folded into one (2026-10-12) belong to no one lane.
-    if (line.startsWith("<!--") || line === FRAMING.context || isFoldedLine(line)) {
+    if (line.startsWith("<!--") || line === FRAMING.context || line === LEGACY_CONTEXT || isFoldedLine(line)) {
       add("furniture", n);
       return;
     }

@@ -340,11 +340,16 @@ export interface PluginInstallRead {
    *  beside it (`runtime.ts#readsHostUserConfig`); true for the launcher
    *  flavor; null when `installPath` is unrecorded or holds neither. */
   readonly standsDown?: boolean | null;
+  /** The directory flavor since 2026-10-15 carries `src/adapters/npm-live.js`:
+   *  it stands down by the npm install's marker instead (`npm-live.ts`). */
+  readonly readsMarker?: boolean;
 }
 
 /** Which flavor sits at a plugin's `installPath`, read by its files: the
  *  launcher flavor carries `src/adapters/plugin-run.sh`, the directory flavor
- *  the transpiled `src/adapters/runtime.js` in its place. */
+ *  the transpiled `src/adapters/runtime.js` in its place. (A directory flavor
+ *  that reads the npm install's marker stands down too, when the marker holds:
+ *  `readsMarker`, and doctor checks the marker.) */
 export function pluginStandsDown(installPath: string | null): boolean | null {
   if (installPath === null || installPath.length === 0) return null;
   if (existsSync(join(installPath, "src", "adapters", "plugin-run.sh"))) return true;
@@ -395,6 +400,7 @@ export function pluginInstall(input: {
     projectPath: first !== undefined && typeof first["projectPath"] === "string" ? first["projectPath"] : null,
     enabled,
     standsDown: pluginStandsDown(installPath),
+    readsMarker: installPath !== null && installPath.length > 0 && existsSync(join(installPath, "src", "adapters", "npm-live.js")),
   };
 }
 

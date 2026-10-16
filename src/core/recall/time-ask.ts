@@ -225,6 +225,16 @@ function lastDayOf(year: number, month: number): string {
   return parseCalendarDate(`${String(year)}-${pad(month)}`)?.last ?? `${String(year)}-${pad(month)}-28`;
 }
 
+/** `ymd` less `n` calendar months, the day kept where that month has it, else its last day (03-31 → 02-28). */
+function monthsBack(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split("-").map(Number) as [number, number, number];
+  const total = y * 12 + (m - 1) - n;
+  const year = Math.floor(total / 12);
+  const month = (total % 12) + 1;
+  const last = lastDayOf(year, month);
+  return Number(last.slice(8)) < d ? last : `${String(year).padStart(4, "0")}-${pad(month)}-${pad(d)}`;
+}
+
 /** Monday of the week `ymd` falls in. 1970-01-05 was a Monday. */
 function mondayOf(ymd: string): string {
   const since = daysBetween("1970-01-05", ymd);
@@ -497,6 +507,18 @@ export function readTimeAsk(text: string, clock: { now: number; zone: string }):
 
   // ── months ───────────────────────────────────────────────────────────────
   const [ty, tm] = today.split("-").map(Number) as [number, number];
+  // A rolling stretch back from today, as "the past week" is: "in the last
+  // month" asked 05-30 means 04-30..05-30, not April, which hid what happened
+  // in May (2026-10-16). Plain "last month" stays the calendar month.
+  const pastMonths = new RegExp(`\\b(?:the\\s+)?(?:past|last)\\s+(${NUMBER_ALT})(?:\\s+of)?\\s+months?\\b`, "i").exec(text);
+  if (pastMonths !== null) {
+    const n = Math.max(1, numberOf(pastMonths[1] as string) ?? 3);
+    return ask(pastMonths[0], { from: monthsBack(today, n), to: today }, 0, without(text, pastMonths[0]));
+  }
+  const pastMonth = /\b(?:in|over|within|during|for)\s+the\s+(?:past|last)\s+month\b(?!\s+of\b)|\b(?:the\s+)?past\s+month\b(?!\s+of\b)/i.exec(text);
+  if (pastMonth !== null) {
+    return ask(pastMonth[0], { from: monthsBack(today, 1), to: today }, 0, without(text, pastMonth[0]));
+  }
   if (/\blast month\b/i.test(text)) {
     const y = tm === 1 ? ty - 1 : ty;
     const m = tm === 1 ? 12 : tm - 1;

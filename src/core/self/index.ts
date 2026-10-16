@@ -40,10 +40,21 @@
  * reachable by construction, not by a tool description nobody reads.*
  */
 import type { Band, Kind } from "../types.js";
-import { strength } from "../physics/index.js";
+import { defaultClaimFor, strength } from "../physics/index.js";
 import type { CreditOutcome, UseTier } from "../physics/index.js";
-import type { AboutMark, AboutSetter, ProseDoc, Store } from "../store/index.js";
-import { ABOUT_SETTERS, aboutMarkOf, hashText } from "../store/index.js";
+import type { AboutMark, ProseDoc, Store } from "../store/index.js";
+import { CHAPTER_SUMMARY_META, CLAIMED_DEFAULT_SPELLED, aboutMarkOf, hashText } from "../store/index.js";
+import type { ChapterSummaryKind } from "../store/index.js";
+import { chaptersOf } from "../handoff/last-here.js";
+import {
+  SUMMARY_CHAPTER_META,
+  automaticSummaryText,
+  chapterSummaries,
+  SUMMARY_DUPLICATE_REASON,
+  chaptersCoveredByCopies,
+  summaryOf,
+  summaryTitle,
+} from "./summaries.js";
 import { scanSecrets } from "../encode/secrets.js";
 import {
   IDENTITY_CORE_ROLE,
@@ -139,22 +150,23 @@ import type {
   PageWriterRun,
   PageWriterStatus,
   WriterInput,
+  WriterJournal,
 } from "./writer.js";
 import { COUNTER_PREFIX, FROZEN_KINDS, counterKey, decide } from "./freeze.js";
 import type { ClaimDirection, ClaimSource, FreezeReason, FreezeVerdict } from "./freeze.js";
 import {
   NO_GATE,
+  CHAPTER_ABOUT_META,
   EPISODE_ABOUT_META,
   appendChapter,
+  chapterAbout,
   askDue,
   askText,
   asksSpentOn,
-  findIngested,
   freshEpisodeState,
   ingestKey,
   intakeEpisode,
   loadEpisodeState,
-  memoriesForEpisode,
   rebasedWatermark,
   stateKey,
 } from "./episodes.js";
@@ -174,9 +186,11 @@ import {
   syncJournalCopy,
 } from "./journal-file.js";
 import type { JournalCopyOutcome } from "./journal-file.js";
+import { lineOf } from "../fit/index.js";
 import { withTunables } from "./tunables.js";
 import type { SelfTunables } from "./tunables.js";
 import { calendarDate } from "./calendar.js";
+import { isDay, yearOf } from "../time.js";
 import { markWakeBehind } from "./behind.js";
 import { pairOrder, standingOf } from "../recall/standing.js";
 
@@ -326,11 +340,15 @@ export interface AssembleRequest
     "day" | "yesterday" | "yesterdayShorter" | "elsewhere" | "elsewhereShorter"
   > {
   readonly ceilingBytes: number;
+  /** The session's calendar date (`BoundaryRequest.at`). */
+  readonly at?: string;
   /** The hash of the bundle published now (`hashText`): a record written
    *  beside another bundle is not this one's. */
   readonly publishedHash: string;
   readonly horizon?: readonly HorizonItem[];
   readonly horizonMore?: readonly string[];
+  /** `horizonMore` with their dates (`BoundaryRequest.horizonMoreItems`). */
+  readonly horizonMoreItems?: readonly HorizonItem[];
 }
 
 /**
@@ -349,6 +367,14 @@ export interface SelfOptions {
   /** Told about each memory an episode ingestion mints, so the composition can
    *  credit the cards it names (schemas NOTES §15). */
   onMemoryMinted?: (m: { id: string; title: string | null; body: string; day: number }) => void;
+  /**
+   * Told the words a CHAPTER'S SUMMARY stands for (2026-10-15): the chapter's
+   * own text, so the composition credits the cards it names and links the
+   * summary to them as subjects — a summary names fewer people than the
+   * chapter, and the 419 subject links the full copies held must not thin.
+   * `credit: false` links without crediting (words already credited once).
+   */
+  onSummaryNamed?: (m: { id: string; text: string; day: number; credit: boolean }) => void;
   /**
    * `associate.retargetOnSupersede`, so a regrown copy inherits the links its
    * archived copy had learned (2026-10-09) — the same callback `schemas/` and
@@ -407,9 +433,23 @@ export interface HorizonItem {
    * #ROOM_ORDER`'s `arrivingNear`).
    */
   readonly near?: boolean;
+  /**
+   * DUE ON THE DAY THE WAKE IS FOR (2026-10-16): `due` is the date the
+   * caller asked about (`core/briefing.ts#horizonFor`). With `past` and
+   * `plainDue`, what "Coming up" lists while `COMING_UP_TODAY_ONLY` is on.
+   */
+  readonly today?: boolean;
 }
 
 export interface BoundaryRequest extends BriefingRequest {
+  /**
+   * THE CALENDAR DATE THE WAKE IS COMPOSED FOR (2026-10-16), `YYYY-MM-DD`:
+   * the date the horizon was asked about (`core/briefing.ts#selfRenderer`,
+   * `Counterpart#assembleWake`). Its year is the one a date prints short in
+   * (`time.ts#shortDay`), and "Coming up" lists what is due by it
+   * (`COMING_UP_TODAY_ONLY`). Absent: the store's today.
+   */
+  readonly at?: string;
   /**
    * THE HOST'S REPORTED BUDGET this composition's `budgetBytes` was cut from
    * (2026-10-10), recorded with what it showed (`WAKE_SHOWN_KEY`) so a
@@ -426,6 +466,13 @@ export interface BoundaryRequest extends BriefingRequest {
    * owner's wake only (ignored with `omit`).
    */
   readonly horizonMore?: readonly string[];
+  /**
+   * THE SAME ITEMS WITH THEIR DATES (2026-10-16), in `horizonMore`'s order:
+   * one due today or past its date is listed under `COMING_UP_TODAY_ONLY`
+   * although `prospective/`'s count left it out. Absent: `horizonMore`'s
+   * ids are counted, as before.
+   */
+  readonly horizonMoreItems?: readonly HorizonItem[];
   /** When supplied, the boundary ensures the identity core's home row exists in
    *  the shape `schemas/` indexes. Idempotent (schemas/INTERFACE-GAPS #5). */
   readonly identityCore?: IdentityCoreSpec;
@@ -551,6 +598,30 @@ export interface ChapterAppend {
    * canonical and landed before the copy was attempted.
    */
   readonly copy: JournalCopyOutcome | null;
+  /** What happened to the chapter's summary memory (2026-10-15). Null when no chapter was written. */
+  readonly summary: SummaryOutcome | null;
+}
+
+/**
+ * THE CHAPTER'S SUMMARY, AS THE `chapter` CALL LEFT IT (2026-10-15):
+ *   `written`   — the summary given became the chapter's summary memory;
+ *   `rewritten` — it replaced the AUTOMATIC one a boundary had written (the
+ *                 same row, revised: its id and links stay);
+ *   `kept`      — the chapter already had a summary the session wrote, and a
+ *                 summary is written once — the new text was not used;
+ *   `refused`   — the gate turned the summary away (`reason`); the chapter
+ *                 stands, and the boundary writes an automatic one;
+ *   `absent`    — none was given; one already stands (`id`), or the boundary
+ *                 writes an automatic one;
+ *   `failed`    — the write threw; the chapter stands.
+ */
+export interface SummaryOutcome {
+  readonly outcome: "written" | "rewritten" | "kept" | "refused" | "absent" | "failed";
+  /** The summary memory standing for the chapter afterwards, when there is one. */
+  readonly id: string | null;
+  /** The chapter (1-based) it stands for. */
+  readonly chapter: number;
+  readonly reason?: string;
 }
 
 /**
@@ -791,6 +862,7 @@ export class Self {
   private readonly gate: EpisodeGate;
   private readonly onEvent: ((e: SelfEvent) => void) | undefined;
   private readonly onMemoryMinted: SelfOptions["onMemoryMinted"];
+  private readonly onSummaryNamed: SelfOptions["onSummaryNamed"];
   private readonly retarget: SelfOptions["retarget"];
   private readonly now: () => number;
   private readonly zone: string | undefined;
@@ -806,6 +878,7 @@ export class Self {
     this.gate = opts.gate ?? NO_GATE;
     this.onEvent = opts.onEvent;
     this.onMemoryMinted = opts.onMemoryMinted;
+    this.onSummaryNamed = opts.onSummaryNamed;
     this.retarget = opts.retarget;
     this.now = opts.now ?? (() => Date.now());
     this.zone = opts.zone;
@@ -850,7 +923,9 @@ export class Self {
     // A PLAIN REMINDER DUE THE DAY THE WAKE IS READ LEADS THE LANE (2026-10-10),
     // the rest in the order supplied: the lane trims from its end, and its
     // head is what no lane below it may take (`briefing.ts#arrivingHead`).
-    const supplied: Ranked[] = (req.horizon ?? []).map((h) => this.horizonRank(h, req.day));
+    // "Coming up" = today (`COMING_UP_TODAY_ONLY`, 2026-10-16): the rest counted.
+    const coming = this.comingUp(req.horizon, req.horizonMore, req.horizonMoreItems, req.at);
+    const supplied: Ranked[] = coming.listed.map((h) => this.horizonRank(h, req.day));
     // Then, at session start, the ones due within the next few days
     // (`HorizonItem.near`, 2026-10-12): first claim on its room.
     const horizon: Ranked[] = [
@@ -858,12 +933,17 @@ export class Self {
       ...supplied.filter((r) => r.due !== true && r.near === true),
       ...supplied.filter((r) => r.due !== true && r.near !== true),
     ];
-    const lanes: Lanes = rankLanes(scanned, horizon, this.tunables, {
-      settledOver: settledOver(this.store),
-      coveredByPage: this.pageCovers(scanned),
-      workAtDelivery: this.tunables.CRAFT_AT_DELIVERY,
-      ...(req.horizonMore === undefined || req.omit !== undefined ? {} : { horizonMore: req.horizonMore }),
-    });
+    const lanes: Lanes = {
+      ...rankLanes(scanned, horizon, this.tunables, {
+        settledOver: settledOver(this.store),
+        coveredByPage: this.pageCovers(scanned),
+        workAtDelivery: this.tunables.CRAFT_AT_DELIVERY,
+        ...(coming.more.length === 0 || req.omit !== undefined ? {} : { horizonMore: coming.more }),
+        ...(coming.later.length === 0 ? {} : { later: coming.later }),
+      }),
+      ...(coming.later.length === 0 || req.omit !== undefined ? {} : { later: coming.later }),
+      ...(coming.overdue.length === 0 || req.omit !== undefined ? {} : { overdue: coming.overdue }),
+    };
     const docs = new Map<string, ProseDoc>();
     // Provenance rides along from the SAME scan the docs came from: the render
     // dates a migrated element as an upper bound, and a second row read per
@@ -921,7 +1001,8 @@ export class Self {
     };
     // Arriving, as the turn-end ranks it: a due-day plain reminder first, an
     // identity element left to its own lane.
-    const supplied = (req.horizon ?? []).filter((h) => bandOf(h.id) !== "identity").map((h) => this.horizonRank(h, day));
+    const coming = this.comingUp(req.horizon, req.horizonMore, req.horizonMoreItems, req.at);
+    const supplied = coming.listed.filter((h) => bandOf(h.id) !== "identity").map((h) => this.horizonRank(h, day));
     // Then, at session start, the ones due within the next few days
     // (`HorizonItem.near`, 2026-10-12): first claim on its room.
     const horizon: Ranked[] = [
@@ -943,11 +1024,13 @@ export class Self {
     const fresh = rankLanes(open, horizon, this.tunables, {
       settledOver: settled,
       workAtDelivery: this.tunables.CRAFT_AT_DELIVERY,
-      ...(req.horizonMore === undefined ? {} : { horizonMore: req.horizonMore }),
+      ...(coming.more.length === 0 ? {} : { horizonMore: coming.more }),
+      ...(coming.later.length === 0 ? {} : { later: coming.later }),
     });
     // The stateful lanes, as the published bundle showed them.
     const opened = new Set(openIds);
-    const arriving = new Set(fresh.horizon.map((r) => r.id));
+    // A later date counted under "Coming up" (2026-10-16) is no other lane's either.
+    const arriving = new Set([...fresh.horizon.map((r) => r.id), ...coming.later]);
     const carried = (ids: readonly string[], lane: "identity" | "craft" | "hints"): Scanned[] => {
       const out: Scanned[] = [];
       for (const id of ids) {
@@ -967,22 +1050,28 @@ export class Self {
     const covered = hintsScanned.length === 0 ? new Set<string>() : this.pageCovers(hintsScanned);
     const lanes: Lanes = {
       identity: carried(shown.identity, "identity").map((s) => rankedAs(note(s), "identity")),
-      craft: carried(shown.craft, "craft").map((s) => rankedAs(note(s), "craft")),
+      // A bundle published before the craft lane left the wake (2026-10-16)
+      // still names its craft: not carried while `CRAFT_IN_WAKE` is off.
+      craft: this.tunables.CRAFT_IN_WAKE ? carried(shown.craft, "craft").map((s) => rankedAs(note(s), "craft")) : [],
       hints: hintsScanned.filter((s) => !covered.has(s.id)).map((s) => rankedAs(note(s), "hints")),
       threads: fresh.threads,
       horizon: fresh.horizon,
       overflow: {
         identity: [...shown.more.identity],
-        craft: [...shown.more.craft],
+        craft: this.tunables.CRAFT_IN_WAKE ? [...shown.more.craft] : [],
         hints: [],
         threads: fresh.overflow?.threads ?? [],
         horizon: fresh.overflow?.horizon ?? [],
       },
+      ...(coming.later.length === 0 ? {} : { later: coming.later }),
+      ...(coming.overdue.length === 0 ? {} : { overdue: coming.overdue }),
     };
     return this.composeLanes(lanes, docs, sources, {
       day,
+      ...(req.at === undefined ? {} : { at: req.at }),
       budgetBytes: shown.budget,
       ...(req.horizon === undefined ? {} : { horizon: req.horizon }),
+      ...(req.horizonMoreItems === undefined ? {} : { horizonMoreItems: req.horizonMoreItems }),
       ...(req.yesterday === undefined ? {} : { yesterday: req.yesterday }),
       ...(req.yesterdayShorter === undefined ? {} : { yesterdayShorter: req.yesterdayShorter }),
       ...(req.elsewhere === undefined ? {} : { elsewhere: req.elsewhere }),
@@ -1006,13 +1095,28 @@ export class Self {
     sources: Map<string, string | null>,
     req: BoundaryRequest,
   ): BriefingResult {
-    const base: Resolve = req.resolve ?? ((id) => this.resolveStatement(id, docs, sources));
+    const resolved: Resolve = req.resolve ?? ((id) => this.resolveStatement(id, docs, sources));
+    // WHOLE TEXT WHERE NOBODY CAN RECALL (review of #508): a composition that
+    // passes `omit` is not owner-facing — the background sweep's, read by a
+    // model with no recall tool — so a line's `[id]` would point nowhere and
+    // its text would be lost. Its items print whole, as before #489 C.
+    // SHORT DATES IN THIS YEAR (2026-10-16, the wake trims): the year of
+    // the date the composition is for (`at`, else the store's today) rides
+    // on every resolved item (`time.ts#shortDay`).
+    const year = yearOf(req.at ?? this.store.today());
+    const base: Resolve =
+      req.omit === undefined
+        ? (id) => ({ ...resolved(id), year })
+        : (id) => {
+            const { line: _line, ...whole } = resolved(id);
+            return { ...whole, year };
+          };
     // An arriving occasion's due date, beside its learned one (2026-10-01).
     // A repeating one says how often, beside it (2026-10-09).
     // One already behind the day the wake is composed for says it WAS due
     // (2026-10-09).
     const dues = new Map<string, { due: string; every?: string; duePast?: boolean }>();
-    for (const h of req.horizon ?? []) {
+    for (const h of [...(req.horizon ?? []), ...(req.horizonMoreItems ?? [])]) {
       if (h.due === undefined || h.due.trim() === "") continue;
       const every = h.every?.trim() ?? "";
       dues.set(h.id, {
@@ -1115,6 +1219,11 @@ export class Self {
             : { handoffKeepBytes: Math.max(0, Math.floor(req.handoffKeepBytes)) }),
           // "Today, elsewhere" (2026-10-10): asked for at session start only.
           ...(req.elsewhere === undefined || req.omit !== undefined ? {} : { elsewhere: req.elsewhere }),
+          // What "Coming up" counts for its later date (2026-10-16), so its
+          // line says "none due today" rather than "no room".
+          ...(lanes.later === undefined || lanes.later.length === 0 || req.omit !== undefined ? {} : { horizonLater: lanes.later }),
+          // And which of them are past their date, so it says "overdue" (review of #511).
+          ...(lanes.overdue === undefined || lanes.overdue.length === 0 || req.omit !== undefined ? {} : { horizonOverdue: lanes.overdue }),
           ...(req.elsewhereShorter === undefined || req.elsewhere === undefined || req.omit !== undefined
             ? {}
             : { elsewhereShorter: req.elsewhereShorter }),
@@ -1721,6 +1830,8 @@ export class Self {
     budgetBytes?: number;
     max?: number;
     omit?: (m: { id: string; confidential: boolean; protectedRow: boolean }) => boolean;
+    /** The day's journal, composed by the caller (2026-10-15, `dream/slices.ts#dayJournal`). */
+    journal?: WriterJournal;
   }): WriterInput {
     const day = opts.day ?? this.store.livedDay();
     const picked = dayMemories(this.store, {
@@ -1738,6 +1849,7 @@ export class Self {
       dropped: picked.dropped,
       omitted: picked.omitted,
       bytes: picked.bytes,
+      ...(opts.journal === undefined ? {} : { journal: opts.journal }),
     };
   }
 
@@ -1961,6 +2073,7 @@ export class Self {
       page.revisedOn,
       this.pageStale(page),
       this.tunables.PAGE_STALE_DAYS,
+      this.store.today(),
     );
     // THE PAGE'S OWN "LAST REVISED" LINE IS NOT PRINTED (2026-10-09): the
     // dateline above is the wake's, and a page that carried one of its own
@@ -2581,19 +2694,21 @@ export class Self {
     text: string,
     /** `scope`: the directory it was written in, recorded on a NEW episode's
      *  origin (2026-09-30). `about`: what the session was about — on the
-     *  episode's meta, and on its live memory copy at once (2026-10-01). */
-    opts: { day?: number; title?: string; happenedOn?: string; model?: string; scope?: string; about?: AboutMark } = {},
+     *  episode's meta, and on the chapter's summary (2026-10-01; the copy
+     *  until 2026-10-15). `summary`: the chapter's summary memory, in the
+     *  session's own words (2026-10-15) — written once per chapter. */
+    opts: { day?: number; title?: string; happenedOn?: string; model?: string; scope?: string; about?: AboutMark; summary?: string } = {},
   ): ChapterAppend {
     const d = opts.day ?? this.store.livedDay();
     if (sessionId.trim().length === 0) {
       // Identity-safe join (§13 G7): every anonymous session collapses to the
       // same marker, so one session's account would pool into another's.
       this.emit("self.episode.skipped", undefined, { reason: "anonymous-session" });
-      return { episodeId: null, chapter: 0, created: false, heading: false, reason: "anonymous-session", copy: null };
+      return { episodeId: null, chapter: 0, created: false, heading: false, reason: "anonymous-session", copy: null, summary: null };
     }
     if (this.observer) {
       this.emit("self.observer.standdown", sessionId, { site: "appendChapter" });
-      return { episodeId: null, chapter: 0, created: false, heading: false, reason: "observer", copy: null };
+      return { episodeId: null, chapter: 0, created: false, heading: false, reason: "observer", copy: null, summary: null };
     }
     // Every ingestion entrance runs the battery — a chapter is canonical prose,
     // and a credential in one landed durably before this gate existed (found by
@@ -2605,7 +2720,7 @@ export class Self {
         gate: verdict.gate,
         reason: verdict.reason,
       });
-      return { episodeId: null, chapter: 0, created: false, heading: false, reason: "gate-refused", copy: null };
+      return { episodeId: null, chapter: 0, created: false, heading: false, reason: "gate-refused", copy: null, summary: null };
     }
     const gatedText = verdict.text ?? text;
     const state = this.episodeState(sessionId, d);
@@ -2621,20 +2736,41 @@ export class Self {
     if (opts.scope !== undefined && opts.scope.length > 0) append.scope = opts.scope;
     if (opts.about !== undefined) append.about = opts.about;
     const written = appendChapter(this.store, state, gatedText, append);
-    // THE MARK REACHES THE COPY NOW (2026-10-01, lane 8), not at its next
-    // regrowth — which a closed window may never bring. The latest act wins:
-    // a regrown copy carries its predecessor's mark (`ingestEpisode`), so a
-    // reflection's later mark is kept the same way. Never fails the chapter.
+    // WHICH CHAPTER THIS IS, by place among the engine headings — the number
+    // a summary carries and an address names (`epi_…#N`).
+    let place = written.chapter;
+    try {
+      place = chaptersOf(this.store.readProse(written.episodeId).body).length;
+    } catch {
+      /* the store's own count stands */
+    }
+    // THE MARK REACHES THE COPY NOW (2026-10-01, lane 8). Since 2026-10-15 the
+    // frozen full copy of an episode from before summaries, and the summary
+    // of THIS chapter if it has one: every other chapter's summary keeps its
+    // own chapter's mark. The latest act wins. Never fails the chapter.
     if (opts.about !== undefined) {
       try {
         // `Store#copiesOf`: the live copies with their marks, in one read.
+        const own = chapterSummaries(this.store, [written.episodeId]).get(written.episodeId);
+        const others = new Set([...(own?.values() ?? [])].filter((s) => s.chapter !== place).map((s) => s.id));
         for (const copy of this.store.copiesOf([written.episodeId]).get(written.episodeId) ?? []) {
+          if (others.has(copy.id)) continue;
           if (copy.about !== opts.about) this.store.setAbout(copy.id, opts.about, { by: "writer" });
         }
       } catch (err) {
         this.emit("self.episode.about.failed", written.episodeId, { error: err instanceof Error ? err.name : "UNKNOWN" });
       }
     }
+    const summary = this.summaryAtChapter({
+      sessionId,
+      episodeId: written.episodeId,
+      chapter: place,
+      continued: !written.heading,
+      appended: gatedText,
+      given: opts.summary,
+      about: opts.about,
+      day: d,
+    });
     this.persistState(
       {
         ...state,
@@ -2652,6 +2788,7 @@ export class Self {
       chapter: written.chapter,
       created: written.created,
       bytes: byteLength(gatedText),
+      summary: summary.outcome,
     });
     // THE MARKDOWN COPY, AFTER THE ROW AND NEVER INSTEAD OF IT (F6). The
     // chapter is committed above; this is a derived file, it cannot throw, and
@@ -2672,13 +2809,193 @@ export class Self {
       bytes: copy.bytes,
       ...(copy.reason === null ? {} : { reason: copy.reason }),
     });
-    return { ...written, reason: "appended", copy: copy.outcome };
+    return { ...written, reason: "appended", copy: copy.outcome, summary };
   }
 
   /**
-   * Ingest the session's episode as an ordinary self-kind memory — context and
-   * source, in that order, ingested ONCE. Idempotent by identity against active
-   * and archived memories; add-first on regrowth; the window closes.
+   * THE CHAPTER'S SUMMARY, AT THE `chapter` CALL (2026-10-15). Written ONCE
+   * per chapter: a summary the session gave becomes the chapter's summary
+   * memory — or replaces the AUTOMATIC one a boundary wrote meanwhile, in
+   * place — and a chapter that already has one the session wrote keeps it.
+   * Through the same gate as the chapter. The cards the CHAPTER names are
+   * credited to the summary and linked to it (`onSummaryNamed`); an append
+   * that continues a chapter credits its new words to the summary standing.
+   * Never throws: a summary that cannot be written costs the summary, never
+   * the chapter, and the boundary writes an automatic one.
+   */
+  private summaryAtChapter(input: {
+    sessionId: string;
+    episodeId: string;
+    chapter: number;
+    continued: boolean;
+    appended: string;
+    given: string | undefined;
+    about: AboutMark | undefined;
+    day: number;
+  }): SummaryOutcome {
+    const { episodeId, chapter } = input;
+    try {
+      const doc = this.store.readProse(episodeId);
+      const chapterText = (chaptersOf(doc.body)[chapter - 1]?.text ?? input.appended).trim();
+      // Written once, live or not: a summary the prune or a merge took is not written again.
+      const had = chapterSummaries(this.store, [episodeId], { archived: true }).get(episodeId)?.get(chapter) ?? null;
+      const standing = had !== null && !had.archived ? had : null;
+      const creditNew = (id: string): void => {
+        if (input.continued) this.onSummaryNamed?.({ id, text: input.appended, day: input.day, credit: true });
+      };
+      const given = input.given?.trim() ?? "";
+      if (given.length === 0) {
+        if (standing !== null) creditNew(standing.id);
+        return { outcome: "absent", id: standing?.id ?? null, chapter };
+      }
+      if (had !== null && had.kind === "written") {
+        if (standing !== null) creditNew(standing.id);
+        return { outcome: "kept", id: standing?.id ?? null, chapter };
+      }
+      const verdict = this.gate({ text: given, handles: [], sessionId: input.sessionId });
+      if (!verdict.ok) {
+        this.emit("self.episode.summary.refused", episodeId, { chapter, gate: verdict.gate, reason: verdict.reason });
+        if (standing !== null) creditNew(standing.id);
+        return { outcome: "refused", id: standing?.id ?? null, chapter, reason: verdict.reason };
+      }
+      const body = verdict.text !== undefined && verdict.text.length > 0 ? verdict.text : given;
+      if (standing !== null && standing.kind === "automatic") {
+        // THE SESSION'S OWN WORDS OVER THE ENGINE'S, on the same row: its id,
+        // links and marks stay, and the automatic words are its version.
+        this.store.revise(standing.id, { body, meta: { [CHAPTER_SUMMARY_META]: "written" }, reason: "summary-written" });
+        // `revise` relinks the subjects its own words name; the chapter's go back on.
+        this.onSummaryNamed?.({ id: standing.id, text: chapterText, day: input.day, credit: false });
+        creditNew(standing.id);
+        this.emit("self.episode.summary", episodeId, { chapter, memory: standing.id, kind: "written", replaced: "automatic" });
+        return { outcome: "rewritten", id: standing.id, chapter };
+      }
+      const id = this.putSummary({ episodeId, doc, chapter, kind: "written", body, sessionId: input.sessionId, handles: [], about: input.about ?? null });
+      // An automatic one a boundary wrote meanwhile leaves (written once).
+      const kept = this.settleSummaries(episodeId, chapter, input.day);
+      if (kept !== null && kept !== id) return { outcome: "kept", id: kept, chapter };
+      this.onSummaryNamed?.({ id, text: chapterText, day: input.day, credit: true });
+      this.emit("self.episode.summary", episodeId, { chapter, memory: id, kind: "written", bytes: byteLength(body) });
+      return { outcome: "written", id, chapter };
+    } catch (err) {
+      this.emit("self.episode.summary.failed", episodeId, { chapter, error: err instanceof Error ? err.name : "UNKNOWN" });
+      return { outcome: "failed", id: null, chapter };
+    }
+  }
+
+  /**
+   * WRITTEN ONCE, EVEN ACROSS PROCESSES (review of #504): the check for a
+   * chapter's summary and the write of one are two steps, and another
+   * session's boundary may write an automatic summary between them. After a
+   * write, the chapter's live summaries are settled: a written one stands
+   * over an automatic one, then the oldest; any other is archived
+   * `SUMMARY_DUPLICATE_REASON` and its links go to the one that stands.
+   * Returns the id that stands (null when none reads). Never throws.
+   */
+  private settleSummaries(episodeId: string, chapter: number, day: number): string | null {
+    try {
+      const live = (this.store.copiesOf([episodeId]).get(episodeId) ?? [])
+        .map((c) => summaryOf(this.store, c.id))
+        .filter((s): s is NonNullable<typeof s> => s !== null && s.chapter === chapter)
+        .sort((a, b) => (a.kind === b.kind ? a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1) : a.kind === "written" ? -1 : 1));
+      const [stands, ...others] = live;
+      if (stands === undefined) return null;
+      for (const other of others) {
+        this.store.archive(other.id, SUMMARY_DUPLICATE_REASON);
+        try {
+          this.retarget?.(other.id, stands.id, day);
+        } catch {
+          /* the links, never the summary */
+        }
+        this.emit("self.episode.summary.duplicate", episodeId, { chapter, archived: other.id, stands: stands.id });
+      }
+      return stands.id;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ONE SUMMARY MEMORY, in the shape the chapter copy had (so every reader of
+   * that shape keeps working): a self-kind memory, `source: episode`,
+   * `origin_ref` the chapter's id, `meta.episodeId`, plus `meta.chapter` and
+   * `meta.chapterSummary`. It FADES like an ordinary memory (Mike,
+   * 2026-10-15), so it is born with an ordinary memory's default floor for
+   * its kind (`physics.defaultClaimFor`, recorded `claimedDefault` like a
+   * note's) rather than the copy's zero, which would have put it below reach
+   * from its first day. Its title is the episode's, with the chapter's number
+   * after the first. Its mark: its own chapter's (the episode's latest only for an episode from before per-chapter marks).
+   */
+  private putSummary(input: {
+    episodeId: string;
+    doc: ProseDoc;
+    chapter: number;
+    kind: ChapterSummaryKind;
+    body: string;
+    sessionId: string;
+    handles: readonly string[];
+    about: AboutMark | null;
+  }): string {
+    const { doc } = input;
+    // ITS OWN CHAPTER'S MARK (review of e6920860): the one given, else the one
+    // that chapter's call recorded (`meta.abouts`). Only an episode from before
+    // per-chapter marks (no `abouts` at all) falls back to the episode's latest
+    // mark; otherwise an unmarked chapter's summary is unmarked, never another
+    // chapter's "owner" with that mark's floor.
+    const legacy = doc.meta[CHAPTER_ABOUT_META] === undefined;
+    const mark = input.about ?? aboutMarkOf(chapterAbout(doc.meta, input.chapter)) ?? (legacy ? aboutMarkOf(doc.meta[EPISODE_ABOUT_META]) : null);
+    const put: Parameters<Store["put"]>[0] = {
+      type: "memory",
+      kind: "self",
+      body: input.body,
+      meta: {
+        episodeId: input.episodeId,
+        sessionId: input.sessionId,
+        handles: [...input.handles],
+        [SUMMARY_CHAPTER_META]: input.chapter,
+        [CHAPTER_SUMMARY_META]: input.kind,
+        [CLAIMED_DEFAULT_SPELLED]: true,
+      },
+      source: "episode",
+      origin: { session: input.sessionId, ref: input.episodeId },
+      salience: { claimed: defaultClaimFor({ about: mark, kind: "self" }).claim },
+    };
+    // THE TITLE, THROUGH THE SECRETS SCAN ONLY (review of #293, B3): the
+    // battery's content floor is for bodies, and a title that is nothing but
+    // a credential is dropped and said.
+    const title = summaryTitle(doc.title, input.chapter);
+    if (title !== undefined) {
+      const scan = scanSecrets(title, "title");
+      if (scan.emptyAfterRedaction) this.emit("self.episode.title.dropped", input.episodeId, { reason: "empty-after-redaction" });
+      else put.title = scan.redacted;
+    }
+    // THE DAY IT HAPPENED: the calendar day its chapter's heading names (the
+    // summary's words carry no heading to read it from), else the episode's.
+    const chapterDay = chaptersOf(doc.body)[input.chapter - 1]?.date ?? null;
+    if (chapterDay !== null) put.happenedOn = chapterDay;
+    else if (doc.happenedOn !== undefined) put.happenedOn = doc.happenedOn;
+    if (mark !== null) {
+      put.about = mark;
+      put.aboutBy = "writer";
+    }
+    return this.store.put(put);
+  }
+
+  /**
+   * THE CHAPTERS THIS SESSION'S EPISODE STILL OWES A SUMMARY, written now as
+   * AUTOMATIC ones (2026-10-15; until then: the whole episode ingested as one
+   * full copy, regrown as it grew). Every chapter has one summary memory,
+   * written once: the session's own, given with the `chapter` call, or — when
+   * it gave none — one the engine writes here from the chapter's title and
+   * opening lines (`summaries.ts#automaticSummaryText`), marked `automatic`.
+   * The chapters a frozen full copy already stands for are owed nothing
+   * (`chaptersCoveredByCopies`), and neither is a chapter that ever had a
+   * summary, live or not. Each summary crosses the same battery as any
+   * ingestion (§13 G8). Idempotent: run twice, the second writes nothing.
+   *
+   * The name and the result keep the old door's shape — `ingested` when it
+   * wrote at least one (`summaries` lists them, `memoryId` is the last),
+   * `already-ingested` when nothing was owed — so the boundary's report and
+   * every caller of the composition root read the same.
    */
   ingestEpisode(
     input: EpisodeProposal | { sessionId: string; day?: number; handles?: readonly string[] },
@@ -2694,6 +3011,7 @@ export class Self {
       episodeId: null,
       key: null,
       archived: [],
+      summaries: [],
       gate: null,
       intake: intakeReason,
     });
@@ -2716,195 +3034,76 @@ export class Self {
       this.emit("self.episode.ingest.skipped", sessionId, { reason: "no-episode" });
       return none("no-episode");
     }
-    const doc = this.store.readProse(state.episodeId);
-    const key = ingestKey(state.episodeId, doc.body);
-    const existing = findIngested(this.store, key);
-    if (existing !== null) {
-      // Idempotent against active AND archived, so consolidation's archival
-      // decisions are not resurrected by a stray touch (§5 G10).
-      this.emit("self.episode.ingest.skipped", state.episodeId, {
-        reason: "already-ingested",
-        memory: existing.id,
-      });
-      return {
-        ingested: false,
-        reason: "already-ingested",
-        memoryId: existing.id,
-        episodeId: state.episodeId,
-        key,
-        archived: [],
-        gate: null,
-        intake: null,
-      };
-    }
-    const regrow = state.firstIngestDay !== null;
-    if (regrow && d - (state.firstIngestDay ?? d) > this.tunables.REGROW_WINDOW_DAYS) {
-      // The window CLOSES — the deliberate deviation from human
-      // reconsolidation, which reopens on every retrieval (§13 G12).
-      this.emit("self.episode.ingest.skipped", state.episodeId, {
-        reason: "window-closed",
-        openedOn: state.firstIngestDay,
-        day: d,
-        window: this.tunables.REGROW_WINDOW_DAYS,
-      });
-      return {
-        ingested: false,
-        reason: "window-closed",
-        memoryId: state.ingestedMemoryId,
-        episodeId: state.episodeId,
-        key,
-        archived: [],
-        gate: null,
-        intake: null,
-      };
-    }
-
+    const episodeId = state.episodeId;
+    const doc = this.store.readProse(episodeId);
+    const key = ingestKey(episodeId, doc.body);
+    const chapters = chaptersOf(doc.body);
+    const covered = chaptersCoveredByCopies(this.store, episodeId);
+    const had = chapterSummaries(this.store, [episodeId], { archived: true }).get(episodeId);
     const handles = [...(input.handles ?? [])];
-    const verdict = this.gate({ text: doc.body, handles, sessionId });
-    if (!verdict.ok) {
-      // A first-person reflection is not exempt from never durably encoding a
-      // credential (§13 G8, scar §2.7).
-      this.emit("self.episode.ingest.refused", state.episodeId, {
-        gate: verdict.gate,
-        reason: verdict.reason,
-      });
-      return {
-        ingested: false,
-        reason: "gate-refused",
-        memoryId: null,
-        episodeId: state.episodeId,
-        key,
-        archived: [],
-        gate: { gate: verdict.gate, reason: verdict.reason },
-        intake: null,
-      };
-    }
-
-    // ADD FIRST, then archive the stale one: a failed add can never leave an
-    // episode with no live memory (§13 G11).
-    const proposal = input as EpisodeProposal;
-    // The GATE's text, never the draft, is what becomes the memory: an episode
-    // is an ordinary ingestion and the battery may have redacted it (SEAMS H).
-    const body = verdict.text !== undefined && verdict.text.length > 0 ? verdict.text : doc.body;
-    const put: Parameters<Store["put"]>[0] = {
-      type: "memory",
-      kind: "self",
-      body,
-      meta: { episodeId: state.episodeId, episodeKey: key, sessionId, handles },
-      // The experiencer's own episode is lived testimony — the "episode"
-      // channel, recorded as provenance like every other mint (F9-light).
-      source: "episode",
-      origin: { session: sessionId, ref: state.episodeId },
-    };
-    // THE COPY KEEPS THE CHAPTER'S TITLE (2026-09-30, U13). The boundary caller
-    // never fills `proposal.title`, so every copy was minted untitled — a row
-    // that read, in a recall result, as the less useful twin of its own chapter.
-    // Nothing is invented: the chapter's own title, when it has one. A copy
-    // minted before this picks the title up when its chapter next regrows.
-    //
-    // THE SECRETS SCAN ONLY, not the whole battery (review of #293, B3): the
-    // battery's content floor (20 characters, three words) is a rule for a
-    // memory's BODY, and it refused almost every real title — "Launch day",
-    // "The first week". A credential is still redacted (the chapter door gates
-    // only the text, so a title may carry one); a title that is nothing BUT a
-    // credential is dropped, and says so.
-    if (proposal.title !== undefined) put.title = proposal.title;
-    else if (doc.title !== undefined && doc.title.trim().length > 0) {
-      const scan = scanSecrets(doc.title.trim(), "title");
-      if (scan.emptyAfterRedaction) {
-        this.emit("self.episode.title.dropped", state.episodeId, { reason: "empty-after-redaction" });
-      } else put.title = scan.redacted;
-    }
-    if (proposal.happenedOn !== undefined) put.happenedOn = proposal.happenedOn;
-    else if (doc.happenedOn !== undefined) put.happenedOn = doc.happenedOn;
-    if (proposal.salience !== undefined || proposal.claimed !== undefined) {
-      put.salience = { ...(proposal.salience ?? {}), claimed: proposal.claimed ?? null };
-    }
-    // WHAT THE COPY IS ABOUT (2026-10-01, lane 8): the copy it replaces says
-    // last — the chapter tool sets the mark on the live copy at once, and a
-    // reflection may set one later, so the latest act is on that row — and
-    // the chapter's own `about` when there is no copy yet.
-    const staleCopies = memoriesForEpisode(this.store, state.episodeId);
-    const carried = this.copyAbout(staleCopies, doc);
-    if (carried !== null) {
-      put.about = carried.mark;
-      put.aboutBy = carried.by;
-    }
-    const memoryId = this.store.put(put);
-
-    const archived: string[] = [];
-    for (const stale of staleCopies) {
-      if (stale === memoryId) continue;
-      this.store.archive(stale, "episode-regrown");
-      archived.push(stale);
-    }
-    // THE LINKS GO WITH THE WORDS (2026-10-09). An archived copy stops
-    // conducting, so every link it had learned (the session's contiguity, a
-    // co-use, a dream's tie) was stranded on it: 260 of a live store's 1,200
-    // edge rows on 10-02. The new copy inherits them the way a dream merge's
-    // memory inherits its originals' — after the archive, so one stale copy's
-    // tie to another is not carried. A failure costs the links, never the copy.
-    let relinkFailed = 0;
-    for (const stale of archived) {
-      try {
-        this.retarget?.(stale, memoryId, d);
-      } catch {
-        relinkFailed += 1;
+    const written: string[] = [];
+    let refused: { gate: string; reason: string } | null = null;
+    for (let k = covered + 1; k <= chapters.length; k += 1) {
+      if (had?.has(k) === true) continue;
+      const chapterText = (chapters[k - 1]?.text ?? "").trim();
+      const auto = automaticSummaryText(chapterText);
+      if (auto.length === 0) continue;
+      const verdict = this.gate({ text: auto, handles, sessionId });
+      if (!verdict.ok) {
+        // A first-person account is not exempt from never durably encoding a
+        // credential (§13 G8, scar §2.7) — nor, here, from the content floor:
+        // a chapter of a few words has no summary until it grows.
+        refused = { gate: verdict.gate, reason: verdict.reason };
+        this.emit("self.episode.ingest.refused", episodeId, { chapter: k, gate: verdict.gate, reason: verdict.reason });
+        continue;
       }
+      const body = verdict.text !== undefined && verdict.text.length > 0 ? verdict.text : auto;
+      // The mark this chapter's call gave (putSummary reads it).
+      const id = this.putSummary({ episodeId, doc, chapter: k, kind: "automatic", body, sessionId, handles, about: null });
+      // A session's summary that landed meanwhile stands; this one leaves.
+      const stands = this.settleSummaries(episodeId, k, d);
+      if (stands !== null && stands !== id) continue;
+      this.onSummaryNamed?.({ id, text: chapterText, day: d, credit: true });
+      this.emit("self.episode.summary", episodeId, { chapter: k, memory: id, kind: "automatic", bytes: byteLength(body) });
+      written.push(id);
     }
-    if (relinkFailed > 0) {
-      this.emit("self.episode.relink.failed", state.episodeId, { memory: memoryId, failed: relinkFailed });
-    }
-
+    // THE BODY THIS PASS READ is recorded whatever it wrote, so the boundary's
+    // cheap skip (`reconcileEpisodes`) passes the episode until it grows again
+    // — a chapter the gate refused is tried again then, never on every boundary.
     this.persistState(
       {
         ...state,
         ingestedKey: key,
-        ingestedMemoryId: memoryId,
+        ingestedMemoryId: written[written.length - 1] ?? state.ingestedMemoryId,
         firstIngestDay: state.firstIngestDay ?? d,
         lastDay: d,
       },
       "ingestEpisode",
     );
-    this.emit("self.episode.ingested", state.episodeId, {
-      memory: memoryId,
-      regrown: regrow,
-      archived: archived.length,
+    if (written.length === 0) {
+      if (refused !== null) {
+        return { ingested: false, reason: "gate-refused", memoryId: null, episodeId, key, archived: [], summaries: [], gate: refused, intake: null };
+      }
+      this.emit("self.episode.ingest.skipped", episodeId, { reason: "already-ingested", covered });
+      return { ingested: false, reason: "already-ingested", memoryId: null, episodeId, key, archived: [], summaries: [], gate: null, intake: null };
+    }
+    this.emit("self.episode.ingested", episodeId, {
+      summaries: written.length,
+      covered,
       handles: handles.length,
       bytes: byteLength(doc.body),
     });
-    this.onMemoryMinted?.({ id: memoryId, title: put.title ?? null, body, day: d });
     return {
       ingested: true,
-      reason: regrow ? "regrown" : "ingested",
-      memoryId,
-      episodeId: state.episodeId,
+      reason: "ingested",
+      memoryId: written[written.length - 1] ?? null,
+      episodeId,
       key,
-      archived,
+      archived: [],
+      summaries: written,
       gate: null,
       intake: null,
     };
-  }
-
-  /**
-   * The mark a new copy of an episode takes: the newest live copy's, with who
-   * set it, else the episode's own `meta.about` (the chapter tool's, set by
-   * the writer), else none. Never throws.
-   */
-  private copyAbout(staleCopies: readonly string[], episode: ProseDoc): { mark: AboutMark; by: AboutSetter } | null {
-    try {
-      for (const id of [...staleCopies].reverse()) {
-        const row = this.store.row(id);
-        const mark = aboutMarkOf(row?.about);
-        if (mark === null) continue;
-        const by = row?.about_by ?? "";
-        return { mark, by: (ABOUT_SETTERS as readonly string[]).includes(by) ? (by as AboutSetter) : "writer" };
-      }
-    } catch {
-      /* the episode's own mark, below */
-    }
-    const own = aboutMarkOf(episode.meta[EPISODE_ABOUT_META]);
-    return own === null ? null : { mark: own, by: "writer" };
   }
 
   /**
@@ -2916,11 +3115,11 @@ export class Self {
    * its own tests. An episode that nobody ingests is a file, not a memory — the
    * "context and source, in that order" half of §13 G6 was unreachable in
    * production for the whole run. This is that scheduled pass: every live
-   * episode whose CURRENT text has not been ingested is ingested here, at the
-   * boundary, before the cycle that decays and re-renders around it.
+   * episode whose CURRENT text has not been read is read here, at the
+   * boundary, and each chapter that has no summary gets its automatic one.
    *
    * Cheap by construction: the skip is a state read plus a hash, so an episode
-   * already ingested at its current text costs no scan of the memory table.
+   * already read at its current text costs no scan of the memory table.
    */
   reconcileEpisodes(day?: number): {
     considered: number;
@@ -2931,7 +3130,6 @@ export class Self {
     const d = day ?? this.store.livedDay();
     let considered = 0;
     let ingested = 0;
-    let regrown = 0;
     let skipped = 0;
     for (const id of this.store.list({ type: "episode", archived: false })) {
       let doc: ProseDoc;
@@ -2951,18 +3149,19 @@ export class Self {
         continue;
       }
       const out = this.ingestEpisode({ sessionId, day: d });
-      if (out.reason === "ingested") ingested += 1;
-      else if (out.reason === "regrown") regrown += 1;
+      // `ingested` counts SUMMARIES written, not episodes.
+      if (out.ingested) ingested += out.summaries.length;
       else skipped += 1;
     }
+    // `regrown` stays in the shape and is always 0: nothing regrows since 2026-10-15.
     this.emit("self.episode.reconciled", undefined, {
       considered,
       ingested,
-      regrown,
+      regrown: 0,
       skipped,
       day: d,
     });
-    return { considered, ingested, regrown, skipped };
+    return { considered, ingested, regrown: 0, skipped };
   }
 
   /**
@@ -2992,6 +3191,47 @@ export class Self {
   }
 
   // ── internals ────────────────────────────────────────────────────────────
+
+  /**
+   * "COMING UP" = TODAY (2026-10-16, the wake trims; Mike, lightly held).
+   * `listed`: the arriving items the lane lists — due on the day the wake
+   * is for (`today`, else `at`, else the store's today), a plain reminder due
+   * the day it is read (`plainDue`), or one with no date (nothing to count it
+   * by) — including one `prospective/`'s count left out (`horizonMoreItems`).
+   * `later`: every id it counts instead, the overdue first. `overdue`: those
+   * past their date (`past`, or a day before), which the count line names
+   * as such (review of #511). `more`: what the lane's overflow takes, the
+   * later ids and then any of the count's ids that came without a date. Off
+   * (`COMING_UP_TODAY_ONLY`): the items and the count as supplied. Reads
+   * only the store's clock.
+   */
+  private comingUp(
+    items: readonly HorizonItem[] | undefined,
+    moreIds: readonly string[] | undefined,
+    moreItems: readonly HorizonItem[] | undefined,
+    at: string | undefined,
+  ): { listed: HorizonItem[]; later: string[]; overdue: string[]; more: string[] } {
+    if (!this.tunables.COMING_UP_TODAY_ONLY) return { listed: [...(items ?? [])], later: [], overdue: [], more: [...(moreIds ?? [])] };
+    // The composition's date as well as the caller's word (`today`, `past`):
+    // a caller that names only the date is read by it.
+    const today = at ?? this.store.today();
+    const due = (h: HorizonItem): string => h.due?.trim() ?? "";
+    // Listed: due today, a plain reminder due the day it is read
+    // (`plainDue`), or no date to count it by. Past its date (`past`, or a
+    // day before today) is counted as overdue, not listed (2026-10-16,
+    // review of #511: "just what's due today").
+    const now = (h: HorizonItem): boolean => h.plainDue === true || h.today === true || due(h) === "" || (isDay(due(h)) && due(h) === today);
+    const late = (h: HorizonItem): boolean => !now(h) && (h.past === true || (isDay(due(h)) && due(h) < today));
+    const all = [...(items ?? []), ...(moreItems ?? [])];
+    const dated = new Set((moreItems ?? []).map((h) => h.id));
+    const listed = all.filter(now);
+    const overdue = all.filter(late).map((h) => h.id);
+    // Every id counted rather than listed, overdue first, so the count line
+    // names them first (`moreLine`).
+    const later = [...overdue, ...all.filter((h) => !now(h) && !late(h)).map((h) => h.id)];
+    const undated = (moreIds ?? []).filter((id) => !dated.has(id));
+    return { listed, later, overdue, more: [...later, ...undated] };
+  }
 
   private horizonRank(item: HorizonItem, day: number): Ranked {
     let kind: Kind = "fact";
@@ -3051,7 +3291,16 @@ export class Self {
       happenedOn?: string;
       boundedDate?: boolean;
       standing?: { prefix: string; suffix: string };
+      line?: string;
     } = { statement: statement.length > 0 ? statement : id };
+    // A LONG ITEM'S LINE (#489 C, 2026-10-16): its title, else `lineOf`'s
+    // first line — offered only past `WAKE_LINE_BYTES`, and only when the line
+    // and its id are shorter than the statement. Which lanes print it is
+    // `briefing.ts#asLine`'s decision.
+    if (Buffer.byteLength(statement) > this.tunables.WAKE_LINE_BYTES) {
+      const line = lineOf(doc);
+      if (line.length > 0 && Buffer.byteLength(`${line} [${id}]`) < Buffer.byteLength(statement)) out.line = line;
+    }
     // Its standing in a contradiction — the same words recall uses (review of
     // #284, S3): hints, threads and identity alike. Never fails a render.
     try {

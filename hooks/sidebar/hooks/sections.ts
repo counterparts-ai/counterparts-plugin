@@ -30,6 +30,7 @@ import type {
   SidebarToday,
 } from '../types'
 import { dateOf, hm, humanDates } from './feed'
+import type { Glance } from './feed'
 import { MECHS, STAGES, hex, stageOf } from './mechanisms'
 import type { MechId } from './mechanisms'
 import { STATUS_STALE_MS, agoWords } from './status'
@@ -184,6 +185,8 @@ export type BodyState = {
   prose?: boolean
   /** The pane's own text width in cells, when `w` was widened for a prose surface's narrower font (bars use it). */
   cellsW?: number
+  /** The wake's first glance line (Last here, Coming up, Yesterday), or null. */
+  glance?: Glance | null
 }
 
 /** How far each section is folded: the ladder's knobs. */
@@ -202,11 +205,13 @@ type Fold = {
   excerpt: number
   dreamFolded: boolean
   mindFolded: boolean
+  /** The glance (Last here, Coming up, Yesterday) left out: the first thing to give way. */
+  glanceOff: boolean
 }
 
 const FULL: Fold = {
   memShow: 99, text: OPEN_MAX_LINES, sub: 4, savedShow: SAVED_MAX, savedFolded: false, chartFolded: false,
-  events: 6, dreamLines: 3, excerpt: OPEN_MAX_LINES, dreamFolded: false, mindFolded: false,
+  events: 6, dreamLines: 3, excerpt: OPEN_MAX_LINES, dreamFolded: false, mindFolded: false, glanceOff: false,
 }
 
 /** One fold of the ladder; `fold` when it folds a section to its heading. */
@@ -223,6 +228,7 @@ const memTo = (n: number) => step(`memories shows ${String(n)}`, 'mind', f => ({
 const chartFold = step('chart folded', 'chart', f => ({ ...f, chartFolded: true }))
 const mindFold = step('memories folded', 'mind', f => ({ ...f, mindFolded: true, sub: 0 }))
 const dreamFold = step('dream folded', 'dream', f => ({ ...f, dreamFolded: true }))
+const glanceGone = step('glance off', 'glance', f => ({ ...f, glanceOff: true }))
 /**
  * Saved items, fewer one at a time (down to `to`), each keeping its two
  * lines; `savedFold` then folds the section to its heading. Never one line each: Mike would rather read
@@ -250,14 +256,14 @@ function ladders(s: BodyState): Readonly<Record<'default' | 'open' | 'mech' | 'd
   const n = Math.min(s.saved.length, SAVED_MAX)
   const saved = [...savedFewer(n), savedFold]
   return {
-    default: [...saved, dreamTo(2), subTo(3), subTo(2), dreamTo(1), subTo(1), memTo(2), subTo(0), memTo(1), chartFold, mindFold, dreamFold],
+    default: [glanceGone, ...saved, dreamTo(2), subTo(3), subTo(2), dreamTo(1), subTo(1), memTo(2), subTo(0), memTo(1), chartFold, mindFold, dreamFold],
     // An opened item's text is the last to give way (cut, it ends with `more`); the dream (two rows) folds
     // before the chart (twelve).
-    open: [...saved, dreamTo(1), subTo(1), subTo(0), dreamFold, chartFold, textTo(14), textTo(10), textTo(8), textTo(5)],
-    mech: [...saved, dreamTo(1), mindFold, ...EVENTS_DOWN, dreamFold, eventsTo(1)],
+    open: [glanceGone, ...saved, dreamTo(1), subTo(1), subTo(0), dreamFold, chartFold, textTo(14), textTo(10), textTo(8), textTo(5)],
+    mech: [glanceGone, ...saved, dreamTo(1), mindFold, ...EVENTS_DOWN, dreamFold, eventsTo(1)],
     // The dream the person opened keeps its words while the saved list goes down to two items; past that its
     // excerpt shortens before the last two go (the round-3 160x48 frame: two saved, the dream's first sentence).
-    dream: [chartFold, ...savedFewer(n, 2), excerptTo(14), excerptTo(10), excerptTo(7), excerptTo(5), excerptTo(3), ...(n > 1 ? [savedTo(1)] : []), savedFold, subTo(1), subTo(0), mindFold],
+    dream: [glanceGone, chartFold, ...savedFewer(n, 2), excerptTo(14), excerptTo(10), excerptTo(7), excerptTo(5), excerptTo(3), ...(n > 1 ? [savedTo(1)] : []), savedFold, subTo(1), subTo(0), mindFold],
   }
 }
 
@@ -381,9 +387,15 @@ function saved(s: BodyState, f: Fold): Line[] {
   return out
 }
 
-/** `▄▄▄▖`: a half-height bar in half-cell steps, at least one half. */
+/**
+ * `▄▄▄▖`: a half-height bar in half-cell steps, at least one half. On a log
+ * scale (2026-10-15, Mike, lightly held): one mechanism firing 144 times left
+ * every other bar a sliver, so 1, 10 and 100 are now even steps; the count
+ * beside the bar says the number.
+ */
 export function bar(v: number, max: number, width: number): string {
-  const halves = Math.max(1, Math.round((v / Math.max(1, max)) * width * 2))
+  const share = Math.log1p(Math.max(0, v)) / Math.log1p(Math.max(1, max))
+  const halves = Math.max(1, Math.round(share * width * 2))
   return '▄'.repeat(Math.floor(halves / 2)) + (halves % 2 === 1 ? '▖' : '')
 }
 
@@ -491,10 +503,42 @@ function dream(s: BodyState, f: Fold): Line[] {
   return out
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** A `Coming up` item's leading date in words: `Today · …`, `Tomorrow · …`, else `Oct 20 · …`.
+ *  Core writes it whole (`2026-10-20`) or, since 2026-10-16, short in the wake's year (`Oct 20`). */
+export function leadDate(text: string, now: number): string {
+  const short = (ymd: string): string => {
+    const [, m, d] = ymd.split('-')
+    const name = MONTHS[Number(m) - 1]
+    return name === undefined ? ymd : `${name} ${String(Number(d))}`
+  }
+  const words = (said: string, day: string | null): string => {
+    if (day === dateOf(now) || said === short(dateOf(now))) return 'Today · '
+    if (day === dateOf(now + 86_400_000) || said === short(dateOf(now + 86_400_000))) return 'Tomorrow · '
+    return `${day === null ? said : short(day)} · `
+  }
+  return text
+    .replace(/^(\d{4}-\d{2}-\d{2}) · /, (_whole, day: string) => words(day, day))
+    .replace(/^([A-Z][a-z]{2} \d{1,2}) · /, (_whole, said: string) => words(said, null))
+}
+
+/** Lines the glance may take. */
+const GLANCE_LINES = 3
+
+/** Before anything happens: where things were left, what's coming up, or yesterday (the wake's own lines). */
+function glance(s: BodyState, f: Fold): Line[] {
+  const g = s.glance
+  const opened = s.open?.key === 'glance'
+  // Opened (a click, as the dream opens), it is the one opened text, and shortens only as an opened text does.
+  if (g === null || g === undefined || (f.glanceOff && !opened)) return []
+  return [heading(g.head, '', s.w, { key: 'glance' }), ...plain(wrapN(humanDates(leadDate(g.text, s.now), s.now), s.w, opened ? f.text : GLANCE_LINES), P.text, 'glance')]
+}
+
 // ── the ladder ───────────────────────────────────────────────────────────────
 
 function sectionsOf(s: BodyState, f: Fold): Line[][] {
-  return [memories(s, f), subconscious(s, f), saved(s, f), chart(s, f), dream(s, f)].filter(x => x.length > 0)
+  return [memories(s, f), subconscious(s, f), saved(s, f), chart(s, f), dream(s, f), glance(s, f)].filter(x => x.length > 0)
 }
 
 function total(secs: readonly Line[][], gaps: boolean): number {

@@ -67,6 +67,7 @@ import { readHost, mcpCommand } from "./install.js";
 import { coverageLines } from "./coverage.js";
 import { readDesktop } from "./desktop.js";
 import { runtimeLabel } from "../runtime.js";
+import { npmMarkerReading } from "../npm-live.js";
 import { installRoute } from "../plugin.js";
 // The terminal layouts for the two readings a person checks an install with.
 // Both fall back to today's exact bytes for a console that is not a terminal.
@@ -969,6 +970,9 @@ export function doctorCommand(
         claudeOnPath: claudeOnPath(env),
         mcpAddLine: mcpCommand(dir, undefined, customConfigPath(named, home ?? homedir())),
         consoleRuntime: runtimeLabel(),
+        // THE NPM INSTALL'S MARKER, as a directory-flavor plugin reads it
+        // (`npm-live.ts`): whether that plugin stands down beside this wiring.
+        npmMarker: npmMarkerReading(configPath, env),
       },
       // CLAUDE DESKTOP'S ENTRY (2026-09-30): two small reads of the host's
       // files, like `host` above. Quiet in the report when there is none.

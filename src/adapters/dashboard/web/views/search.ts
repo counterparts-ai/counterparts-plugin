@@ -104,6 +104,7 @@ function hitOf(store: DashboardSource["store"], id: string, score: number, day: 
   const shown = shownOf(row.body, {
     chapter,
     learnedOn: row.learned_on,
+    chapterDay: row.happened_on ?? null,
     confidential: r.confidential || !r.present,
     withheld: r.text ?? r.label,
   });

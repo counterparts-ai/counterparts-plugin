@@ -35,7 +35,10 @@
  * fetched from here (the directory build's policy read, 2026-10-14), and
  * nothing is a link: the footer says `/counterparts:dashboard`. The speak-first, which submits one prompt once per install, is
  * `speak-first.tsx`, a hooks module of its own that only the full build
- * carries.
+ * carries. So is `actions.tsx` (2026-10-16), which gives the full build's pane
+ * the Meet row, the title's link to the dashboard and a footer of clickable
+ * rows (`state.ts#run.full`); with it unset, as in the directory's build, none
+ * of them is drawn and a `set:` click does nothing.
  *
  * The engine lets `$` pass only to functions declared at the top of this
  * file, reads a `$.state` source only from an atom declared here, and reads
@@ -81,6 +84,8 @@ import {
   otherStore,
   ourTool,
   parseRecallBlock,
+  parseGlance,
+  parseOnboardingMarker,
   parseStoreMarker,
   savedItems,
   surfacedIds,
@@ -119,7 +124,9 @@ import type { RegistryMode } from './scopes'
 import { layoutBody } from './sections'
 import type { Line } from './sections'
 import {
+  FILL_NOTE_MS,
   FIRING_MS,
+  MEET_FLAG,
   NAMES_NOTHING,
   OPEN_COLUMNS,
   POLL_IDLE_MS,
@@ -131,13 +138,14 @@ import {
   quiet,
   run,
 } from './state'
-import { NOT_CARRIED, STATUS_FILE, memoryIn, parseStatus, rowsNamed, rowsSince } from './status'
+import { NOT_CARRIED, STATUS_FILE, keepsBefore, memoryIn, parseStatus, rowsNamed, rowsSince } from './status'
 import type { Status } from './status'
 import { CLASSIC_HINT, NARROW_HINT, TAIL_HINT, TAIL_SPARE, narrowHint, quietTail } from './tail'
 import { P, SURFACE, applyTheme, normTheme } from './theme'
 import { cells } from './width'
 import {
   bodyOf,
+  firedIn,
   isAbsolutePath,
   isPaused,
   memoriesCount,
@@ -209,9 +217,10 @@ async function readStatus($: EngineInterface): Promise<Status | null> {
     // the last good one stands until the next read.
     if (parsed === null) return run.status
     run.statusStamp = stamp
-    // Two writers racing: an older file of the same store over a newer one is not shown (the log only grows).
+    // Two writers racing: an older file of the same store over a newer one is not shown (the log only grows),
+    // unless it is newer by more than a race makes it — a store put back (`keepsBefore`).
     const before = run.status
-    if (before !== null && parsed.storeId !== null && parsed.storeId === before.storeId && parsed.pulse.lastSeq < before.pulse.lastSeq) return before
+    if (keepsBefore(before, parsed)) return before
     run.status = parsed
     return parsed
   } catch {
@@ -618,16 +627,23 @@ function deeperFirings(s: Status, id: MechId, panel: readonly DashEvent[], dream
 
 /** A click on a row of the body, by the key the layout gave it. */
 async function clickBody($: EngineInterface, key: string): Promise<void> {
+  // The full build's switches (`actions.tsx` draws them; never drawn in the directory's build, never acted on there).
+  if (key.startsWith('set:')) {
+    if (run.full !== null) await setSwitch($, key)
+    return
+  }
+  // A command for the prompt box: `actions.tsx`'s own hook answers it, outside this one.
+  if (key.startsWith('fill:')) return
   // (The `more` that ends a cut text is plain words, with no link: a click on it is its row's.)
   if (key.startsWith('head:')) {
     const section = key.slice(5)
     await update($, focusA, f => (f === section ? null : section))
     return
   }
-  if (key === 'dream') {
+  if (key === 'dream' || key === 'glance') {
     const at = await $.clock.now()
     const cur = await read($, openA)
-    await update($, openA, () => (cur?.key === 'dream' ? null : { key, id: null, status: 'ready' as const, title: null, text: '', meta: null, at }))
+    await update($, openA, () => (cur?.key === key ? null : { key, id: null, status: 'ready' as const, title: null, text: '', meta: null, at }))
     return
   }
   if (key.startsWith('mech:')) {
@@ -822,6 +838,17 @@ async function setAvatar($: EngineInterface, mode: SidebarAvatar): Promise<void>
   $.ui.invalidate('ui.render')
 }
 
+/**
+ * A click on one of the full build's footer switches (2026-10-16): store-only, as `/counterparts quiet`,
+ * `/counterparts` and `/counterparts avatar animal|off` do it. `set:view:quiet` closes the pane to quiet.
+ */
+async function setSwitch($: EngineInterface, key: string): Promise<void> {
+  if (key === 'set:view:quiet') await closeQuiet($)
+  else if (key === 'set:view:sidebar') await openPane($)
+  else if (key === 'set:avatar:off') await setAvatar($, 'off')
+  else if (key === 'set:avatar:fox') await setAvatar($, 'fox')
+}
+
 /** The pane's colours, for every session (`$.store`): tron or cozy. The Pane hook applies it at each drawing. */
 async function setTheme($: EngineInterface, name: SidebarTheme): Promise<void> {
   await $.store.set('theme', name)
@@ -878,9 +905,14 @@ async function foxEvent($: EngineInterface, ev: FoxEvent): Promise<void> {
  * between (a still hold is one wait of 4–9 s). A change on a Raster or an
  * Image is a blit; in sextants (Text) or on the desktop (an Svg) a redraw of
  * the pane. A pane no longer shown stops it (the next drawing starts it). A
- * refused blit stops it; an Image refused twice in a row (it draws its alt
- * here) leaves `auto` drawing sextants for the session.
+ * refused blit stops it; an Image refused twice in a row because it draws
+ * its alt here leaves `auto` drawing sextants or half-blocks for the session. Any other
+ * refusal (not mounted yet, another size, the terminal not yet asked) is not
+ * counted: it says nothing about pictures.
  */
+/** What the engine's blit refusal says when an Image draws its alt (Claude Code 2.1.300). */
+const ALT_REFUSAL = 'draws its alt'
+
 async function stageStep($: EngineInterface, gen: number): Promise<void> {
   if (gen !== stage.gen || !stage.live) return
   const now = await $.clock.now()
@@ -916,7 +948,7 @@ async function stageStep($: EngineInterface, gen: number): Promise<void> {
             if (tier === 'image') stage.imageDenies = 0
             return
           }
-          if (tier === 'image') {
+          if (tier === 'image' && r.deny.includes(ALT_REFUSAL)) {
             stage.imageDenies += 1
             if (stage.imageDenies >= 2) stage.noImages = true
           }
@@ -1093,16 +1125,13 @@ export const register: Register = on => {
     stage.pngDir = await findPngDir($)
     stage.pngData.clear()
     if (stage.pngDir === null) stage.noImages = true
-    // What this terminal can draw the fox with, read once (fox.ts, `pickTier`).
+    // Pictures: tried, and the engine says. Where they can't show, whether the font draws sextants, read once (fox.ts).
     // (Each name spelled out: the engine lists the variables a module reads.)
     const envVals = await Promise.all([
       $.env.get('TERM_PROGRAM').catch(() => undefined),
       $.env.get('TERM').catch(() => undefined),
       $.env.get('KITTY_WINDOW_ID').catch(() => undefined),
       $.env.get('WEZTERM_EXECUTABLE').catch(() => undefined),
-      $.env.get('TMUX').catch(() => undefined),
-      $.env.get('STY').catch(() => undefined),
-      $.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES').catch(() => undefined),
     ])
     stage.env = Object.fromEntries(TIER_ENV.map((k, i) => [k, envVals[i]]).filter(([, v]) => typeof v === 'string'))
     await update($, themeA, () => normTheme(themePref))
@@ -1147,7 +1176,7 @@ export const register: Register = on => {
         return {
           text:
             d === 'auto'
-              ? 'The fox is drawn the finest way this terminal is known to show.'
+              ? 'The fox is drawn the best way this terminal shows: a picture, else sextants, else half-blocks.'
               : d === 'images'
                 ? 'The fox is drawn as a picture (kitty, Ghostty); a terminal that cannot shows its name instead.'
                 : d === 'fine'
@@ -1231,6 +1260,17 @@ export const register: Register = on => {
       // The wake's store marker: which store this session's hooks opened (the status file must be the same store's).
       const storeId = parseStoreMarker(text)
       if (storeId !== null) run.wakeStore = storeId
+      // The wake's onboarding marker: once the first meeting is done or skipped, the footer stops offering it.
+      const glanceNow = parseGlance(text)
+      if (glanceNow !== null) {
+        run.glance = glanceNow
+        $.ui.invalidate('ui.render')
+      }
+      const meet = parseOnboardingMarker(text)
+      if (meet !== null && meet !== run.meet) {
+        run.meet = meet
+        $.ui.invalidate('ui.render')
+      }
     } catch {
       // the row is stored whatever the sidebar made of it
     }
@@ -1245,6 +1285,9 @@ export const register: Register = on => {
       await update($, savedA, () => [])
       await update($, mindA, () => null)
       await update($, openA, () => null)
+      // the next session's wake says these again; until it does, nothing stale
+      run.glance = null
+      run.meet = 'unknown'
     }
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -1337,6 +1380,11 @@ export const register: Register = on => {
     const roomy = fill >= ROOMY_ROWS
     const lit = firingNow[0] ?? (mech === null ? null : mech.id)
     const paneEls: PaneEls = { Box, Text }
+    // The full build's pieces (`actions.tsx`, `run.full`); none in the directory's. The title links to the
+    // dashboard only on the terminal: the desktop draws a link that is not https as plain text.
+    const full = run.full
+    const link = full !== null && e.surface === 'terminal' && 'Link' in els ? full.titleLink(els, run.status?.dashboard ?? null) : null
+    const note = run.fillNote !== null && now - run.fillNote.at < FILL_NOTE_MS ? run.fillNote : null
     const rows: JSX.Element[] = []
     let used = 0
     if (roomy) {
@@ -1355,7 +1403,7 @@ export const register: Register = on => {
       const step = advance(stage.director, now).step
       // An Image's first frame is blitted once mounted too: a refusal says it draws its alt here.
       stage.shown = tier === 'image' ? '' : stepKey(step)
-      const [title] = header(paneEls, { w, paused, lit, day, count: countText })
+      const [title] = header(paneEls, { w, paused, lit, day, count: countText, link })
       const png = tier === 'svg' ? await pngData($, pngName(step)) : ''
       stageTop = [...rows, ...(title === undefined ? [] : [title]), stageElement(els, tier, step, png)]
       rows.length = 0
@@ -1365,7 +1413,7 @@ export const register: Register = on => {
       used += 1 + (tier === 'svg' ? (SURFACE.prose ? Math.ceil(10 * Math.min(1, (W * 7) / (STAGE_COLS * 6))) : 15) : stageRows(tier)) + 1
       if (!holding) startStage($)
     } else {
-      rows.push(...header(paneEls, { w, paused, lit, day, count: countText }))
+      rows.push(...header(paneEls, { w, paused, lit, day, count: countText, link }))
       used += 2
     }
 
@@ -1379,11 +1427,37 @@ export const register: Register = on => {
     // The desktop sets text in its own font, about a fifth narrower than the cells the pane is measured in:
     // the body wraps to that, and the footer fits its lines to it (2026-10-13, Mike: "hard to read").
     const bodyW = SURFACE.prose ? Math.floor(w * 1.2) : w
-    const footRows = footerRows(bodyW, paused)
+    const footShow = { intro: run.meet !== 'done' && run.meet !== 'skipped', fox: mode !== 'off' }
+    // The full build: "Meet your counterpart" at the top of the body while the meeting waits (not while this
+    // session's speak-first is the introduction), and a footer whose rows can be clicked. The rows that fill the
+    // prompt box only on the terminal: on the desktop `$.prompt.fill` may refuse (`no_composer`, a surface that
+    // draws its own composer), unmeasured, so there the footer says the commands as the directory's does.
+    const fills = e.surface === 'terminal'
+    const meet =
+      full !== null && fills && full.meetShows(run.meet, scope.mode, firedIn(await $.store.get(MEET_FLAG)), run.session, run.meetFilledIn)
+        ? full.meetLines(bodyW, note?.key === 'fill:meet' ? note.text : null)
+        : []
+    const foot =
+      full === null
+        ? null
+        : full.footLines({
+            fit: bodyW,
+            w,
+            prose: SURFACE.prose,
+            paused,
+            view: normView(view),
+            avatar: mode,
+            note: note?.key === 'fill:dash' ? note.text : null,
+            // the intro line only where the meeting waits and the Meet row isn't drawn (no repeats)
+            intro: meet.length === 0 && footShow.intro,
+            fills,
+          })
+    const footRows = foot === null ? footerRows(bodyW, paused, footShow) : foot.length
     // The desktop's rows are its font's, a little taller than the cells it reports: two rows of headroom keep its
     // pane from scrolling by a line (2026-10-13).
-    const bodyRows = Math.max(4, fill - used - footRows - (SURFACE.prose ? 2 : 0))
-    const { lines } = layoutBody({ w: bodyW, rows: bodyRows, now, mind, saved, today, dream: dreamNow, open, mech, focus, dash, prose: SURFACE.prose, cellsW: w, statusAt: pulse?.at ?? null })
+    const bodyRows = Math.max(4, fill - used - footRows - meet.length - (SURFACE.prose ? 2 : 0))
+    const laid = layoutBody({ w: bodyW, rows: bodyRows, now, mind, saved, today, dream: dreamNow, open, mech, focus, dash, prose: SURFACE.prose, cellsW: w, statusAt: pulse?.at ?? null, glance: run.glance })
+    const lines = [...meet, ...laid.lines]
     // The body's surface module stays here, its module a literal on the tag's own line: the engine reads a hooks
     // module's surface modules off its own source.
     if ('Client' in els) {
@@ -1393,7 +1467,12 @@ export const register: Register = on => {
     rows.push(<Box key="spacer" flexGrow={1} />)
 
     // ── the footer: how to do what the pane doesn't (the intro, the dashboard, a pause, hiding it) ──
-    rows.push(footer(paneEls, { w, fit: bodyW, prose: SURFACE.prose, paused }))
+    // The full build's is drawn by the body's surface module too, so its Dashboard line and its switches can be clicked.
+    if (foot === null) rows.push(footer(paneEls, { w, fit: bodyW, prose: SURFACE.prose, paused, show: footShow }))
+    else if ('Client' in els) {
+      const footProps: BodyProps = { lines: foot, prose: SURFACE.prose }
+      rows.push(<els.Client key="foot" module="./body.tsx" width={w} props={footProps} />)
+    } else rows.push(plainBody(paneEls, foot))
 
     return frame(paneEls, W, fill, rows, stageTop)
   })

@@ -786,3 +786,63 @@ export function otherStore(wake: string | null, dash: string | null): boolean {
 export function canMeet(folderMode: string): boolean {
   return folderMode === 'on' || folderMode === 'unset';
 }
+
+// ── a glance before anything happens: the wake's own lines ─────────────────
+
+/** What the sidebar shows before the session has done anything: a heading and one short text. */
+export type Glance = { head: string; text: string }
+
+/**
+ * THE ONE PLACE THE WAKE'S GLANCE LINES ARE SPELLED (2026-10-15, Mike: show
+ * the first that has something, in this order). Core writes them in every
+ * SessionStart wake: `Last here: …` (handoff/last-here.ts), `Where I left off
+ * in this directory (…): …` (handoff/index.ts), the `Coming up:` heading
+ * (self/briefing.ts FRAMING.horizon) with `- <date> · <text>` items, and
+ * `Yesterday, <date>: …` (handoff/last-here.ts). Change these if core's change;
+ * a wake without them shows no glance, nothing else.
+ */
+const GLANCE_LAST = /^Last here:\s*(.+)$/m
+const GLANCE_LEFT_OFF = /^Where I left off in this directory \([^)]*\):\s*(.+)$/m
+const GLANCE_COMING = /^Coming up:\s*\n-\s*(.+)$/m
+// "Yesterday, Oct 15: …", or since 2026-10-16 at a session start "Yesterday: …" (its date on the `Now:` line).
+const GLANCE_YESTERDAY = /^Yesterday(?:, ([^:]+))?:\s*(.+)$/m
+/**
+ * A Coming up item's date, every way core's `datePrefix` (self/briefing.ts)
+ * writes it: `due D`, `was due D`, `due D, every May 14`, `[by ]L (due D…)`,
+ * `[by ]L (was due D…)`, `[by ]L (of H)`, `[by ]L` — then ` · `. The date it
+ * is about comes out alone: the due date where there is one, else the learned.
+ */
+// Each date whole (`2026-10-15`) or, since 2026-10-16, short in the wake's year (`Oct 15`).
+const COMING_DATE = /^(?:by\s+)?(?:(?:was due|due)\s+(?:yesterday,\s+)?(\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2} \d{1,2})(?:,[^·]*)?|(\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2} \d{1,2})(?:\s*\((was due|due|of)\s+(?:yesterday,\s+)?(\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2} \d{1,2})[^)]*\))?)\s*·\s*/
+
+/** Memory, chapter and handoff ids, and the asides that only point at them: not for the person. */
+function forPerson(text: string): string {
+  return text
+    .replace(/\((?:earlier|the whole of it is|expand)[^)]*\)/gi, '')
+    .replace(/\[?\b(?:mem|epi|sch|ctr)_[0-9a-f]{6,}\b\]?,?/g, '')
+    .replace(/\(\s*\)/g, '')
+    .replace(/[;,]\s*(?=[;,.]|$)/g, '')
+    .replace(/\s+([.,;])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/** The first glance line the wake has, in Mike's order: where things were left, what's coming up, yesterday. */
+export function parseGlance(text: string): Glance | null {
+  for (const re of [GLANCE_LAST, GLANCE_LEFT_OFF]) {
+    const m = re.exec(text)?.[1]
+    if (m !== undefined && forPerson(m).length > 0) return { head: 'Last here', text: forPerson(m) }
+  }
+  const coming = GLANCE_COMING.exec(text)?.[1]
+  if (coming !== undefined) {
+    const t = forPerson(coming.replace(COMING_DATE, (_m, lone?: string, learned?: string, word?: string, inner?: string) =>
+      `${lone ?? (word === 'of' ? learned : inner ?? learned) ?? ''} · `))
+    if (t.length > 0) return { head: 'Coming up', text: t }
+  }
+  const y = GLANCE_YESTERDAY.exec(text)
+  if (y !== null) {
+    const t = forPerson(y[2] ?? '').replace(/^[\s;,]*(?:and \d+ more)?[.;\s]*$/, '')
+    if (t.length > 0) return { head: y[1] === undefined ? 'Yesterday' : `Yesterday, ${y[1]}`, text: t }
+  }
+  return null
+}

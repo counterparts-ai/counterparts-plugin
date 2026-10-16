@@ -52,6 +52,16 @@ export interface SelfTunables {
    * skill-kind above the warm floor, store-wide, as before.
    */
   CRAFT_AT_DELIVERY: boolean;
+  /**
+   * THE "HOW I WORK:" LIST IN THE WAKE (2026-10-16, the wake trims; Mike,
+   * lightly held, review 2026-10-18). Off: a craft memory — skill-kind,
+   * above the warm floor, not this directory's work — is in no lane of the
+   * wake, listed or counted; the page's own "## How I work" says the
+   * lessons, and a craft memory still comes up when a turn reaches it, as a
+   * per-turn footnote ("Quietly available"), by the same gate as any other
+   * kind (`recall/`). On: the lane as before (`CRAFT_MAX`).
+   */
+  CRAFT_IN_WAKE: boolean;
   /** How many work lines one delivery shows for its directory. CAL. */
   WORK_HERE_MAX: number;
   /** How many work lines are ranked for the rotation to choose `WORK_HERE_MAX`
@@ -74,6 +84,20 @@ export interface SelfTunables {
   HINTS_MAX: number;
   /** Most arriving occasions considered. CAL. */
   HORIZON_MAX: number;
+  /**
+   * "COMING UP" = TODAY (2026-10-16, the wake trims; Mike, lightly held,
+   * review 2026-10-18). On: the lane lists what is due the day the wake is
+   * for, and a plain reminder due the day it is read (whole, as before);
+   * every other date — later, or past its date in its grace days (review of
+   * #511) — is counted in the lane's one line with its recall ids ("(2
+   * overdue, 4 more coming up; recall ids: …)", or "Coming up: 6 — none due
+   * today, 2 overdue; …" when nothing is listed).
+   * Those return on their own: a date cues recall around it, as a per-turn
+   * footnote (`prospective.arrivals()` → recall's temporal cues), and a plain
+   * reminder is said outright on its day (`Counterpart#plainDueToday`). Off:
+   * the lane as before, its first `HORIZON_ITEMS` by date.
+   */
+  COMING_UP_TODAY_ONLY: boolean;
   /** A non-identity element must reach this decayed strength to be craft or a
    *  hint. Identity elements are constitutive and face no floor (contract §3:
    *  "identity is re-inhabited, not retrieved"). CAL. */
@@ -108,12 +132,13 @@ export interface SelfTunables {
   /**
    * THE PAGE'S ROOM, in BYTES (UTF-8), the target its writer is told: "aim
    * under N; past it, sessions read a short version instead". Defaults to
-   * `briefing.ts#PAGE_ROOM_BYTES`, the page the wake prints whole — top and
-   * end lines included — at the 9,000-byte ceiling under the widest delivery
-   * reserves. A page past it is kept; a short version is kept with it only
-   * then, and only within this same number. Overridden only by tests; a value
-   * above the default gives up the guarantee that a page within it prints
-   * whole on every day.
+   * `briefing.ts#PAGE_ROOM_BYTES`: 4,600 since 2026-10-16 (the wake trims,
+   * lightly held), under the page the wake prints whole — top and end lines
+   * included — at the 9,000-byte ceiling under the widest delivery reserves
+   * (`pageRoomBytes(9_000)`). A page past it is kept; a short version is kept
+   * with it only then, and only within this same number. Overridden only by
+   * tests; a value above `pageRoomBytes(9_000)` gives up the guarantee that a
+   * page within it prints whole on every day.
    */
   PAGE_ROOM_BYTES: number;
   /** Calendar days after which the wake says the page has not been revised.
@@ -185,6 +210,18 @@ export interface SelfTunables {
    */
   PAGE_WRITER_ASKS_PER_DAY: number;
 
+  // ── list items as a line (#489 C, 2026-10-16) ───────────────────────────
+  /**
+   * A list item ("How I work", "Still open", "Might be relevant", "Coming
+   * up") whose first paragraph is longer than this many bytes prints as a
+   * line — `date · title [id]` — and recall reads it whole. Shorter items,
+   * a plain reminder due the day the wake is read, and the identity list stay
+   * whole. Measured 2026-10-15 on a copy of the live store: items ran 350–1,100
+   * bytes and only 3–4 fit beside the page; titles average about 67. Mike,
+   * 2026-10-16, lightly held. CAL.
+   */
+  WAKE_LINE_BYTES: number;
+
   // ── budget telemetry ──────────────────────────────────────────────────────
   /** Fraction of the budget at which the render reports pressure. A budget gets
    *  an event when APPROACHED and one when crossed (scar §2.4). [v1: 0.9] */
@@ -216,9 +253,6 @@ export interface SelfTunables {
    * history is in self NOTES, "The cap moved off the lived day"). CAL.
    */
   MAX_ASKS_PER_SESSION: number;
-  /** Lived days an episode may be re-ingested after its first ingest. The window
-   *  CLOSES — a deliberate deviation from human reconsolidation (§13 G12). CAL. */
-  REGROW_WINDOW_DAYS: number;
 }
 
 export const SELF_TUNABLES: SelfTunables = {
@@ -226,6 +260,7 @@ export const SELF_TUNABLES: SelfTunables = {
   IDENTITY_SHARE: 0.5,
   CRAFT_MAX: 8,
   CRAFT_AT_DELIVERY: true,
+  CRAFT_IN_WAKE: false,
   WORK_HERE_MAX: 4,
   WORK_HERE_POOL: 8,
   WORK_HERE_EXCERPT: 60,
@@ -233,6 +268,7 @@ export const SELF_TUNABLES: SelfTunables = {
   RECONSIDERING_MAX: 1,
   HINTS_MAX: 8,
   HORIZON_MAX: 6,
+  COMING_UP_TODAY_ONLY: true,
   WARM_FLOOR: 0.35,
 
   HINT_STEP: 1,
@@ -249,6 +285,8 @@ export const SELF_TUNABLES: SelfTunables = {
   PAGE_WRITER_MEMORY_MAX: 40,
   PAGE_WRITER_ASKS_PER_DAY: 2,
 
+  WAKE_LINE_BYTES: 240,
+
   BUDGET_PRESSURE: 0.9,
 
   SCHEMA_BYTES_TRIP: 72_000,
@@ -262,7 +300,6 @@ export const SELF_TUNABLES: SelfTunables = {
   REASK_TEXT_BYTES: 24_000,
   // 12, not 6: typed-turn pacing spaces asks further apart, so the backstop can be looser.
   MAX_ASKS_PER_SESSION: 12,
-  REGROW_WINDOW_DAYS: 3,
 };
 
 export function withTunables(overrides: Partial<SelfTunables>): SelfTunables {

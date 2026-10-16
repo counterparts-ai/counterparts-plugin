@@ -16,7 +16,7 @@
  * class". The real `Store` satisfies it structurally, unchanged.
  */
 
-import { SELF_PAGE_ROLE_SPELLED } from "../store/operational.js";
+import { SELF_PAGE_ROLE_SPELLED, isChapterSummary } from "../store/operational.js";
 import type { Band, Kind, MemoryPhysics } from "../types.js";
 import type {
   EventLogCensus,
@@ -650,9 +650,14 @@ export function isSchemaRow(row: MemoryRow): boolean {
  * C4a): the decay pass and the prune both skip it, as they skip the chapter.
  * Read off the row's own columns, the shape `recall/activate.ts#journalCopyOf`
  * reads (sleep does not import recall).
+ *
+ * NOT A CHAPTER'S SUMMARY (2026-10-15, Mike): the per-chapter summary memory
+ * that replaced the full copy has the same columns, and it is an ordinary
+ * memory that fades and leaves like one — only the frozen full copies written
+ * before it stay exempt (`store/operational.ts#isChapterSummary`).
  */
-export function isJournalCopy(row: Pick<MemoryRow, "type" | "source" | "origin_ref">): boolean {
-  return row.type === "memory" && row.source === "episode" && row.origin_ref !== null && row.origin_ref.length > 0;
+export function isJournalCopy(row: Pick<MemoryRow, "type" | "source" | "origin_ref" | "meta">): boolean {
+  return row.type === "memory" && row.source === "episode" && row.origin_ref !== null && row.origin_ref.length > 0 && !isChapterSummary(row);
 }
 
 /**

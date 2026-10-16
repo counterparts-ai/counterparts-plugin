@@ -39,7 +39,7 @@ import {
   stanceOfMode,
 } from "../../scopes.js";
 import type { ScopeCommandContext, ScopeRead, ScopeVerdict } from "../../scopes.js";
-import { canonicalScope, isEntrypoint, readSession } from "../../sessions.js";
+import { canonicalScope, installedVersion, isEntrypoint, readSession } from "../../sessions.js";
 import { openLog } from "../../log/index.js";
 import type { LogEvent, ProcessLog } from "../../log/index.js";
 import { resolveZone, todayIn } from "../../../core/time.js";
@@ -63,7 +63,7 @@ import type { SaysSoHook, StandDownFault } from "../standdown.js";
 import { readTranscript } from "../transcript.js";
 import { BINARY, entryScript, scriptArgs } from "../../runtime.js";
 import type { Binary } from "../../runtime.js";
-import { npmWiring } from "../../host-wiring.js";
+import { noteNpmLive, npmWiringForGate } from "../../npm-live.js";
 import {
   PLUGIN_ROOT_ENV,
   ensureFirstRun,
@@ -698,7 +698,8 @@ async function main(): Promise<void> {
     const home = homedir();
     const projectDir = process.env["CLAUDE_PROJECT_DIR"] ?? eventDirectory(payload);
     const gate = hookGate(
-      npmWiring({ home, env: process.env, cwd: projectDir, read: { mcp: false } }),
+      // The directory flavor reads the npm install's marker instead (`npm-live.ts`).
+      npmWiringForGate({ home, env: process.env, cwd: projectDir, configPath: choice.path, read: { mcp: false } }),
       home,
       // Where the plugin was loaded from changes only the session-start line.
       name === "session-start" ? pluginOrigin({ home, env: process.env, cwd: projectDir }) : undefined,
@@ -916,6 +917,20 @@ async function runHook(
     // `CLAUDE_PROJECT_DIR` is paused while the shell stands elsewhere).
     sayPaused(name, verdict, scope, "session", payload, said, choice.path);
     return;
+  }
+  // THE NPM INSTALL SAYS IT IS WIRED (`npm-live.ts`), for a plugin of the
+  // directory flavor beside it, which reads none of Claude Code's files. Here,
+  // past the configuration refusals (the explicit-dir guard among them) and a
+  // folder that is off or paused, which write nothing. At a session start, one
+  // reading of the user-level wiring (so wiring removed by hand is known by the
+  // next session); at any other event, usually one small read that finds the
+  // file fresh. Written in an observer folder too: it is host state beside the
+  // configuration, not memory. Never from the plugin's own hook.
+  if (!runningAsPlugin(process.env)) {
+    const force = name === "session-start";
+    if (noteNpmLive({ configPath: choice.path, home: homedir(), env: process.env, build: installedVersion(), force }) === "failed") {
+      process.stderr.write("[counterparts] could not write the npm-live marker beside the configuration\n");
+    }
   }
   // THE COMBINATION: the most restrictive of what the configuration said and
   // what the registry says (`adapters/scopes.ts#effectiveStance`, applied here

@@ -375,6 +375,44 @@ export function isDay(ymd: unknown): ymd is string {
   return typeof ymd === "string" && dayOf(ymd) !== null;
 }
 
+/** The year of a whole day (`2026` for `2026-10-16`), or "" for anything else. */
+export function yearOf(ymd: string): string {
+  return isDay(ymd) ? (DAY_RE.exec(ymd)?.[1] ?? "") : "";
+}
+
+/**
+ * A whole day as a short line says it, `Oct 15` — no year, no leading zero —
+ * when it falls in `year`; anything else (another year, a month, a typo) as
+ * it was written (2026-10-16, the wake trims).
+ */
+export function shortDay(ymd: string, year: string | undefined): string {
+  const m = DAY_RE.exec(ymd);
+  if (m === null || year === undefined || m[1] !== year || !isDay(ymd)) return ymd;
+  return `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${String(Number(m[3]))}`;
+}
+
+/**
+ * `Oct 15` read back as the whole day it names nearest to `today` — the
+ * year before, this one or the next — or null for anything else.
+ */
+export function dayOfShort(text: string, today: string): string | null {
+  const m = /^([A-Z][a-z]{2}) (\d{1,2})$/.exec(text.trim());
+  const t = dayOf(today);
+  const month = m === null ? -1 : (MONTHS as readonly string[]).indexOf(m[1] ?? "");
+  const y = Number(yearOf(today));
+  if (m === null || t === null || month < 0) return null;
+  let best: string | null = null;
+  let gap = Number.POSITIVE_INFINITY;
+  for (const year of [y - 1, y, y + 1]) {
+    const ymd = `${String(year).padStart(4, "0")}-${pad2(month + 1)}-${pad2(Number(m[2]))}`;
+    const d = dayOf(ymd);
+    if (d === null || Math.abs(d - t) >= gap) continue;
+    gap = Math.abs(d - t);
+    best = ymd;
+  }
+  return best;
+}
+
 /**
  * Read a stated calendar date: a day, a month, a year, or a range of two days
  * (`2026-10-20..2026-10-31`, inclusive, first ≤ last). Null for anything else —

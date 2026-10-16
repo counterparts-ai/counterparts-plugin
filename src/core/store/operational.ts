@@ -2260,6 +2260,39 @@ export function datedHold(
 }
 
 /**
+ * A CHAPTER'S SUMMARY MEMORY (2026-10-15, `self/summaries.ts`): the meta key
+ * that marks it, and how it was written — `written` by the session in the
+ * `chapter` call, `automatic` by the engine (the chapter's title and opening
+ * lines) when the session gave none. It has the shape the full chapter COPY
+ * had (`source = 'episode'`, `origin_ref` = the chapter's id, `meta.episodeId`)
+ * plus `meta.chapter`, so every reader of that shape keeps working; this key
+ * is what tells it from a frozen copy, which is journal and never fades, where
+ * a summary is an ordinary memory and does.
+ */
+export const CHAPTER_SUMMARY_META = "chapterSummary";
+export type ChapterSummaryKind = "written" | "automatic";
+
+/** Is this row a chapter's summary memory? Read off the meta text: no parse unless the key is there. */
+export function isChapterSummary(row: Pick<MemoryRow, "type" | "meta">): boolean {
+  if (row.type !== "memory" || typeof row.meta !== "string" || !row.meta.includes(`"${CHAPTER_SUMMARY_META}"`)) return false;
+  return chapterSummaryKind(row.meta) !== null;
+}
+
+/** `written` or `automatic` for a summary's meta (text or parsed), else null. */
+export function chapterSummaryKind(meta: string | Record<string, unknown>): ChapterSummaryKind | null {
+  let m: Record<string, unknown> | null = null;
+  if (typeof meta === "string") {
+    try {
+      m = JSON.parse(meta) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  } else m = meta;
+  const v = m?.[CHAPTER_SUMMARY_META];
+  return v === "written" || v === "automatic" ? v : null;
+}
+
+/**
  * OUTSIDE REACH ALTOGETHER (2026-10-10, Group 1, review 03 C2/C4): the rows
  * whose strength is not a working-layer question, so "below reach" never
  * applies to them — the decay pass does not rank them, ambient recall does not
@@ -2284,7 +2317,9 @@ export function datedHold(
  */
 export function reachExempt(row: Pick<MemoryRow, "type" | "source" | "origin_ref" | "meta">): boolean {
   if (row.type === "episode") return true;
-  if (row.type === "memory") return row.source === "episode" && row.origin_ref !== null && row.origin_ref.length > 0;
+  // A chapter's SUMMARY (2026-10-15) is an ordinary memory and fades like
+  // one; only the frozen full copies from before it keep the exemption.
+  if (row.type === "memory") return row.source === "episode" && row.origin_ref !== null && row.origin_ref.length > 0 && !isChapterSummary(row);
   if (row.type !== "schema" || typeof row.meta !== "string" || !row.meta.includes('"role"')) return false;
   try {
     const role = (JSON.parse(row.meta) as { role?: unknown } | null)?.role;

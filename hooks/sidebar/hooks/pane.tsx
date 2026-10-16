@@ -11,6 +11,10 @@
  * do each instead (`words.ts#footerLines`). Nothing is a link either
  * (2026-10-14): COUNTERPARTS is its name, and the dashboard is
  * `/counterparts:dashboard`, which the footer says.
+ *
+ * The full build (2026-10-16) puts some back, drawn from `actions.tsx`'s
+ * pieces (`FullPane`, below): COUNTERPARTS ↗ as a link on the terminal, and a
+ * footer the hooks module draws as body lines so its rows can be clicked.
  */
 
 import type { Elements } from 'claude-code'
@@ -21,22 +25,49 @@ import { clip } from './sections'
 import type { Line } from './sections'
 import { P, bg } from './theme'
 import { RESUME_SAY, footerLines } from './words'
+import type { FooterShow } from './words'
 
 /** The constructors the pane draws with: every surface has these. */
 export type PaneEls = Pick<Elements['terminal'], 'Box' | 'Text'>
 
+/** What a title link wraps its words in, or null: the title is plain words. */
+export type TitleLink = ((words: JSX.Element[]) => JSX.Element) | null
+
+/**
+ * What only the full plugin's build adds to the pane (2026-10-16): `actions.tsx` holds it, and
+ * sets `state.ts#run.full` to it when `full.tsx` registers that file; the directory's build never
+ * loads it, so `run.full` stays null there and the pane draws none of it. Pure: no `$`. What a
+ * click on these does is `actions.tsx`'s own hook (a command put in the prompt box) or
+ * `register.tsx#setSwitch` (the stored view or avatar).
+ */
+export type FullPane = {
+  /** COUNTERPARTS as a link to the dashboard at `href` (core's status file says where), or null where it can't be one. */
+  titleLink: (els: Pick<Elements['terminal'], 'Link'>, href: string | null) => TitleLink
+  /** Whether "Meet your counterpart" shows: core's state, the folder, and this session's speak-first. */
+  meetShows: (meet: string, folderMode: string, firedIn: string | null, session: string, filledIn: string | null) => boolean
+  /** The Meet row (and a note under it), then a blank row: lines for the top of the body. */
+  meetLines: (w: number, note: string | null) => Line[]
+  /** The footer, in lines the body's surface module draws (so its rows can be clicked): its rule, the instructions, the switches. */
+  footLines: (s: { fit: number; w: number; prose: boolean; paused: boolean; view: string; avatar: string; note: string | null; intro: boolean; fills: boolean }) => Line[]
+}
+
 // ── the title, which the header places ──
 
-/** COUNTERPARTS, plain text on every surface (no link, 2026-10-14). `lead` puts a dot before it. */
-export function titleButton(els: PaneEls, o: { lead: boolean; paused: boolean; dot: string | null }): JSX.Element {
+/**
+ * COUNTERPARTS, plain text (no link, 2026-10-14). `lead` puts a dot before it. With `link` (the full
+ * build, on the terminal, 2026-10-16) it is a link to the dashboard, with `↗` after it.
+ */
+export function titleButton(els: PaneEls, o: { lead: boolean; paused: boolean; dot: string | null; link?: TitleLink }): JSX.Element {
   const { Box, Text } = els
+  const link = o.link ?? null
   const words = [
     ...(o.lead ? [<Text key="dot" color={o.dot ?? P.accentDim}>◉ </Text>] : []),
     <Text key="name" color={o.paused ? P.dim : P.accent} bold>COUNTERPARTS</Text>,
+    ...(o.lead && link !== null ? [<Text key="arrow" color={P.accentDim}> ↗</Text>] : []),
   ]
   return (
     <Box key="title" flexDirection="row">
-      <Text>{words}</Text>
+      <Text>{link === null ? words : link(words)}</Text>
     </Box>
   )
 }
@@ -60,17 +91,17 @@ export function pausedBanner(els: PaneEls, scope: SidebarScope, w: number): JSX.
 // ── the footer: how to do what the pane doesn't ──
 
 /** The footer's rows at `w` (`fit`: the cells its text may take, wider on a surface with its own font): a rule (or a blank) and the lines. */
-export function footerRows(fit: number, paused = false): number {
-  return 1 + footerLines(fit, paused).length
+export function footerRows(fit: number, paused = false, show?: FooterShow): number {
+  return 1 + footerLines(fit, paused, show).length
 }
 
-export function footer(els: PaneEls, s: { w: number; fit: number; prose: boolean; paused: boolean }): JSX.Element {
+export function footer(els: PaneEls, s: { w: number; fit: number; prose: boolean; paused: boolean; show?: FooterShow }): JSX.Element {
   const { Box, Text } = els
-  const { w, fit, prose, paused } = s
+  const { w, fit, prose, paused, show } = s
   return (
     <Box key="footer" flexDirection="column" width={w}>
       {prose ? <Text> </Text> : <Text color={P.faint}>{'─'.repeat(w)}</Text>}
-      {footerLines(fit, paused).map((l, i) => (
+      {footerLines(fit, paused, show).map((l, i) => (
         <Text key={`f${String(i)}`}>
           <Text color={P.mid}>{l.label}</Text>
           {l.how === '' ? null : <Text color={P.hi}>{l.how}</Text>}

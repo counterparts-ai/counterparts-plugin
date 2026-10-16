@@ -6,7 +6,7 @@
  * for the preface's reserve (`split-parts.test.ts`).
  */
 import { byteLength } from "./identity.js";
-import { addDays, isDay } from "../time.js";
+import { addDays, dayOfShort, isDay } from "../time.js";
 import { DUE_PAST_WORD, DUE_WORD, FRAMING, LEGACY_FRAMING, fixedPointTotal } from "./briefing.js";
 
 
@@ -96,8 +96,35 @@ export const WAKE_SYSTEM = "Counterparts";
  * composed wake today (self INTERFACE-GAPS §13). The self page's own top line
  * (`pageTopLine`) is the second layer, for a cut inside the wake.
  */
-export const WAKE_WHOLE_SENTENCE =
+export const WAKE_WHOLE_SENTENCE = "If this was saved to a file, read it through the wake/end line.";
+
+/**
+ * THE SENTENCE AND THE LINE BEFORE THE WAKE TRIMS (2026-10-16): what the
+ * preface said until then. `SHORT_PREFACE` off prints them again.
+ */
+export const LEGACY_WAKE_WHOLE_SENTENCE =
   "If a note says this was too large and saved to a file, read that file: it holds all of this, down to the counterparts:wake/end line.";
+
+/**
+ * THE SHORT PREFACE (2026-10-16, the wake trims; Mike, lightly held, review
+ * 2026-10-18). On: `Counterparts memory, day 25 · 1,808 memories. If this was
+ * saved to a file, read it through the wake/end line.` — no date (every host
+ * that delivers a wake prints the `Now:` line above it: Claude Code's
+ * SessionStart and Claude Desktop's `wake` tool), no live-row count, and
+ * "(composed at the last boundary)" only on a bundle delivered as published
+ * rather than assembled at session start. Off: the line as it was, date,
+ * both counts and the long sentence. The one switch to revert it.
+ */
+export const SHORT_PREFACE = true;
+
+/** What the short preface adds for a bundle delivered as published rather
+ *  than assembled at session start: it was composed earlier. */
+export const PUBLISHED_WORDS = " (composed at the last boundary)";
+
+/** The sentence the preface ends with, under the switch above. */
+function wholeSentence(): string {
+  return SHORT_PREFACE ? WAKE_WHOLE_SENTENCE : LEGACY_WAKE_WHOLE_SENTENCE;
+}
 
 /**
  * The room the composed budget leaves for the preface, in bytes. It is the
@@ -118,7 +145,7 @@ export const WAKE_WHOLE_SENTENCE =
 export const PREFACE_RESERVE_BYTES =
   // Measured with an encoder of its own: `identity.ts#byteLength` may not be
   // initialised yet when an import cycle evaluates this module first.
-  160 + new TextEncoder().encode(` ${WAKE_WHOLE_SENTENCE}`).length;
+  160 + new TextEncoder().encode(` ${wholeSentence()}`).length;
 
 export interface PrefaceFacts {
   /** Which memory system composed and is delivering this. */
@@ -171,10 +198,17 @@ export function groupDigits(n: number): string {
  *  saying WHICH population each of its two counts is (U4) — then how to read
  *  all of it when a host cut it (`WAKE_WHOLE_SENTENCE`, 2026-10-10). */
 export function prefaceLine(f: PrefaceFacts): string {
+  if (SHORT_PREFACE) {
+    // The date is the `Now:` line's, above the wake; the day and the count
+    // stay, and a bundle served as published still says it was composed
+    // earlier (the 2026-09-03 reason this line exists).
+    const when = f.assembled === true ? "" : PUBLISHED_WORDS;
+    return `${f.system} memory, day ${f.day} · ${groupDigits(f.memories)} memories${when}. ${WAKE_WHOLE_SENTENCE}`;
+  }
   const when = f.date === undefined ? `day ${f.day}` : `day ${f.day} (${f.date})`;
   return (
     `${f.system} memory, ${when}, ${groupDigits(f.memories)} memories of ` +
-    `${groupDigits(f.liveRows)} live rows — ${f.assembled === true ? "assembled at session start" : "composed at the last boundary"}. ${WAKE_WHOLE_SENTENCE}`
+    `${groupDigits(f.liveRows)} live rows — ${f.assembled === true ? "assembled at session start" : "composed at the last boundary"}. ${LEGACY_WAKE_WHOLE_SENTENCE}`
   );
 }
 
@@ -208,17 +242,20 @@ export function arrivingTense(text: string, today: string, room: number): string
   const start = Math.max(lines.lastIndexOf(FRAMING.horizon), lines.lastIndexOf(LEGACY_FRAMING.horizon));
   if (start < 0) return text;
   const prior = addDays(today, -1);
-  const shape = /^(- (?:(?:by )?\d{4}-\d{2}-\d{2} \()?)(was )?due (\d{4}-\d{2}-\d{2})(?=[,)]| · )/;
+  // A date whole (`2026-10-15`) or short (`Oct 15`, 2026-10-16: the wake
+  // trims), read as the day nearest today; the line keeps the form it has.
+  const shape = /^(- (?:(?:by )?(?:\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2} \d{1,2}) \()?)(was )?due (\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2} \d{1,2})(?=[,)]| · )/;
   const was = `${DUE_PAST_WORD} `;
   const words = { was: byteLength(was) - byteLength(`${DUE_WORD} `), yesterday: byteLength("yesterday, ") };
-  const past: { i: number; head: string; already: boolean; date: string; rest: string; was: boolean; yesterday: boolean }[] = [];
+  const past: { i: number; head: string; already: boolean; date: string; said: string; rest: string; was: boolean; yesterday: boolean }[] = [];
   for (let i = start + 1; i < lines.length && lines[i] !== ""; i++) {
     const line = lines[i] ?? "";
     const m = shape.exec(line);
-    const date = m?.[3];
-    if (m === null || date === undefined || date >= today) continue;
+    const said = m?.[3];
+    const date = said === undefined ? undefined : isDay(said) ? said : (dayOfShort(said, today) ?? undefined);
+    if (m === null || said === undefined || date === undefined || date >= today) continue;
     const already = m[2] !== undefined;
-    past.push({ i, head: m[1] ?? "- ", already, date, rest: line.slice(m[0].length), was: already, yesterday: false });
+    past.push({ i, head: m[1] ?? "- ", already, date, said, rest: line.slice(m[0].length), was: already, yesterday: false });
   }
   let left = room;
   for (const p of past) {
@@ -233,7 +270,7 @@ export function arrivingTense(text: string, today: string, room: number): string
   }
   for (const p of past) {
     if (!p.was || (p.already && !p.yesterday)) continue;
-    lines[p.i] = `${p.head}${was}${p.yesterday ? "yesterday, " : ""}${p.date}${p.rest}`;
+    lines[p.i] = `${p.head}${was}${p.yesterday ? "yesterday, " : ""}${p.said}${p.rest}`;
   }
   return lines.join("\n");
 }

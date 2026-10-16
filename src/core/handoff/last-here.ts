@@ -429,10 +429,11 @@ export function chaptersOn(store: Store, date: string, opts: { fromDay?: number 
  * here (`Counterpart#yesterdayFor`'s gate). They join the count, never by
  * title or id; when they are all there is, the line is the count alone.
  */
-export function yesterdayLine(day: readonly ChaptersOnDate[], date: string, titles = YESTERDAY_SHOWN, hidden = 0): string | null {
+export function yesterdayLine(day: readonly ChaptersOnDate[], date: string, titles = YESTERDAY_SHOWN, hidden = 0, dated = true): string | null {
+  const head = dated ? `Yesterday, ${stampWords(date.slice(5))}:` : "Yesterday:";
   if (day.length === 0) {
     if (hidden <= 0) return null;
-    return flatten(`Yesterday, ${stampWords(date.slice(5))}: ${String(hidden)} session${hidden === 1 ? "" : "s"} in other projects.`);
+    return flatten(`${head} ${String(hidden)} session${hidden === 1 ? "" : "s"} in other projects.`);
   }
   // The first `YESTERDAY_SHOWN` are named, the first `titles` of them by
   // title and id and the rest by id alone — pointers instead of titles
@@ -442,8 +443,19 @@ export function yesterdayLine(day: readonly ChaptersOnDate[], date: string, titl
     return c.title === null || i >= titles ? c.id : `"${excerpt(c.title, YESTERDAY_TITLE_BYTES)}" (${c.id})`;
   });
   const rest = day.length - shown.length + Math.max(0, hidden);
-  return flatten(`Yesterday, ${stampWords(date.slice(5))}: ${shown.join("; ")}${rest > 0 ? `; and ${String(rest)} more` : ""}.`);
+  return flatten(`${head} ${shown.join("; ")}${rest > 0 ? `; and ${String(rest)} more` : ""}.`);
 }
+
+/**
+ * "YESTERDAY:" WITHOUT ITS DATE AT A SESSION START (2026-10-16, the wake
+ * trims; Mike, lightly held, review 2026-10-18). The wake assembled at a
+ * session start is read that day, under the `Now:` line that carries the
+ * date, so the line says "Yesterday:" alone. The turn-end's published render
+ * keeps "Yesterday, Oct 15:" — the reason the line carried a date (above) is
+ * still true of it, read the next morning when a session start cannot
+ * assemble its own. `false` dates both again.
+ */
+export const YESTERDAY_UNDATED_AT_START = true;
 
 /**
  * THE SAME LINE, SHORTER (review of #350, 2026-10-09): one title fewer at a
@@ -456,11 +468,11 @@ export function yesterdayLine(day: readonly ChaptersOnDate[], date: string, titl
  * Arriving lane and "Still open"'s first item; the count is honest because it
  * is counted here, where the chapters are. `hidden` as `yesterdayLine`'s.
  */
-export function yesterdayShorter(day: readonly ChaptersOnDate[], date: string, hidden = 0): string[] {
+export function yesterdayShorter(day: readonly ChaptersOnDate[], date: string, hidden = 0, dated = true): string[] {
   const out: string[] = [];
-  let last = yesterdayLine(day, date, YESTERDAY_SHOWN, hidden);
+  let last = yesterdayLine(day, date, YESTERDAY_SHOWN, hidden, dated);
   for (let n = Math.min(YESTERDAY_SHOWN, day.length) - 1; n >= 0; n--) {
-    const line = yesterdayLine(day, date, n, hidden);
+    const line = yesterdayLine(day, date, n, hidden, dated);
     if (line === null || last === null || line.length >= last.length) continue;
     out.push(line);
     last = line;

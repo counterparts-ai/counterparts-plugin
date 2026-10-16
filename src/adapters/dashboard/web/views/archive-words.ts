@@ -13,6 +13,7 @@
 import { CORRECTED_REASON, PRESSURE_UNDONE_REASON } from "../../../../core/reconsolidation.js";
 import { DREAM_MERGE_REASON, DREAM_UNDONE_REASON } from "../../../../core/dream/index.js";
 import { EPISODE_REGROWN_REASON, LEAVING, REMOVED_BY_OWNER, leftAs } from "../../../../core/leaving.js";
+import { SUMMARY_DUPLICATE_REASON } from "../../../../core/self/summaries.js";
 import type { LeftAs } from "../../../../core/leaving.js";
 import { TUNABLES as SCHEMA_TUNABLES } from "../../../../core/schemas/index.js";
 import { MERGE_ARCHIVE_REASON, PRUNE_ARCHIVE_REASON } from "../../../../core/sleep/index.js";
@@ -52,6 +53,7 @@ export const ARCHIVE_WORDS: readonly ArchiveReasonWords[] = [
   { reason: PRESSURE_UNDONE_REASON, many: "core changes undone", one: "a core change that was undone — the earlier one stands again", group: groupOf(PRESSURE_UNDONE_REASON) },
   { reason: "supersede", many: "replaced by a newer version", one: "replaced by a newer version", group: groupOf("supersede") },
   { reason: EPISODE_REGROWN_REASON, many: "rebuilt from the journal", one: "replaced by a newer version", group: groupOf(EPISODE_REGROWN_REASON) },
+  { reason: SUMMARY_DUPLICATE_REASON, many: "second summaries of one chapter", one: "a second summary of the same chapter — the other stands", group: groupOf(SUMMARY_DUPLICATE_REASON) },
   { reason: SCHEMA_TUNABLES.FADE_REASON, many: "faded from use", one: "faded away — nothing mentions it any more", group: groupOf(SCHEMA_TUNABLES.FADE_REASON) },
   { reason: PRUNE_ARCHIVE_REASON, many: "let go at the floor", one: "let go at the floor — too weak for too long", group: groupOf(PRUNE_ARCHIVE_REASON) },
   { reason: MERGE_ARCHIVE_REASON, many: "merged duplicates", one: "merged into a near-duplicate", group: groupOf(MERGE_ARCHIVE_REASON) },

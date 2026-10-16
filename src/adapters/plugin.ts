@@ -25,12 +25,14 @@
  *      learn about the plugin, so the rule has to live on THIS side: **the
  *      plugin stands down wherever the npm wiring is live** — hooks for
  *      hooks, the server for the server — and says so once, at session
- *      start. Same store either way, so nothing needs to change. Where the
- *      plugin is a real install, the line adds that moving to it alone is
- *      optional (`counterparts disconnect`); where it runs from a folder
- *      (`--plugin-dir`, a checkout), it says this is expected and suggests
- *      nothing (`pluginOrigin`) — disconnecting there would leave the live
- *      memory wired to a development folder.
+ *      start. Same store either way. Where the plugin is a real install, the
+ *      line says keeping one install is simpler and names both ways out
+ *      (`keepOne`: `counterparts disconnect`, or `/plugin uninstall`); where
+ *      it runs from a folder (`--plugin-dir`, a checkout), it says this is
+ *      expected and suggests nothing (`pluginOrigin`) — disconnecting there
+ *      would leave the live memory wired to a development folder. The
+ *      directory flavor reads none of Claude Code's files, so it learns the
+ *      npm wiring from the npm install's own marker (`npm-live.ts`).
  *   3. **First run without a terminal.** The npm way creates the store and
  *      `~/.counterparts/claude-code.json` at `install`. A plugin has no
  *      install step we run, so the first hook or server to start runs that
@@ -147,7 +149,14 @@ function tildeOf(path: string, home: string): string {
 export interface PluginOrigin {
   readonly installed: boolean;
   readonly root: string;
+  /** `counterparts@<marketplace>`, for the line that says how to uninstall it:
+   *  read off the install cache's path (`cache/<marketplace>/<plugin>/<version>`)
+   *  or `installed_plugins.json`'s record; absent when neither says. */
+  readonly id?: string;
 }
+
+/** The plugin's id when nothing says which marketplace it came from: ours. */
+export const DEFAULT_PLUGIN_ID = "counterparts@counterparts";
 
 export function pluginOrigin(input: {
   readonly home: string;
@@ -162,14 +171,33 @@ export function pluginOrigin(input: {
   const configDir = moved.length > 0 ? moved : join(input.home, ".claude");
   const cacheRoot = (input.env["CLAUDE_CODE_PLUGIN_CACHE_DIR"] ?? "").trim();
   const pluginsRoot = realOrResolved(cacheRoot.length > 0 ? cacheRoot : join(configDir, "plugins")).replace(/\/+$/, "");
-  if (root === pluginsRoot || root.startsWith(`${pluginsRoot}/`)) return { installed: true, root };
-  const recorded = pluginInstall({ home: input.home, env: input.env, cwd: input.cwd ?? null })?.installPath ?? null;
-  if (recorded !== null && realOrResolved(recorded).replace(/\/+$/, "") === root) return { installed: true, root };
+  if (root === pluginsRoot || root.startsWith(`${pluginsRoot}/`)) {
+    const parts = root.slice(pluginsRoot.length + 1).split("/");
+    const id = parts[0] === "cache" && (parts[1] ?? "").length > 0 && (parts[2] ?? "").length > 0 ? `${parts[2] ?? ""}@${parts[1] ?? ""}` : null;
+    return id === null ? { installed: true, root } : { installed: true, root, id };
+  }
+  const record = pluginInstall({ home: input.home, env: input.env, cwd: input.cwd ?? null });
+  const recorded = record?.installPath ?? null;
+  if (record !== null && recorded !== null && realOrResolved(recorded).replace(/\/+$/, "") === root) return { installed: true, root, id: record.id };
   return { installed: false, root };
 }
 
 /** An install's origin, for a caller that has not read one (the tests' default). */
 const INSTALLED: PluginOrigin = { installed: true, root: "" };
+
+/**
+ * ONE INSTALL IS SIMPLER (2026-10-15, the owner running both: "nothing needs to
+ * change" left two of everything in place). Both ways out, for the person, with
+ * nothing asked of the model: the memory is the same either way. `lower` starts
+ * it lower-case, inside another sentence.
+ */
+export function keepOne(origin: PluginOrigin, start: "upper" | "lower" = "upper"): string {
+  const lead = start === "upper" ? "Keeping one install is simpler" : "keeping one install is simpler";
+  return (
+    `${lead}, and nothing is lost either way: to keep only the plugin, run \`counterparts disconnect\` in a terminal ` +
+    `and restart Claude Code; to keep only the npm install, run \`/plugin uninstall ${origin.id ?? DEFAULT_PLUGIN_ID}\`.`
+  );
+}
 
 /** What the plugin's hook does about the npm wiring, and what it says. */
 export interface PluginGate {
@@ -193,9 +221,9 @@ export function hookGate(wiring: NpmWiring, home: string, origin: PluginOrigin =
     return {
       standDown: true,
       line: origin.installed
-        ? `Counterparts is installed twice: the npm install's hooks in ${tildeOf(live.file, home)} and this plugin. ` +
-          "The plugin is standing down so nothing is captured twice; both use the same memory, so nothing needs to change. " +
-          "Optional, only if you want the plugin alone: `counterparts disconnect`, then restart Claude Code."
+        ? `Counterparts is installed twice: the npm install (its hooks in ${tildeOf(live.file, home)}) and this plugin. ` +
+          "Both use the same memory, and the plugin is standing down so nothing is captured twice. " +
+          keepOne(origin)
         : `Counterparts: this plugin is running from a folder (${tildeOf(origin.root, home)}), beside the npm install's hooks in ` +
           `${tildeOf(live.file, home)}. Its own hooks and server stand down and the npm install keeps your memory, ` +
           "as expected. Nothing to do.",
@@ -233,8 +261,8 @@ export function mcpGate(
     standDown: true,
     instructions: origin.installed
       ? head +
-        "Nothing needs to change: both use the same memory. Only if the person asks to keep the plugin alone, " +
-        "`counterparts disconnect` and a restart of Claude Code do it; it is their choice, never one to make for them."
+        "Both use the same memory. For the person, if it comes up: " +
+        `${keepOne(origin, "lower")} Which one to keep is theirs to decide, and the commands are theirs to run.`
       : head +
         `This plugin is running from a folder (${tildeOf(origin.root, home)}), not an install, which is expected ` +
         "beside the npm install. Nothing needs to change; do not suggest disconnecting or uninstalling anything.",

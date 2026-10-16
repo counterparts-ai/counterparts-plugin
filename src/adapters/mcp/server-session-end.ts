@@ -671,6 +671,9 @@ export async function chapterTool(server: McpServer, args: Record<string, unknow
   }
   const session = server.session as string;
   const title = args["title"];
+  // THE CHAPTER'S SUMMARY (2026-10-15): the memory that stands for it, in the
+  // session's own words. Optional — the boundary writes an automatic one.
+  const summary = args["summary"];
   // WHAT THE SESSION WAS ABOUT (2026-10-01, lane 8), carried to the
   // chapter's memory copy: a malformed one refuses the call before anything
   // is written, as on `remember`.
@@ -687,6 +690,7 @@ export async function chapterTool(server: McpServer, args: Record<string, unknow
       ...(typeof title === "string" && title.length > 0 ? { title } : {}),
       ...(model === undefined ? {} : { model }),
       ...(about.mark === null ? {} : { about: about.mark }),
+      ...(typeof summary === "string" && summary.trim().length > 0 ? { summary } : {}),
     });
   } catch (err) {
     // A journal that throws must not look like a journal that refused.
@@ -710,8 +714,28 @@ export async function chapterTool(server: McpServer, args: Record<string, unknow
       created: written.created,
       ...(written.gate === null ? {} : { gate: written.gate }),
       ...(about.mark === null || !written.appended ? {} : { about: about.mark }),
+      ...(written.summary === null ? {} : { summary: summaryAnswer(written.summary) }),
       ...withDrewOn,
     },
     !written.appended,
   );
+}
+
+/**
+ * What the chapter call says about its summary (2026-10-15): the outcome, the
+ * memory's id when one stands, and — when none was given and none stands — that
+ * the chapter's opening lines will stand in, so a session can still give one.
+ */
+function summaryAnswer(s: NonNullable<ChapterResult["summary"]>): Record<string, unknown> {
+  const out: Record<string, unknown> = { outcome: s.outcome, chapter: s.chapter };
+  if (s.id !== null) out["memoryId"] = s.id;
+  if (s.reason !== undefined) out["reason"] = s.reason;
+  if (s.outcome === "absent" && s.id === null) {
+    out["note"] = "No summary yet: the chapter's opening lines will stand in. Pass `summary` on your next chapter call to write one in your own words.";
+  } else if (s.outcome === "kept") {
+    out["note"] = "This chapter already has the summary you wrote; a summary is written once.";
+  } else if (s.outcome === "refused") {
+    out["note"] = "The summary was turned away; the chapter's opening lines will stand in.";
+  }
+  return out;
 }

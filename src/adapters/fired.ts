@@ -72,6 +72,7 @@ import { addDays, daysBetween as calendarDaysBetween, localDate, parseCalendarDa
 import type { EventRow, ReadOnlyStore } from "../core/store/index.js";
 import { rowToPhysics } from "../core/store/index.js";
 import { emotionalIntensity } from "../core/physics/index.js";
+import { chapterMoments } from "../core/self/episodes.js";
 import type { DurableEventName } from "./dashboard/registries.js";
 import { NON_INTERACTIVE_ENTRYPOINTS, readSession } from "./sessions.js";
 
@@ -216,6 +217,8 @@ export type ProbeId =
   | "returns.dream"
   /** Live memories a DREAM wrote in its own words (source `dreamed`), dated by when. */
   | "dreamed"
+  /** Journal chapters, each dated by the moment it was written (`meta.chapterAt`, v12), else the episode's birth. */
+  | "chapters"
   | `versions:${string}`;
 
 export type Evidence =
@@ -381,7 +384,10 @@ export const MECHANISMS: readonly Mechanism[] = [
     id: "journal-chapter",
     label: "the session wrote a chapter of its own journal",
     module: "mcp/chapter → self/",
-    evidence: { kind: "probe", probe: "versions:episode-chapter" },
+    // The moment each chapter was written, off the episode itself (2026-10-15):
+    // it was the `episode-chapter` version rows, which an append no longer
+    // writes (`store#appendBody`) — this line would have gone silent.
+    evidence: { kind: "probe", probe: "chapters" },
   },
   {
     id: "sweep-gate",
@@ -2268,6 +2274,19 @@ function readProbes(store: ReadOnlyStore, w: Window): Probed {
     if (row !== undefined && row.archived === 0 && row.source === "dreamed") {
       bump("dreamed", { at: row.created_at, livedDay: row.birth_day });
     }
+    // A CHAPTER WRITTEN: one per stored moment; an episode from before
+    // moments were stored counts its birth (its first chapter) once.
+    if (row !== undefined && row.archived === 0 && row.type === "episode") {
+      let moments: Record<string, number> = {};
+      try {
+        moments = chapterMoments(JSON.parse(row.meta || "{}") as Record<string, unknown>);
+      } catch {
+        moments = {};
+      }
+      const at = Object.values(moments);
+      if (at.length === 0) bump("chapters", { at: row.created_at, livedDay: row.birth_day });
+      for (const t of at) bump("chapters", { at: t });
+    }
   }
   return { byId, livedDay, truncated: scanned.length < ids.length, zone: w.zone };
 }
@@ -2317,5 +2336,6 @@ function probeLabel(probe: ProbeId): string {
   if (probe === "returns.awake") return "the returns table (awake returns)";
   if (probe === "returns.dream") return "the returns table (dream replays)";
   if (probe === "dreamed") return "memories a dream wrote";
+  if (probe === "chapters") return "the journal's chapters";
   return `the ${probe.replace(".", " ")} table`;
 }

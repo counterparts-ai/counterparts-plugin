@@ -675,7 +675,7 @@ async function main(): Promise<void> {
     observer: config.observer === true,
   });
   log.start();
-  const sidebarWanted = sidebarInstalled(process.env, homedir());
+  const sidebarWanted = sidebarInstalled(process.env, homedir(), choice.path);
   if (!sidebarWanted && removeSidebarStatus(choice.path)) log.event({ name: "runner.sidebar", data: { removed: true } });
   try {
     const report = await runOnce({

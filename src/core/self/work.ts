@@ -106,6 +106,9 @@ export interface WorkHereOptions {
   /** How many lines to rank, best first, for the caller to rotate through
    *  (`SelfTunables.WORK_HERE_POOL`). Absent: `max`. */
   readonly pool?: number;
+  /** The calendar year the lines are read in (`YYYY`): a date in it prints
+   *  short (`briefing.ts#shortDay`, 2026-10-16). Absent: whole. */
+  readonly year?: string;
 }
 
 interface Candidate {
@@ -197,7 +200,7 @@ export function workHere(
     }
   }
   found.sort((a, b) => b.touched - a.touched || b.strength - a.strength || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return found.slice(0, pool).map((c) => workLine(c.id, c.doc, opts.excerpt, c.bounded));
+  return found.slice(0, pool).map((c) => workLine(c.id, c.doc, opts.excerpt, c.bounded, opts.year));
 }
 
 /**
@@ -221,7 +224,7 @@ export function rotateWork(lines: readonly string[], max: number, day: number): 
 }
 
 /** One work line (see `workHere`). */
-export function workLine(id: string, doc: ProseDoc, excerpt: number, bounded = false): string {
+export function workLine(id: string, doc: ProseDoc, excerpt: number, bounded = false, year?: string): string {
   const paragraph = doc.body.split(/\n\s*\n/).find((p) => p.trim().length > 0) ?? doc.body;
   const title = flatten(doc.title ?? "");
   const date = datePrefix({
@@ -229,6 +232,7 @@ export function workLine(id: string, doc: ProseDoc, excerpt: number, bounded = f
     learnedOn: doc.learnedOn,
     ...(doc.happenedOn === undefined ? {} : { happenedOn: doc.happenedOn }),
     boundedDate: bounded,
+    ...(year === undefined ? {} : { year }),
   });
   const words = title.length === 0 ? excerptOf(paragraph, excerpt + 40) : `${title} — ${excerptOf(paragraph, excerpt)}`;
   return `- ${date}${words} (${id})`;

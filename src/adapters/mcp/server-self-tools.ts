@@ -397,6 +397,7 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
           about: Array.isArray(args["about"]) ? (args["about"] as never) : [],
           core: Array.isArray(args["core"]) ? (args["core"] as never) : [],
           traits: Array.isArray(args["traits"]) ? (args["traits"] as never) : [],
+          close: ids(args["close"]),
           model: model ?? null,
         });
         if (!out.ok) {
@@ -425,6 +426,7 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
             about: o.about,
             ...(o.traits.length > 0 ? { traits: o.traits } : {}),
             ...(o.refusedCites.length > 0 ? { refusedCites: o.refusedCites } : {}),
+            ...(o.close.proposed.length > 0 || o.close.refused.length > 0 ? { close: o.close } : {}),
             // WHAT WAS NOT WRITTEN, and that it can be sent again (2026-09-28).
             ...(o.retry === null ? {} : { again: o.retry }),
             say:
@@ -463,8 +465,23 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
         server["emit"]("mcp.reflect", reflection, { phase: "told", cited: out.cited });
         return server["result"]({ phase, reflection, told: true, cited: out.cited }, false);
       }
+      case "close": {
+        // A YES TO THE CLOSE PROPOSALS (2026-10-16, #489 D): the owner agreed,
+        // when asked in the share, that some open threads are done.
+        const reflection = args["reflection"];
+        const close = ids(args["close"]);
+        if (typeof reflection !== "string" || close.length === 0) {
+          return refused("reflection-and-close-required", "Pass `reflection` (the id the share named) and `close`: the ids the owner agreed are done.");
+        }
+        const out = reflections.close({ reflection, session, ids: close, scope: server.scope });
+        if (!out.ok) {
+          return refused(out.reason, out.reason === "nothing-proposed" ? "That reflection proposed closing nothing." : "Nothing was closed.");
+        }
+        server["emit"]("mcp.reflect", reflection, { phase: "close", closed: out.closed.length, refused: out.refused.length });
+        return server["result"]({ phase, reflection, closed: out.closed, ...(out.already.length > 0 ? { alreadyClosed: out.already } : {}), ...(out.refused.length > 0 ? { refused: out.refused } : {}) }, out.closed.length === 0 && out.already.length === 0);
+      }
       default:
-        return refused("phase-unknown", "phase is one of launch, begin, part, finish, settle, told.");
+        return refused("phase-unknown", "phase is one of launch, begin, part, finish, settle, told, close.");
     }
   } catch (err) {
     return refused("threw", String((err as Error).message ?? err));

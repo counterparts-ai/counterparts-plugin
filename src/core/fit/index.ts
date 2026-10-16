@@ -386,8 +386,9 @@ export function packParts<T extends { readonly size: number }>(pieces: readonly 
 
 // ── the lookup ledger ───────────────────────────────────────────────────────
 
-/** The mechanisms that hand an index and name the lookup (2026-09-28). */
-export const FIT_MECHANISMS = ["dream", "reflection"] as const;
+/** The mechanisms that hand an index and name the lookup (2026-09-28; the
+ *  wake's list items since #489 C, 2026-10-16). */
+export const FIT_MECHANISMS = ["dream", "reflection", "wake"] as const;
 export type FitMechanism = (typeof FIT_MECHANISMS)[number];
 
 /**
@@ -416,6 +417,12 @@ export interface FitIndex {
    * the reader (`Dreams#requeueSpilled`).
    */
   readonly fresh?: readonly string[];
+  /**
+   * The longest a chapter's written summary was as a line in this run's fit
+   * (2026-10-15, `dream/slices.ts#summaryLineBytes`), so a later part renders
+   * the line the fit measured. Absent: an ordinary line.
+   */
+  readonly lineCap?: number;
 }
 
 export function indexKey(mechanism: FitMechanism): string {
@@ -516,6 +523,9 @@ export function noteLookups(
  * same memory is not the dream reading its line.
  */
 function runOpen(store: Pick<Store, "dream" | "reflection">, m: FitMechanism, ref: string, now: number): boolean {
+  // A wake has no run row: its index is the newest session start's, and a
+  // lookup within `LOOKUP_WINDOW_MS` of it counts (#489 C).
+  if (m === "wake") return true;
   try {
     const row = m === "dream" ? store.dream(ref) : store.reflection(ref);
     if (row === undefined) return false;

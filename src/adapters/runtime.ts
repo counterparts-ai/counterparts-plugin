@@ -119,8 +119,9 @@ export const TRANSPILED: boolean = MODULE_EXT === ".js";
  * (`$CLAUDE_CONFIG_DIR/.claude.json`)? Yes everywhere but the transpiled tree,
  * the plugin directory's bundle (2026-10-14, owner's decision): there nothing
  * opens that file. What that build gives up, every reader gated on this says:
- * the plugin no longer stands down beside the npm install's wiring (memory
- * wired twice until a marker-based check lands, docs/plugin.md), doctor has
+ * the plugin cannot read the npm install's wiring to stand down beside it (it
+ * stands down by the npm install's own marker instead, since 2026-10-15:
+ * `npm-live.ts`, docs/plugin.md), doctor has
  * no MCP-registration line and no Desktop Code-tab clash, and an uninstall
  * that may delete or move the store has only `claude mcp remove`'s word that a
  * `-s user` registration is gone (with no `claude`, it says the line to run and

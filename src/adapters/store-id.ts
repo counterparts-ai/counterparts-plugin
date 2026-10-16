@@ -45,9 +45,10 @@ export function storeId(dir: string, opts: { readonly mint?: boolean } = {}): st
 }
 
 /**
- * THE WAKE'S STORE MARKER: `<!-- counterparts:store id=st_… -->`, on its own
- * line right under the first meeting's marker (`core/onboarding.ts#
- * onboardingMarker`) on a Claude Code session-start wake, so the mod learns
+ * THE WAKE'S STORE MARKER: `<!-- counterparts:store id=st_… -->`, beside the
+ * first meeting's marker (`core/onboarding.ts#onboardingMarker`) on a Claude
+ * Code session-start wake — on the wake's one tag line since 2026-10-16
+ * (`wakeTagLead`) — so the mod learns
  * from the hook's own context which store this session opened, before any
  * dashboard is up. The wake is a writer, so it mints the salt if the store has
  * none yet; empty when even that fails (no marker beats a wrong one).
@@ -55,4 +56,35 @@ export function storeId(dir: string, opts: { readonly mint?: boolean } = {}): st
 export function storeMarker(dir: string): string {
   const id = storeId(dir, { mint: true });
   return id === null ? "" : `<!-- counterparts:store id=${id} -->`;
+}
+
+/**
+ * THE WAKE'S TAGS ON ONE LINE (2026-10-16, the wake trims; Mike, lightly
+ * held, review 2026-10-18). A session-start wake opened with three comment
+ * lines — the first meeting's marker, the store marker and the wake's own
+ * head tag — before a word was said. They now share ONE line: the hook's
+ * markers, then the wake's head tag (`<!-- counterparts:wake elements=…
+ * bytes=… -->`), the line the body starts on. Each keeps its own text,
+ * whole, because a sidebar already published in the plugin (0.3.23, the
+ * directory flavor, and the full flavor's tags) draws beside a newer npm
+ * install's hooks and finds each marker by its own unanchored pattern
+ * (`hooks/sidebar/hooks/feed.ts`'s `ONBOARDING_MARKER`, `STORE_MARKER`); the
+ * wake's own readers find its head by prefix, not by line (`transcript.ts
+ * #sight`), and the byte counts are the block's, which starts at its tag.
+ *
+ * What goes in FRONT of the wake's text: the markers and a space when the
+ * text opens with the head tag, else the markers on a line of their own (a
+ * bootstrap line, a resume's short wake). Empty with no marker. Off
+ * (`ONE_TAG_LINE`): each marker on its own line, as before.
+ */
+export const ONE_TAG_LINE = true;
+
+/** How the wake's head tag starts (`self/briefing.ts#headerLine`). */
+const WAKE_HEAD = "<!-- counterparts:wake ";
+
+export function wakeTagLead(tags: readonly string[], wakeText: string): string {
+  const shown = tags.filter((t) => t.length > 0);
+  if (shown.length === 0) return "";
+  if (!ONE_TAG_LINE) return `${shown.join("\n")}\n`;
+  return wakeText.startsWith(WAKE_HEAD) ? `${shown.join(" ")} ` : `${shown.join(" ")}\n`;
 }

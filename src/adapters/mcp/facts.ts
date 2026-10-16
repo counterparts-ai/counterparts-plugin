@@ -77,7 +77,7 @@
  *   may not be everything: meaning search hit its cap (100) · 3 weak matches not shown
  *
  *   1. Gym moved to 6am · mem_… · words, subject
- *      you said · done · happened 09-28
+ *      you said · done · happened Mon 09-28
  *      learned 09-28 in ~/counterparts · session a1b2c3d4 · CURRENT
  *        (with another result on the same day: `learned 09-28 14:05 …`)
  *      earlier: "gym at 7" (learned 09-12), changed 09-28 · mem_…
@@ -113,7 +113,7 @@ import type { DayWindow, FeelingWhose, SemanticSource, TimeAsk } from "../../cor
 import { STOPWORDS } from "../../core/recall/reference.js";
 import { tokenize } from "../../core/store/index.js";
 import type { ContradictionRow, RecallRow } from "../../core/store/index.js";
-import { addDays, localDate, localTime, parseCalendarDate } from "../../core/time.js";
+import { addDays, daysBetween, localDate, localTime, parseCalendarDate } from "../../core/time.js";
 import { UNBOUND_SESSION } from "../../core/types.js";
 import {
   RECALL_EXCERPT_CHARS,
@@ -406,6 +406,29 @@ export function shortDate(ymd: string | null, today: string): string {
   if (c === null) return ymd;
   const year = today.slice(0, 4);
   const one = (d: string): string => (d.slice(0, 4) === year ? d.slice(5) : d);
+  if (c.precision === "day") return one(c.first);
+  if (c.precision === "range") return `${one(c.first)}..${one(c.last)}`;
+  return c.text;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/**
+ * A fact's event date with its weekday in front ("Mon 05-15", "Mon 05-15..Wed 05-17"),
+ * so "on Monday" can be matched without the reader working weekdays out
+ * (2026-10-16). The weekday is the calendar date's own, not any zone's. Only the
+ * facts line's event date uses it; every other date keeps `shortDate`.
+ */
+export function shortDateWithWeekday(ymd: string | null, today: string): string {
+  if (ymd === null || ymd.length === 0) return "";
+  const c = parseCalendarDate(ymd);
+  if (c === null) return ymd;
+  const year = today.slice(0, 4);
+  const one = (d: string): string => {
+    // 1970-01-04 was a Sunday.
+    const weekday = WEEKDAYS[((daysBetween("1970-01-04", d) % 7) + 7) % 7] as string;
+    return `${weekday} ${d.slice(0, 4) === year ? d.slice(5) : d}`;
+  };
   if (c.precision === "day") return one(c.first);
   if (c.precision === "range") return `${one(c.first)}..${one(c.last)}`;
   return c.text;
@@ -878,7 +901,10 @@ function factItem(
   const earlier: EarlierVersion[] = [];
   const versions = safe(() => store.versions(c.id), []);
   for (const v of [...versions].reverse()) {
-    if (v.body.length === 0 || v.body === doc.body || v.reason === "episode-chapter") continue;
+    // A journal's own appends are not earlier readings of it: each is the
+    // current body's prefix (`episode-append` was listed until 2026-10-15),
+    // and since then an append keeps no version at all (`store#appendBody`).
+    if (v.body.length === 0 || v.body === doc.body || v.reason === "episode-chapter" || v.reason === "episode-append") continue;
     earlier.push({
       text: plainLine(v.title ?? v.body, 60),
       learned: v.learned_on.length > 0 ? v.learned_on : null,
@@ -1092,7 +1118,7 @@ function itemLines(m: FactItem, i: number, today: string, excerptChars: number, 
     const occurred =
       m.occurredOn === null
         ? "no event date"
-        : `${m.status === "planned" || m.status === "proposed" || m.status === "asked" ? "for" : "happened"} ${shortDate(m.occurredOn, today)}`;
+        : `${m.status === "planned" || m.status === "proposed" || m.status === "asked" ? "for" : "happened"} ${shortDateWithWeekday(m.occurredOn, today)}`;
     out.push(`   ${said} · ${status} · ${occurred}`);
     const where = m.where === null ? "" : ` in ${m.where}`;
     const who = m.who === null ? "" : ` · ${m.who}`;

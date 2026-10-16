@@ -85,10 +85,11 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { DATA_DIR_ENV, isWithin } from "../../core/store/index.js";
 import { CONFIG_ENV, CONFIG_FLAG } from "../config-path.js";
 import { expandHome, hookCommandLive, isOurHookCommand, npmWiring, readOurHook } from "../host-wiring.js";
+import { noteNpmLive, removeNpmLive } from "../npm-live.js";
 import { PACKAGE_ROOT, PLUGIN_DATA_ENV, PLUGIN_ROOT_ENV } from "../plugin.js";
 import { claudeCodeEnvMarker } from "../hosts.js";
 import { parseScriptInvocation, readsHostUserConfig, scriptArgs, shellTokens } from "../runtime.js";
-import { installedBuild, readServerRecords, sameBuild, serverBelieved } from "../sessions.js";
+import { installedBuild, installedVersion, readServerRecords, sameBuild, serverBelieved } from "../sessions.js";
 import type { BuildStamp, ServerRecordRead } from "../sessions.js";
 import type { Io } from "./commands.js";
 import {
@@ -1265,6 +1266,7 @@ export async function wire(input: WireInput): Promise<WireResult> {
     u.hint(`hooks: ${tilde(sight.target, home)}`);
     u.hint(`tools: ${tilde(mcp.file, home)} (registered as "${MCP_SERVER_NAME}")`);
     u.hint("Nothing was changed and no backup was taken.");
+    if (!input.dryRun) noteWired(input);
     return { outcome: "ok", hooks: "already", mcp: "already", backup: null, mcpConfirmed: false };
   }
 
@@ -1406,7 +1408,31 @@ export async function wire(input: WireInput): Promise<WireResult> {
         : "memory tools registered";
   const hooksSaid = `${String(HOST_EVENTS.length)} hooks ${verb} ${where}${kept}`;
   u.ok(tools === null ? hooksSaid : `connected — ${hooksSaid}, ${tools}`);
+  noteWired(input);
   return { outcome: "ok", hooks: hooksWord, mcp: mcpWord, backup, mcpConfirmed: false };
+}
+
+/**
+ * THE MARKER A DIRECTORY-FLAVOR PLUGIN STANDS DOWN BY (`npm-live.ts`), written
+ * now rather than at the next hook, so a plugin beside this install stands
+ * down from the next session on. A reading of what is wired, so a half that
+ * did not take (`claude` missing) is written as absent. Not from the plugin's
+ * own console, whose `connect` would wire the plugin's copy into settings: a
+ * launcher-flavor hook run from there writes the marker itself, and a
+ * directory-flavor one writes none (it reads no Claude Code file), so that
+ * copy then runs beside the settings wiring — a rare path, left as it is.
+ */
+function noteWired(input: WireInput): void {
+  if ((input.env[PLUGIN_ROOT_ENV] ?? "").trim().length > 0) return;
+  noteNpmLive({
+    configPath: input.configPath,
+    home: input.home,
+    env: input.env,
+    build: installedVersion(),
+    force: true,
+    now: input.now,
+    ...(input.readsUserConfig === undefined ? {} : { readsUserConfig: input.readsUserConfig }),
+  });
 }
 
 /**
@@ -1810,6 +1836,13 @@ export async function unwire(input: WireInput): Promise<WireResult> {
     io.err("Nothing was changed. Remove the Counterparts hook entries by hand.");
     return { outcome: "refused", hooks: "refused", mcp: "skipped", backup: null, mcpConfirmed: false };
   }
+
+  // THE MARKER GOES FIRST (`npm-live.ts`): a plugin of the directory flavor
+  // must not stand down for wiring that is on its way out. Removing it early
+  // is safe whatever follows: if the wiring stays (a refusal below), the next
+  // npm hook finds no marker and writes it again. Not for the plugin's rule,
+  // which leaves a live npm install as it is.
+  if (input.onlyDead !== true && input.dryRun !== true) removeNpmLive(input.configPath, env);
 
   // THE PLUGIN'S RULE (`onlyDead`): a hook that still runs stays.
   const dirs = input.onlyDead === true ? pluginDirs(env, home) : [];

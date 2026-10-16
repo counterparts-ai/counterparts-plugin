@@ -140,26 +140,39 @@ export const FOOTER_ITEMS: readonly { label: string; short: string; how: string 
   { label: 'Hide this', short: 'Hide', how: '/counterparts quiet' },
 ]
 
-/** One footer line: its label part (dim) and its command part (bright); either may be empty. */
-export type FooterLine = { label: string; how: string }
+/** One footer line: its label part (dim) and its command part (bright); either may be empty. `of`: the item's command, on each of its lines. */
+export type FooterLine = { label: string; how: string; of: string }
 
 /** Where memory is paused or off, the pause line says how to resume instead. */
 const RESUME_ITEM = { label: 'Resume here', short: 'Resume', how: RESUME_SAY }
 
+/** For someone who'd rather not have the fox: shown while it is the avatar (Mike, 2026-10-15). */
+const NO_FOX_ITEM = { label: 'Hide the fox', short: 'Fox', how: '/counterparts avatar off' }
+
+/**
+ * Which optional lines the footer carries: the intro until the first meeting is done or skipped; the fox's line while it shows;
+ * the hide line unless `hide` is false (the full build's view switch does it, 2026-10-16).
+ */
+export type FooterShow = { intro: boolean; fox: boolean; hide?: boolean }
+
 /** The footer's lines at `w` cells; `paused`: this folder is paused or off. */
-export function footerLines(w: number, paused = false): FooterLine[] {
-  const items = paused ? FOOTER_ITEMS.map(it => (it.how === PAUSE_SAY ? RESUME_ITEM : it)) : FOOTER_ITEMS
+export function footerLines(w: number, paused = false, show: FooterShow = { intro: true, fox: false }): FooterLine[] {
+  const base = paused ? FOOTER_ITEMS.map(it => (it.how === PAUSE_SAY ? RESUME_ITEM : it)) : FOOTER_ITEMS
+  const items = [
+    ...base.filter(it => (show.intro || it.how !== '/counterparts:meet') && (show.hide !== false || it.how !== '/counterparts quiet')),
+    ...(show.fox ? [NO_FOX_ITEM] : []),
+  ]
   const fits = (label: string, how: string): boolean => [...`${label} · ${how}`].length <= w
   // One set of labels for every line, so they read alike: the long ones only where all of them fit.
   const long = items.every(it => fits(it.label, it.how))
   const out: FooterLine[] = []
   for (const it of items) {
     const label = long ? it.label : it.short
-    if (fits(label, it.how)) out.push({ label: `${label} · `, how: it.how })
+    if (fits(label, it.how)) out.push({ label: `${label} · `, how: it.how, of: it.how })
     else {
       // A command is never cut: indented where that fits, else at the margin (under 25 cells the longest wraps).
-      out.push({ label: it.short, how: '' })
-      out.push({ label: [...it.how].length + 2 <= w ? '  ' : '', how: it.how })
+      out.push({ label: it.short, how: '', of: it.how })
+      out.push({ label: [...it.how].length + 2 <= w ? '  ' : '', how: it.how, of: it.how })
     }
   }
   return out

@@ -63,6 +63,7 @@ import {
   SPAWN_STARTED_EVENT,
   SWEEP_GATE_EVENT,
   WAKE_DELIVERED_EVENT,
+  WAKE_INJECTED_EVENT,
 } from "../../core/counterpart.js";
 import { Counterpart } from "../../core/counterpart.js";
 import {
@@ -120,7 +121,7 @@ import { finding, tilde, payloadOf, str, num, off, newestRows, undetermined } fr
 import type { Finding } from "./doctor-finding.js";
 import { checkoutFindings } from "./doctor-checkout.js";
 import type { CheckoutReading } from "./doctor-checkout.js";
-import { openFindings, journalFindings, journalCopyFindings } from "./doctor-open.js";
+import { openFindings, journalFindings, journalCopyFindings, chapterSummaryFindings } from "./doctor-open.js";
 import type { OpenReading, MigrationReading } from "./doctor-open.js";
 import {
   metaJson,
@@ -2347,14 +2348,25 @@ const LOOKUP_WINDOW_DAYS = 14;
  */
 export function lookupFindings(store: Store): Finding[] {
   const since = Math.max(0, store.livedDay() - LOOKUP_WINDOW_DAYS);
-  const offered = { dream: 0, reflection: 0 };
-  const runs = { dream: 0, reflection: 0 };
-  const looked = { dream: 0, reflection: 0 };
+  const offered = { dream: 0, reflection: 0, wake: 0 };
+  const runs = { dream: 0, reflection: 0, wake: 0 };
+  const looked = { dream: 0, reflection: 0, wake: 0 };
   let unread = false;
   try {
     const begun = store.eventLog({ name: "dream.begun", sinceDay: since, order: "desc", limit: LOOKUP_ROWS });
     const recalls = store.eventLog({ name: "mcp.recall", sinceDay: since, order: "desc", limit: LOOKUP_ROWS });
-    unread = begun.length >= LOOKUP_ROWS || recalls.length >= LOOKUP_ROWS;
+    // The wake's list items as lines (#489 C): each session start's row says
+    // how many it listed that way; a start before that build says nothing.
+    const woke = store.eventLog({ name: WAKE_INJECTED_EVENT, sinceDay: since, order: "desc", limit: LOOKUP_ROWS });
+    unread = begun.length >= LOOKUP_ROWS || recalls.length >= LOOKUP_ROWS || woke.length >= LOOKUP_ROWS;
+    for (const row of woke) {
+      const p = payloadOf(row);
+      const n = num(p, "lined");
+      // A resume composes no wake: not a session start that offered nothing.
+      if (n === null || p["resumed"] === true) continue;
+      runs.wake += 1;
+      offered.wake += n;
+    }
     for (const row of begun) {
       const n = num(payloadOf(row), "offered");
       if (n === null) continue;
@@ -2375,7 +2387,7 @@ export function lookupFindings(store: Store): Finding[] {
     for (const row of recalls) {
       const from = payloadOf(row)["fromIndex"];
       if (from === null || typeof from !== "object") continue;
-      for (const m of ["dream", "reflection"] as const) {
+      for (const m of ["dream", "reflection", "wake"] as const) {
         const v = (from as Record<string, unknown>)[m];
         if (typeof v === "number") looked[m] += v;
       }
@@ -2383,17 +2395,20 @@ export function lookupFindings(store: Store): Finding[] {
   } catch {
     return [];
   }
-  const say = (m: "dream" | "reflection", runWord: string): string =>
+  const say = (m: "dream" | "reflection" | "wake", runWord: string): string =>
     runs[m] === 0
       ? `${m}: no ${runWord} measured yet`
       : `${m}: ${String(looked[m])} looked up of ${String(offered[m])} offered in part, over ${String(runs[m])} ${runWord}${runs[m] === 1 ? "" : "s"}`;
-  const none = runs.dream + runs.reflection > 0 && offered.dream + offered.reflection > 0 && looked.dream + looked.reflection === 0;
+  const none =
+    runs.dream + runs.reflection + runs.wake > 0 &&
+    offered.dream + offered.reflection + offered.wake > 0 &&
+    looked.dream + looked.reflection + looked.wake === 0;
   return [
     finding(
       "lookups",
       "green",
       "Lookups",
-      `last ${String(LOOKUP_WINDOW_DAYS)} lived days — ${say("dream", "night")}; ${say("reflection", "reflection")}` +
+      `last ${String(LOOKUP_WINDOW_DAYS)} lived days — ${say("dream", "night")}; ${say("reflection", "reflection")}; ${say("wake", "session start")}` +
         (none ? ". None looked up yet: if that holds, the lines may be too thin or the lookup unclear" : "") +
         (unread ? ". More rows than were read: the counts are a floor" : ""),
       "",
@@ -2404,6 +2419,9 @@ export function lookupFindings(store: Store): Finding[] {
         reflectionOffered: offered.reflection,
         reflectionLooked: looked.reflection,
         reflections: runs.reflection,
+        wakeOffered: offered.wake,
+        wakeLooked: looked.wake,
+        wakes: runs.wake,
         floor: unread,
       },
     ),
@@ -3336,6 +3354,8 @@ export function doctorFindings(input: DoctorInput): Finding[] {
       : [["crash-write-up", (): Finding[] => crashWriteUpFindings(input, store, owedReading)] as const]),
     // F6: silent unless a copy failure is standing. Two bounded event reads.
     ["journal-copy", () => journalCopyFindings(store)],
+    // 2026-10-15: written vs automatic chapter summaries this week. Silent without any.
+    ["chapter-summaries", () => chapterSummaryFindings(store)],
     // The process log (2026-09-30): one directory listing and today's file.
     // Not in the session-start reading: it is never red, and it reads a file.
     ...(input.budgetMs !== undefined ? [] : [["log", (): Finding[] => logFindings(input)] as const]),

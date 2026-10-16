@@ -226,8 +226,18 @@ export function dayBefore(date: string, n = 1): string {
  * (`briefing.ts#PAGE_ROOM_BYTES`). A longer page is kept, never refused under
  * the ceiling and never cut.
  */
+/**
+ * "## HOW I WORK" IS A FEW SHORT LESSONS (2026-10-16, the wake trims; Mike,
+ * lightly held, review 2026-10-18): general, without the dated example or
+ * the story each was learned from — those stay in the memories, where recall
+ * finds them. Part of `PAGE_WRITING_RULE`, so the reflection is told it too;
+ * to revert, drop it from there.
+ */
+export const HOW_I_WORK_RULE =
+  `Under "## How I work", keep a few short, general lessons, a line or two each, without dated examples or anecdotes; the stories stay in the memories.`;
+
 export const PAGE_WRITING_RULE =
-  `The page is read on later days and by sessions on other models. Name the model when a claim is about one model ("the Opus 5.5 system card says…", not "my system card says…"); write a date, never "tonight" or "today"; and add no revised-on line of your own — the wake dates the page. Aim to keep the whole page under ${String(PAGE_ROOM_BYTES)} bytes (UTF-8). A longer page is kept whole, but on a day the wake has no room for it sessions read a short version instead — so when yours runs past ${String(PAGE_ROOM_BYTES)}, also write a short version of it in the same call, under ${String(PAGE_ROOM_BYTES)} bytes (\`short\`, beside the page): the whole of who you are, condensed, not its first part.`;
+  `${HOW_I_WORK_RULE} The page is read on later days and by sessions on other models. Name the model when a claim is about one model ("the Opus 5.5 system card says…", not "my system card says…"); write a date, never "tonight" or "today"; and add no revised-on line of your own — the wake dates the page. Aim to keep the whole page under ${String(PAGE_ROOM_BYTES)} bytes (UTF-8). A longer page is kept whole, but on a day the wake has no room for it sessions read a short version instead — so when yours runs past ${String(PAGE_ROOM_BYTES)}, also write a short version of it in the same call, under ${String(PAGE_ROOM_BYTES)} bytes (\`short\`, beside the page): the whole of who you are, condensed, not its first part.`;
 
 /**
  * THE DATE A RUN ON `today` IS ABOUT — yesterday, always.
@@ -610,11 +620,45 @@ export interface WriterMemory {
   readonly strength: number;
 }
 
+/** One entry of the day's journal, as the writer is shown it (2026-10-15). */
+export interface WriterJournalEntry {
+  readonly episode: string;
+  readonly title: string | null;
+  readonly chapter: number | null;
+  /** `whole` or `excerpt`: the chapter's own words; `line`: its summary, or its first words. */
+  readonly fidelity: "whole" | "excerpt" | "line";
+  readonly text: string;
+  /** The whole entry's length in characters. */
+  readonly chars: number;
+}
+
+/**
+ * THE DAY'S JOURNAL, ACROSS SESSIONS (2026-10-15): until chapter summaries the
+ * writer saw the journal only as the full chapter copies among the day's
+ * memories, competing for the room by a strength of zero; the copies are no
+ * longer written, so the day's chapters come here, fitted as the dream and
+ * the reflection get them (`dream/slices.ts#dayJournal`), in a room of their
+ * own.
+ */
+export interface WriterJournal {
+  readonly entries: readonly WriterJournalEntry[];
+  /** The day's entries, all of them. */
+  readonly total: number;
+  /** Entries the room did not take. */
+  readonly notShown: number;
+  /** Sessions held back as confidential. */
+  readonly omitted: number;
+  /** Characters the journal took. */
+  readonly chars: number;
+}
+
 export interface WriterInput {
   readonly about: string;
   readonly today: string;
   readonly page: SelfPage | null;
   readonly memories: readonly WriterMemory[];
+  /** The day's journal (2026-10-15). Absent: none was composed for this block. */
+  readonly journal?: WriterJournal;
   /** Memories from that date this budget could not carry. */
   readonly dropped: number;
   /** Confidential rows held back before the budget was spent. */
@@ -669,6 +713,10 @@ export function dayMemories(
     // except a dream's merge of that day's memories, which is stamped the
     // night it was made and still IS that day (`isOfDay`, 2026-09-28).
     if (row === undefined || !isOfDay(store, row, opts.about)) continue;
+    // THE JOURNAL'S OWN MEMORIES (a chapter's summary, a frozen full copy) are
+    // not listed here: the day's chapters come in the journal block, each
+    // with its summary as its line (2026-10-15), and would be shown twice.
+    if (row.source === "episode" && row.origin_ref !== null && row.origin_ref.length > 0) continue;
     let statement: string;
     let confidential: boolean;
     try {
@@ -737,6 +785,16 @@ export function dayMemories(
  * What does not fit is counted and said, as always. CAL.
  */
 export const NIGHT_WRITER_MEMORY_BYTES = 40_000;
+/**
+ * THE JOURNAL'S ROOM in the writer's block (2026-10-15): the day's chapters,
+ * across sessions, fitted inside it (`WriterJournal`) out of the SAME budget
+ * as the memories — at most `WRITER_JOURNAL_SHARE` of it — so the block's
+ * ceiling is unchanged. Measured on a copy of the owner's store (self NOTES,
+ * 2026-10-15). CAL.
+ */
+export const WRITER_JOURNAL_CHARS = 14_000;
+export const WRITER_JOURNAL_SHARE = 0.35;
+
 export const NIGHT_WRITER_MEMORY_MAX = 150;
 
 /** The tool the nightly writer is told to write the page with — the MCP server's `self_page`. */
@@ -886,7 +944,13 @@ export function writerInstruction(
       "",
     );
   }
-  if (input.memories.length === 0) {
+  const journal = input.journal;
+  const journaled = journal !== undefined && journal.entries.length > 0;
+  if (input.memories.length === 0 && journaled) {
+    lines.push(
+      `Besides the journal below, nothing was written down on ${input.about}${input.dropped > 0 ? ` that fit this block (${String(input.dropped)} did not)` : ""}${input.omitted > 0 ? ` that can be shown here (${String(input.omitted)} held back as confidential)` : ""}.`,
+    );
+  } else if (input.memories.length === 0) {
     // "THE DAY WAS EMPTY" AND "I COULD NOT READ THE DAY" ARE DIFFERENT THINGS,
     // and saying the first about the second is a stated falsehood handed to the
     // one reader whose whole job is to decide whether the day changed anything
@@ -915,8 +979,40 @@ export function writerInstruction(
     );
     for (const m of input.memories) lines.push(`- ${m.statement}`);
   }
+  if (journal !== undefined && (journaled || journal.omitted > 0)) lines.push("", ...journalLines(input.about, journal));
   lines.push(PAGE_WRITER_CLOSE);
   return lines.join("\n");
+}
+
+/**
+ * THE JOURNAL BLOCK (2026-10-15): the day's chapters, a line each — the
+ * chapter whole when the room let it in, else its summary (or its first
+ * words) — under the same framing as the memories.
+ */
+/**
+ * WHAT THE JOURNAL BLOCK COSTS, measured as it renders (review of e6920860):
+ * every line with its framing — the title, "chapter N", "(summary)" or an
+ * excerpt's "(the first part; …)" — by `wireChars`, about its bytes.
+ */
+export function journalBlockChars(about: string, journal: Omit<WriterJournal, "chars">): number {
+  return wireChars(journalLines(about, { ...journal, chars: 0 }).join("\n")) + 2;
+}
+
+function journalLines(about: string, journal: WriterJournal): string[] {
+  const tail =
+    (journal.notShown > 0 ? `, ${String(journal.notShown)} more did not fit` : "") +
+    (journal.omitted > 0 ? `, ${String(journal.omitted)} session${journal.omitted === 1 ? "" : "s"} held back as confidential` : "");
+  if (journal.entries.length === 0) return [`The journal on ${about}: nothing that can be shown here${tail}.`];
+  const out = [
+    `The journal on ${about} (${String(journal.entries.length)} of ${String(journal.total)} chapter${journal.total === 1 ? "" : "s"}${tail}) — a chapter in full where there was room, otherwise its summary:`,
+    DATA_NOT_INSTRUCTIONS,
+  ];
+  for (const e of journal.entries) {
+    const what = `${e.title === null || e.title.trim().length === 0 ? "a session" : flattenLine(e.title)}${e.chapter === null ? "" : `, chapter ${String(e.chapter)}`}`;
+    const how = e.fidelity === "line" ? " (summary)" : e.fidelity === "excerpt" ? ` (the first part; ${String(e.chars)} characters in all, ${e.episode})` : "";
+    out.push(`- ${what}${how}: ${flattenLine(e.text)}`);
+  }
+  return out;
 }
 
 /** The one sentence that stands between quoted memories and the reader. */

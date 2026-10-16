@@ -10,7 +10,7 @@ import { byteLength } from "./identity.js";
 import { addDays, isDay } from "../time.js";
 import { TODAY_ELSEWHERE_MAX_BYTES } from "../handoff/last-here.js";
 import { LANE_ORDER, ROOM_ORDER, collapsedLine, compose, flatten, foldedLine, moreLine } from "./briefing.js";
-import type { BriefingRequest, Composed, IdentityBlock, Resolve, RoomLane, TrimEvent } from "./briefing.js";
+import type { BriefingRequest, Composed, HorizonCounted, IdentityBlock, Resolve, RoomLane, TrimEvent } from "./briefing.js";
 
 
 /** The order lanes are offered room for their line when it was not reserved
@@ -87,12 +87,17 @@ export function lendOf(n: number | undefined): number {
  * The count lines a composition carries for its pinned lanes: "N more", or —
  * a lane that lists nothing — its one collapsed line (`collapsedLine`).
  */
-export function pinnedLines(pinned: Partial<Record<LaneName, readonly string[]>>, kept: Kept): Partial<Record<LaneName, string>> {
+export function pinnedLines(
+  pinned: Partial<Record<LaneName, readonly string[]>>,
+  kept: Kept,
+  /** What "Coming up" counts rather than lists (`BriefingRequest.horizonLater`, `.horizonOverdue`). */
+  counted?: HorizonCounted,
+): Partial<Record<LaneName, string>> {
   const out: Partial<Record<LaneName, string>> = {};
   for (const lane of LANE_ORDER) {
     const ids = pinned[lane];
     if (ids === undefined || ids.length === 0) continue;
-    out[lane] = lane !== "identity" && kept[lane].length === 0 ? collapsedLine(lane, ids) : moreLine(lane, ids);
+    out[lane] = lane !== "identity" && kept[lane].length === 0 ? collapsedLine(lane, ids, counted) : moreLine(lane, ids, counted?.horizonOverdue);
   }
   return out;
 }
@@ -103,7 +108,11 @@ export function pinnedLines(pinned: Partial<Record<LaneName, readonly string[]>>
  * it ("Who I am" always does); only the lanes that list nothing go into the
  * one folded line (`foldedLine`). No fold when no lane lists nothing.
  */
-export function foldParts(pinned: Partial<Record<LaneName, readonly string[]>>, kept: Kept): { more: Partial<Record<LaneName, string>>; fold?: string } {
+export function foldParts(
+  pinned: Partial<Record<LaneName, readonly string[]>>,
+  kept: Kept,
+  counted?: HorizonCounted,
+): { more: Partial<Record<LaneName, string>>; fold?: string } {
   const listing: Partial<Record<LaneName, readonly string[]>> = {};
   const empty: Partial<Record<LaneName, readonly string[]>> = {};
   for (const lane of LANE_ORDER) {
@@ -113,7 +122,7 @@ export function foldParts(pinned: Partial<Record<LaneName, readonly string[]>>, 
     else listing[lane] = ids;
   }
   const fold = foldedLine(empty);
-  return fold === null ? { more: pinnedLines(listing, kept) } : { more: pinnedLines(listing, kept), fold };
+  return fold === null ? { more: pinnedLines(listing, kept, counted) } : { more: pinnedLines(listing, kept, counted), fold };
 }
 
 /**
@@ -240,8 +249,8 @@ export function takeRoom(
     // Folded already (2026-10-12): each lane's own line when there is room,
     // else the one line — never a lane left without a word. `foldFirst`:
     // the one line first.
-    const each = (): Composed => compose(k, req.day, ctx.resolve, ctx.coreName, ctx.identity, pinnedLines(pins, k), y, e);
-    const parts = from.fold ? foldParts(pins, k) : null;
+    const each = (): Composed => compose(k, req.day, ctx.resolve, ctx.coreName, ctx.identity, pinnedLines(pins, k, req), y, e);
+    const parts = from.fold ? foldParts(pins, k, req) : null;
     const one = (): Composed | null =>
       parts?.fold === undefined ? null : compose(k, req.day, ctx.resolve, ctx.coreName, ctx.identity, parts.more, y, e, parts.fold);
     let fold = false;
@@ -389,7 +398,7 @@ export function keepArrivingCount(overflow: readonly string[], from: Rescued, ct
   const pinned = { ...from.pinned, horizon: rest };
   // Room as the composition stands: `tellLost` says it then, as it says every lane's.
   const { req } = ctx;
-  if (from.lent === 0 && compose(from.kept, req.day, ctx.resolve, ctx.coreName, ctx.identity, pinnedLines(pinned, from.kept), from.yesterday, from.elsewhere).bytes <= req.budgetBytes) {
+  if (from.lent === 0 && compose(from.kept, req.day, ctx.resolve, ctx.coreName, ctx.identity, pinnedLines(pinned, from.kept, req), from.yesterday, from.elsewhere).bytes <= req.budgetBytes) {
     return null;
   }
   return takeRoom(overflow.length > 0 ? "openFirst" : "arriving", from, from.kept, pinned, from.trimmed, ctx);
@@ -450,7 +459,7 @@ export function keepFirstOpen(
     // does not fit as the composition stands.
     if (rest.length === 0) return null;
     const { req } = ctx;
-    const asIs = compose(k, req.day, ctx.resolve, ctx.coreName, ctx.identity, pinnedLines(pinned, k), from.yesterday, from.elsewhere);
+    const asIs = compose(k, req.day, ctx.resolve, ctx.coreName, ctx.identity, pinnedLines(pinned, k, req), from.yesterday, from.elsewhere);
     if (from.lent === 0 && asIs.bytes <= req.budgetBytes) return null;
     return takeRoom("openCount", from, k, pinned, t, ctx);
   }
@@ -518,7 +527,7 @@ export function tellLost(ctx: {
     ...(ctx.pinned === undefined ? [] : [{ lost: ctx.pinned, fold: false }, { lost: ctx.pinned, fold: true }]),
   ];
   for (const t of tries) {
-    const parts = t.fold ? foldParts(t.lost, ctx.kept) : { more: pinnedLines(t.lost, ctx.kept) };
+    const parts = t.fold ? foldParts(t.lost, ctx.kept, ctx.req) : { more: pinnedLines(t.lost, ctx.kept, ctx.req) };
     if (t.fold && parts.fold === undefined) continue;
     const c = at(parts.more, parts.fold);
     if (Object.keys(counts).length === 0 || c.bytes <= ctx.limit) {
@@ -538,7 +547,7 @@ export function tellLost(ctx: {
   for (const lane of MORE_ORDER) {
     const ids = ctx.lost[lane];
     if (ids === undefined || ids.length === 0) continue;
-    lines[lane] = lane !== "identity" && ctx.kept[lane].length === 0 ? collapsedLine(lane, ids) : moreLine(lane, ids);
+    lines[lane] = lane !== "identity" && ctx.kept[lane].length === 0 ? collapsedLine(lane, ids, ctx.req) : moreLine(lane, ids, ctx.req.horizonOverdue);
     const candidate = at(lines);
     if (candidate.bytes > ctx.limit) {
       delete lines[lane];

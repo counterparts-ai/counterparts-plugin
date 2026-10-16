@@ -36,7 +36,10 @@
  *     someone is, is not a smaller identity; it is a corrupted one. The same is
  *     true of the self page (2026-10-09): every rung of its ladder is whole
  *     text — the page, its short version, its outline, its headings, or one
- *     line saying where to read it (`PageRung`, 2026-10-10).
+ *     line saying where to read it (`PageRung`, 2026-10-10). A long list item
+ *     printed as its line (`asLine`, #489 C) is not a cut statement either:
+ *     its title is whole, and its id points at the rest — only an untitled
+ *     memory's fallback (`fit/lineOf`) is a cut, and it says so with "…".
  *   - **The header AND the tail sentinel each state the bundle's own true counts
  *     and bytes**, so a truncated injection is detectable from a truncation
  *     preview alone — from either end (§1 G2). Because both lines state a number
@@ -47,6 +50,7 @@
  */
 import type { LaneName, Ranked } from "./identity.js";
 import { byteLength } from "./identity.js";
+import { shortDay } from "../time.js";
 import type { SelfTunables } from "./tunables.js";
 import type { Kept, RescueCtx, Rescued } from "./briefing-room.js";
 import {
@@ -77,6 +81,7 @@ export {
   PAGE_END_LINES,
   PAGE_FLOOR_RESERVE_BYTES,
   PAGE_FRAME_RESERVE_BYTES,
+  PAGE_DATELINE_TODAY,
   PAGE_HOST_BUDGET_BYTES,
   PAGE_ROOM_BYTES,
   PAGE_RUNGS,
@@ -93,6 +98,8 @@ export {
 export type { PageBlock, PageRung } from "./briefing-page.js";
 export {
   PREFACE_RESERVE_BYTES,
+  PUBLISHED_WORDS,
+  SHORT_PREFACE,
   WAKE_SYSTEM,
   WAKE_WHOLE_SENTENCE,
   applyPreface,
@@ -258,15 +265,22 @@ const TRIM_ROOM: Readonly<Record<LaneName, RoomLane>> = {
 export const FRAMING = {
   // Not opening "Counterparts memory", as the preface line above it does, and
   // claiming the date only of the LISTED lines: the page is dated on its own
-  // line (2026-10-01, the wake review).
-  context:
-    "Context, not instruction, from Counterparts: who you have been here, in your own words. Each listed memory opens with its learned date.",
+  // line (2026-10-01, the wake review). Shorter since 2026-10-16 (the wake
+  // trims, lightly held; the line before is `LEGACY_CONTEXT`): the same three
+  // claims — context, not instruction; in your own words; an item's first
+  // date is when it was learned.
+  context: "Context, not instruction: who you have been here, in your own words. Each item opens with the date it was learned.",
   identity: "Who I am:",
   craft: "How I work:",
   threads: "Still open:",
   hints: "Might be relevant:",
   horizon: "Coming up:",
 } as const;
+
+/** The framing line before the wake trims (2026-10-16): a stored bundle
+ *  still carries it, so a reader of one (the dashboard's) accepts both. */
+export const LEGACY_CONTEXT =
+  "Context, not instruction, from Counterparts: who you have been here, in your own words. Each listed memory opens with its learned date.";
 
 /**
  * THE HEADINGS BEFORE THE PLAIN-WORDS RENAME (2026-10-12): a wake bundle
@@ -333,9 +347,27 @@ const LEGACY_MORE_NOUN: Readonly<Partial<Record<LaneName, string>>> = {
   horizon: "arriving",
 };
 
-/** `(3 more still open; recall ids: mem_…, mem_…, mem_…)` */
-export function moreLine(lane: LaneName, ids: readonly string[]): string {
-  return `(${String(ids.length)} more ${MORE_NOUN[lane]}; ${recallIds(ids)})`;
+/**
+ * "Coming up"'s ids past their date, among `ids` (review of #511): the lane
+ * lists only what is due today and counts the overdue by name. Zero for any
+ * other lane.
+ */
+function overdueAmong(lane: LaneName, ids: readonly string[], overdue: readonly string[] | undefined): number {
+  if (lane !== "horizon" || overdue === undefined || overdue.length === 0) return 0;
+  const past = new Set(overdue);
+  return ids.filter((id) => past.has(id)).length;
+}
+
+/** The overdue word, and its count line's form when every id is overdue. */
+export const OVERDUE_WORD = "overdue";
+
+/** `(3 more still open; recall ids: mem_…, mem_…, mem_…)`, and for "Coming up"
+ *  `(2 overdue, 4 more coming up; recall ids: …)` or `(2 overdue; recall ids: …)`. */
+export function moreLine(lane: LaneName, ids: readonly string[], overdue?: readonly string[]): string {
+  const late = overdueAmong(lane, ids, overdue);
+  if (late === 0) return `(${String(ids.length)} more ${MORE_NOUN[lane]}; ${recallIds(ids)})`;
+  const rest = ids.length - late;
+  return `(${String(late)} ${OVERDUE_WORD}${rest === 0 ? "" : `, ${String(rest)} more ${MORE_NOUN[lane]}`}; ${recallIds(ids)})`;
 }
 
 /**
@@ -398,6 +430,12 @@ export function countedLanes(text: string): Partial<Record<LaneName, number>> {
       out[lane] = Number(more[1]);
       continue;
     }
+    // "Coming up"'s overdue (review of #511): `(2 overdue, 4 more coming up; …)`, `(2 overdue; …)`.
+    const late = new RegExp(`^\\((\\d+) ${OVERDUE_WORD}(?:, (\\d+) more ${MORE_NOUN.horizon})?; recall ids`).exec(line);
+    if (late !== null) {
+      out.horizon = Number(late[1]) + Number(late[2] ?? 0);
+      continue;
+    }
     if (!isFoldedLine(line)) continue;
     for (const m of line.slice(FOLDED_WORDS.length + 1).matchAll(/(\d+) ([^;(]+?) \(recall ids: /g)) {
       const l = byNoun.get(m[2] ?? "");
@@ -427,16 +465,34 @@ function recallIds(ids: readonly string[]): string {
  */
 export const COLLAPSED_WORDS = "no room to list them in this wake";
 
-export function collapsedLine(lane: LaneName, ids: readonly string[]): string {
-  return `${laneHeading(lane)} ${String(ids.length)} — ${COLLAPSED_WORDS}; ${recallIds(ids)}`;
+/**
+ * "COMING UP" WITH NOTHING DUE TODAY (2026-10-16, the wake trims): the lane
+ * lists only what is due today or past (`COMING_UP_TODAY_ONLY`), so a day
+ * with none counts the later dates in one line that says why — `Coming up:
+ * 5 — none due today; recall ids: …` — only when every id it counts is one
+ * of those (`later`); a due item left out for room still says "no room".
+ */
+export const NONE_TODAY_WORDS = "none due today";
+
+export function collapsedLine(lane: LaneName, ids: readonly string[], counted?: HorizonCounted): string {
+  const later = counted?.horizonLater;
+  const none = lane === "horizon" && later !== undefined && ids.length > 0 && ids.every((id) => later.includes(id));
+  // Those past their date said as such (review of #511): `none due today, 2 overdue`.
+  const late = none ? overdueAmong(lane, ids, counted?.horizonOverdue) : 0;
+  const why = none ? `${NONE_TODAY_WORDS}${late === 0 ? "" : `, ${String(late)} ${OVERDUE_WORD}`}` : COLLAPSED_WORDS;
+  return `${laneHeading(lane)} ${String(ids.length)} — ${why}; ${recallIds(ids)}`;
 }
+
+/** What "Coming up" counts rather than lists, as a composition's request
+ *  carries it (`BriefingRequest.horizonLater`, `.horizonOverdue`). */
+export type HorizonCounted = Pick<BriefingRequest, "horizonLater" | "horizonOverdue">;
 
 /** The lane a collapsed line (`collapsedLine`) speaks for, or null for any other line. */
 export function collapsedLane(line: string): LaneName | null {
   for (const lane of LANE_ORDER) {
     for (const heading of headingsOf(lane)) {
       if (!line.startsWith(`${heading} `)) continue;
-      if (new RegExp(`^ \\d+ — ${COLLAPSED_WORDS}; recall ids`).test(line.slice(heading.length))) return lane;
+      if (new RegExp(`^ \\d+ — (?:${COLLAPSED_WORDS}|${NONE_TODAY_WORDS}(?:, \\d+ ${OVERDUE_WORD})?); recall ids`).test(line.slice(heading.length))) return lane;
     }
   }
   return null;
@@ -551,6 +607,20 @@ export interface Resolved {
    * current. Absent: nothing to say.
    */
   readonly standing?: { readonly prefix: string; readonly suffix: string };
+  /**
+   * THE CALENDAR YEAR THE WAKE IS COMPOSED IN (`YYYY`, 2026-10-16, the wake
+   * trims): a whole-day date in it prints short — `Oct 15`, `Oct 15 (due
+   * Oct 18)` — and any other prints whole (`time.ts#shortDay`). Absent: every date
+   * whole, as before. The composition sets it (`Self#composeLanes`).
+   */
+  readonly year?: string;
+  /**
+   * THE ITEM'S LINE (#489 C, 2026-10-16): its title, else `fit/lineOf`'s first
+   * line — present only when the statement is longer than `WAKE_LINE_BYTES`.
+   * A list item prints it with its id in place of the statement
+   * (`asLine`); absent, the statement prints whole as before.
+   */
+  readonly line?: string;
 }
 
 export type Resolve = (id: string) => Resolved;
@@ -651,6 +721,16 @@ export interface BriefingRequest {
   /** Its shorter forms, widest first: fewer chapters, fewer directories.
    *  Ignored without `elsewhere`. */
   readonly elsewhereShorter?: readonly string[];
+  /**
+   * "COMING UP"'S LATER DATES (2026-10-16, `Lanes.later`): ids in the
+   * horizon overflow because they are not due yet. When every id the lane
+   * counts is one of them and it lists nothing, its line says "none due
+   * today", not "no room" (`collapsedLine`). Absent: "no room", as before.
+   */
+  readonly horizonLater?: readonly string[];
+  /** Those of `horizonLater` past their date (review of #511): the line
+   *  counts them as overdue. Absent: none said so. */
+  readonly horizonOverdue?: readonly string[];
 }
 
 export interface TrimEvent {
@@ -717,11 +797,25 @@ export interface BriefingResult extends Composed {
   /** The "Today, elsewhere" line as it printed (the form the room allowed),
    *  or absent when none was asked for or none fit. */
   readonly elsewhere?: string;
+  /** The ids this wake listed as a line, not whole (#489 C, `asLine`), in
+   *  lane order — what the lookup ledger's `fit.index.wake` offers. */
+  readonly lined?: readonly string[];
 }
 
 
+/**
+ * THE HEAD TAG WITHOUT ITS DAY (2026-10-16, the wake trims; Mike, lightly
+ * held, review 2026-10-18): the preface right under it states the lived day,
+ * and the end tag still carries `day=` for a stored bundle read on its own.
+ * Nothing parses the head's `day=` (`OPEN_RE`, the transcript's head
+ * sighting and the forged-marker guards read only the prefix, `elements=`
+ * and `bytes=`), so both forms read alike. `true` puts it back.
+ */
+export const HEAD_STATES_DAY = false;
+
 function headerLine(day: number, elements: number, bytes: string): string {
-  return `<!-- counterparts:wake day=${day} elements=${elements} bytes=${bytes} -->`;
+  const said = HEAD_STATES_DAY ? `day=${day} ` : "";
+  return `<!-- counterparts:wake ${said}elements=${elements} bytes=${bytes} -->`;
 }
 
 function sentinelLine(
@@ -812,9 +906,24 @@ export const DATE_BOUND = "by ";
 export const DUE_WORD = "due";
 export const DUE_PAST_WORD = "was due";
 
+/**
+ * SHORT DATES (2026-10-16, the wake trims; Mike, lightly held, review
+ * 2026-10-18): a whole day in `year` as `Oct 15`, no year and no zero; any
+ * other date — another year, a month, a typo — as it was written, so a date
+ * never reads as a year it is not in. `SHORT_DATES` off: every date whole,
+ * as before.
+ */
+export const SHORT_DATES = true;
+
+/** A date as the wake's lines say it (`time.ts#shortDay`), under `SHORT_DATES`. */
+function shortOrWhole(ymd: string, year: string | undefined): string {
+  return SHORT_DATES ? shortDay(ymd, year) : ymd;
+}
+
 export function datePrefix(r: Resolved): string {
   const learned = (r.learnedOn ?? "").trim();
   const due = (r.due ?? "").trim();
+  const short = (d: string): string => shortOrWhole(d, r.year);
   // AN ARRIVING OCCASION SAYS WHEN IT IS DUE (2026-10-01): a watch list read
   // "2026-09-27 · …" while the item was due 2026-10-03, and the learned date
   // alone reads as when it happens.
@@ -830,14 +939,14 @@ export function datePrefix(r: Resolved): string {
     // DUE ON THE DAY IT WAS LEARNED: the one date, stated once — as the DUE
     // date (2026-10-09), so the line still says when, and the delivery can
     // put it in the past tense the morning after (`arrivingTense`).
-    if (learned === "" || (due === learned && often === "")) return `${word} ${due}${often}${DATE_SEP}`;
-    return `${r.boundedDate === true ? DATE_BOUND : ""}${learned} (${word} ${due}${often})${DATE_SEP}`;
+    if (learned === "" || (due === learned && often === "")) return `${word} ${short(due)}${often}${DATE_SEP}`;
+    return `${r.boundedDate === true ? DATE_BOUND : ""}${short(learned)} (${word} ${short(due)}${often})${DATE_SEP}`;
   }
   if (learned === "") return "";
   const happened = (r.happenedOn ?? "").trim();
-  if (happened !== "" && happened !== learned) return `${learned} (of ${happened})${DATE_SEP}`;
+  if (happened !== "" && happened !== learned) return `${short(learned)} (of ${short(happened)})${DATE_SEP}`;
   const bound = r.boundedDate === true ? DATE_BOUND : "";
-  return `${bound}${learned}${DATE_SEP}`;
+  return `${bound}${short(learned)}${DATE_SEP}`;
 }
 
 /**
@@ -847,8 +956,8 @@ export function datePrefix(r: Resolved): string {
  */
 export function elementLine(item: Ranked, resolve: Resolve): string {
   const r = resolve(item.id);
-  const statement = flatten(r.statement);
   const standing = r.standing?.prefix ?? "";
+  const statement = asLine(item, r) ? lineText(item.id, r) : flatten(r.statement);
   let date = datePrefix(r);
   // ONE DATE, NOT TWO (2026-10-01, the wake review): a statement that already
   // opens with the very date the prefix would state ("2026-09-26: …") read
@@ -856,8 +965,32 @@ export function elementLine(item: Ranked, resolve: Resolve): string {
   // plain prefix is dropped — "by", "(of …)" and "(due …)" say something the
   // statement does not, and a standing qualifier would come between.
   const learned = (r.learnedOn ?? "").trim();
-  if (standing === "" && learned !== "" && date === `${learned}${DATE_SEP}` && statement.startsWith(learned)) date = "";
+  if (standing === "" && learned !== "" && date === `${shortOrWhole(learned, r.year)}${DATE_SEP}` && statement.startsWith(learned)) date = "";
   return `- ${date}${standing}${statement}${r.standing?.suffix ?? ""}`;
+}
+
+/**
+ * A LONG LIST ITEM IS A LINE (#489 C, 2026-10-16; Mike, lightly held): in
+ * "How I work", "Still open", "Might be relevant" and "Coming up", an item
+ * whose statement is longer than `WAKE_LINE_BYTES` (the resolver gives it a
+ * `line`) prints as `date · title [id]`, and recall reads it whole by the id.
+ * A title is whole text, so this is not a cut statement; an untitled memory
+ * falls back to `fit/lineOf`'s first line, whose own cut says "…". Whole
+ * stays whole for the identity list, a plain reminder due the day the wake is
+ * read (`Ranked.due`), and an item the leftover room upgraded
+ * (`Ranked.whole`). Decided here, for every composition and every rescue, so
+ * the byte accounting cannot disagree with the line printed.
+ */
+export function asLine(item: Ranked, r: Resolved): boolean {
+  return r.line !== undefined && item.lane !== "identity" && item.due !== true && item.whole !== true;
+}
+
+/** The line's words, the id once: not again when its standing already names it. */
+function lineText(id: string, r: Resolved): string {
+  const line = flatten(r.line ?? "");
+  const tag = `[${id}]`;
+  const named = (r.standing?.prefix ?? "").includes(tag) || (r.standing?.suffix ?? "").includes(tag);
+  return named ? line : `${line} ${tag}`;
 }
 
 /** Every lane empty — the floor a composition cannot go below. */
@@ -1184,7 +1317,7 @@ export function render(
   let bare = false;
   const lostNow = (): Partial<Record<LaneName, string[]>> => withoutNearby(lostByLane(lanes.overflow, trimmed, held, suppressList));
   const linesFor = (lost: Partial<Record<LaneName, readonly string[]>>, k: Kept, folded: boolean): { more: Partial<Record<LaneName, string>>; fold?: string } =>
-    folded ? foldParts(lost, k) : { more: pinnedLines(lost, k) };
+    folded ? foldParts(lost, k, req) : { more: pinnedLines(lost, k, req) };
 
   for (;;) {
     const lost = lostNow();
@@ -1326,18 +1459,39 @@ export function render(
       }
       // THE LANES' LINES, last and checked: each lane that lost something is
       // counted, in its own line or the folded one (`tellLost`).
-      const told = tellLost({
-        kept,
-        lost: lostByLane(lanes.overflow, trimmed, held, suppressList),
-        req,
-        resolve,
-        coreName,
-        identity,
-        ...(said === undefined ? {} : { yesterday: said }),
-        ...(away === undefined ? {} : { elsewhere: away }),
-        limit: budgetBytes,
-        ...(first === null ? {} : { pinned: first.pinned }),
-      });
+      const tell = (): ReturnType<typeof tellLost> =>
+        tellLost({
+          kept,
+          lost: lostByLane(lanes.overflow, trimmed, held, suppressList),
+          req,
+          resolve,
+          coreName,
+          identity,
+          ...(said === undefined ? {} : { yesterday: said }),
+          ...(away === undefined ? {} : { elsewhere: away }),
+          limit: budgetBytes,
+          ...(first === null ? {} : { pinned: first.pinned }),
+        });
+      let told = tell();
+      // THE TOP ITEMS WHOLE, ON ROOM LEFT OVER (#489 C, 2026-10-16; Mike,
+      // lightly held): once the lanes fit as lines, the first item of "Still
+      // open" and then of "Coming up" is printed whole when that fits in what
+      // is left — breadth first, as `fit()` places. One item per lane, and
+      // only when nothing else moves: every lane's count stays as it was and
+      // nothing past this render's room is taken. Unlike identity's leftover
+      // above, not only when nothing was trimmed: a lane that lost items still
+      // has its count, and the upgrade takes only bytes nobody else was given.
+      for (const lane of ["threads", "horizon"] as const) {
+        const top = kept[lane][0];
+        if (top === undefined || !asLine(top, resolve(top.id))) continue;
+        kept[lane][0] = { ...top, whole: true };
+        const next = tell();
+        const same =
+          next.folded === told.folded &&
+          JSON.stringify([next.more, next.untold, next.quiet]) === JSON.stringify([told.more, told.untold, told.quiet]);
+        if (same && next.composed.bytes <= budgetBytes) told = next;
+        else kept[lane][0] = top;
+      }
       // AN ARRIVING ID THE COUNT COULD NOT NAME LEAVES A TRIM ROW (review of
       // #367, 2026-10-10). One past the lane's cap — `prospective/`'s count
       // (`BoundaryRequest.horizonMore`) or the lane's own — was never a line
@@ -1371,6 +1525,7 @@ export function render(
         pressure: composed.bytes >= budgetBytes * t.BUDGET_PRESSURE,
         overBudget: !fits,
         ...(away === undefined ? {} : { elsewhere: away }),
+        lined: LANE_ORDER.flatMap((lane) => kept[lane].filter((r) => asLine(r, resolve(r.id))).map((r) => r.id)),
         page:
           identity.page === null
             ? null

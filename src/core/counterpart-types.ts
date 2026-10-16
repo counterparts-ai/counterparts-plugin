@@ -360,6 +360,13 @@ export interface CounterpartOptions extends Stance {
 export interface WakeOutcome extends WakeResult {
   /** The ceiling this brain will compose to, or null if none was ever reported. */
   readonly budgetBytes: number | null;
+  /**
+   * The ids a wake ASSEMBLED at this delivery listed as a line rather than
+   * whole (#489 C, `self/briefing.ts#asLine`); empty when it listed none or
+   * the published bundle was delivered as it was. The adapter writes them to
+   * the lookup ledger (`fit.index.wake`).
+   */
+  readonly lined?: readonly string[];
 }
 
 /**
@@ -692,6 +699,8 @@ export interface ChapterResult {
   readonly episodeId: string | null;
   readonly chapter: number;
   readonly created: boolean;
+  /** The chapter's summary memory (2026-10-15): written, kept, refused… Null when nothing was written. */
+  readonly summary: ChapterAppend["summary"];
 }
 
 export interface SessionEndReport {

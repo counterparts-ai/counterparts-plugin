@@ -73,7 +73,8 @@ import type { Kind } from "../types.js";
 import { DREAM_MARK, carriesDreamMark } from "./mark.js";
 import { mindRanked, noteMindShown } from "./mind.js";
 import type { MindItem } from "./mind.js";
-import { chapterEntries, entryKey, fitEpisodes, shownEntry } from "./slices.js";
+import { chapterEntries, entryKey, entryLine, fitEpisodes, shownEntry, summarized, withSummaries } from "./slices.js";
+import { chapterSummaries } from "../self/summaries.js";
 import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter, ShownEntry } from "./slices.js";
 import { BUNDLE_OWNER, DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 import type { DreamAction } from "./tunables.js";
@@ -1689,7 +1690,7 @@ export class Dreams {
 
   /** The dream's index — what it offered, at which fidelity, and its later parts — for the lookup ledger and `part`. */
   private index(id: string, c: Composed, later: readonly string[][]): void {
-    writeIndex(this.store, "dream", { ref: id, at: this.store.now(), offered: c.offered, parts: later, looked: [], entries: c.reads, unread: c.unread, fresh: c.bundle.fresh.map((f) => f.id) });
+    writeIndex(this.store, "dream", { ref: id, at: this.store.now(), offered: c.offered, parts: later, looked: [], entries: c.reads, unread: c.unread, fresh: c.bundle.fresh.map((f) => f.id), lineCap: c.lineCap });
   }
 
   /**
@@ -2720,6 +2721,11 @@ export class Dreams {
       if (dreamed.has(id) || denied.has(id)) continue;
       const row = this.store.row(id);
       if (row === undefined || !this.showableAs(row, opts.owner)) continue;
+      // NOT THE JOURNAL'S OWN MEMORIES (2026-10-15): a chapter's summary (or
+      // a frozen full copy) reaches the dream as its chapter's line in the
+      // journal section (`chaptersSince`); queued as a new memory too, the
+      // same chapter would be shown twice in one bundle.
+      if (row.type === "memory" && row.source === "episode" && row.origin_ref !== null && row.origin_ref.length > 0) continue;
       if (opts.madeBy !== undefined && (row.created_at ?? 0) > opts.madeBy) continue;
       const p = rowToPhysics(row);
       if (belowReach(p, day)) {
@@ -3051,6 +3057,7 @@ export class Dreams {
       entryIndex: chaptersFit.entryIndex,
       reads: chaptersFit.reads,
       unread: chaptersFit.unread,
+      lineCap: chaptersFit.summaryBytes,
     };
   }
 
@@ -3102,7 +3109,8 @@ export class Dreams {
       }
       if (fresh.length > 0) episodes.push({ row, at, fresh, earlier });
     }
-    return fitEpisodes(episodes, { room, owner, day, lineBytes: T.LINE_BYTES, entryChars: T.ENTRY_CHARS, reads: extent, unread });
+    // A CHAPTER'S LINE IS ITS SUMMARY when the session wrote one (2026-10-15).
+    return fitEpisodes(summarized(this.store, episodes), { room, owner, day, lineBytes: T.LINE_BYTES, entryChars: T.ENTRY_CHARS, reads: extent, unread });
   }
 
   /**
@@ -3286,13 +3294,16 @@ export class Dreams {
       const row = this.store.row(eid);
       const ch = chapters.get(eid) ?? { id: eid, title: row?.title ?? null, entries: [] };
       chapters.set(eid, ch);
-      const entry = row === undefined || (row.confidential === 1 && !this.bundleOwner) ? undefined : chapterEntries(row.body)[Number(at)];
-      if (entry === undefined) {
+      const raw = row === undefined || (row.confidential === 1 && !this.bundleOwner) ? undefined : chapterEntries(row.body)[Number(at)];
+      if (raw === undefined) {
         ch.entries.push({ chapter: null, day: null, fidelity: "line", text: gone, chars: 0 });
         continue;
       }
+      // The line `begin` fitted: the chapter's summary when it has one.
+      const entry = withSummaries([raw], chapterSummaries(this.store, [eid]).get(eid), offered.at)[0] ?? raw;
       const f = fidelity(entryKey(eid, entry.index));
-      const text = f === "line" ? lineOf({ body: entry.text }, DREAM_TUNABLES.LINE_BYTES) : clipWire(entry.text, DREAM_TUNABLES.ENTRY_CHARS);
+      // At the length the fit measured (an index from before 2026-10-15 has none: an ordinary line).
+      const text = f === "line" ? entryLine(entry, DREAM_TUNABLES.LINE_BYTES, offered.lineCap ?? DREAM_TUNABLES.LINE_BYTES) : clipWire(entry.text, DREAM_TUNABLES.ENTRY_CHARS);
       ch.entries.push(shownEntry(entry, { fidelity: f === "line" ? "line" : text === entry.text ? "whole" : "excerpt", text, chars: entry.text.length }));
     }
     const body = { dream: input.dream, part: input.part, of, memories, chapters: [...chapters.values()] };
@@ -3555,6 +3566,8 @@ interface Composed {
   readonly reads: Record<string, number>;
   /** Entries below that it did not take (the next dream sends them). */
   readonly unread: Record<string, number[]>;
+  /** The longest a chapter's summary was as a line (2026-10-15), so `part` renders what the fit measured. */
+  readonly lineCap: number;
 }
 
 /** A shown memory's cost beside its words (the fitter's `OVERHEAD`, which the fit uses too). */

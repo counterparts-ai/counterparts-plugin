@@ -105,7 +105,9 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
  */
 export function shownOf(
   body: string,
-  opts: { chapter: boolean; learnedOn: string; confidential: boolean; withheld?: string; width?: number },
+  /** `chapterDay`: a chapter SUMMARY's own date (its `happened_on`, 2026-10-15) —
+   *  its words carry no heading to read one from. */
+  opts: { chapter: boolean; learnedOn: string; confidential: boolean; withheld?: string; width?: number; chapterDay?: string | null },
 ): Shown {
   const recorded = DAY.test(opts.learnedOn) ? opts.learnedOn : null;
   const fallback = { date: recorded, dateFrom: recorded === null ? null : ("recorded" as const) };
@@ -128,6 +130,7 @@ export function shownOf(
     const bare = stripChapterLead(flat);
     flat = bare.rest;
     fromChapter ??= bare.date;
+    if (fromChapter === null && typeof opts.chapterDay === "string" && DAY.test(opts.chapterDay)) fromChapter = opts.chapterDay;
   }
   const lifted = liftDate(flat);
   const width = opts.width ?? 320;

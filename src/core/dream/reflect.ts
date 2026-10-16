@@ -88,12 +88,14 @@ import { DREAM_MARK, carriesDreamMark } from "./mark.js";
 import { feelingWeeks } from "./feeling-weeks.js";
 import type { FeelingWeeks } from "./feeling-weeks.js";
 import { isWorkMemory } from "../self/work.js";
-import { chapterEntries, entryKey, fitEpisodes, shownEntry } from "./slices.js";
+import { chapterEntries, entryKey, entryLine, fitEpisodes, shownEntry, summarized, withSummaries } from "./slices.js";
+import { chapterSummaries } from "../self/summaries.js";
 import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter } from "./slices.js";
 import { BUNDLE_OWNER, DREAM_TUNABLES } from "./tunables.js";
 import { mindRanked, noteMindShown } from "./mind.js";
 import type { MindItem } from "./mind.js";
 import { settle as settleContradiction } from "../reconsolidation.js";
+import { UNRESOLVED_META_KEY } from "../mint.js";
 import type { SettleOutcome } from "../reconsolidation.js";
 
 /** Every `reflect` knob, in one place. Working defaults of 2026-09-27; CAL = not yet measured. */
@@ -169,6 +171,19 @@ export const REFLECT_TUNABLES = {
    * the same five every night. It comes back when the rest run out. CAL.
    */
   UNMARKED_REST_NIGHTS: 3,
+  /**
+   * STALE OPEN THREADS, OFFERED TO CLOSE (2026-10-16, #489 D; a lightly held
+   * default). A memory flagged `unresolved` stays in the wake's "Still open"
+   * lane until something closes it, and most are open only because nobody
+   * did. The reflection is shown at most `STALE_OPEN` of those untouched
+   * (neither born nor used) for `STALE_OPEN_DAYS` lived days, the longest
+   * untouched first, and may PROPOSE closing the ones that look done
+   * (`finish`'s `close`). Nothing closes until the owner or a session says
+   * yes (`close`). Rotated like the unmarked offer. CAL.
+   */
+  STALE_OPEN_DAYS: 4,
+  STALE_OPEN: 5,
+  STALE_OPEN_REST_NIGHTS: 3,
   /** Feelings shown per memory, and the characters of each one's carried_by. */
   FEELINGS_SHOWN: 3,
   FEELING_CARRIED_CHARS: 160,
@@ -304,6 +319,12 @@ export interface ReflectBundle {
    * project's work only for want of a mark — offered to be marked by meaning.
    */
   readonly unmarked: readonly string[];
+  /**
+   * STALE OPEN (2026-10-16, #489 D): open threads nobody has touched for
+   * `STALE_OPEN_DAYS` lived days — a line each and how many lived days — that
+   * `finish`'s `close` may propose closing. Empty when none.
+   */
+  readonly staleOpen: readonly { readonly id: string; readonly text: string; readonly untouched: number }[];
   readonly memories: Readonly<Record<string, ReflectItem>>;
   /**
    * How the room was spent (2026-09-28): memories and entries shown whole, as
@@ -418,6 +439,8 @@ export interface ReflectFinish {
     readonly carried_by?: string;
   }[];
   readonly model?: string | null;
+  /** Stale open threads it thinks are done (2026-10-16, #489 D): ids from `staleOpen` only. Proposed, never closed here. */
+  readonly close?: readonly string[];
 }
 
 /**
@@ -462,6 +485,8 @@ export interface ReflectOutcome {
   readonly core: readonly PartResult[];
   readonly traits: readonly PartResult[];
   readonly refusedCites: readonly string[];
+  /** Close proposals (2026-10-16): what was proposed and what was refused, with why. */
+  readonly close: { readonly proposed: readonly string[]; readonly refused: readonly { id: string; reason: string }[] };
   /**
    * When any part was not written: which, and that `finish` may be called
    * again with the same reflection and just those parts. Null when all landed.
@@ -626,9 +651,9 @@ export class Reflections {
     const s = composed.shownAs;
     const fitRecord = { whole: s.whole, excerpt: s.excerpt, lined: s.line, ids: s.ids, notShown: s.notShown, offered: offeredInPart(fitted), parts: packed.later.length + 1 };
     this.store.updateReflection(id, {
-      detail: { ...(packed.later.length > 0 ? { parts: packed.later } : {}), fit: fitRecord, ...(composed.unmarked.length > 0 ? { unmarked: composed.unmarked } : {}) },
+      detail: { ...(packed.later.length > 0 ? { parts: packed.later } : {}), fit: fitRecord, ...(composed.unmarked.length > 0 ? { unmarked: composed.unmarked } : {}), ...(composed.staleOpen.length > 0 ? { staleOpen: composed.staleOpen.map((x) => x.id) } : {}) },
     });
-    writeIndex(this.store, "reflection", { ref: id, at: this.store.now(), offered: fitted.offered, looked: [] });
+    writeIndex(this.store, "reflection", { ref: id, at: this.store.now(), offered: fitted.offered, looked: [], lineCap: fitted.lineCap });
     this.record("reflection.begun", id, { dream: dreamId, shown: shown.length, ...fitRecord });
     const instructions = this.instructions(id, input.session, bundle);
     return { ok: true, bundle, text: render(id, bundle), instructions };
@@ -769,14 +794,16 @@ export class Reflections {
     const chapters = ids.c.map((cid): ShownChapter => {
       const r = this.store.row(cid);
       if (r === undefined || (r.confidential === 1 && !this.bundleOwner)) return { id: cid, title: null, entries: [{ chapter: null, day: null, fidelity: "line", text: gone, chars: 0 }], earlier: 0 };
-      const all = chapterEntries(r.body);
+      // The line `begin` fitted: the chapter's summary when it has one.
+      const all = withSummaries(chapterEntries(r.body), chapterSummaries(this.store, [cid]).get(cid), index?.ref === row.id ? index.at : 0);
       const entries = [];
       for (const e of all) {
         const f = fidelityOf(entryKey(cid, e.index));
         if (f === null || f === "id") continue;
         // An entry whose place moved since begin (the body was rewritten) is
         // still bounded: whatever it holds now reads within ENTRY_CHARS.
-        const text = f === "line" ? lineOf({ body: e.text }, T.LINE_BYTES) : clipWire(e.text, T.ENTRY_CHARS);
+        // At the length the fit measured (an index from before 2026-10-15 has none: an ordinary line).
+        const text = f === "line" ? entryLine(e, T.LINE_BYTES, index?.ref === row.id ? (index.lineCap ?? T.LINE_BYTES) : T.LINE_BYTES) : clipWire(e.text, T.ENTRY_CHARS);
         entries.push(shownEntry(e, { fidelity: f === "line" ? "line" : text === e.text ? "whole" : "excerpt", text, chars: e.text.length }));
       }
       return { id: cid, title: r.title, entries, earlier: all.length - entries.length };
@@ -840,6 +867,11 @@ export class Reflections {
       ...(bundle.unmarked.length > 0
         ? [
             `  unmarked: ${String(bundle.unmarked.length)} ${bundle.unmarked.length === 1 ? "memory nobody has" : "memories nobody has"} marked. Unmarked, a fact written in a project, or a skill, counts as that project's work and is shown only there — so a personal one (a person, a feeling, life outside the work) sits among the work lines. ${open ? "Mark each by meaning in about, with why: owner or us when it is personal, work when it really is the craft, world otherwise." : "Tonight a mark may only be work or world: mark the ones that are, and leave a personal one unmarked."} They count toward the ${String(L.about)}.`,
+          ]
+        : []),
+      ...(bundle.staleOpen.length > 0
+        ? [
+            `- close (optional, ids from staleOpen only): staleOpen lists ${String(bundle.staleOpen.length)} open ${bundle.staleOpen.length === 1 ? "thread" : "threads"} nobody has touched for a while (untouched: lived days). Most are open only because nobody closed them. Name in close the ones that, from what you have read, look done — read one whole with recall first if its line is not enough. Nothing closes tonight: your share will ask ${who}, and a yes closes them. When in doubt, leave it out.`,
           ]
         : []),
       ...(bundle.feelingWeeks !== null
@@ -1372,6 +1404,55 @@ export class Reflections {
           .map((m) => `I've come to think "${this.handle(m.id)}" is ${m.mark === "me" ? "about who I am" : m.mark === "us" ? "about the two of us" : "about you"}.`)
       : [];
 
+    // ── (d) close proposals (2026-10-16, #489 D) ───────────────────────────
+    // Only ids from the stale open list this reflection was shown; nothing is
+    // closed here — the share asks, and a yes closes them (`close`). They ride
+    // in the share, so a share already told or carried takes none.
+    const offeredStale = new Set(stringIds(parseDetail(row.detail)["staleOpen"]));
+    const priorProposed = stringIds(prior["closeProposed"]);
+    const proposed = [...priorProposed];
+    const closeRefused: { id: string; reason: string }[] = [];
+    for (const cid of [...new Set(input.close ?? [])]) {
+      if (typeof cid !== "string") continue;
+      if (proposed.includes(cid)) continue;
+      if (!offeredStale.has(cid)) {
+        closeRefused.push({ id: cid, reason: "not-offered" });
+        continue;
+      }
+      if (shareLocked) {
+        closeRefused.push({ id: cid, reason: `share-already-${row.share_state}` });
+        continue;
+      }
+      if (proposed.length >= T.STALE_OPEN) {
+        closeRefused.push({ id: cid, reason: "limit" });
+        continue;
+      }
+      const r = this.store.row(cid);
+      let open = false;
+      try {
+        open = r !== undefined && r.archived === 0 && this.showable(r) && this.store.readProse(cid).meta[UNRESOLVED_META_KEY] === true;
+      } catch {
+        open = false;
+      }
+      if (!open) {
+        closeRefused.push({ id: cid, reason: "no-longer-open" });
+        continue;
+      }
+      proposed.push(cid);
+    }
+    const priorCloseLine = typeof prior["closeLine"] === "string" ? prior["closeLine"] : null;
+    let closeLine: string | null = null;
+    if (!shareLocked && proposed.length > 0) {
+      if (priorCloseLine !== null) shareText = shareText.replace(` ${priorCloseLine}`, "").replace(priorCloseLine, "").trim();
+      const named = proposed.map((cid) => `"${this.handle(cid)}" (${cid})`).join("; ");
+      closeLine =
+        proposed.length === 1
+          ? `One thing still listed as open looks done to me: ${named}. Shall I close it?`
+          : `A few things still listed as open look done to me: ${named}. Shall I close them?`;
+      shareText = [shareText, closeLine].filter((x) => x.length > 0).join(" ");
+      share = { ...share, offered: true, reason: share.offered ? share.reason : "close-proposed" };
+    }
+
     // REPLACING AN OFFERED SHARE IS A CLAIM (review of #268): a later session
     // may carry it between the read above and this write; only the write that
     // still finds it offered replaces it.
@@ -1427,6 +1508,17 @@ export class Reflections {
     // What it was offered to mark: the next nights' rotation reads it.
     const offeredUnmarked = parseDetail(row.detail)["unmarked"];
     if (Array.isArray(offeredUnmarked)) detail["unmarked"] = offeredUnmarked;
+    // The stale open list it was shown, and what it proposed closing (2026-10-16).
+    const offeredStaleList = parseDetail(row.detail)["staleOpen"];
+    if (Array.isArray(offeredStaleList)) detail["staleOpen"] = offeredStaleList;
+    // The share that stands is the one that asks: when another session took it
+    // mid-finish, the earlier proposals stand with it (review, 2026-10-16).
+    const keptProposed = shareStands ? proposed : priorProposed;
+    if (keptProposed.length > 0) detail["closeProposed"] = keptProposed;
+    const keptLine = shareStands ? closeLine : priorCloseLine;
+    if (keptLine !== null) detail["closeLine"] = keptLine;
+    const closedEarlier = parseDetail(row.detail)["closed"];
+    if (Array.isArray(closedEarlier)) detail["closed"] = closedEarlier;
     if (again) detail["finishes"] = (typeof prior["finishes"] === "number" ? prior["finishes"] : 1) + 1;
     this.store.updateReflection(row.id, {
       ...(again ? {} : { state: "reflected" as const }),
@@ -1454,6 +1546,7 @@ export class Reflections {
     const missed: string[] = [];
     if (pageRefused) missed.push(`page — ${page.reason}${page.detail !== undefined ? `: ${page.detail}` : ""}`);
     if (shareMiss !== null) missed.push(`share — ${shareMiss}`);
+    for (const c of closeRefused) missed.push(`close (${c.id}) — ${c.reason}`);
     for (const [part, list] of [["feelings", feelings], ["about", about], ["core", coreDecisions], ["traits", traits]] as const) {
       list.forEach((x, i) => {
         if (!x.ok) missed.push(`${part}[${String(i)}]${x.id === null ? "" : ` (${x.id})`} — ${x.reason}${x.detail !== undefined ? `: ${x.detail}` : ""}`);
@@ -1464,7 +1557,7 @@ export class Reflections {
         ? null
         : `Not written: ${missed.join("; ")}. You can fix these and call finish again with reflection ${row.id} and just those parts — the entry and everything already written stand.`;
 
-    const handBack = this.handBack(row, !shareLocked && share.offered ? shareText : null, nothingMuch, pageStands, tellAlso);
+    const handBack = this.handBack(row, !shareLocked && share.offered ? shareText : null, nothingMuch, pageStands, tellAlso, shareStands ? this.closeHow(row.id, proposed) : null);
     return {
       ok: true,
       outcome: {
@@ -1481,6 +1574,7 @@ export class Reflections {
         core: coreDecisions,
         traits,
         refusedCites,
+        close: { proposed: keptProposed, refused: closeRefused },
         retry,
       },
     };
@@ -1499,7 +1593,7 @@ export class Reflections {
   }
 
   /** The dreamer's (or reflector's) final message: the dream's line, then the share. */
-  private handBack(row: ReflectionRow, share: string | null, nothingMuch: boolean, page: boolean, tellAlso: readonly string[] = []): string {
+  private handBack(row: ReflectionRow, share: string | null, nothingMuch: boolean, page: boolean, tellAlso: readonly string[] = [], closeHow: string | null = null): string {
     const who = this.ctx.ownerName() ?? "the owner";
     const dreamLine = row.dream_id === null ? null : this.ctx.dreamLine(row.dream_id);
     const head = dreamLine ?? `${reflectionOpener(row.id)} I reflected for a few minutes.`;
@@ -1512,7 +1606,7 @@ export class Reflections {
     }
     return (
       `${head}\n${reflectionOpener(row.id)} I reflected afterwards.${pageLine} Morning share for ${who} — tell it in your own words, as a telling ("While I slept I dreamed…", "I've been thinking…"), tentatively where it is about ${who}. ` +
-      `Once you have told it, the counterparts reflect tool's phase "told", reflection: ${row.id}, marks it told, so another session does not carry it and tell it again.\n${share}`
+      `Once you have told it, the counterparts reflect tool's phase "told", reflection: ${row.id}, marks it told, so another session does not carry it and tell it again.${closeHow === null ? "" : ` ${closeHow}`}\n${share}`
     );
   }
 
@@ -1538,6 +1632,82 @@ export class Reflections {
     this.store.updateReflection(row.id, { shareState: "told", shareSession: input.session });
     this.record("reflection.told", row.id, { cited: ids.length });
     return { ok: true, reason: "told", cited: ids.length };
+  }
+
+  /**
+   * A YES TO THE CLOSE PROPOSALS (2026-10-16, #489 D; a lightly held default):
+   * the owner, asked in the share, agreed some open threads are done. Closes
+   * only ids this reflection proposed, with the write a deposit that answers a
+   * thread makes (`counterpart-deposit.ts#closeThread`: the flag set false,
+   * reason `thread-closed`) and its checks — the owner's protection, an
+   * archived row, and, from a session that is not the owner's, nothing
+   * confidential and nothing written in another directory. Any day, told or
+   * not; an id already closed is said so, not refused.
+   */
+  close(input: { reflection: string; session: string; ids: readonly string[]; scope?: string | null }):
+    | { ok: true; closed: string[]; already: string[]; refused: { id: string; reason: string }[] }
+    | { ok: false; reason: string } {
+    if (this.ctx.observer) return { ok: false, reason: "observer" };
+    const row = this.store.reflection(input.reflection);
+    if (row === undefined) return { ok: false, reason: "unknown-reflection" };
+    const d = parseDetail(row.detail);
+    const proposed = new Set(stringIds(d["closeProposed"]));
+    if (proposed.size === 0) return { ok: false, reason: "nothing-proposed" };
+    const ids = [...new Set(input.ids)].filter((x) => typeof x === "string" && x.length > 0);
+    if (ids.length === 0) return { ok: false, reason: "ids-required" };
+    const closed: string[] = [];
+    const already: string[] = [];
+    const refused: { id: string; reason: string }[] = [];
+    for (const id of ids) {
+      if (!proposed.has(id)) {
+        refused.push({ id, reason: "not-proposed" });
+        continue;
+      }
+      const r = this.store.row(id);
+      if (r === undefined) {
+        refused.push({ id, reason: "gone" });
+        continue;
+      }
+      let open = false;
+      try {
+        open = this.store.readProse(id).meta[UNRESOLVED_META_KEY] === true;
+      } catch {
+        refused.push({ id, reason: "unreadable" });
+        continue;
+      }
+      if (!open) {
+        already.push(id);
+        continue;
+      }
+      const why =
+        r.protected === 1
+          ? "protected-refuses-revision"
+          : r.archived === 1
+            ? "target-archived"
+            : !this.ctx.owner && r.confidential === 1
+              ? "confidential"
+              : !this.ctx.owner && (r.origin_scope ?? "") !== (input.scope ?? "")
+                ? "other-directory"
+                : null;
+      if (why !== null) {
+        refused.push({ id, reason: why });
+        continue;
+      }
+      try {
+        this.store.revise(id, { meta: { [UNRESOLVED_META_KEY]: false }, reason: "thread-closed" });
+        closed.push(id);
+      } catch (err) {
+        refused.push({ id, reason: `failed: ${String((err as Error).message ?? err).slice(0, 120)}` });
+      }
+    }
+    if (closed.length > 0) {
+      const fresh = this.store.reflection(row.id);
+      const detail = parseDetail(fresh?.detail ?? row.detail);
+      detail["closed"] = [...new Set([...stringIds(detail["closed"]), ...closed])];
+      this.store.updateReflection(row.id, { detail });
+    }
+    this.record("reflection.closed", row.id, { closed: closed.length, already: already.length, refused: refused.length, session: input.session });
+    return { ok: true, closed, already, refused };
   }
 
   /** The newest share offered and never told nor carried, from another session. A read. */
@@ -1571,9 +1741,10 @@ export class Reflections {
     this.record("reflection.carried", row.id, {});
     const who = this.ctx.ownerName() ?? "the owner";
     const when = row.date ?? "recently";
+    const close = this.closeHow(row.id, stringIds(parseDetail(row.detail)["closeProposed"]));
     return (
       `Counterparts: after reflecting on ${when}, you left a morning share for ${who} that was never told. At a natural moment — not mid-task — tell it in your own words, as a telling ("When I last reflected…"), tentatively where it is about ${who}. ` +
-      `Once you have told it, the counterparts reflect tool's phase "told", reflection: ${row.id}, marks it told. The share: ${row.share}`
+      `Once you have told it, the counterparts reflect tool's phase "told", reflection: ${row.id}, marks it told.${close === null ? "" : ` ${close}`} The share: ${row.share}`
     );
   }
 
@@ -1669,7 +1840,12 @@ export class Reflections {
       // return to, feel or mark here.
       if (row === undefined || !this.showable(row) || row.source === "dreamed" || row.source === "reflection") continue;
       const f = emotionalIntensity(this.store.physicsOf(mid));
-      if (row.birth_day >= day - T.CHAPTER_DAYS) recent.push({ id: mid, felt: f, at: row.created_at ?? 0 });
+      // Not the journal's own memories (2026-10-15, review of #504): a chapter's
+      // summary reaches the reflection as its chapter's line in `chapters`,
+      // and in this lane the same chapter would be in the bundle twice. The
+      // core lanes below still take a summary about me: being offered for the
+      // core is a different question from being shown the day.
+      if (row.birth_day >= day - T.CHAPTER_DAYS && !isJournalCopy(row)) recent.push({ id: mid, felt: f, at: row.created_at ?? 0 });
       // UNMARKED WORK THAT MAY NOT BE WORK (owner pick 4): only a memory NOBODY
       // marked — a writer's mark is never offered to be overridden here. Skills
       // too since 2026-10-11 (the about-marks review: 5 of 34 unmarked skills
@@ -1739,6 +1915,10 @@ export class Reflections {
     const unmarkedIds = [...ranked.filter((x) => !lately.has(x)), ...ranked.filter((x) => lately.has(x))]
       .slice(0, T.UNMARKED)
       .filter(take(2));
+    // STALE OPEN (2026-10-16, #489 D): open threads untouched for
+    // `STALE_OPEN_DAYS` lived days, the longest untouched first, rotated like
+    // the unmarked offer — a line each, offered to be proposed closed.
+    const staleOpen = this.staleOpen(id, day, see);
     // THE OFFER'S OWN ROOM (2026-10-11, the about-marks review): exactly what
     // the offered ids cost as lines, held back from the shared room — so a
     // full night, whose ids alone fill the room before priority 2 is reached,
@@ -1778,7 +1958,8 @@ export class Reflections {
       wireChars(page ?? "") +
       wireChars(dreamed?.journal ?? "") +
       earlier.reduce((n, e) => n + wireChars(e.entry), 0) +
-      dreamSaw.reduce((n, s) => n + wireChars(s.text) + 30, 0);
+      dreamSaw.reduce((n, s) => n + wireChars(s.text) + 30, 0) +
+      staleOpen.reduce((n, s) => n + wireChars(s.text) + 40, 0);
     const avail = Math.max(0, T.ROOM_CHARS - spent - REFLECT_FURNITURE);
     const candOf = (mid: string, p: number): FitCandidate => {
       const v = see(mid) as { whole: string; line: string };
@@ -1841,6 +2022,7 @@ export class Reflections {
       reconsidering: reconsidering.filter((r) => kept(r.id)).map((r) => ({ id: r.id, reason: r.reason })),
       feelingWeeks: weeks === null ? null : { ...weeks, restsOn: weeksRest.filter(kept) },
       unmarked: unmarkedIds.filter(kept),
+      staleOpen,
       memories,
       feltOf: feltAll.length,
       shownAs: {
@@ -1854,7 +2036,7 @@ export class Reflections {
       limits: { ...T.LIMITS },
     };
     noteMindShown(this.store, bundle.onMind, day);
-    return { bundle, offered };
+    return { bundle, offered, lineCap: chaptersFit.summaryBytes };
   }
 
   /**
@@ -2004,7 +2186,8 @@ export class Reflections {
       const fresh = entries.filter((e) => this.entryInView(e, day));
       if (fresh.length > 0) episodes.push({ row, at, fresh, earlier: entries.length - fresh.length });
     }
-    return fitEpisodes(episodes, { room, owner: ownerNames(this.store), day, lineBytes: T.LINE_BYTES, entryChars: T.ENTRY_CHARS });
+    // A CHAPTER'S LINE IS ITS SUMMARY when the session wrote one (2026-10-15).
+    return fitEpisodes(summarized(this.store, episodes), { room, owner: ownerNames(this.store), day, lineBytes: T.LINE_BYTES, entryChars: T.ENTRY_CHARS });
   }
 
   /** An entry of the last few lived days (one with no day in its heading counts as recent). */
@@ -2062,6 +2245,65 @@ export class Reflections {
   }
 
   /** A memory's short handle for a sentence: its title, else its first line. */
+  /**
+   * THE STALE OPEN THREADS (2026-10-16, #489 D): live memories still flagged
+   * `unresolved` (confirmed on the prose, as the wake does), showable here,
+   * neither born nor used for `STALE_OPEN_DAYS` lived days. The longest
+   * untouched first; what the last few reflections were offered waits behind
+   * the rest. At most `STALE_OPEN`.
+   */
+  private staleOpen(
+    id: string,
+    day: number,
+    see: (mid: string) => { row: MemoryRow; whole: string; line: string } | null,
+  ): { id: string; text: string; untouched: number }[] {
+    const T = REFLECT_TUNABLES;
+    const found: { id: string; text: string; untouched: number }[] = [];
+    let ids: string[] = [];
+    try {
+      ids = this.store.openThreadIds();
+    } catch {
+      return [];
+    }
+    for (const mid of ids) {
+      const v = see(mid);
+      if (v === null || v.row.source === "dreamed") continue;
+      // Settled over by a later memory: that one carries it now.
+      if (headOf(this.store, mid) !== null) continue;
+      const untouched = day - Math.max(v.row.birth_day, v.row.last_used_day);
+      if (untouched < T.STALE_OPEN_DAYS) continue;
+      try {
+        if (this.store.readProse(mid).meta[UNRESOLVED_META_KEY] !== true) continue;
+      } catch {
+        continue;
+      }
+      found.push({ id: mid, text: v.line, untouched });
+    }
+    const lately = new Set(
+      this.store
+        .reflections({ limit: T.STALE_OPEN_REST_NIGHTS + 1 })
+        .filter((r) => r.id !== id)
+        .slice(0, T.STALE_OPEN_REST_NIGHTS)
+        .flatMap((r) => stringIds(parseDetail(r.detail)["staleOpen"])),
+    );
+    found.sort((a, b) => b.untouched - a.untouched || (a.id < b.id ? -1 : 1));
+    return [...found.filter((x) => !lately.has(x.id)), ...found.filter((x) => lately.has(x.id))].slice(0, T.STALE_OPEN);
+  }
+
+  /**
+   * THE CLOSE PROPOSALS, as the session is told to act on them (2026-10-16,
+   * #489 D): beside the share in the hand-back and the carried line (the
+   * owner-facing question rides in the share itself). Null when none.
+   */
+  private closeHow(reflection: string, ids: readonly string[]): string | null {
+    if (ids.length === 0) return null;
+    const who = this.ctx.ownerName() ?? "the owner";
+    return (
+      `The share asks ${who} whether ${ids.length === 1 ? "an open thread looks done" : "some open threads look done"} (${ids.join(", ")}): ask it plainly. ` +
+      `On ${who}'s yes, the counterparts reflect tool's phase "close", reflection: ${reflection}, close: [the ids ${who} agreed to], closes them. On a no, or no answer, nothing changes.`
+    );
+  }
+
   private handle(id: string): string {
     const row = this.store.row(id);
     if (row === undefined) return id;
@@ -2384,6 +2626,8 @@ function mergeFits(shared: FitOutcome, offer: FitOutcome): Pick<FitOutcome, "pla
 interface Composed {
   readonly bundle: ReflectBundle;
   readonly offered: { whole: string[]; excerpt: string[]; line: string[]; id: string[] };
+  /** The longest a chapter's summary was as a line (2026-10-15), so `part` renders what the fit measured. */
+  readonly lineCap: number;
 }
 
 /** The bundle's other furniture, reserved from the room: ids, lists, the questions, the limits. */
@@ -2395,6 +2639,11 @@ function onDay(row: { date: string | null; day: number }, at: string, day: numbe
 }
 
 /** The begin result's text: the opener, then the bundle. */
+/** The strings of a detail's list, or none. */
+function stringIds(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
 function render(id: string, bundle: ReflectBundle): string {
   return `${reflectionOpener(id)} what you are handed to reflect on — memories and a dream, not events happening now.\n${JSON.stringify(bundle)}`;
 }

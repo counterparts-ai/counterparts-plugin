@@ -288,6 +288,7 @@ export {
   writeRollbackHold,
 } from "./rollback-hold.js";
 export type { RollbackHold } from "./rollback-hold.js";
+export type { ChapterSummaryKind } from "./operational.js";
 export {
   PRE_MIGRATION_NAME_RE,
   PRE_MIGRATION_TAG,
@@ -320,6 +321,9 @@ export {
   eraCarriedFrom,
   eraClaimOf,
   reachExempt,
+  CHAPTER_SUMMARY_META,
+  chapterSummaryKind,
+  isChapterSummary,
   carriedPairId,
   refileFeelingsV11,
   refileStrayV10Cores,
@@ -400,6 +404,8 @@ export const WRITE_METHODS = [
   "put",
   "putMany",
   "revise",
+  // 2026-10-15: the journal's append, which keeps no version (§5 G5's deviation).
+  "appendBody",
   "supersede",
   "archive",
   "updatePhysics",
@@ -1295,6 +1301,55 @@ export class Store {
     this.indexOne(doc);
     this.emit("store.revise", id, { seq, hash });
     return seq;
+  }
+
+  /**
+   * AN APPEND, WHICH IS NOT A REVISION (2026-10-15, chapter summaries; §5 G5's
+   * one named deviation). The new body must START WITH the stored one, whole
+   * — refused `APPEND_NOT_PREFIX` otherwise — so the prior state is the
+   * current body's own prefix and a version row would hold nothing the row
+   * does not. Written for the journal: a chapter is only ever added after the
+   * last (`self/episodes.ts#appendChapter`), and on the owner's store every
+   * one of 326 version rows and 421 chapter copies was such a prefix — the
+   * same words kept three times. No version row, so `revision` is not
+   * advanced; `meta` merges shallowly as on `revise`; `model` is the last
+   * writer's, NULL when none is named (the words are no longer only the last
+   * model's). Title and dates stay as they are: an append adds words.
+   */
+  appendBody(
+    id: string,
+    patch: { body: string; meta?: Record<string, unknown>; model?: string },
+  ): void {
+    const { doc, hash } = this.mutate("appendBody", () => {
+      const row = this.requireRow(id);
+      if (!patch.body.startsWith(row.body) || patch.body.length === row.body.length) {
+        throw new StoreError("APPEND_NOT_PREFIX", { id, stored: row.body.length, offered: patch.body.length });
+      }
+      const prior = this.docOf(row);
+      const next: ProseDoc = {
+        ...prior,
+        body: bodyForStorage(patch.body, id),
+        meta: patch.meta ? { ...prior.meta, ...patch.meta } : prior.meta,
+      };
+      const nextHash = hashText(next.body);
+      this.ops.run(
+        `UPDATE memories
+            SET content_hash = ?, body = ?, meta = ?, confidential = ?, model = ?, updated_at = ?
+          WHERE id = ?`,
+        nextHash,
+        next.body,
+        serializeMeta(next.meta, id),
+        // Recomputed, as `revise` does: meta can carry the confidentiality gate.
+        confidentialByMeta(next.meta) ? 1 : 0,
+        patch.model !== undefined ? modelOrNull(patch.model) : null,
+        this.nowFn(),
+        id,
+      );
+      if (row.type === "memory") this.relinkSubjects(id, next.title ?? null, next.body);
+      return { doc: next, hash: nextHash };
+    });
+    this.indexOne(doc);
+    this.emit("store.append", id, { hash, bytes: doc.body.length });
   }
 
   /**

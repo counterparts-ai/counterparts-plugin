@@ -68,14 +68,23 @@ export interface PageBlock {
 export const PAGE_RUNGS = ["whole", "short", "outline", "headings", "line"] as const;
 export type PageRung = (typeof PAGE_RUNGS)[number];
 
+/** Whether the page's dateline is printed on the day it was revised (above). */
+export const PAGE_DATELINE_TODAY = false;
+
 /**
  * The page's own date, under the page. It states the DATE and — when the page
  * has gone stale — how long the silence was allowed to be, rather than "N days
  * ago": the bundle is composed at a boundary and then served unchanged until
  * the next one, so a delta computed here goes wrong while a date does not.
  */
-export function pageDateline(revisedOn: string, stale: boolean, staleDays: number): string | null {
+export function pageDateline(revisedOn: string, stale: boolean, staleDays: number, today?: string): string | null {
   const on = revisedOn.trim();
+  // REVISED TODAY, NOT SAID (2026-10-16, the wake trims; Mike, lightly held,
+  // review 2026-10-18): the `Now:` line above the wake carries today's date,
+  // and "(Last revised 2026-10-16.)" under it said it twice. Any other day
+  // is still said, and the stale notice always. `PAGE_DATELINE_TODAY` on
+  // says it again.
+  if (!PAGE_DATELINE_TODAY && !stale && today !== undefined && on === today.trim()) return null;
   // A page with no readable date SAYS SO. Returning null printed the page with
   // no date and no staleness signal at all while every other surface called it
   // stale — the one state where the wake said less than it knew (adversarial
@@ -303,7 +312,19 @@ export const PAGE_HOST_BUDGET_BYTES = 9_000;
  * history showed the stopgap losing by a few hundred bytes each time (7,012,
  * 6,767, then 6,085, each trimmed by hand).
  */
-export const PAGE_ROOM_BYTES = pageRoomBytes(PAGE_HOST_BUDGET_BYTES);
+export const PAGE_ROOM_BYTES = Math.min(pageRoomBytes(PAGE_HOST_BUDGET_BYTES), 4_600);
+
+/*
+ * 4,600, NOT THE WHOLE ROOM (2026-10-16, the wake trims; Mike, lightly held,
+ * review 2026-10-18). The page the wake prints whole at 9,000 is still
+ * `pageRoomBytes(PAGE_HOST_BUDGET_BYTES)` — the guarantee above holds for any
+ * page within it, and the wake prints a page whole whenever it fits the room
+ * it actually has (`Self#pageBlock`), so nothing about printing changed. What
+ * changed is the TARGET the writer is told: about a thousand bytes under that
+ * room, so the page summarizes harder and the lists beside it get the room
+ * back. A page past it is kept whole as before, with its short version (the
+ * same ladder). To revert: `pageRoomBytes(PAGE_HOST_BUDGET_BYTES)` alone.
+ */
 
 /**
  * THE LAST RUNG (2026-10-09): the one short line a wake with no room for any

@@ -277,6 +277,12 @@ export interface ActivationResult {
   /** Journal copies folded into their own chapter before the cut (2026-09-30,
    *  U13). Reported, not recorded, for `capped`'s reason. */
   readonly collapsed: number;
+  /**
+   * WHICH journal rows each chapter absorbed (2026-10-15): chapter id → the
+   * copies and summaries folded into it. A use of the chapter credits only
+   * these, never every summary its episode holds (`Recall#creditCopies`).
+   */
+  readonly folded: ReadonlyMap<string, readonly string[]>;
   /** Rows the exact recheck found BELOW REACH and left out (2026-10-10) —
    *  candidates and would-be pointers. Reported, not recorded. */
   readonly belowReach: number;
@@ -861,6 +867,10 @@ export function activate(
   /** copy id -> the chapter it was folded into, and the reverse. */
   const collapsedInto = new Map<string, string>();
   const absorbed = new Map<string, string[]>();
+  /** Of those, the rows the turn itself reached (2026-10-15): a use of the chapter credits these. */
+  const reachedFold = new Map<string, string[]>();
+  /** Each folded row's own match (cue less stamp, plus meaning), judged once every fold is in. */
+  const ownMatch = new Map<string, number>();
   if (copyOf.size > 0) {
     const byId = new Map(scored.map((c) => [c.id, c]));
     const gone = new Set<string>();
@@ -879,6 +889,7 @@ export function activate(
       byId.set(chapterId, { ...chapter, cue, temporal, semantic, arrival, activation, sal, cutKey: salienceRank(activation, sal, t), feeling, stamp });
       collapsedInto.set(copyId, chapterId);
       absorbed.set(chapterId, [...(absorbed.get(chapterId) ?? []), copyId]);
+      ownMatch.set(copyId, copy.cue - copy.stamp + copy.semantic);
       // The pair's place in the feeling lane's order is the better half's.
       const rank = Math.min(feelingRank.get(chapterId) ?? Number.POSITIVE_INFINITY, feelingRank.get(copyId) ?? Number.POSITIVE_INFINITY);
       if (Number.isFinite(rank)) feelingRank.set(chapterId, rank);
@@ -887,6 +898,16 @@ export function activate(
       gone.add(copyId);
       collapsed += 1;
     }
+    // WHICH FOLDED ROWS EARN THE CHAPTER'S USE, judged after every fold, so
+    // against the pair's FINAL match (review of #504's fix): a row carried a
+    // real share of it — at least half, by words and meaning — not the faint
+    // likeness every chapter of a long session has to a turn about another.
+    // Judged inside the loop, the bar was the match merged SO FAR, and a weak
+    // summary iterated before a strong sibling passed it.
+    for (const [chapterId, rows] of foldCredited(absorbed, ownMatch, (chapterId) => {
+      const merged = byId.get(chapterId);
+      return merged === undefined ? null : merged.cue - merged.stamp + merged.semantic;
+    })) reachedFold.set(chapterId, rows);
     scored = scored.filter((c) => !gone.has(c.id)).map((c) => byId.get(c.id) ?? c);
   }
   // SALIENCE BEFORE THE CUT (2026-09-28). The gate lowers a salient candidate's
@@ -1184,6 +1205,7 @@ export function activate(
           },
     dropped,
     collapsed,
+    folded: reachedFold,
     belowReach: belowReachCount,
     feeling:
       feelingAsk === null
@@ -1197,6 +1219,41 @@ export function activate(
             noTopic: rankedFrame === null ? new Set<string>() : noTopicOf(candidates, rankedFrame.stored, rankedFrame.proper),
           },
   };
+}
+
+/**
+ * How much of a folded pair's match a journal row must carry for a use of the
+ * chapter to credit it (2026-10-15): half. A chapter's summary that matched the
+ * turn earns its chapter's use; its sibling summaries, which merely sit in the
+ * same episode, do not. CAL.
+ */
+export const FOLD_CREDIT_SHARE = 0.5;
+
+/**
+ * THE FOLDED ROWS A CHAPTER'S USE CREDITS (2026-10-15): of each chapter's
+ * folded rows (`absorbed`, in fold order), those whose own match is at least
+ * `FOLD_CREDIT_SHARE` of the pair's FINAL match (`finalMatch`: cue less
+ * stamp, plus meaning, after every fold). Judged after the folds, so the
+ * order they folded in cannot let a weak row through (review of e6920860).
+ * Pure.
+ */
+export function foldCredited(
+  absorbed: ReadonlyMap<string, readonly string[]>,
+  own: ReadonlyMap<string, number>,
+  finalMatch: (chapterId: string) => number | null,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const [chapterId, rows] of absorbed) {
+    const match = finalMatch(chapterId);
+    if (match === null) continue;
+    const bar = FOLD_CREDIT_SHARE * match;
+    const reached = rows.filter((id) => {
+      const m = own.get(id) ?? 0;
+      return m > 0 && m >= bar;
+    });
+    if (reached.length > 0) out.set(chapterId, reached);
+  }
+  return out;
 }
 
 /**

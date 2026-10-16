@@ -40,6 +40,7 @@ import { CORRECTED_REASON, PRESSURE_UNDONE_REASON } from "./reconsolidation.js";
 import { DREAM_MERGE_REASON, DREAM_UNDONE_REASON } from "./dream/index.js";
 import { TUNABLES as SCHEMA_TUNABLES } from "./schemas/index.js";
 import { MERGE_ARCHIVE_REASON, PRUNE_ARCHIVE_REASON } from "./sleep/index.js";
+import { SUMMARY_DUPLICATE_REASON } from "./self/summaries.js";
 
 export type LeftAs = "replaced" | "let-go" | "removed";
 
@@ -63,6 +64,8 @@ export const LEAVING: Readonly<Record<string, LeftAs>> = {
   [PRESSURE_UNDONE_REASON]: "replaced",
   supersede: "replaced",
   [EPISODE_REGROWN_REASON]: "replaced",
+  // A second live summary of one chapter (2026-10-15): the one that stands carries it.
+  [SUMMARY_DUPLICATE_REASON]: "replaced",
   [SCHEMA_TUNABLES.FADE_REASON]: "let-go",
   [PRUNE_ARCHIVE_REASON]: "let-go",
   [MERGE_ARCHIVE_REASON]: "replaced",

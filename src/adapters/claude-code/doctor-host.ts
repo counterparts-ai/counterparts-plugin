@@ -53,7 +53,8 @@ export interface HostReading {
   readonly mcpUnreadable: boolean;
   /** False: this build does not open the MCP file at all (the plugin
    *  directory's, `runtime.ts#readsHostUserConfig`), so there is no MCP clause,
-   *  and its plugin does not stand down beside the npm install. Absent: read. */
+   *  and its plugin stands down beside the npm install only by the npm
+   *  install's marker (`npmMarker`, `npm-live.ts`). Absent: read. */
   readonly mcpRead?: boolean;
   /**
    * Whether a `claude` executable is on the PATH the caller would run
@@ -82,6 +83,10 @@ export interface HostReading {
   /** The Counterparts Claude Code plugin, when Claude Code records it
    *  installed (`host-wiring.ts#pluginInstall`); absent or null when not. */
   readonly plugin?: PluginInstallRead | null;
+  /** The npm install's marker (`npm-live.ts`) as a directory-flavor plugin
+   *  would read it: which halves it would stand down for. Null when there is
+   *  none it would believe; absent when not read. */
+  readonly npmMarker?: { readonly hooks: boolean; readonly server: boolean } | null;
 }
 
 /** How a Runtime row names where a command was wired: `desktop` is Claude
@@ -311,23 +316,34 @@ export function hostFindings(reading: HostReading): Finding[] {
       ),
     ];
   }
-  // THE PLUGIN DIRECTORY'S BUILD DOES NOT STAND DOWN (2026-10-14): it never
-  // reads `~/.claude.json`, so it cannot tell this wiring is there, and both
-  // run, on the same memory, until a marker-based check lands (docs/plugin.md).
-  // Known two ways: this doctor IS that build (`mcpRead` false), or the
-  // installed plugin is (`standsDown` false, read from its `installPath`, the
-  // case of an npm doctor beside it). Unknown (null) keeps the launcher's word.
-  const bothRun = plugin !== null && (reading.mcpRead === false || plugin.standsDown === false);
+  // THE PLUGIN DIRECTORY'S BUILD (2026-10-14): it never reads Claude Code's
+  // files, so it cannot see this wiring. Known two ways: this doctor IS that
+  // build (`mcpRead` false), or the installed plugin is (`standsDown` false,
+  // read from its `installPath`, the case of an npm doctor beside it). Unknown
+  // (null) keeps the launcher's word. Since 2026-10-15 it stands down by the
+  // npm install's marker (`npm-live.ts`) when it carries the reader
+  // (`readsMarker`; this doctor, when it is that build) and the marker holds
+  // for the hooks, and for the server when one is registered. A build without
+  // the reader, or a marker the hooks have not written yet, runs beside it.
+  const directory = plugin !== null && (reading.mcpRead === false || plugin.standsDown === false);
+  const readsMarker = reading.mcpRead === false || plugin?.readsMarker === true;
+  const marker = reading.npmMarker ?? null;
+  const markerHolds = marker !== null && marker.hooks && (marker.server || !reading.mcp);
+  const bothRun = directory && !(readsMarker && markerHolds);
   const twiceClause =
     plugin === null
       ? ""
       : bothRun
-        ? `ALSO installed as the Claude Code plugin (${plugin.id}), whose build does not check for the other install, so both are running, on the same memory: every hook and memory tool is wired twice until a later version checks`
+        ? readsMarker
+          ? `ALSO installed as the Claude Code plugin (${plugin.id}), which reads none of Claude Code's files and has no word from this install yet, so both are running, on the same memory, until this install's hooks have run in a session`
+          : `ALSO installed as the Claude Code plugin (${plugin.id}), whose build does not check for the other install, so both are running, on the same memory: every hook and memory tool is wired twice until a later version checks`
         : `ALSO installed as the Claude Code plugin (${plugin.id}), which stands down while this wiring is live`;
+  // KEEP ONE (2026-10-15, as the plugin's own session-start line says it,
+  // `plugin.ts#keepOne`): both ways out, the same memory either way.
   const twiceFix =
     plugin === null
       ? ""
-      : `Installed twice${bothRun ? "; remove one" : ""}: to keep only the plugin, run \`counterparts disconnect\` and restart Claude Code; to keep only this install, run \`claude plugin uninstall ${plugin.id}\`. Same memory either way.`;
+      : `Installed twice; keeping one is simpler, and nothing is lost either way: to keep only the plugin, run \`counterparts disconnect\` and restart Claude Code; to keep only this install, run \`claude plugin uninstall ${plugin.id}\` (or \`/plugin uninstall ${plugin.id}\` inside Claude Code).`;
   const mcpClause = reading.mcpRead === false
     ? ""
     : reading.mcp

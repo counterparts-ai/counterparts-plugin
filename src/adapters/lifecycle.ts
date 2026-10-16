@@ -58,6 +58,7 @@ import {
   WRITE_UP_FAILED_EVENT,
 } from "../core/counterpart.js";
 import type { AdapterDurableEventName, DeliveryWarningName, PlainReminder, WakeHere } from "../core/counterpart.js";
+import { readIndex, writeIndex } from "../core/fit/index.js";
 import type {
   BoundaryKind,
   CaptureResult,
@@ -572,7 +573,33 @@ export class Lifecycle implements HostLifecycle {
       },
     );
     this.noteWakeExpectation(input, woke.sentinel);
+    this.noteWakeIndex(input, woke.lined ?? []);
     return woke;
+  }
+
+  /**
+   * THE WAKE'S LOOKUP LEDGER (#489 C, 2026-10-16): the ids this session's
+   * wake listed as a line, as `fit.index.wake` — one meta row, overwritten at
+   * each session start — so the recall tool counts the ones a session
+   * expanded (`fit/noteLookups`) and doctor's Lookups line reports them. The
+   * nightly run's wake is not indexed: its lookups are the dream's. A start
+   * that listed no line clears a stale index rather than writing an empty
+   * one each time. Never throws: the ledger is evidence.
+   */
+  private noteWakeIndex(input: SessionInput, lined: readonly string[]): void {
+    if (input.nightRun === true) return;
+    const store = this.counterpart.store;
+    try {
+      if (lined.length === 0 && (readIndex(store, "wake")?.offered.line.length ?? 0) === 0) return;
+      writeIndex(store, "wake", {
+        ref: `wake:${input.sessionId}`,
+        at: store.now(),
+        offered: { whole: [], excerpt: [], line: [...lined], id: [] },
+        looked: [],
+      });
+    } catch {
+      /* evidence only */
+    }
   }
 
   /**
