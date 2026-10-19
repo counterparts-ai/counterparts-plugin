@@ -414,8 +414,21 @@ export function slotOf(store: Pick<SleepStore, "row" | "contradictionsOf">, id: 
   return out;
 }
 
-/** The sources whose returns are a recurrence: an ordinary use, a reflection's citation (full), an engaged use (`ENGAGED_RECURRENCE_WEIGHT`). */
-const RECURRENCE_SOURCES: Readonly<Record<string, "full" | "engaged">> = { awake: "full", reflection: "full", engaged: "engaged" };
+/**
+ * The sources whose returns are a recurrence, and what a day of each counts:
+ * an ordinary use and a reflection's citation a full day; an engaged use
+ * `ENGAGED_RECURRENCE_WEIGHT`; a glimpse (shown, not rated) and a rating of 1
+ * their own fractions (2026-10-19, the feedback loop). `anchors`: whether the
+ * row's own return of this source says it was really used — a glimpse or a
+ * rating of 1 does not, so a memory only ever shown never anchors itself.
+ */
+const RECURRENCE_SOURCES: Readonly<Record<string, { readonly weight: number; readonly anchors: boolean }>> = {
+  awake: { weight: 1, anchors: true },
+  reflection: { weight: 1, anchors: true },
+  engaged: { weight: PHYSICS_TUNABLES.ENGAGED_RECURRENCE_WEIGHT, anchors: true },
+  shown: { weight: PHYSICS_TUNABLES.SHOWN_RECURRENCE_WEIGHT, anchors: false },
+  ontopic: { weight: PHYSICS_TUNABLES.ONTOPIC_RECURRENCE_WEIGHT, anchors: false },
+};
 /** A dream fold's row (`meta.fold`, 2026-10-11, Group 3 part B). Never throws. */
 function isFoldRow(row: Pick<MemoryRow, "source" | "meta">): boolean {
   if (row.source !== "dreamed" || typeof row.meta !== "string" || !row.meta.includes('"fold"')) return false;
@@ -432,7 +445,9 @@ const NOT_REENCODING = new Set(["dreamed", "reflection"]);
 /**
  * THE MEMORY'S RECURRENCE (2026-10-11, Group 3 part A; review 08 C1): over
  * its slot (`slotOf`), every lived day on which a member was used awake (an
- * engaged use counts `ENGAGED_RECURRENCE_WEIGHT` of a day, and never alone),
+ * engaged use counts `ENGAGED_RECURRENCE_WEIGHT` of a day, and never alone;
+ * since 2026-10-19 a glimpse or a rating of 1 its own smaller fraction, never
+ * alone and never the row's anchor — `RECURRENCE_SOURCES`),
  * cited by a reflection, or RE-ENCODED — a member written that day, other than
  * the slot's first, by a session (a dream's or a reflection's writing is not
  * one). Dream replays never count. Read off the `returns` table and the
@@ -491,8 +506,8 @@ export function coreRecurrence(store: Pick<SleepStore, "row" | "returnsOf" | "co
       const kind = RECURRENCE_SOURCES[r.source];
       if (kind === undefined || typeof r.day !== "number") continue;
       if (folded && foldAt !== null && (typeof r.at === "number" ? r.at < foldAt.at : r.day <= foldAt.day)) continue;
-      if (m === id) anchored = true;
-      evidence.push({ day: r.day, weight: kind === "full" ? 1 : PHYSICS_TUNABLES.ENGAGED_RECURRENCE_WEIGHT, session: r.session ?? null });
+      if (m === id && kind.anchors) anchored = true;
+      evidence.push({ day: r.day, weight: kind.weight, session: r.session ?? null });
     }
     if (m !== firstBorn && !folded && !NOT_REENCODING.has(row.source ?? "")) evidence.push({ day: row.birth_day, weight: 1, session: row.origin_session ?? null });
   }

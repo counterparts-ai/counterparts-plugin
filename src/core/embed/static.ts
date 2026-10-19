@@ -189,6 +189,16 @@ export interface StaticModel {
   embed(text: string): number[] | null;
   /** The ids `embed` pools, after the UNK drop and the cap. For parity tests. */
   tokenIds(text: string): number[];
+  /**
+   * The L2 norm of a WORD's own row (whole-word vocabulary entries only — no
+   * WordPiece split, so "bake", which the table holds only in pieces, is null).
+   * model2vec bakes a frequency weighting into its rows, so the norm reads as
+   * "how much this word means in English generally": "the" 1.7, "you" 7.2,
+   * "any" 33, against a median row of 97 in potion-base-8M (measured
+   * 2026-10-19). Recall's everyday-word discount reads it — an experiment.
+   * Memoized per word; nothing is computed at load.
+   */
+  wordNorm(word: string): number | null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -607,6 +617,22 @@ export function loadStaticModel(opts: StaticModelOptions): StaticModel {
     return out;
   };
 
+  const norms = new Map<string, number | null>();
+  const wordNorm = (word: string): number | null => {
+    const known = norms.get(word);
+    if (known !== undefined) return known;
+    const id = vocab.get(word);
+    let out: number | null = null;
+    if (id !== undefined && id !== unk && !SPECIAL_TOKENS.includes(word)) {
+      let ss = 0;
+      const row = id * width;
+      for (let d = 0; d < width; d++) ss += (data[row + d] ?? 0) * (data[row + d] ?? 0);
+      out = Math.sqrt(ss);
+    }
+    norms.set(word, out);
+    return out;
+  };
+
   return {
     model,
     label,
@@ -622,5 +648,6 @@ export function loadStaticModel(opts: StaticModelOptions): StaticModel {
     maxTokens,
     embed,
     tokenIds,
+    wordNorm,
   };
 }

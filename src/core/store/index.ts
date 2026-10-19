@@ -57,7 +57,7 @@ import type { AddFeelingsResult, FeelingInput, FeelingRow, FeelingSource } from 
 import { checkTraitsRepaired } from "./traits.js";
 import type { TraitRepair } from "./traits.js";
 import type { TraitInput, TraitRead, TraitRow, TraitSource } from "./traits.js";
-import { USE_TIER_WEIGHT, creditReturn, creditUse } from "../physics/index.js";
+import { PARTIAL_RETURN_SOURCES, USE_TIER_WEIGHT, creditReturn, creditUse, partialSourceOf } from "../physics/index.js";
 import type { CreditOutcome, ReturnOutcome, UseTier } from "../physics/index.js";
 import type { Db, Statement, WalFold } from "./db.js";
 import { foldWal, isLocked, wroteOn } from "./db.js";
@@ -136,9 +136,14 @@ import {
   reconcileEmbedder,
   recordedEmbedder,
   resetCache,
+  restemBatch,
   searchIndex,
   setEmbedding,
+  termIndexReady,
+  TERMS_CURSOR_META_KEY,
+  TERMS_META_KEY,
 } from "./cache.js";
+import { STEMMER_VERSION } from "./stem.js";
 import type { EmbedderIdentity, EmbedderVerdict, Hit, LengthNorm, VectorRefusal } from "./cache.js";
 import {
   occurredOnOf,
@@ -191,6 +196,11 @@ import {
 import * as memoryReads from "./reads-memories.js";
 import * as markReads from "./reads-marks.js";
 import * as historyReads from "./reads-history.js";
+
+/** The partial return sources (`physics#PARTIAL_RETURN_SOURCES`), quoted for an `IN (...)` list. Constants, never input. */
+const PARTIAL_SOURCES_SQL = Object.keys(PARTIAL_RETURN_SOURCES)
+  .map((source) => `'${source}'`)
+  .join(", ");
 
 // What moved to marks.ts, shapes.ts and index-text.ts (2026-10-11), re-exported so every import of the store still resolves.
 export {
@@ -249,6 +259,7 @@ export type {
   MemoryFilter,
 } from "./shapes.js";
 export { EMBED_FAILED_PREFIX, EMBED_SKIP_AFTER, indexTextOf, noVector } from "./index-text.js";
+export { STEMMER_VERSION, stemTerm } from "./stem.js";
 
 export * from "./errors.js";
 export * from "../observer.js";
@@ -334,6 +345,11 @@ export {
 } from "./operational.js";
 export {
   tokenize,
+  indexTerms,
+  lookupTerms,
+  termIndexReady,
+  TERMS_META_KEY,
+  TERMS_CURSOR_META_KEY,
   cosine,
   CACHE_SCHEMA_VERSION,
   DEFAULT_LENGTH_NORM,
@@ -431,6 +447,8 @@ export const WRITE_METHODS = [
   "appendRemovalRecord",
   "rebuildCache",
   "pruneDeadIndex",
+  // v7 cache (2026-10-19, an experiment): the worker's re-stem of the word index.
+  "restemIndex",
   "embedOne",
   // v8 (2026-09-26, dreaming + consolidation).
   "replayReturn",
@@ -474,6 +492,8 @@ export const WRITE_METHODS = [
   "dropRanking",
   "setNextChangeDays",
   "clearNextChangeDays",
+  // 2026-10-19 (the feedback loop): a derived note in box 3 (recall's habituation).
+  "setCacheNote",
 ] as const;
 
 export type WriteMethod = (typeof WRITE_METHODS)[number];
@@ -549,6 +569,12 @@ export class Store {
   private readonly cache: Db;
   private readonly embed: Embedder | undefined;
   /**
+   * The embedder's word weights (`Embedder.wordNorm`), kept apart from `embed`
+   * because the open may switch the VECTOR channel off (held, ahead) and the
+   * table's word weights are still the table's (2026-10-19, an experiment).
+   */
+  private readonly wordNormFn: ((word: string) => number | null) | undefined;
+  /**
    * The identity this handle writes and ranks under — `opts.embed.identity`,
    * never under observer. Kept past open because the at-open check is not
    * enough for a handle that lives all session (re-review MAJOR A): every
@@ -582,6 +608,7 @@ export class Store {
     this.observer = isObserver(opts);
     this.retentionDays = opts.retentionDays ?? DEFAULT_RETENTION_DAYS;
     this.embed = opts.embed;
+    this.wordNormFn = opts.embed?.wordNorm;
     this.nowFn = opts.now ?? Date.now;
     this.configuredZone = opts.timeZone;
     this.onEvent = opts.onEvent;
@@ -1524,7 +1551,7 @@ export class Store {
     const outcome = this.mutate("reinforce", () => {
       const row = this.requireRow(id);
       let physics = rowToPhysics(row);
-      const upgradeFrom = opts.upgradeFrom ?? this.engagedToday(id, day, row.last_used_day, tier);
+      const upgradeFrom = opts.upgradeFrom ?? this.partialToday(id, day, row.last_used_day, tier);
       const verdict = creditUse(physics, day, tier, upgradeFrom === undefined ? {} : { upgradeFrom });
       let ret: ReturnOutcome | null = null;
       if (verdict.credited) {
@@ -1537,18 +1564,20 @@ export class Store {
           verdict.next.reinforcedDays,
           id,
         );
-        // AN ENGAGED USE (2026-10-11, `drewOn`) is half a return of its own
-        // source, outside the core lanes. A use that LIFTS today's engaged
-        // credit takes its return back first, so the day's one return is the
-        // higher one.
-        if (upgradeFrom === "engaged" && tier !== "engaged") {
-          this.ops.run("DELETE FROM returns WHERE memory_id = ? AND day = ? AND source = 'engaged'", id, day);
+        // A PARTIAL USE (2026-10-11 engaged; 2026-10-19 a glimpse, a rating
+        // of 1) is a return of its own source, outside the core lanes. A use
+        // that LIFTS today's partial credit takes that return back first, so
+        // the day's one return is the higher one.
+        const fromSource = upgradeFrom === undefined ? null : partialSourceOf(upgradeFrom);
+        if (fromSource !== null && upgradeFrom !== tier) {
+          this.ops.run("DELETE FROM returns WHERE memory_id = ? AND day = ? AND source = ?", id, day, fromSource);
           this.recomputeReturns(id);
           physics = rowToPhysics(this.requireRow(id));
         }
+        const partial = partialSourceOf(tier);
         ret =
-          tier === "engaged"
-            ? creditReturn(physics, day, { source: "engaged", since: this.spacingSince(id) })
+          partial !== null
+            ? creditReturn(physics, day, { source: partial, since: this.spacingSince(id) })
             : creditReturn(physics, day, {
                 source: "awake",
                 tierWeight: verdict.w,
@@ -1556,6 +1585,16 @@ export class Store {
                 since: this.spacingSince(id),
               });
         if (ret.counted) this.writeReturn(id, day, ret, null, opts.session ?? null);
+        // A PARTIAL CREDIT ON A DAY THAT ALREADY COUNTED A RETURN (a dream's
+        // or a reflection's at the start of the lived day — review of #525):
+        // its row is still written, at weight 0, so `partialToday` can read the
+        // day's tier and another session's fuller use lifts it. Without it, a
+        // glimpse after the night's dream refused every later use that day.
+        // Weight 0 adds nothing to `returns`; the lane columns read only
+        // `awake` / `reflection`.
+        else if (partial !== null && ret.reason === "already-returned-today") {
+          this.writeReturn(id, day, { ...ret, weight: 0 }, null, opts.session ?? null);
+        }
       }
       return { ...verdict, ret };
     });
@@ -1627,29 +1666,37 @@ export class Store {
   private spacingSince(id: string): number | null {
     return (
       this.ops.get<{ d: number | null }>(
-        "SELECT MAX(day) AS d FROM returns WHERE memory_id = ? AND source IN ('legacy', 'engaged')",
+        `SELECT MAX(day) AS d FROM returns WHERE memory_id = ? AND source IN ('legacy', ${PARTIAL_SOURCES_SQL})`,
         id,
       )?.d ?? null
     );
   }
 
   /**
-   * `engaged` when today's credit for this memory was an ENGAGED one — its
-   * return row says so — and a use above that tier would lift it; otherwise
-   * undefined (2026-10-11). Only an engaged credit writes that row, and a
-   * lift deletes it, so its presence on a day the memory was used means the
-   * day stands at the engaged tier. Not seen: an engaged credit whose return
-   * was refused (another return already counted that day) — that lift is
-   * left to the gate state of the session that gave it.
+   * The PARTIAL tier today's credit for this memory stood at — `engaged`
+   * (2026-10-11), or since 2026-10-19 `shown` / `ontopic` — when its return
+   * row says so and a use above that tier would lift it; otherwise undefined.
+   * Only a partial credit writes that row, and a lift deletes it, so its
+   * presence on a day the memory was used means the day stands at that tier.
+   * Not seen: a partial credit whose return was refused (another return
+   * already counted that day) — that lift is left to the gate state of the
+   * session that gave it.
    */
-  private engagedToday(id: string, day: number, lastUsedDay: number, tier: UseTier): UseTier | undefined {
-    if (lastUsedDay !== day || USE_TIER_WEIGHT[tier] <= USE_TIER_WEIGHT.engaged) return undefined;
-    const r = this.ops.get<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM returns WHERE memory_id = ? AND day = ? AND source = 'engaged'",
+  private partialToday(id: string, day: number, lastUsedDay: number, tier: UseTier): UseTier | undefined {
+    if (lastUsedDay !== day) return undefined;
+    const rows = this.ops.all<{ source: string }>(
+      `SELECT source FROM returns WHERE memory_id = ? AND day = ? AND source IN (${PARTIAL_SOURCES_SQL})`,
       id,
       day,
     );
-    return (r?.n ?? 0) > 0 ? "engaged" : undefined;
+    // The day's partial credit, read back exactly from its source (2026-10-19:
+    // a glimpse lifts by 0.9, not by an engaged credit's 0.5).
+    let from: UseTier | undefined;
+    for (const r of rows) {
+      const t = PARTIAL_RETURN_SOURCES[r.source as keyof typeof PARTIAL_RETURN_SOURCES];
+      if (t !== undefined && (from === undefined || USE_TIER_WEIGHT[t] > USE_TIER_WEIGHT[from])) from = t;
+    }
+    return from !== undefined && USE_TIER_WEIGHT[tier] > USE_TIER_WEIGHT[from] ? from : undefined;
   }
 
   /** Insert one `returns` row and bring the aggregate columns in line with the table. */
@@ -3524,6 +3571,27 @@ export class Store {
   }
 
   /**
+   * A DERIVED NOTE IN BOX 3 (2026-10-19, recall's habituation): one
+   * `cache_meta` row, keyed by `key`, whose value its writer can rebuild from
+   * the store's own rows. Never truth: `rebuildCache()` drops it with the rest
+   * of `cache_meta`, and no table or schema version changes. Null when absent
+   * or unreadable.
+   */
+  cacheNote(key: string): string | null {
+    try {
+      return this.cache.get<{ value: string }>("SELECT value FROM cache_meta WHERE key = ?", `note:${key}`)?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Write a derived note (`cacheNote`). Refused under observer, like every box-3 write. */
+  setCacheNote(key: string, value: string): void {
+    this.assertWritable("setCacheNote");
+    this.cache.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", `note:${key}`, value);
+  }
+
+  /**
    * Drop rows from box 3's ranking (2026-10-10): a row the turn-down no longer
    * ranks — a chapter's copy, a handoff — must not sit there at the strength
    * it was last read at, or the ambient prefilter (`search`'s `minStrength`)
@@ -4628,6 +4696,19 @@ export class Store {
     return memoryReads.memoriesOfSession(this, session);
   }
 
+  /** The day's lived returns — every source but the night's and `legacy` —
+   *  for the dream's day replay (2026-10-19, `reads-memories.ts#livedReturnsSince`). */
+  livedReturnsSince(filter?: { sinceAt?: number; sinceDay?: number }): { memoryId: string; source: string; session: string | null }[] {
+    return memoryReads.livedReturnsSince(this, filter);
+  }
+
+  /** The ids ONE session wrote, born at or after `sinceAt` — ambient recall's
+   *  echo set (2026-10-19, `reads-memories.ts#sessionMemoryIds`). `fromDay`
+   *  bounds the read on the birth index. */
+  sessionMemoryIds(session: string, opts?: { sinceAt?: number; fromDay?: number }): string[] {
+    return memoryReads.sessionMemoryIds(this, session, opts);
+  }
+
   prospectiveFor(id: string): ProspectiveRow[] {
     return this.ops.all<ProspectiveRow>(
       "SELECT * FROM prospective WHERE memory_id = ? ORDER BY window_key",
@@ -4698,6 +4779,79 @@ export class Store {
    */
   docFrequency(tokens: readonly string[]): Map<string, number> {
     return docFrequency(this.cache, tokens);
+  }
+
+  /**
+   * How much the embedder's table weighs a word in English generally — the row
+   * norm of its whole-word row — or null: no embedder, an embedder that does
+   * not offer it, or a word the table does not hold whole. Recall's
+   * everyday-word discount reads it (`recall/cues.ts#everydayFactor`).
+   * 2026-10-19, an experiment.
+   */
+  wordNorm(word: string): number | null {
+    if (this.wordNormFn === undefined) return null;
+    try {
+      const n = this.wordNormFn(word);
+      return typeof n === "number" && Number.isFinite(n) ? n : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Is the word index fully stemmed (v7), or still mixed from a v6 cache? */
+  termIndex(): { ready: boolean; stemmer: string } {
+    return { ready: termIndexReady(this.cache), stemmer: STEMMER_VERSION };
+  }
+
+  /**
+   * THE WORKER'S RE-STEM (v7 cache, 2026-10-19, an experiment): walk the word
+   * index in bounded batches, re-stemming each document's rows from the rows
+   * themselves (`cache.ts#restemBatch` — no prose, no vectors), until
+   * `budgetMs` is spent or the walk reaches the end, which sets the `terms`
+   * marker. Resumable: the cursor lives in `cache_meta` between runs. Never
+   * run at open — a hook cannot pay for it — and a no-op on a ready index.
+   */
+  restemIndex(opts: { budgetMs?: number; batch?: number } = {}): {
+    ready: boolean;
+    examined: number;
+    changed: number;
+    ms: number;
+  } {
+    this.assertWritable("restemIndex");
+    const started = performance.now();
+    if (termIndexReady(this.cache)) return { ready: true, examined: 0, changed: 0, ms: 0 };
+    // A cache from a NEWER build is only read here, never rewritten: a later
+    // build may stem by other rules, and these would re-stem its rows wrongly.
+    if (cacheAhead(this.cache) !== null) return { ready: false, examined: 0, changed: 0, ms: 0 };
+    const budget = opts.budgetMs ?? 2000;
+    const batch = opts.batch ?? 200;
+    let after =
+      this.cache.get<{ value: string }>("SELECT value FROM cache_meta WHERE key = ?", TERMS_CURSOR_META_KEY)?.value ??
+      undefined;
+    let examined = 0;
+    let changed = 0;
+    let ready = false;
+    for (;;) {
+      const r = restemBatch(this.cache, batch, after);
+      examined += r.examined;
+      changed += r.changed;
+      if (r.done) {
+        this.cache.transaction(() => {
+          this.cache.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", TERMS_META_KEY, STEMMER_VERSION);
+          this.cache.run("DELETE FROM cache_meta WHERE key = ?", TERMS_CURSOR_META_KEY);
+        });
+        ready = true;
+        break;
+      }
+      after = r.lastId ?? after;
+      if (after !== undefined) {
+        this.cache.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", TERMS_CURSOR_META_KEY, after);
+      }
+      if (performance.now() - started >= budget) break;
+    }
+    const ms = Math.round(performance.now() - started);
+    this.emit("cache.terms.restem", undefined, { ready, examined, changed, ms });
+    return { ready, examined, changed, ms };
   }
 
   nearestTo(vec: readonly number[], limit = 10, opts: { minStrength?: number } = {}): Hit[] {

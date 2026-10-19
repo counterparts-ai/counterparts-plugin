@@ -167,7 +167,15 @@ export function createStaticEmbedder(
     } else hits += 1;
     return vec;
   };
-  const embed: Embedder = Object.assign(compute, { identity });
+  // THE WORD WEIGHTS, only from a table someone has calibrated recall's
+  // everyday-word discount against (2026-10-19, an experiment: the ramp in
+  // `recall/tunables.ts` is in potion-base-8M's own units). Any other table
+  // offers none, and recall's word weights stay as they were.
+  const calibrated = WORD_NORM_CALIBRATED.has(model.model);
+  const embed: Embedder = Object.assign(
+    compute,
+    calibrated ? { identity, wordNorm: (word: string) => model.wordNorm(word) } : { identity },
+  );
   return {
     model: model.model,
     kind: "static",
@@ -181,6 +189,13 @@ export function createStaticEmbedder(
     stats: (): EmbedderStats => ({ hits, misses, cached: 0, fetched: 0, failed: 0, lastFailures: [] }),
   };
 }
+
+/**
+ * Tables whose row norms recall's everyday-word discount was calibrated on
+ * (`recall/tunables.ts#EVERYDAY_NORM_LOW`). Another table's norms are in its
+ * own units, so it gets no discount until someone measures it.
+ */
+export const WORD_NORM_CALIBRATED: ReadonlySet<string> = new Set(["potion-base-8M"]);
 
 /**
  * The static table that was asked for and is not here: every ask answers null,

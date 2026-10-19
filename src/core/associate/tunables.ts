@@ -166,8 +166,48 @@ export interface AssociateTunables {
    *  counting only questions before the write and no chapters. It was 15
    *  minutes. CAL. */
   WRITE_LINK_ASKED_MS: number;
-  /** At most this many write-time links per new memory, the nearest in mind first. CAL. */
+  /**
+   * At most this many write-time links per new memory, the nearest in mind
+   * first; **0 is off**, and the boundary lays none (`linkAtWrite` returns
+   * null before reading anything). CAL.
+   *
+   * OFF, as an experiment (2026-10-19, agreed with Mike; check ~10-22). It was
+   * 4. Trying no write-time links to see whether co-use links (`CO_USE_DEPOSIT`)
+   * build the graph alone without the noise: at most 3 of 161 write-time pairs
+   * were ever reinforced, a hand-read of 20 found 5 right and 11 noise, and
+   * they spend the `MAX_EDGES_PER_NODE` budget (2026-10-18 association
+   * diagnosis). Contiguity links stay. Edges already laid stay and fade on
+   * their own. Revert by setting this back to 4.
+   */
   WRITE_LINK_MAX: number;
+
+  // ── co-use from ratings (an experiment, 2026-10-19; check ~10-22) ────────
+  // Trying strong co-use links to see whether quiet pointers start showing and
+  // get used. Revert by setting both deposits to 0 (`Associate#deposit` skips
+  // a zero delta) or reverting the PR.
+  /**
+   * The link deposit for two memories CO-USED inside one `rated` stretch —
+   * both rated 2 or more, or otherwise used there (opened, quoted, named in
+   * `drewOn`) — through `Counterpart#rateShown`. Why 0.25: two such co-uses
+   * (0.5) clear the quiet-pointer lane's single-link weight (0.4 =
+   * `LINK_POINTER_MIN_FRACTION` × `MAX_OUT_WEIGHT` / `HOP_DECAY`) and the
+   * second co-use lights a pointer by itself; at today's 0.03–0.06 no edge
+   * ever got there (2026-10-18 association diagnosis). Erring strong on
+   * purpose, to see it working; check ~10-22. CAL.
+   */
+  CO_USE_DEPOSIT: number;
+  /** At most this many memories in one stretch's co-use set (the strongest
+   *  use first), so one boundary adds at most this many minus one links to a
+   *  node — under `MAX_EDGES_PER_NODE` (32) with room. CAL. */
+  CO_USE_MAX_MEMBERS: number;
+  /**
+   * The small deposit for two memories SHOWN ON THE SAME TURN in a `rated`
+   * stretch, neither rated 0. Why 0.05: a faint trail like a write-time link
+   * (`WRITE_LINK_WEIGHT`), above `EDGE_FLOOR` so it lands, living ~27 lived
+   * days unconfirmed; a fifth of a co-use, because footnotes are often noise.
+   * CAL.
+   */
+  SHOWN_TOGETHER_DEPOSIT: number;
 }
 
 export const TUNABLES: AssociateTunables = {
@@ -197,7 +237,11 @@ export const TUNABLES: AssociateTunables = {
   WRITE_LINK_WEIGHT: 0.05,
   WRITE_LINK_TURNS: 1,
   WRITE_LINK_ASKED_MS: 0,
-  WRITE_LINK_MAX: 4,
+  WRITE_LINK_MAX: 0, // an experiment, 2026-10-19: off (was 4); check ~10-22
+
+  CO_USE_DEPOSIT: 0.25,
+  CO_USE_MAX_MEMBERS: 8,
+  SHOWN_TOGETHER_DEPOSIT: 0.05,
 };
 
 export function withTunables(overrides: Partial<AssociateTunables> = {}): AssociateTunables {

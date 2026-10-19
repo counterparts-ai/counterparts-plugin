@@ -127,6 +127,11 @@ export function runnerConfigChoice(
   return resolveConfigPath(argv, env as Record<string, string | undefined>);
 }
 
+/** One run's share of the word index re-stem (v7): enough for a live-sized
+ *  store in one run (the diagnosis's full rebuild, vectors and all, was 3.3 s),
+ *  small enough that a run on a far larger store stops and resumes. */
+const RESTEM_BUDGET_MS = 5_000;
+
 export interface RunReport {
   readonly ran: boolean;
   /** `ran` covers the keyless run too: the day HAPPENED, minus the sweep. The
@@ -145,6 +150,9 @@ export interface RunReport {
   /** The day's retention pass, or why it did not run. Null when the run refused
    *  before it opened a store at all. */
   readonly retention: RetentionJobReport | null;
+  /** The word index's re-stem (v7 cache, 2026-10-19, an experiment), when this
+   *  run did any: absent on an index that was already stemmed. */
+  readonly terms?: { readonly ready: boolean; readonly examined: number; readonly changed: number; readonly ms: number };
   /** The sidebar's status file (`adapters/sidebar-status.ts`), written after the
    *  store closed; absent when the run was not asked to (no configuration path). */
   readonly sidebar?: SidebarWrite;
@@ -394,6 +402,22 @@ export async function runOnce(input: {
     noteFailure(counterpart, emit, code, "vectors", today);
   }
 
+  // 0c. THE WORD INDEX RE-STEM (v7 cache, 2026-10-19, an experiment; check
+  // ~10-22). A cache migrated from v6 holds surface words until this step
+  // re-stems it — bounded per run, resumable, never at open (a hook cannot pay
+  // for it). Until it finishes, lookups ask for both forms, so nothing is lost
+  // meanwhile. A no-op on an index that is already stemmed.
+  let terms: RunReport["terms"];
+  try {
+    const r = counterpart.store.restemIndex({ budgetMs: RESTEM_BUDGET_MS });
+    if (r.examined > 0) {
+      terms = r;
+      emit("runner.terms", { ready: r.ready, examined: r.examined, changed: r.changed, ms: r.ms });
+    }
+  } catch (err) {
+    noteFailure(counterpart, emit, err instanceof Error ? err.name : "UNKNOWN", "terms", today);
+  }
+
   // Step 4's answer, filled in the `finally` below and joined to whichever of
   // the two results the boundary produced. A `let` rather than a fourth return
   // arm because the copy must happen on BOTH paths and before `close()`.
@@ -436,7 +460,18 @@ export async function runOnce(input: {
     } catch (err) {
       noteFailure(counterpart, emit, err instanceof Error ? err.name : "UNKNOWN", "wake", today);
     }
-    result = { ran: true, reason: "ran", swept, minted, code: null, lag, backfill, snapshot: null, retention: null };
+    result = {
+      ran: true,
+      reason: "ran",
+      swept,
+      minted,
+      code: null,
+      lag,
+      backfill,
+      snapshot: null,
+      retention: null,
+      ...(terms === undefined ? {} : { terms }),
+    };
   } catch (err) {
     const code =
       err !== null && typeof err === "object" && typeof (err as { code?: unknown }).code === "string"

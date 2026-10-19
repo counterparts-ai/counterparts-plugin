@@ -57,7 +57,11 @@ import {
   headOf,
   judgedThrough,
   loadGateState,
+  inLineSemantic,
   loadSessionSemantic,
+  stripBoilerplate,
+  wakeOpenIds,
+  PRIME_TEXT_CHARS,
   markJudged,
   saveSessionSemantic,
   RATED_MAX_PER_CALL,
@@ -65,6 +69,10 @@ import {
   rateableSet,
   ratedCoverage,
   readRatings,
+  planRatedUse,
+  refreshHabituation,
+  NO_RATED_USE,
+  RATED_SAME_TURN_ROWS,
 } from "./recall/index.js";
 import { DREW_ON_MAX_PER_BOUNDARY, resolveReferences } from "./recall/reference.js";
 import type { ReferenceCandidate } from "./recall/reference.js";
@@ -72,6 +80,9 @@ import type {
   CreditResult,
   GateState,
   RatedResult,
+  RatedUseSummary,
+  ShownEntry,
+  StoredRating,
   RecallDecision,
   Turn as RecallTurn,
   RecallResult,
@@ -354,6 +365,11 @@ const EVENT_RING = REMEMBER.CONSUMED_LEDGER_MAX;
  * once-per-lived-day gate, or physics' birth-day / stale-day / already-today —
  * still counts as co-activation for links (2026-09-28, associate NOTES §8).
  */
+/** An unordered pair's key (`rateShown`'s once-per-stretch co-use links). */
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
 function linksDespite(r: CreditResult): boolean {
   if (r.reason === "already-credited-at-or-above") return true;
   if (r.reason !== "physics-refused") return false;
@@ -543,6 +559,7 @@ export class Counterpart {
       ...(this.reportedBudget === null ? {} : { budgetBytes: this.reportedBudget }),
       onEvent: (e) => this.relay("recall", e),
       now: this.nowFn,
+      ...(opts.recallTunables === undefined ? {} : { tunables: opts.recallTunables }),
     });
     this.prospective = new Prospective({
       store: this.store,
@@ -723,10 +740,14 @@ export class Counterpart {
     // The ids the assembled wake listed as a line (#489 C): the host's
     // adapter writes them to the lookup ledger, since a wake writes nothing.
     let lined: readonly string[] = [];
+    // The open threads it kept (context priming, 2026-10-19): the host records
+    // them for this session, as part of what is open here.
+    let threads: readonly string[] = [];
     this.delivering = delivery !== undefined;
     try {
       const assembled = delivery === undefined ? null : this.assembleWake(delivery, here);
       lined = assembled?.lined ?? [];
+      threads = assembled?.kept.threads ?? [];
       const result = delivery === undefined ? this.self.wake() : this.self.wake(delivery, assembled?.text);
       this.deliveredThreads = assembled === null ? null : new Set(assembled.kept.threads);
       withPointer = delivery === undefined ? result : this.addHandoffPointer(result, here);
@@ -742,7 +763,7 @@ export class Counterpart {
       preface: withPointer.preface !== null,
       budgetBytes: this.reportedBudget,
     });
-    return { ...withPointer, budgetBytes: this.reportedBudget, lined };
+    return { ...withPointer, budgetBytes: this.reportedBudget, lined, threads };
   }
 
   /**
@@ -1857,6 +1878,17 @@ export class Counterpart {
        *  read — the headless nightly run's own — must not spend the fires a
        *  person's day is owed. */
       noCues?: boolean;
+      /** THE ECHO SKIP'S WINDOW (2026-10-19, feedback-loop part C), epoch ms:
+       *  the host's last compaction of this conversation. Memories this
+       *  session wrote at or after it are not handed back; absent, every one
+       *  it wrote. */
+      echoSince?: number;
+      /** When the session began, epoch ms, when the host knows: bounds the
+       *  echo read to the lived days since, and filters nothing. */
+      sessionFrom?: number;
+      /** The directory this session works in (context priming, 2026-10-19):
+       *  its live handoffs are part of what is open here. Absent: none read. */
+      scope?: string;
     } = {},
   ): RecallResult {
     // THE TEMPORAL CUES ARE COMPUTED HERE, not inside `composeTurn`, for one
@@ -1875,9 +1907,11 @@ export class Counterpart {
             ...(turn.day === undefined ? {} : { day: turn.day }),
             sessionId: turn.sessionId,
           }).arrivals.filter((a) => opts.withhold?.has(a.memoryId) !== true);
-    const withCues: RecallTurn =
+    const cued: RecallTurn =
       arrived === null ? turn : { ...turn, temporal: arrived.map((a) => ({ id: a.memoryId, weight: a.cueWeight })) };
-    const result = recallTurn(this.recall, this.withSemantic(withCues), {
+    const echo = turn.echo ?? this.echoOf(turn.sessionId, opts.echoSince, opts.sessionFrom);
+    const withCues: RecallTurn = echo.size === 0 ? cued : { ...cued, echo };
+    const result = recallTurn(this.recall, this.withPrime(this.withSemantic(withCues), opts.scope), {
       schemas: this.schemas,
       prospective: this.prospective,
       associate: this.associate,
@@ -1886,6 +1920,85 @@ export class Counterpart {
     this.recordDecision(result.decision, opts.at ?? null);
     if (arrived !== null && opts.at !== undefined) this.spendArrivals(arrived, result.decision, opts.at);
     return result;
+  }
+
+  /**
+   * CONTEXT PRIMING'S INPUT (an experiment, 2026-10-19; `recall/prime.ts`):
+   * this turn's own vector for the train of thought — the in-line one when
+   * the semantic channel embedded the turn, else the turn's stripped text
+   * embedded now (~0.5 ms on the local table; null with no embedder) — and
+   * what is open in this folder, read only on the turn the session has not
+   * read it yet: the open threads this session's wake listed and this
+   * directory's live handoffs (not memories: their text's vector joins the
+   * train). The link channel is bound by the composition root
+   * (`retrieval.ts`). A turn whose session is not a known one, or that
+   * already carries `prime`, is left as it is. Never throws into the turn.
+   */
+  private withPrime(turn: RecallTurn, scope: string | undefined): RecallTurn {
+    if (turn.prime !== undefined || !isKnownSession(turn.sessionId)) return turn;
+    let vector: readonly number[] | null = null;
+    try {
+      vector =
+        turn.vector !== undefined && turn.vector.length > 0
+          ? turn.vector
+          : this.store.textVector(stripBoilerplate(turn.text).text.trim().slice(0, PRIME_TEXT_CHARS));
+    } catch {
+      vector = null;
+    }
+    const sessionId = turn.sessionId;
+    const open = (): { ids: string[]; vectors: { vector: number[]; weight: number }[] } => {
+      const ids = wakeOpenIds(this.store, sessionId);
+      const vectors: { vector: number[]; weight: number }[] = [];
+      if (scope !== undefined && scope.trim().length > 0) {
+        try {
+          // Weighted by age in lived days (review, 2026-10-19): a handoff
+          // lives 14, and last week's should not open every session here
+          // with its train for all of them.
+          const today = this.store.livedDay();
+          const decay = this.recall.tunables.PRIME_HANDOFF_DAY_DECAY;
+          for (const h of this.handoffs.readAll(scope)) {
+            const weight = h.writtenDay === null ? 0 : decay ** Math.max(0, today - h.writtenDay);
+            if (!(weight > 0)) continue;
+            const v = this.store.textVector(stripBoilerplate(h.body).text.trim().slice(0, PRIME_TEXT_CHARS));
+            if (v !== null && v.length > 0) vectors.push({ vector: v, weight });
+          }
+        } catch {
+          /* an unread handoff primes nothing */
+        }
+      }
+      return { ids, vectors };
+    };
+    return { ...turn, prime: { vector, open } };
+  }
+
+  /**
+   * WHAT THIS SESSION WROTE, AS AMBIENT RECALL'S ECHO SET (2026-10-19,
+   * feedback-loop part C — an experiment, check on ~10-22): live memories whose `origin_session`
+   * is this one, born at or after `since` (the host's last compaction) when
+   * given. They are already in the model's context, so a footnote or a "came
+   * to mind" line naming one hands the conversation back to itself. The
+   * deliberate ask never reads this. Ids only. A memory a server wrote before
+   * it knew its session (`UNBOUND_SESSION`) is not this session's here and
+   * can still echo — under-skipping, the safe direction. Never throws into
+   * the turn: a failed read is no echo set, and the turn recalls as before.
+   */
+  /** One calendar day, ms — the echo read's day bound. */
+  private static readonly ECHO_DAY_MS = 86_400_000;
+
+  private echoOf(sessionId: string, since: number | undefined, sessionFrom: number | undefined): ReadonlySet<string> {
+    if (!isKnownSession(sessionId)) return new Set();
+    try {
+      // The read is bounded to the lived days the window can span: a lived
+      // day moves at most once per calendar day, so `elapsed days + 1` back
+      // from today cannot miss a row born inside the window.
+      const from = since ?? sessionFrom;
+      const fromDay =
+        from === undefined ? undefined : this.store.livedDay() - Math.ceil(Math.max(0, this.store.now() - from) / Counterpart.ECHO_DAY_MS) - 1;
+      return new Set(this.store.sessionMemoryIds(sessionId, { ...(since === undefined ? {} : { sinceAt: since }), ...(fromDay === undefined ? {} : { fromDay }) }));
+    } catch (err) {
+      this.emit("counterpart.recall.echo.failed", sessionId, { code: errCode(err) });
+      return new Set();
+    }
   }
 
   /**
@@ -2052,10 +2165,22 @@ export class Counterpart {
    *
    * A CALLER-SUPPLIED input always wins — the deliberate ask embeds its own
    * question in line and must not be overridden by a stale conversational cue.
+   *
+   * NO FRESH LAG ROW, NO DARK CHANNEL (2026-10-19): any turn without a fresh
+   * lag row — a session's first prompt (`none`), a row from an earlier turn
+   * (`stale`), or one the worker could not use (`other-model`, `unreadable`,
+   * `no-text`, `embed-failed`) — embeds its own text and ranks it in line (`session.ts#inLineSemantic`), recorded as
+   * `in-line`, or `in-line-skipped` when box 3 is past the count guard. With no
+   * vector to be had (no embedder, an empty box 3) the lag's word stands.
    */
   private withSemantic(turn: RecallTurn): RecallTurn {
     if (turn.vector !== undefined || turn.semanticHits !== undefined) return turn;
     const lag = loadSessionSemantic(this.store, turn.sessionId);
+    if (lag.source !== "lagged") {
+      const own = inLineSemantic(this.store, turn.text, this.recall.tunables.SEMANTIC_INLINE_MAX_VECTORS);
+      if (own !== null && "vector" in own) return { ...turn, vector: own.vector, semanticSource: "in-line" };
+      if (own !== null) return { ...turn, semanticSource: "in-line-skipped" };
+    }
     return {
       ...turn,
       ...(lag.hits === null ? {} : { semanticHits: lag.hits }),
@@ -2068,10 +2193,12 @@ export class Counterpart {
    * Record the lagged semantic cue for the NEXT turn: rank the vector the caller
    * embedded, and store the top-M slice as this session's gate state.
    *
-   * The RANK lives here, in the detached caller's process, because it is the
-   * expensive half — `Store.nearestTo` measured 590-1040 ms over a live-sized
-   * vector index — and the whole point of the lag is that the hot path spends
-   * none of that. `SEMANTIC_TOP_M` is `recall/`'s own number, read off the gate
+   * The RANK lives here, in the detached caller's process, because it was the
+   * expensive half — `Store.nearestTo` measured 590-1040 ms over v1's 13,862
+   * JSON vectors in 2026-09 — and the point of the lag was that the hot path
+   * spent none of that. (Float32 BLOBs since 2026-09-05: ~18 ms cold at the
+   * live store's 2,207 vectors, 2026-10-19 — which is why a turn with no fresh
+   * row now ranks in line, `withSemantic`. The lag stays where it works.) `SEMANTIC_TOP_M` is `recall/`'s own number, read off the gate
    * rather than restated by an adapter: a slice size chosen at the caller would
    * be a threshold with no home.
    *
@@ -2402,7 +2529,8 @@ export class Counterpart {
    * THE `drewOn` FIELD (2026-10-11): the session SAYS which memories it was
    * shown that shaped what it did or said, on `session_end` or `chapter`, and
    * each is credited at the `engaged` tier — half a use, a half-weight
-   * `engaged` return, no core-lane day. The successor to #371's matcher, which
+   * `engaged` return, no core-lane day (since 2026-10-19, an experiment: a
+   * full use with an awake return — physics `W_ENGAGED`). The successor to #371's matcher, which
    * guessed at it from rare title words (hand-read precision 0.17–0.33, parked
    * 2026-10-10). Built by the drewOn builder, 2026-10-11, from Mike's 10-10
    * direction, lightly held.
@@ -2512,7 +2640,7 @@ export class Counterpart {
         // session drew on together was thought together, so the named
         // memories enter one pair set at the REFERENCED tier — a co-use, one
         // `HEBB_RATE` per pair, homeostasis bounding it at the flush. Strength
-        // stays the engaged tier's half use; only the link is a full deposit.
+        // is the engaged tier's (a full use since 2026-10-19, an experiment).
         // As in `creditReferences`, a memory refused only for its day cadence
         // (opened earlier today, born today) still joins the pair set. The set
         // holds at most DREW_ON_MAX_PER_BOUNDARY (reviewer of #423): a refusal
@@ -2543,20 +2671,28 @@ export class Counterpart {
   }
 
   /**
-   * THE `rated` FIELD (2026-10-14; Mike's call, TRACKING ONLY, lightly held):
-   * the session scores the memories it was shown, 0–3, on `session_end` —
+   * THE `rated` FIELD (2026-10-14; Mike's call, lightly held): the session
+   * scores the memories it was shown, 0–3, on `session_end` —
    * `recall/rated.ts` holds the anchors, the lanes and the validation. One
-   * durable `recall.rated` row per call; NOTHING ELSE. No strength, ranking,
-   * credit, decay, link, judged mark or reminder window moves: this method
-   * never calls `resolveUse`, physics, `publishCoactivation`, `markJudged` or
-   * `Prospective`. How the signal is used is decided later, from the rows.
+   * durable `recall.rated` row per call.
    *
-   * The one guard is the shown set: the gate state's `surfaced` (loud,
-   * footnotes, pointers), the session's `asked` records, and `opened` — what
-   * the adapter's tools handed this session (by-address opens; a `remember`
-   * result's neighbours). Unlike `creditDrewOn` it checks nothing about the
-   * row itself (archived, superseded, faded): a rating credits nothing, so a
-   * memory shown and since replaced can still be scored.
+   * AN EXPERIMENT SINCE 2026-10-19 (the feedback loop; check ~10-22; revert
+   * by reverting the PR): trying the scores as use. Over the stretch since the session's
+   * previous rating row (`useRatings`, `rated.ts#planRatedUse`): each rating
+   * is a use at its tier through `resolveUse` (its once-a-lived-day rule and
+   * lift), each ambient showing left unrated a glimpse; the stretch's co-used
+   * memories are linked at `CO_USE_DEPOSIT` and those shown on one turn at
+   * `SHOWN_TOGETHER_DEPOSIT` (the pending file, as the credit pass's pairs);
+   * and the habituation note is rebuilt (`recall/habituation.ts`). Still no
+   * judged mark, no reminder window, no `Prospective`.
+   *
+   * The guard on what may be RATED is the shown set: the gate state's
+   * `surfaced` (loud, footnotes, pointers), the session's `asked` records, and
+   * `opened` — what the adapter's tools handed this session (by-address
+   * opens; a `remember` result's neighbours). A memory shown and since
+   * replaced can still be scored, and its score is recorded; what is CREDITED
+   * or linked is checked as `creditDrewOn` checks it (unknown, archived, a
+   * handoff, superseded, faded under a newer one: not credited, by name).
    *
    * `drewOn` is what the same call's `drewOn` CREDITED (the adapter passes its
    * credited ids, never what was merely named — review of #492); an id
@@ -2593,6 +2729,7 @@ export class Counterpart {
         coverage: { shown: 0, rated: 0 },
         drewOnUnrated: [],
         recorded: false,
+        used: NO_RATED_USE,
       };
     }
     const state = this.recall.gateState(sessionId);
@@ -2609,10 +2746,22 @@ export class Counterpart {
     }
     const { rated, refused, replaced } = readRatings(entries, shown, drewOn);
     let floor = 0;
+    /**
+     * Co-use pairs this session already linked ON THIS TURN (review of #525):
+     * a retried call, or one that re-rates what the turn's earlier call rated,
+     * is the same stretch, and a pair is linked once per stretch.
+     */
+    const linkedThisTurn = new Set<string>();
     try {
-      const prev = this.store.eventLog({ name: RECALL_RATED_EVENT, ref: sessionId, order: "desc", limit: 1 })[0];
-      const p = prev === undefined ? null : (JSON.parse(prev.payload ?? "null") as { turn?: unknown } | null);
+      const prev = this.store.eventLog({ name: RECALL_RATED_EVENT, ref: sessionId, order: "desc", limit: RATED_SAME_TURN_ROWS });
+      const payloads = prev.map((row) => JSON.parse(row.payload ?? "null") as { turn?: unknown; coUse?: { ids?: unknown } } | null);
+      const p = payloads[0] ?? null;
       if (p !== null && typeof p.turn === "number" && Number.isFinite(p.turn)) floor = p.turn;
+      for (const q of payloads) {
+        if (q === null || q.turn !== state.turn) break;
+        const ids = Array.isArray(q.coUse?.ids) ? q.coUse.ids.filter((x): x is string => typeof x === "string") : [];
+        for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) linkedThisTurn.add(pairKey(ids[i] as string, ids[j] as string));
+      }
     } catch {
       // Unreadable: coverage counts from the session's start — more shown, never fewer.
     }
@@ -2622,6 +2771,17 @@ export class Counterpart {
     const byReason: Record<string, number> = {};
     for (const r of refused) byReason[r.reason] = (byReason[r.reason] ?? 0) + 1;
     let recorded = false;
+    // THE SCORES COUNT (the 2026-10-19 experiment), before the row, so the row can say what
+    // they did. A call with nothing kept credits and links nothing, as it
+    // writes nothing.
+    let used: RatedUseSummary = NO_RATED_USE;
+    if (rated.length > 0) {
+      try {
+        used = this.useRatings(sessionId, state, shown, rated, floor, drewOn, day, linkedThisTurn);
+      } catch (err) {
+        this.emit("counterpart.rated.use.failed", sessionId, { code: errCode(err) });
+      }
+    }
     // NOTHING KEPT, NO ROW (review of #492): a call whose every entry was
     // refused writes nothing, so it cannot move the next call's coverage
     // window. Its refusals ride on the answer and the in-process event.
@@ -2645,12 +2805,20 @@ export class Counterpart {
           coverage: { shown: coverage.shown, rated: coverage.rated },
           drewOnNamed: drewOn.size,
           drewOnUnrated: drewOnUnrated.slice(0, RATED_ROW_IDS_MAX),
+          // What the scores did (2026-10-19): uses by tier, what was not
+          // credited and why, and the pairs sent to be linked.
+          credited: used.credited,
+          notCredited: used.notCredited,
+          coUse: used.coUse,
+          together: used.together,
         },
       });
       recorded = seq > 0;
     } catch (err) {
       this.emit("counterpart.rated.failed", sessionId, { code: errCode(err) });
     }
+    // The habituation note, rebuilt from the rows this one now belongs to.
+    if (recorded) used = { ...used, habituated: refreshHabituation(this.store, day, this.recall.tunables) };
     this.emit("counterpart.rated", sessionId, {
       day,
       sent: entries.length,
@@ -2659,8 +2827,150 @@ export class Counterpart {
       shown: coverage.total.shown,
       covered: coverage.total.rated,
       recorded,
+      credited: used.credited.shown + used.credited.ontopic + used.credited.useful + used.credited.referenced,
+      coUsePairs: used.coUse.pairs,
+      together: used.together,
     });
-    return { day, sent: entries.length, rated, refused, replaced, coverage: coverage.total, drewOnUnrated, recorded };
+    return { day, sent: entries.length, rated, refused, replaced, coverage: coverage.total, drewOnUnrated, recorded, used };
+  }
+
+  /**
+   * WHAT THE SCORES DO (an experiment, 2026-10-19; check ~10-22). Over the
+   * stretch past `floor` (`rated.ts#planRatedUse`):
+   *
+   *   - every graded use goes through `resolveUse` — the gate state's
+   *     refusals (an ambiguous handle trains nothing; never downgrades within
+   *     a lived day), the lift from a lower tier, physics' once a lived day —
+   *     after the row checks `creditDrewOn` makes (unknown, archived, a
+   *     handoff, superseded, faded under a newer one);
+   *   - the co-used set (rated 3, otherwise used in the stretch, rated 2; at
+   *     most `CO_USE_MAX_MEMBERS`) is linked pairwise at `CO_USE_DEPOSIT`,
+   *     and memories shown on one turn of the stretch, none rated 0, at
+   *     `SHOWN_TOGETHER_DEPOSIT` — written to the pending file the worker
+   *     applies, exactly as the credit pass's pairs (`publishDeposits`). A
+   *     memory refused only for its day cadence still links (`linksDespite`).
+   *
+   * "Otherwise used" is what this session credited past `floor` at the
+   * referenced or engaged tier (an open, a quote, `drewOn` at an earlier
+   * boundary) and what this call's `drewOn` credited.
+   */
+  private useRatings(
+    sessionId: string,
+    state: GateState,
+    shown: ReadonlyMap<string, ShownEntry>,
+    rated: readonly StoredRating[],
+    floor: number,
+    drewOn: ReadonlySet<string>,
+    day: number,
+    linkedThisTurn: ReadonlySet<string> = new Set(),
+  ): RatedUseSummary {
+    const otherwise: string[] = [];
+    for (const [id, c] of Object.entries(state.credited)) {
+      if (c.turn > floor && (c.tier === "referenced" || c.tier === "engaged")) otherwise.push(id);
+    }
+    for (const id of drewOn) if (!otherwise.includes(id)) otherwise.push(id);
+    const t = this.associate.tunables;
+    const plan = planRatedUse({ shown, rated, floor, otherwiseUsed: otherwise, maxMembers: t.CO_USE_MAX_MEMBERS });
+    const credited = { shown: 0, ontopic: 0, useful: 0, referenced: 0 };
+    const notCredited: Record<string, number> = {};
+    const refuse = (why: string): void => {
+      notCredited[why] = (notCredited[why] ?? 0) + 1;
+    };
+    /** Ids that may be linked: their row passed, and nothing said they train nothing. */
+    const linkable = new Set<string>();
+    const rowRefusal = (id: string): string | null => {
+      const row = this.store.row(id);
+      if (row === undefined) return "unknown-id";
+      if (row.archived === 1) return "archived";
+      if (isHandoffRow(this.store, id)) return "handoff";
+      if (row.superseded_by !== null) return "superseded";
+      if (fadeOf({ fade: row.fade }) < 1) return "faded-under-newer";
+      return null;
+    };
+    for (const c of plan.credits) {
+      const why = rowRefusal(c.id);
+      if (why !== null) {
+        refuse(why);
+        continue;
+      }
+      try {
+        const r = this.resolveUse(sessionId, c.id, c.tier);
+        if (r.credited || linksDespite(r)) linkable.add(c.id);
+        if (r.credited && (c.tier === "shown" || c.tier === "ontopic" || c.tier === "useful" || c.tier === "referenced")) {
+          credited[c.tier] += 1;
+        } else if (!r.credited) {
+          refuse(r.outcome?.reason ?? r.reason);
+        }
+      } catch (err) {
+        refuse(errCode(err));
+      }
+    }
+    // What the stretch otherwise used was credited when it was used; it links if its row still may.
+    for (const id of plan.coUse) {
+      if (!linkable.has(id) && rowRefusal(id) === null && state.surfaced[id]?.trains !== false) linkable.add(id);
+    }
+    const members = plan.coUse.filter((id) => linkable.has(id));
+    const coUse: PairDelta[] = [];
+    for (let i = 0; i < members.length; i++) {
+      for (let j = i + 1; j < members.length; j++) {
+        const a = members[i] as string;
+        const b = members[j] as string;
+        // Once per pair per stretch: an earlier call on this turn linked it.
+        if (!linkedThisTurn.has(pairKey(a, b))) coUse.push({ a, b, delta: t.CO_USE_DEPOSIT });
+      }
+    }
+    const together: PairDelta[] = plan.together
+      .filter(([a, b]) => linkable.has(a) && linkable.has(b))
+      .map(([a, b]) => ({ a, b, delta: t.SHOWN_TOGETHER_DEPOSIT }));
+    const sent = this.publishDeposits(
+      [
+        { deltas: coUse, site: "rated.co-use" },
+        { deltas: together, site: "rated.shown-together" },
+      ],
+      day,
+    );
+    return {
+      credited,
+      notCredited,
+      coUse: { members: members.length, capped: plan.coUseCapped, pairs: sent[0] ?? 0, ids: members },
+      together: sent[1] ?? 0,
+      habituated: null,
+    };
+  }
+
+  /**
+   * Deposits at weights the caller chose (`Associate#deposit`), drained to the
+   * pending file the worker applies — `publishCoactivation`'s path, one append
+   * for all of them. Returns, per group, how many pairs the buffer took; all
+   * zero when the append failed (the loss is evented, as there).
+   */
+  private publishDeposits(groups: readonly { deltas: readonly PairDelta[]; site: string }[], day: number): number[] {
+    if (this.observer) {
+      this.emit("counterpart.associate.standdown", undefined, { site: "deposit" });
+      return groups.map(() => 0);
+    }
+    const started = this.store.now();
+    const taken: number[] = [];
+    let deltas: PairDelta[] = [];
+    try {
+      for (const g of groups) taken.push(g.deltas.length === 0 ? 0 : this.associate.deposit(g.deltas, g.site).pairs);
+      deltas = this.associate.drain();
+    } catch (err) {
+      this.emit("counterpart.associate.deposit.failed", undefined, { code: errCode(err) });
+      return groups.map(() => 0);
+    }
+    if (deltas.length === 0) return taken;
+    const append = appendPendingDeltas(this.store.dir, deltas, { day, at: started });
+    this.emit("counterpart.associate.pending", undefined, {
+      day,
+      site: "deposit",
+      pairs: deltas.length,
+      written: append.pairs,
+      dropped: append.droppedPairs + (append.ok ? 0 : deltas.length - append.pairs),
+      code: append.code,
+      elapsedMs: this.store.now() - started,
+    });
+    return append.ok ? taken : groups.map(() => 0);
   }
 
   /**

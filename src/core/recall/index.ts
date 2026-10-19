@@ -10,6 +10,7 @@
  *   `activate.ts`  three channels — cue, semantic, arrival — against the cache box
  *   `gate.ts`      the hard gates, this turn's own background bar, the tiers
  *   `session.ts`   per-session gate state, PERSISTED (the ruling this module exists to honor)
+ *   `prime.ts`     context priming, an experiment (2026-10-19): the session's train of thought and sources
  *   `render.ts`    composed budget, explicit trim order, tail sentinel
  *   `tunables.ts`  every knob, in one visible place
  *
@@ -32,11 +33,14 @@ import { USE_TIER_WEIGHT, strength } from "../physics/index.js";
 import type { CreditOutcome, UseTier } from "../physics/index.js";
 import type { ProseDoc, Store } from "../store/index.js";
 import { isChapterSummary } from "../store/index.js";
-import { activate } from "./activate.js";
+import { activate, primeOf } from "./activate.js";
 import type { Candidate, SpreadFn, SpreadStats } from "./activate.js";
 import type { FeelingAskInput } from "./feeling-ask.js";
 import { detectAffect, stripBoilerplate } from "./cues.js";
 import { floorUnit, gate } from "./gate.js";
+import { habituatedIds } from "./habituation.js";
+import { planPrime, saveTrain } from "./prime.js";
+import type { PrimeInput, PrimePlan, TrainState } from "./prime.js";
 import type { Background, CandidateVerdict, Verdict } from "./gate.js";
 import { NO_MOOD, currentMood } from "./mood.js";
 import { loadGateState, saveGateState } from "./session.js";
@@ -51,19 +55,35 @@ import type { RecallTunables } from "./tunables.js";
  *  same cap the credit row puts on `shownNotUsed` (2026-10-14). */
 export const MOOD_MATCHED_IDS_CAP = 64;
 
+/** A turn priming ran on and touched nothing (a quiet turn's numbers). */
+const NO_PRIME: PrimeSummary = {
+  sources: { used: 0, wrote: 0, open: 0 },
+  train: false,
+  candidates: 0,
+  cut: 0,
+  capped: 0,
+  trainCentre: null,
+  shown: 0,
+  lifted: 0,
+  byLink: 0,
+  byTrain: 0,
+};
+
 export * from "./cues.js";
 export * from "./feeling-ask.js";
 export * from "./gate.js";
 export * from "./mood.js";
 export * from "./rated.js";
+export * from "./habituation.js";
+export * from "./prime.js";
 export * from "./render.js";
 export * from "./session.js";
 export * from "./standing.js";
 export * from "./recency-ask.js";
 export * from "./time-ask.js";
 export * from "./tunables.js";
-export { activate, isConfidential, isHandoff, isSelfPage, gatedSal, recordedIdentity, salienceRank } from "./activate.js";
-export type { FeelingLane, SpreadFn, SpreadStats } from "./activate.js";
+export { activate, isConfidential, isHandoff, isSelfPage, gatedSal, primeOf, recordedIdentity, salienceRank } from "./activate.js";
+export type { CandidatePrime, FeelingLane, PrimeStats, SpreadFn, SpreadStats } from "./activate.js";
 export type { Candidate, ActivationResult } from "./activate.js";
 import type { ActivationResult } from "./activate.js";
 
@@ -101,9 +121,14 @@ export interface Turn {
   /**
    * The semantic channel ALREADY RANKED — the lagged cue the detached worker
    * resolved after the previous turn (`session.ts`). It exists because ranking
-   * is the expensive half: `Store.nearestTo` over a live-sized vector index
-   * measured 590-1040 ms, which no 1200 ms budget survives. Supplied hits
-   * replace the scan; an empty array means "nothing was near" and degrades.
+   * WAS the expensive half: `Store.nearestTo` measured 590-1040 ms over v1's
+   * 13,862 JSON-stored vectors (2026-09-04). Since box 3 went to float32 BLOBs
+   * (2026-09-05) the same rank measures ~2 ms warm and ~18 ms cold in a fresh
+   * hook process on the live store's 2,207 vectors, and ~60 ms p50 / ~160 ms
+   * p95 cold at 22,207 (2026-10-19, 25 fresh processes per number, bun on
+   * macOS; ~/counterparts-notes/2026-10-19-first-prompt-recall-diagnosis.md).
+   * Supplied hits replace the scan; an empty array means "nothing was near"
+   * and degrades.
    */
   semanticHits?: readonly { id: string; score: number }[];
   /** Where the semantic input came from, for the decision record. Defaults to
@@ -133,8 +158,10 @@ export interface Turn {
    * deliberate ask, which is "a deeper effort with different thresholds, on
    * purpose" (§9.1) and has no host turn waiting on it. The ambient budget is a
    * promise to a person mid-sentence; a question someone typed and is waiting
-   * for is a different promise, and the semantic channel it may pay for costs
-   * 590-1040 ms of vector scan on a live-sized index all by itself.
+   * for is a different promise. (It was written when the semantic channel's
+   * vector scan cost 590-1040 ms on a live-sized index; that scan is now tens
+   * of ms — see `semanticHits` above — and the deliberate ask's longer budget
+   * stands on its deeper effort, not on the scan.)
    */
   budgetMs?: number;
   /**
@@ -146,6 +173,49 @@ export interface Turn {
    * ambient affect gates (§9 G10/G11) are untouched.
    */
   feeling?: FeelingAskInput;
+  /**
+   * THE ECHO SET (2026-10-19, feedback-loop part C, an experiment): memories
+   * this session wrote (since its last compaction, when the host knows one),
+   * which are already in its context. Ambient only — set by
+   * `Counterpart#recallForTurn` and by nothing on the deliberate path — and
+   * the gate turns each away as `echo-skipped` where it would have been shown
+   * (`gate.ts`). Absent or empty: nothing is skipped.
+   */
+  echo?: ReadonlySet<string>;
+  /**
+   * CONTEXT PRIMING (an experiment, 2026-10-19; `prime.ts`): this turn's own
+   * vector for the train of thought, one hop along links, and what is open in
+   * this folder. Ambient only — set by `Counterpart#recallForTurn` and by
+   * nothing on the deliberate path. Absent: priming does not run.
+   */
+  prime?: PrimeInput;
+}
+
+/**
+ * What priming did on one turn (2026-10-19, an experiment), on the durable
+ * decision row: which kinds of source counted (so "on, nothing primed" reads
+ * apart from "off"), whether a train of thought existed, and of the memories
+ * SHOWN, how many were primed, by which channel, and how many only because of
+ * it (`lifted`). Counts only; which ones are on the rows of `surfaced` and
+ * `footnotes` (`primed` there). Null when priming did not run.
+ */
+export interface PrimeSummary {
+  readonly sources: { readonly used: number; readonly wrote: number; readonly open: number };
+  readonly train: boolean;
+  /** Candidates the cut kept that priming reached. */
+  readonly candidates: number;
+  /** Of those, kept only because of it. */
+  readonly cut: number;
+  /** How many the ceiling (`PRIME_CEILING`) bound. */
+  readonly capped: number;
+  /** The cosine with the train a candidate had to beat for a train head start
+   *  (the candidates' mean under centring, or the floor), rounded; null when
+   *  no candidate was scored against a train. */
+  readonly trainCentre: number | null;
+  readonly shown: number;
+  readonly lifted: number;
+  readonly byLink: number;
+  readonly byTrain: number;
 }
 
 export type DecisionReason =
@@ -216,6 +286,15 @@ export interface RecallDecision {
    */
   readonly moodMatchedIds: string[];
   /**
+   * How many memories this turn would have shown (loud, footnote or quiet
+   * pointer) but did not because this session wrote them — the echo skip
+   * (2026-10-19, part C; `Turn.echo`). A count, so a review can see what a
+   * long session lost. 0 when no echo set was given.
+   */
+  readonly echoSkipped: number;
+  /** What context priming did this turn (2026-10-19, `PrimeSummary`); null when it did not run. */
+  readonly primed: PrimeSummary | null;
+  /**
    * What spreading did this turn (association build 1, 2026-09-28): seeds,
    * nodes expanded, where and why it stopped, contributions computed and how
    * many LANDED on a candidate. Null when it did not run. Counts only. On the
@@ -278,6 +357,8 @@ interface BuildOutput {
   carry: string[];
   render: RenderResult | null;
   gateStatus: "loaded" | "absent" | "unreadable";
+  /** The train of thought to save at the record step (priming, 2026-10-19). Absent: none to save. */
+  train?: TrainState;
 }
 
 export class Recall {
@@ -340,6 +421,28 @@ export class Recall {
       state.carriedFromTurn === turnNo - 1 && state.carriedCues.length > 0
         ? state.carriedCues
         : [];
+    // CONTEXT PRIMING (an experiment, 2026-10-19): planned from reads only —
+    // the session's sources and its train of thought. Ambient only (the
+    // deliberate path never sets `turn.prime`). A failed plan primes nothing.
+    let plan: PrimePlan | null = null;
+    if (turn.prime !== undefined && (this.tunables.PRIME_LINK_UNITS > 0 || this.tunables.PRIME_TRAIN_SHARE > 0)) {
+      try {
+        plan = planPrime({
+          store: this.store,
+          sessionId: turn.sessionId,
+          state,
+          turnNo,
+          day,
+          echo: turn.echo,
+          prime: turn.prime,
+          // The semantic channel is the worker's rank of the previous exchange.
+          lagged: turn.vector === undefined && turn.semanticHits !== undefined,
+          t: this.tunables,
+        });
+      } catch {
+        plan = null;
+      }
+    }
 
     const quiet = (
       reason: DecisionReason,
@@ -383,6 +486,8 @@ export class Recall {
         affectReason: "no-feeling-in-turn",
         moodMatched: 0,
         moodMatchedIds: [],
+        echoSkipped: 0,
+        primed: plan === null ? null : { ...NO_PRIME, sources: plan.sources, train: plan.activation.train !== null },
         spread: null,
         dropped: 0,
         bytes: 0,
@@ -397,6 +502,7 @@ export class Recall {
       carry: [],
       render: null,
       gateStatus: loaded.status,
+      ...(plan === null ? {} : { train: plan.next }),
     });
 
     if (text.trim().length === 0) return quiet("empty-turn");
@@ -435,6 +541,7 @@ export class Recall {
         maxCandidates,
         storeSize,
         ...(turn.feeling === undefined ? {} : { feeling: { ...turn.feeling, owner } }),
+        ...(plan === null ? {} : { prime: plan.activation }),
       },
       this.tunables,
     );
@@ -460,6 +567,9 @@ export class Recall {
     // THE CHAIN HEAD WINS (2026-10-11, Group 2): an earlier version the turn
     // reached is shown as the memory that holds now (`headsWin`).
     const candidates = headsWin(this.store, act.candidates, day);
+    // HABITUATION (an experiment, 2026-10-19, light): who was rated 0 in enough
+    // recent sessions. Ambient turns only: a deliberate feeling ask is untouched.
+    const habituated = turn.feeling === undefined ? habituatedIds(this.store, day, this.tunables) : new Map<string, number>();
 
     const gated = gate(
       {
@@ -469,6 +579,8 @@ export class Recall {
         owner,
         affectStated: affect.stated,
         turn: turnNo,
+        ...(turn.echo === undefined || turn.echo.size === 0 ? {} : { echo: turn.echo }),
+        ...(habituated.size === 0 ? {} : { habituated }),
       },
       this.tunables,
     );
@@ -529,6 +641,24 @@ export class Recall {
     const moodLifted = gated.verdicts
       .filter((v) => (v.verdict === "surfaced" || v.verdict === "footnoted") && (v.mood ?? 0) > 0)
       .map((v) => v.id);
+    // What priming did to what was SHOWN (after the render's trim).
+    const shownSet = new Set([...rendered.surfaced, ...rendered.footnotes]);
+    const shownPrimed = gated.verdicts.filter((v) => v.primed !== undefined && shownSet.has(v.id) && (v.verdict === "surfaced" || v.verdict === "footnoted"));
+    const primed: PrimeSummary | null =
+      plan === null
+        ? null
+        : {
+            sources: plan.sources,
+            train: plan.activation.train !== null,
+            candidates: act.prime?.primed ?? 0,
+            cut: act.prime?.cut ?? 0,
+            capped: act.prime?.capped ?? 0,
+            trainCentre: act.prime?.trainCentre == null ? null : Math.round(act.prime.trainCentre * 10_000) / 10_000,
+            shown: shownPrimed.length,
+            lifted: shownPrimed.filter((v) => v.primed?.lifted === true).length,
+            byLink: shownPrimed.filter((v) => (v.primed?.link ?? 0) > 0).length,
+            byTrain: shownPrimed.filter((v) => (v.primed?.train ?? 0) > 0).length,
+          };
     const decision: RecallDecision = {
       sessionId: turn.sessionId,
       turn: turnNo,
@@ -555,6 +685,8 @@ export class Recall {
       affectReason: gated.affectReason,
       moodMatched: moodLifted.length,
       moodMatchedIds: moodLifted.slice(0, MOOD_MATCHED_IDS_CAP),
+      echoSkipped: gated.verdicts.filter((v) => v.verdict === "echo-skipped").length,
+      primed,
       // What the gate SHOWED of the pointers activation handed it, after the
       // render's trim: the pointer lane's last number (2026-09-28).
       spread:
@@ -584,6 +716,7 @@ export class Recall {
       semantic: act.semantic,
       folded: act.folded,
       ...(act.feeling === null ? {} : { feeling: act.feeling }),
+      ...(plan === null ? {} : { train: plan.next }),
     };
   }
 
@@ -638,6 +771,16 @@ export class Recall {
       next.folded = folded;
     }
     this.persist(next, "recall");
+    // The train of thought moves on with this turn (priming, 2026-10-19). An
+    // observer keeps none (an instrument deposits nothing); a lost write costs
+    // the train one turn, never the recall.
+    if (built.train !== undefined && !this.observer) {
+      try {
+        saveTrain(this.store, turn.sessionId, built.train, d.day);
+      } catch (err) {
+        this.emit("recall.prime.save.failed", turn.sessionId, { code: err instanceof Error ? err.name : "unknown" });
+      }
+    }
 
     this.emitTelemetry(d, built.render);
     // WHICH PAIR RAN (review MINOR 2): the identity box 3 recorded at this
@@ -924,7 +1067,8 @@ function upgradeOf(prior: { tier: UseTier; day: number } | undefined, today: num
  * THE CHAIN HEAD WINS AMBIENT RECALL (2026-10-11, Group 2; review 04 change
  * 1, MOD #3). A candidate a later memory settled over (`headOf`) carries its
  * head, and the gate inhibits it when the head is admitted or already in the
- * session. When the turn did not reach the head itself, the head is brought
+ * session. When the turn did not reach the head itself (or reached it more
+ * weakly than the earlier one, 2026-10-19), the head is brought
  * in to stand for it — the earlier's numbers (what came to mind), the head's
  * words, and its standing label naming the earlier one (`(earlier: [id])`) —
  * left out of the turn's background. Not a confidential head for a guest:
@@ -937,25 +1081,57 @@ export function headsWin(store: Store, candidates: readonly Candidate[], day: nu
   // apart from what the words found, so the earlier version the words found
   // was never inhibited and both showed. It is brought in to stand for the
   // earlier one instead, and its link-only candidate is dropped.
-  const ids = new Set(candidates.filter((c) => c.linkOnly !== true).map((c) => c.id));
+  //
+  // A HEAD THE WORDS REACHED MORE WEAKLY than the earlier one (2026-10-19, an
+  // experiment) stands in for it too, with the earlier's numbers: on its own
+  // weak reach it failed its bar while the earlier passed and showed without
+  // it. Its direct candidate is dropped; its own reach stays in the turn's
+  // background (`directReach`, review of #526). Trying this to see the
+  // earlier-shown-without-its-head count go to ~0; check ~10-22; revert by
+  // skipping the head whenever `reached` has it, and dropping `directReach`
+  // (docs/decisions.d/fix-head-wins-gap-1019.md).
+  const reached = new Map(candidates.filter((c) => c.linkOnly !== true).map((c) => [c.id, c]));
+  const heads = candidates.map((c): string | null => {
+    try {
+      return headOf(store, c.id);
+    } catch {
+      return null;
+    }
+  });
+  // ONE EARLIER PER HEAD stands for it, the STRONGEST the words reached (review
+  // of #526): candidates come in the cut's salience order, so taking the first
+  // one met let the head stand in at a weaker earlier's numbers while a
+  // stronger earlier (a chain A→B→C, or two memories one head settled over)
+  // cleared its own bar and showed alone. A link-only earlier claims the head
+  // only when no word-reached one does.
+  const claimant = new Map<string, Candidate>();
+  candidates.forEach((c, i) => {
+    const head = heads[i];
+    if (head === null || head === undefined) return;
+    const prev = claimant.get(head);
+    const better =
+      prev === undefined ||
+      (prev.linkOnly === true && c.linkOnly !== true) ||
+      (prev.linkOnly !== true && c.linkOnly !== true && c.activation > prev.activation);
+    if (better) claimant.set(head, c);
+  });
   const out: Candidate[] = [];
   const brought = new Set<string>();
-  for (const c of candidates) {
-    let head: string | null = null;
-    try {
-      head = headOf(store, c.id);
-    } catch {
-      head = null;
-    }
-    if (head === null) {
+  candidates.forEach((c, i) => {
+    const head = heads[i];
+    if (head === null || head === undefined) {
       out.push(c);
-      continue;
+      return;
     }
     out.push({ ...c, head });
-    if (ids.has(head) || brought.has(head)) continue;
+    if (claimant.get(head) !== c) return;
+    // A link-only earlier's arrival is not in the words' units (review of
+    // #526): it never displaces a head the words reached.
+    const direct = reached.get(head);
+    if (direct !== undefined && (c.linkOnly === true || direct.activation >= c.activation)) return;
     try {
       const row = store.row(head);
-      if (row === undefined) continue;
+      if (row === undefined) return;
       const physics = store.physicsOf(head);
       out.push({
         ...c,
@@ -966,13 +1142,18 @@ export function headsWin(store: Store, candidates: readonly Candidate[], day: nu
         strength: strength(physics, day),
         confidential: row.confidential === 1,
         standsFor: c.id,
+        ...(direct !== undefined && direct.pastCut !== true && direct.cue - (direct.stamp ?? 0) + direct.semantic > 0
+          ? // The words' reach only: a head start priming gave the direct
+            // candidate stays out of the background (review of #530).
+            { directReach: direct.activation - (direct.stamp ?? 0) - primeOf(direct), directSal: direct.sal }
+          : {}),
       });
       brought.add(head);
     } catch {
       /* an unreadable head: the earlier one shows, labelled */
     }
-  }
-  return brought.size === 0 ? out : out.filter((c) => !(c.linkOnly === true && brought.has(c.id) && c.standsFor === undefined));
+  });
+  return brought.size === 0 ? out : out.filter((c) => !(brought.has(c.id) && c.standsFor === undefined));
 }
 
 function trainsOf(verdicts: readonly CandidateVerdict[], id: string): boolean {

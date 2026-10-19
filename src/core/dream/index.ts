@@ -71,6 +71,8 @@ import { addDays, isDay } from "../time.js";
 import { livedOn } from "../types.js";
 import type { Kind } from "../types.js";
 import { DREAM_MARK, carriesDreamMark } from "./mark.js";
+import { pairsAmong, readDay, strongerMark } from "./day.js";
+import type { DayMark, DayRead } from "./day.js";
 import { mindRanked, noteMindShown } from "./mind.js";
 import type { MindItem } from "./mind.js";
 import { chapterEntries, entryKey, entryLine, fitEpisodes, shownEntry, summarized, withSummaries } from "./slices.js";
@@ -139,7 +141,7 @@ export const DREAM_UNDONE_REASON = "dream-undone";
 export const RAISED_PREFIX = "dream.raised.";
 
 /** Why a memory is in the bundle. */
-export type DreamRole = "new" | "neighbour" | "mixing" | "lookback" | "on-mind";
+export type DreamRole = "new" | "neighbour" | "mixing" | "lookback" | "on-mind" | "today";
 
 /**
  * One memory as a dream is shown it (2026-09-28): enough to decide on —
@@ -221,6 +223,16 @@ export interface DreamBundle {
   readonly fresh: readonly { id: string; neighbours: readonly string[] }[];
   readonly mixing: readonly string[];
   readonly lookback: readonly string[];
+  /**
+   * THE DAY'S REPLAY (2026-10-19, feedback-loop part E): memories the day
+   * since the last dream used, rated useful or drew on, strongest first, with
+   * how — `reward` (named in `drewOn` or rated 3: replay me), `used` (opened,
+   * quoted, a lived return), `useful` (rated 2). A new one tonight is in
+   * `fresh` too; one already dreamed is here in the role `today`.
+   */
+  readonly today: readonly { readonly id: string; readonly mark: Exclude<DayMark, "shown"> }[];
+  /** Pairs the day used together in one session, both shown tonight: the replay's first links to weigh. */
+  readonly todayPairs: readonly (readonly [string, string])[];
   /**
    * WHAT'S ON MY MIND (2026-09-27): a few open things beside the day — what is
    * coming up, a pair a dream flagged, where the work stands. Not new; the
@@ -1554,6 +1566,7 @@ export class Dreams {
       dream: (n) => [
         "The dream — how it goes (the brain's, borrowed):",
         "- Deep-sleep replay: file what happened, link what belongs together, merge near-copies into one memory in better words, and replay what matters (each replay strengthens it a little).",
+        '- The day\'s replay: the bundle\'s "today" lists what the day used or found useful, strongest first. A "reward" one (drawn on, or rated "changed what I did or said") is the plainest "replay me". "todayPairs" were used together: replay both, and link them if they belong together.',
         "- Folding: when several memories are parts of one event or one stretch of work (a day's merges, a release, one book), fold them: a gist with fold: true, citing them, that says the standing outcome they add up to — what holds now, not the session retold (that is the chapter's job). Give it its kind: self, person or entity when it is about someone. Lessons and rulings inside stay their own memories. The parts stay, earlier under the fold, and fade (readings, and strongly felt memories about you or someone, keep their own weight).",
         "- REM mixing: let loosely related memories touch. If a real pattern shows, write it as a gist in your own words, citing its sources. If two memories disagree, flag the pair; settle it only when the reason is plain (the waking self usually settles).",
         '- To confirm: an on-mind item of kind "to-confirm" is two memories read by arithmetic as one thing\'s earlier and later state (older first). Say which: slot {pair, same: true, why} if the newer replaces it, same: false if they are two different things.',
@@ -1685,6 +1698,15 @@ export class Dreams {
       notShown: b.shownAs.notShown,
       offered: c.offered.excerpt.length + c.offered.line.length + c.offered.id.length,
       parts,
+      // THE DAY'S REPLAY (part E, 2026-10-19): what the day marked and the
+      // bundle carried — listed as `today`, of them the reward-tagged and the
+      // ones already dreamed (role `today`), the co-used pairs, and how many
+      // of tonight's fresh the day marked.
+      today: b.today.length,
+      todayReward: b.today.filter((t) => t.mark === "reward").length,
+      todayDreamed: Object.values(c.roles).filter((r) => r === "today").length,
+      todayPairs: b.todayPairs.length,
+      freshMarked: c.freshMarked,
     };
   }
 
@@ -2290,6 +2312,8 @@ export class Dreams {
         // the dream, a reader, says whether they are. Both must have been
         // shown. Confirmed is a settle `changed` (its provisional cut lifted,
         // the full one made); "two things" withdraws it, its cut put back.
+        // Since 2026-10-19 (an experiment, `SLOT_FADE` 1) a proposal makes no
+        // cut, so confirming is the only fade and withdrawing restores nothing.
         const pair = typeof change.pair === "string" ? this.store.contradiction(change.pair.trim()) : undefined;
         const p = pair === undefined || pair.state !== "unsettled" ? null : provisionalOf(this.store, pair);
         if (pair === undefined || p === null) return { action, ok: false, reason: "not-a-proposal", detail: `${String(change.pair ?? "")} is not a proposal waiting to be confirmed.` };
@@ -2868,13 +2892,20 @@ export class Dreams {
     });
     const mindAll = mindRead.items;
     const mindIds = new Set(mindAll.flatMap((m) => m.ids));
+    // THE DAY SINCE THE LAST DREAM (part E): what it used, rated and drew on.
+    const dayRead = this.dayRead(last, day);
 
     // TONIGHT'S NEW, by replay priority, while their lines (and their
     // neighbours') fit the share; the rest wait.
     // A FOLD THE LAST NIGHT COULD NOT MAKE comes first, its carried parts
     // together (Group 3 part C), so the fold has all its parts in front of it;
     // then the queue by value × fragility.
-    const scored = q.ids.filter((mid) => see(mid) !== null).map((mid) => ({ id: mid, p: this.replayPriority(mid, day, mindIds) }));
+    // The day's marks LIFT a queued memory's priority (part E, `DAY_LIFT`).
+    const lift = (mid: string): number => {
+      const m = dayRead.marks.get(mid);
+      return m === undefined ? 1 : 1 + T.DAY_LIFT[m];
+    };
+    const scored = q.ids.filter((mid) => see(mid) !== null).map((mid) => ({ id: mid, p: this.replayPriority(mid, day, mindIds) * lift(mid) }));
     const groupOf = new Map<string, number>();
     q.carried.forEach((g, i) => {
       for (const mid of g) if (!groupOf.has(mid)) groupOf.set(mid, i);
@@ -2960,6 +2991,27 @@ export class Dreams {
       lookback.push(f.id);
       if (!role.has(f.id)) role.set(f.id, "lookback");
     }
+    // THE DAY'S REPLAY (2026-10-19, part E): what the day used, rated useful
+    // or drew on, strongest mark first. A memory already dreamed is not in
+    // the queue, so it joins as `today` (over a neighbour's or a mixing role,
+    // whose low fit priority would drop the day's strongest first; a look-back
+    // one keeps its own). One that is new tonight is listed and
+    // stays `new`. A QUEUED one that is not tonight's new is left out: shown
+    // here, it would leave the queue as if dreamed — the lift already ranked
+    // it, and it waits.
+    const today: { id: string; mark: Exclude<DayMark, "shown"> }[] = [];
+    const marked = [...dayRead.marks]
+      .filter((e): e is [string, Exclude<DayMark, "shown">] => e[1] !== "shown")
+      .sort((a, b) => (strongerMark(a[1], b[1]) ? -1 : strongerMark(b[1], a[1]) ? 1 : a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    for (const [mid, m] of marked) {
+      if (today.length >= T.TODAY_COUNT) break;
+      if (denied.has(mid) || see(mid) === null) continue;
+      const r = role.get(mid);
+      if (queued.has(mid) && r !== "new") continue;
+      today.push({ id: mid, mark: m });
+      if (r === undefined || r === "neighbour" || r === "mixing") role.set(mid, "today");
+    }
+    const todayMark = new Map(today.map((t) => [t.id, t.mark]));
     // WHAT'S ON MY MIND: open things, not new. Their memories join the shown
     // set (a dream may link or feel them), never the fresh list.
     // A QUEUED memory that is not tonight's new is left off my mind tonight:
@@ -2981,12 +3033,15 @@ export class Dreams {
     const selfPage = page === null ? null : clipWire(page, T.PAGE_CHARS);
     const wakeText = wake === null ? null : clipWire(wake, T.WAKE_CHARS);
     const room = Math.max(0, T.NIGHT_CHARS - chaptersFit.used - wireChars(selfPage ?? "") - wireChars(wakeText ?? "") - FURNITURE);
-    const base: Record<DreamRole, number> = { new: 4, "on-mind": 3, lookback: 2, neighbour: 1, mixing: 0.5 };
+    const base: Record<DreamRole, number> = { new: 4, today: T.TODAY_FIT, "on-mind": 3, lookback: 2, neighbour: 1, mixing: 0.5 };
+    // Within `today`, the stronger mark first: reward, then used, then useful.
+    const markWithin: Record<Exclude<DayMark, "shown">, number> = { reward: 1, used: 2 / 3, useful: 1 / 3 };
     const cands: FitCandidate[] = [];
     for (const [mid, r] of role) {
       const v = see(mid);
       if (v === null) continue;
-      const within = r === "new" ? (priority.get(mid) ?? 0) : emotionalIntensity(this.store.physicsOf(mid));
+      const tm = todayMark.get(mid);
+      const within = r === "new" ? (priority.get(mid) ?? 0) : r === "today" && tm !== undefined ? markWithin[tm] : emotionalIntensity(this.store.physicsOf(mid));
       cands.push({ id: mid, priority: base[r] * 10 + within, line: v.line, whole: v.whole });
     }
     const fitted = fit(cands, { room, excerptChars: T.DETAIL_CHARS, least: "line" });
@@ -3029,6 +3084,8 @@ export class Dreams {
       fresh,
       mixing: mixing.filter((m) => !left.has(m)),
       lookback: lookback.filter((m) => !left.has(m)),
+      today: today.filter((t) => !left.has(t.id)),
+      todayPairs: pairsAmong(dayRead.together, (x) => role.has(x) && !left.has(x), (x) => todayMark.has(x)),
       onMind: mindKept.filter((item) => item.ids.every((mid) => !left.has(mid))),
       ...(mindRead.more > 0 ? { onMindMore: mindRead.more } : {}),
       ...((mindRead.slotsMore ?? 0) > 0 ? { toConfirmMore: mindRead.slotsMore } : {}),
@@ -3058,7 +3115,17 @@ export class Dreams {
       reads: chaptersFit.reads,
       unread: chaptersFit.unread,
       lineCap: chaptersFit.summaryBytes,
+      freshMarked: fresh.filter((f) => dayRead.marks.has(f.id)).length,
     };
+  }
+
+  /**
+   * THE DAY SINCE THE LAST DREAM (2026-10-19, part E): from the last dream's
+   * start (its lived day bounds the read), or the lived day before today on a
+   * store that never dreamed. Never throws (`day.ts#readDay`).
+   */
+  private dayRead(last: DreamRow | null, day: number): DayRead {
+    return readDay(this.store, last === null ? { sinceDay: day - 1, sinceAt: 0 } : { sinceDay: Math.min(last.day, day), sinceAt: last.started_at });
   }
 
   /**
@@ -3568,6 +3635,8 @@ interface Composed {
   readonly unread: Record<string, number[]>;
   /** The longest a chapter's summary was as a line (2026-10-15), so `part` renders what the fit measured. */
   readonly lineCap: number;
+  /** Of tonight's fresh, how many the day marked (used, rated or shown; part E). */
+  readonly freshMarked: number;
 }
 
 /** A shown memory's cost beside its words (the fitter's `OVERHEAD`, which the fit uses too). */

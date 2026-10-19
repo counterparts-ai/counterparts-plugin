@@ -961,15 +961,17 @@ const DREW_ON_PROPERTY = {
 /** The claim `session_end` and `chapter` share about `drewOn`. */
 const DREW_ON_PRIVILEGE = {
   claim:
-    "`drewOn` credits only memories this session was shown — its footnotes, loud memories and recall answers — at half a use, at most 3 per boundary and once a day each. An id it was not shown, a handoff, a superseded memory or one faded under a newer one is refused by name, and nothing is credited for it. A dated memory it names stops coming back as a footnote for that date.",
+    "`drewOn` credits only memories this session was shown — its footnotes, loud memories and recall answers — as a full use (an experiment since 2026-10-19), at most 3 per boundary and once a day each. An id it was not shown, a handoff, a superseded memory or one faded under a newer one is refused by name, and nothing is credited for it. A dated memory it names stops coming back as a footnote for that date.",
   mechanizedBy: "src/core/counterpart.ts#creditDrewOn -> src/core/prospective/index.ts#Prospective.actedOn",
 };
 
 /**
- * `rated` on `session_end` (2026-10-14; Mike's call, TRACKING ONLY, lightly
- * held): the session scores what it was shown, 0–3, so every footnote gets a
- * feedback signal. The anchors are `core/recall/rated.ts#RATING_ANCHORS`,
- * said here in the model's own voice. Nothing reads the rows to act yet.
+ * `rated` on `session_end` (2026-10-14; Mike's call): the session scores what
+ * it was shown, 0–3, so every footnote gets a feedback signal. The anchors are
+ * `core/recall/rated.ts#RATING_ANCHORS`, said here in the model's own voice.
+ * Tracking only until 2026-10-19; since then an EXPERIMENT (the feedback loop,
+ * check ~10-22) has the scores count as use, and the words say so plainly
+ * rather than claim a rating changes nothing.
  */
 const RATED_PROPERTY = {
   type: "array",
@@ -982,14 +984,15 @@ const RATED_PROPERTY = {
     required: ["id", "score"],
   },
   description:
-    "Optional: rate each footnote shown to you since you last wrote — and recall answers or ones you opened by id, if you like — and every id you name in `drewOn` (expected a 2 or 3). score: 0 = noise (unrelated), 1 = on topic but I didn't need it, 2 = useful background, 3 = changed what I did or said. Tracking only: a rating changes nothing about the memory. An id this session was not shown is refused; rated twice, the last score counts.",
+    "Optional: rate each footnote shown to you since you last wrote — and recall answers or ones you opened by id, if you like — and every id you name in `drewOn` (expected a 2 or 3). score: 0 = noise (unrelated), 1 = on topic but I didn't need it, 2 = useful background, 3 = changed what I did or said. Rate honestly: a score counts as use of the memory (3 a full use, 2 most of one, 1 a little, 0 none, and a footnote left unrated a glimpse), what you rate 2 or 3 together is linked, and one rated 0 in two sessions comes up less for a while. An id this session was not shown is refused; rated twice, the last score counts.",
 } as const;
 
 /** The claim `session_end` makes about `rated`. */
 const RATED_PRIVILEGE = {
   claim:
-    "`rated` is recorded and changes nothing: no strength, ranking, credit or fading. Only a memory this session was shown — a footnote, a loud memory, a recall answer, one it opened — can be rated; any other id, a score that is not an integer 0 to 3, or an entry with no id is refused by name, and its siblings still count. A call whose every rating is refused records nothing.",
-  mechanizedBy: "src/core/counterpart.ts#rateShown -> src/core/recall/rated.ts#readRatings (one recall.rated row)",
+    "`rated` is recorded, and (an experiment since 2026-10-19) each score is a use of the memory at its weight — 3 a full use, 2 most of one, 1 a quarter, 0 none — once a lived day, and each footnote the call leaves unrated since the last rating a glimpse; memories rated 2 or 3 (or otherwise used) since the last rating are linked together, and one rated 0 in two sessions within a week shows less readily in ambient recall until a later 2 or 3 or the week passes. A memory archived, replaced or handed over as a handoff is scored but not credited. Only a memory this session was shown — a footnote, a loud memory, a recall answer, one it opened — can be rated; any other id, a score that is not an integer 0 to 3, or an entry with no id is refused by name, and its siblings still count. A call whose every rating is refused records nothing.",
+  mechanizedBy:
+    "src/core/counterpart.ts#rateShown -> src/core/recall/rated.ts#readRatings (one recall.rated row) + #planRatedUse -> src/core/counterpart.ts#useRatings (resolveUse; Associate#deposit to the pending file) + src/core/recall/habituation.ts (gate.ts raises the bar)",
 };
 
 const SESSION_END: ToolSpec = {

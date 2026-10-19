@@ -237,6 +237,26 @@ export function memoriesWrittenSince(store: Store, at: number): { id: string; se
     .map((r) => ({ id: r.id, session: r.origin_session, at: r.created_at, bornDay: r.birth_day, nightly: r.nightly === 1 }));
 }
 
+/**
+ * THE DAY'S LIVED RETURNS, row by row (2026-10-19, feedback-loop part E): one
+ * per memory, day and source, at or after `sinceAt` (epoch ms) on lived days
+ * from `sinceDay` — every source but the night's own (`dream`, `reflection`)
+ * and the imported history (`legacy`). A denylist, so a source a later build
+ * adds for waking use is read without an edit here. Ids, sources and the
+ * session that earned it; nothing else.
+ */
+export function livedReturnsSince(store: Store, filter: { sinceAt?: number; sinceDay?: number } = {}): { memoryId: string; source: string; session: string | null }[] {
+  return store["ops"]
+    .all<{ memory_id: string; source: string; session: string | null }>(
+      `SELECT memory_id, source, session FROM returns
+          WHERE at >= ? AND day >= ? AND source NOT IN ('dream', 'reflection', 'legacy')
+          ORDER BY at, memory_id`,
+      filter.sinceAt ?? 0,
+      filter.sinceDay ?? -2_147_483_648,
+    )
+    .map((r) => ({ memoryId: r.memory_id, source: r.source, session: r.session }));
+}
+
 export function memoryCountsByScopeSince(store: Store, at: number, opts: { confidential?: boolean } = {}): { scope: string; count: number }[] {
   return store["ops"]
     .all<{ origin_scope: string; n: number }>(
@@ -261,6 +281,30 @@ export function memoriesOfSession(store: Store, session: string): { id: string; 
       session,
     )
     .map((r) => ({ id: r.id, session: r.origin_session, at: r.created_at, bornDay: r.birth_day }));
+}
+
+/**
+ * THE IDS ONE SESSION WROTE, for ambient recall's echo skip (2026-10-19,
+ * feedback-loop part C): live memories with this `origin_session`, born at or
+ * after `sinceAt` (epoch ms) when given — settled-over or not, since either
+ * is in the conversation that wrote it. `fromDay` bounds the read on the
+ * birth index (`memories_birth`) — a caller that knows the window's lived
+ * days passes it, and the prompt never scans the table. The nightly run's
+ * rows are left out (they carry the launching session's id; the session did
+ * not write them). Ids only.
+ */
+export function sessionMemoryIds(store: Store, session: string, opts: { sinceAt?: number; fromDay?: number } = {}): string[] {
+  return store["ops"]
+    .all<{ id: string }>(
+      `SELECT id FROM memories
+          WHERE archived = 0 AND birth_day >= ? AND type = 'memory' AND origin_session = ?
+            AND created_at IS NOT NULL AND created_at >= ?
+            AND NOT ${NIGHTLY_SQL}`,
+      opts.fromDay ?? -2_147_483_648,
+      session,
+      opts.sinceAt ?? 0,
+    )
+    .map((r) => r.id);
 }
 
 export function readVersion(store: Store, id: string, seq: number): ProseDoc {
@@ -438,13 +482,15 @@ export function returnCounts(store: Store, filter: { sinceAt?: number; sinceDay?
     dream: number;
     /** v9: returns a reflection counted (also lane returns, beside `awake`). */
     reflection: number;
+    /** Memories with any return — not counting a glimpse or a rating of 1
+     *  alone (2026-10-19: shown is not "came back"). */
     memories: number;
   } {
   const r = store["ops"].get<{ awake: number | null; dream: number | null; reflection: number | null; memories: number | null }>(
     `SELECT SUM(CASE WHEN source = 'awake' THEN 1 ELSE 0 END) AS awake,
               SUM(CASE WHEN source = 'dream' THEN 1 ELSE 0 END) AS dream,
               SUM(CASE WHEN source = 'reflection' THEN 1 ELSE 0 END) AS reflection,
-              COUNT(DISTINCT CASE WHEN source != 'legacy' THEN memory_id END) AS memories
+              COUNT(DISTINCT CASE WHEN source NOT IN ('legacy', 'shown', 'ontopic') THEN memory_id END) AS memories
          FROM returns WHERE at >= ? AND day >= ? AND source != 'legacy'`,
     filter.sinceAt ?? 0,
     filter.sinceDay ?? -2_147_483_648,

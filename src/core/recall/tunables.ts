@@ -69,6 +69,16 @@ export interface RecallTunables {
   /** Cue carry-over: previous turn's cues re-enter at this weight, for one turn.
    *  [v1: 1 turn, decay 0.5] CAL. */
   CARRY_DECAY: number;
+  /**
+   * EVERYDAY WORDS (2026-10-19, an experiment; check ~10-22, revert by 11-02):
+   * a cue's rarity weight is scaled by how much the embedder's table weighs the
+   * word in English generally (`cues.ts#everydayFactor`, `Store.wordNorm`) —
+   * 0 at or below LOW, 1 at or above HIGH, a smoothstep between. In
+   * potion-base-8M's own row-norm units (the only table it is calibrated on,
+   * `embed-client.ts#WORD_NORM_CALIBRATED`). HIGH <= LOW turns it off. CAL.
+   */
+  EVERYDAY_NORM_LOW: number;
+  EVERYDAY_NORM_HIGH: number;
 
   // ── the document side of §9 G4: length normalization + a per-doc ceiling ──
   /** tf saturation for a cue's evidence in ONE document (BM25 k1). At `k1 = 1`
@@ -117,6 +127,15 @@ export interface RecallTunables {
    * `tools/bench/embedder-trial.ts`, `docs/research/static-embedder-trial-2026-09-23.md`.
    */
   SEMANTIC_BY_IDENTITY: Readonly<Record<string, SemanticProfile>>;
+  /**
+   * The most vectors box 3 may hold for an AMBIENT turn with no fresh lagged
+   * cue (a session's first prompt, or a stale lag row) to embed its own text
+   * and rank it in line (`session.ts#inLineSemantic`). A COUNT, not a clock:
+   * the rank runs inside `activate()`, before `build()`'s first time check, so
+   * an overrun there would abort the turn rather than degrade the channel.
+   * Above it the channel stays dark and the turn records `in-line-skipped`. CAL.
+   */
+  SEMANTIC_INLINE_MAX_VECTORS: number;
   /** Weight on base-level activation (strength). The recency/arrival channel:
    *  it can make a memory warm, never loud. [v1: 0.15] CAL. */
   ARRIVAL_WEIGHT: number;
@@ -187,7 +206,9 @@ export interface RecallTunables {
    *  this fraction of the strongest seed's activation. Relative, so it means the
    *  same on a small store as a big one. At 0.05 a direct link from the
    *  strongest seed must weigh about 0.4 (four co-uses: `0.5 · w / 4 ≥ 0.05`);
-   *  a single fresh co-use (0.1) or a legacy gist tie does not reach it. CAL. */
+   *  a single fresh co-use (0.1) or a legacy gist tie does not reach it. CAL.
+   *  Since 2026-10-19 two co-uses in `rated` stretches reach it
+   *  (`associate` `CO_USE_DEPOSIT` 0.25); this threshold is left alone. */
   LINK_POINTER_MIN_FRACTION: number;
   /** How many of the turn's strongest candidates (ranked the way the cut
    *  ranks them, words and meaning both) SEED spreading — 2026-09-28. Not the
@@ -201,6 +222,82 @@ export interface RecallTunables {
    *  semantic. At 1 the graph can at most double what the conversation gave a
    *  memory, however many paths reach it. Counted when it binds. CAL. */
   HOP_CEILING: number;
+
+  // ── habituation (an experiment, 2026-10-19, light; check ~10-22) ─────────
+  // Trying a raised bar for memories rated 0 twice to see whether footnote
+  // noise drops. Revert by setting `HABITUATION_BAR_LIFT` to 0.
+  /** How far back, in lived days (today included), a rating of 0 counts toward
+   *  habituation. Why 7: the brief's week; an old rating ages out by itself. */
+  HABITUATION_WINDOW_DAYS: number;
+  /** Rated 0 in at least this many sessions inside the window: the memory is
+   *  habituated. Why 2: one 0 can be one odd turn; two sessions agreeing is a
+   *  pattern. */
+  HABITUATION_MIN_SESSIONS: number;
+  /** A rating at or above this, later than the zeros, clears them (the brief:
+   *  "a later useful rating clears it"). Why 2: "useful background". */
+  HABITUATION_CLEAR_SCORE: number;
+  /** A habituated memory's bar to be shown is raised by this factor (×1.5 at
+   *  0.5) — a penalty on its chance to show, never on its strength, and never
+   *  a veto: a turn that reaches it strongly still shows it. Why 0.5: light;
+   *  about the margin an ordinary footnote clears its bar by. CAL. */
+  HABITUATION_BAR_LIFT: number;
+
+  // ── context priming (an experiment, 2026-10-19; check ~10-22) ───────────
+  // Trying a head start for memories connected to what this session is doing,
+  // to see whether primed footnotes are rated more useful than unprimed ones
+  // without one cluster winning turn after turn (`prime.ts`). Ambient only;
+  // only candidates the turn's own words or meaning reached; never the
+  // session's own writes; never past the absolute floors. Revert by setting
+  // `PRIME_LINK_UNITS` and `PRIME_TRAIN_SHARE` to 0.
+  /** Along LINKS: a source passes `weight × decayed edge × this` CUE UNITS
+   *  (`floorUnit`) to each linked partner. Why 1: a fresh source and a link
+   *  two co-uses made (0.5, associate `CO_USE_DEPOSIT`) give half a
+   *  maximally-rare cue — two and a half times the floor, enough to clear an
+   *  ordinary bar; a faint dream or contiguity link (~0.05) only breaks ties. */
+  PRIME_LINK_UNITS: number;
+  /** Along MEANING: the train of thought's head start, as a SHARE of what the
+   *  turn's own meaning gives at the same cosine (the in-line semantic floor and
+   *  weight of the store's embedder, `semanticTuning`). Why 0.5: the last few
+   *  turns count half as much as this one. */
+  PRIME_TRAIN_SHARE: number;
+  /** CENTRING (review, 2026-10-19, an experiment inside the experiment):
+   *  1 = a candidate gets a train head start only for the part of its cosine
+   *  above the mean of the turn's cut before priming (or the floor, if higher); 0 =
+   *  above the floor alone. Why 1: on a steady topic every candidate is a
+   *  little near the train, and the floor alone gave all of them a head start
+   *  (24 of 24 in the cost run) — priming should make the memories closer to
+   *  the train than their peers win, not lift everyone. Revert by setting 0. */
+  PRIME_TRAIN_CENTRE: number;
+  /** The train's decay per turn. Why 0.5: the previous prompt weighs 1, the one
+   *  before 0.5, then 0.25 — "the last few turns", so a dropped topic is mostly
+   *  gone three turns on. */
+  PRIME_TRAIN_DECAY: number;
+  /** A source's link head start decays by this per turn since it first counted.
+   *  Why 0.8: something opened or written five turns ago still primes at a
+   *  third, ten turns ago at a tenth. */
+  PRIME_SOURCE_DECAY: number;
+  /** Each kind of source's weight. Why: a use or a write is this session's own
+   *  act (1); the folder's open threads and handoff are what was left here, a
+   *  softer sign of what this session is for (0.5). */
+  PRIME_SOURCE_WEIGHT: Readonly<Record<"used" | "wrote" | "open", number>>;
+  /** A handoff's weight as a source falls by this per lived day of its age
+   *  (review, 2026-10-19). Why 0.7: yesterday's handoff is what this folder is
+   *  for now (0.7); last week's is history (0.08 at 7 days, 0.03 at 10), which
+   *  would otherwise open every session there with its train for its whole
+   *  14-day life — the tunnel the brief worried about. */
+  PRIME_HANDOFF_DAY_DECAY: number;
+  /** At most this many sources, the newest first. Why 24: a long session's
+   *  older acts have decayed to almost nothing anyway; it bounds the edge reads. */
+  PRIME_MAX_SOURCES: number;
+  /** How many of the turn's candidates, in the cut's order, are scored against
+   *  the train (one box-3 vector read each). Why 72: three times
+   *  `MAX_CANDIDATES`, so a memory just past the cut can be primed into it. */
+  PRIME_TRAIN_POOL: number;
+  /** "Priming gives a head start, it does not carry", as arithmetic: a
+   *  candidate's priming is capped at this multiple of its own cue + semantic.
+   *  Why 1: like `HOP_CEILING`, at most double what the conversation gave it;
+   *  the dial to turn down first if the review sees tunnel vision. */
+  PRIME_CEILING: number;
 
   // ── affect ───────────────────────────────────────────────────────────────
   /** Emotional salience a candidate needs before it can raise the affect flag. [v1: 0.7] CAL. */
@@ -274,6 +371,10 @@ export const TUNABLES: RecallTunables = {
   CUE_FETCH_MIN_IDF: 0,
   AMBIGUOUS_WEIGHT: 0.5,
   CARRY_DECAY: 0.5,
+  // Below ~20 sit only the true function words (the 1.7, for 5.3, you 7.2, that 9.3): they count nothing.
+  EVERYDAY_NORM_LOW: 20,
+  // Topic words start near here (kitchen 74, guitar 80); the grey zone below keeps part (music 59 → 0.89, any 33 → 0.17).
+  EVERYDAY_NORM_HIGH: 70,
 
   // MEASURED 2026-09-04 on a copy of the live store (15,421 indexed documents,
   // mean 106 indexed tokens, max 3,184 — a 30x spread). Ambient recall returned
@@ -345,6 +446,13 @@ export const TUNABLES: RecallTunables = {
     "potion-base-8M@256": { inline: { floor: 0.15, weight: 6 }, lagged: { floor: 0.05, weight: 1 } },
     "voyage-3-large": { inline: { floor: 0.45, weight: 1.0 }, lagged: { floor: 0.45, weight: 1.0 } },
   },
+  // 100,000 (CAL, 2026-10-19, ~/counterparts-notes/2026-10-19-first-prompt-recall-diagnosis.md):
+  // measured cold, in a fresh process per run, the in-line rank added ~18 ms
+  // at the live store's 2,207 vectors and ~60 ms p50 (~160 ms p95) at 22,207,
+  // against a 1,200 ms budget the live recall build uses ~45 ms of at p50.
+  // 100,000 is ~4.5x the largest size measured, still well inside the budget
+  // if the scan stays linear (warm, at 10x: ~0.8 ms per 1,000 vectors).
+  SEMANTIC_INLINE_MAX_VECTORS: 50_000,
   ARRIVAL_WEIGHT: 0.15,
 
   // 1.2 -> 1.6 (CAL, 2026-09-04). Once length normalization stopped nine hubs
@@ -443,6 +551,22 @@ export const TUNABLES: RecallTunables = {
   LINK_POINTER_MIN_FRACTION: 0.05,
   SPREAD_SEEDS: 24,
   HOP_CEILING: 1,
+
+  HABITUATION_WINDOW_DAYS: 7,
+  HABITUATION_MIN_SESSIONS: 2,
+  HABITUATION_CLEAR_SCORE: 2,
+  HABITUATION_BAR_LIFT: 0.5,
+
+  PRIME_LINK_UNITS: 1,
+  PRIME_TRAIN_SHARE: 0.5,
+  PRIME_TRAIN_CENTRE: 1,
+  PRIME_TRAIN_DECAY: 0.5,
+  PRIME_SOURCE_DECAY: 0.8,
+  PRIME_SOURCE_WEIGHT: { used: 1, wrote: 1, open: 0.5 },
+  PRIME_HANDOFF_DAY_DECAY: 0.7,
+  PRIME_MAX_SOURCES: 24,
+  PRIME_TRAIN_POOL: 72,
+  PRIME_CEILING: 1,
 
   AFFECT_MIN_EMOTION: 0.7,
   AFFECT_REFRACTORY_TURNS: 2,

@@ -520,6 +520,8 @@ export function toHookInput(
     ...(transcriptPath === undefined ? {} : { transcriptPath }),
     // The model that last answered, for the session record (and so the chapter).
     ...(transcript.model === undefined ? {} : { model: transcript.model }),
+    // The last compaction, for the echo skip's window (2026-10-19, part C).
+    ...(transcript.compactedAt === undefined ? {} : { compactedAt: transcript.compactedAt }),
     // The host's re-fire of a blocked Stop, carried INTO the adapter and not
     // only handled at delivery: the pass that says nothing must also advance
     // nothing (`hooks.ts#askAtStop`).

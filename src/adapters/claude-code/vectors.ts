@@ -29,6 +29,12 @@
  * the one that cannot be raced against a 1200 ms synchronous budget. Ranking
  * stays in the worker for that reason alone.
  *
+ * **Amended 2026-10-19.** With the local table only, a turn the lag never
+ * reached — a session's first prompt, or a stale row — now embeds and ranks in
+ * line (`recall/session.ts#inLineSemantic`): measured ~18 ms cold on the live
+ * store's 2,207 vectors (~/counterparts-notes/2026-10-19-first-prompt-recall-diagnosis.md).
+ * This worker's lagged cue is unchanged for every turn it does reach.
+ *
  * Handing the hot path a vector
  * would have moved the network call off it and left that scan on it — the same
  * abort one layer down. So this file embeds AND ranks, and stores the top-M

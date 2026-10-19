@@ -40,6 +40,14 @@ export interface Embedder {
    * `cache_meta.embedder` once, at open (`cache.ts#reconcileEmbedder`).
    */
   readonly identity?: EmbedderIdentity;
+  /**
+   * How much the embedder's table weighs a WORD in English generally: the row
+   * norm of the word's whole-word row, or null when the table has no such row.
+   * Optional; only a table someone has calibrated against offers it
+   * (2026-10-19, an experiment: recall's everyday-word discount,
+   * `recall/cues.ts#everydayFactor`). Never a vector, never a network call.
+   */
+  readonly wordNorm?: (word: string) => number | null;
 }
 
 export interface StoreOptions extends Stance {

@@ -341,11 +341,15 @@ export function bufferContiguity(cp: Counterpart): { pass: ContiguityPass; pairs
  * `planAtWrite` keeps the first `WRITE_LINK_MAX`; `Associate.propose` lands
  * them at `WRITE_LINK_WEIGHT`, room-only.
  *
+ * OFF by default since 2026-10-19, as an experiment (`WRITE_LINK_MAX` 0;
+ * check ~10-22, revert by setting it back to 4): null at once, nothing read.
+ *
  * Null when no memory had anything in mind. Fail-open: a throw is a `failed`
  * pass, and contiguity goes on.
  */
 export function linkAtWrite(cp: Counterpart, fresh: readonly { id: string; session: string; at: number; bornDay: number }[], day: number): AtWritePass | null {
   const t = cp.associate.tunables;
+  if (t.WRITE_LINK_MAX <= 0) return null;
   try {
     const memories: { id: string; inMind: string[] }[] = [];
     const jots = cp["jotsAmong"](fresh);

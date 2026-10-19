@@ -11,15 +11,40 @@
  *
  *   §9 G4 — **cue matching is word-bounded and rarity-weighted.** A distinctive
  *   proper noun fires strongly; a name spanning the whole store contributes
- *   nothing. *Informativeness weighting replaces stop-lists* — there is no stop
- *   list in this file, deliberately: "the" scores zero because it is everywhere,
- *   which is the same reason a project name scores zero once every memory
- *   mentions it.
+ *   nothing.
+ *
+ *   WHAT WE ARE TRYING NOW (2026-10-19, an experiment on Mike's word; check
+ *   ~10-22, revert by 11-02 — `docs/decisions.d/2026-10-19-stemming-everyday-words.md`):
+ *   rarity in THIS store, scaled down for words that are everyday in English
+ *   generally. The second measure is the embedder table's own row weights
+ *   (`everydayFactor`, `Store.wordNorm`), which already separate function
+ *   words cleanly ("the" 1.7, "you" 7.2, "any" 33, against a median row of 97).
+ *   We are trying it to see whether the words a person types around a topic
+ *   ("any tips", "what you'd suggest", "over for a gathering") stop outvoting
+ *   the topic word, and whether first prompts surface what they are about.
+ *   With no table (no embedder, an observer, an uncalibrated table) the factor
+ *   is 1 and the weights are exactly the old ones.
+ *
+ *   THE OLD RULE, kept as history because it was right about what it saw:
+ *   *informativeness weighting replaces stop-lists* — there was no stop list in
+ *   this file, deliberately: "the" scores zero because it is everywhere, which
+ *   is the same reason a project name scores zero once every memory mentions
+ *   it. What broke it (first-prompt recall diagnosis, 2026-10-19): memories are
+ *   third-person SUMMARIES, so the words people type in questions are rare in
+ *   them. "you" was in 3 of 325 memories (weight 4.0), "inviting" and
+ *   "colleagues" in 1 of 335 (5.12, the ceiling), and a memory sharing two such
+ *   words beat every memory that shared only "bake". Rarity measured against
+ *   the store cannot see that; the table, trained on English, can. This is
+ *   still not a stop list — nothing is named, and a word is scaled, not banned
+ *   — but it is a second rarity source, which is what the old rule refused.
  *
  * Word-boundedness is inherited, not re-implemented: `tokenize` comes from the
  * store's cache module, so a cue is tokenized byte-for-byte the way the index was
  * built. A second tokenizer here would be the observer-predicate mistake in
- * miniature (observer-mode.md G7).
+ * miniature (observer-mode.md G7). Since the v7 cache (2026-10-19, the same
+ * experiment) the index stores STEMS (`store/stem.ts`); cues stay surface
+ * words, grouped by stem through `CueInput.term`, and the store stems what it
+ * looks up.
  *
  * NO MODEL CALLS. Vectors are inputs (contract §5 G1) — this file has no network
  * import and no client; the turn's embedding arrives from the caller or not at all,
@@ -121,6 +146,25 @@ export function informativeness(df: number, storeSize: number): number {
   return Math.max(0, Math.log((Math.max(storeSize, MIN_RARITY_STORE) + df) / (2 * df)));
 }
 
+/**
+ * How much of a word's rarity weight survives as a cue, from how much the
+ * embedder's table weighs it in English generally (`Store.wordNorm`): 0 at or
+ * below `EVERYDAY_NORM_LOW`, 1 at or above `EVERYDAY_NORM_HIGH`, a smoothstep
+ * between. Unknown (null: no table, or a word the table holds only in pieces —
+ * which is what rare words are) is 1. A ramp with `HIGH <= LOW` is off: 1 for
+ * every word, the weights before 2026-10-19. AN EXPERIMENT (see the header).
+ */
+export function everydayFactor(norm: number | null, t: Pick<RecallTunables, "EVERYDAY_NORM_LOW" | "EVERYDAY_NORM_HIGH">): number {
+  if (norm === null || !Number.isFinite(norm)) return 1;
+  const lo = t.EVERYDAY_NORM_LOW;
+  const hi = t.EVERYDAY_NORM_HIGH;
+  if (!(hi > lo)) return 1;
+  if (norm >= hi) return 1;
+  if (norm <= lo) return 0;
+  const x = (norm - lo) / (hi - lo);
+  return x * x * (3 - 2 * x);
+}
+
 /** Saturating term frequency: a word repeated ten times is not ten cues. */
 export function tfFactor(tf: number): number {
   if (tf <= 0) return 0;
@@ -139,6 +183,12 @@ export interface Cue {
   readonly ambiguous: boolean;
   /** Carried from the previous turn at CARRY_DECAY, for one turn only. */
   readonly carried: boolean;
+  /**
+   * Every surface word of the turn that shares this cue's index term ("bake",
+   * "baking"), `token` first. What the index is asked for, so a cache still
+   * mixed from before the v7 stemming matches every form (2026-10-19).
+   */
+  readonly forms?: readonly string[];
 }
 
 export interface CueInput {
@@ -151,8 +201,19 @@ export interface CueInput {
   readonly aliases?: ReadonlyMap<string, readonly string[]>;
   /** Live memory count, for informativeness. */
   readonly storeSize: number;
-  /** token -> document frequency, measured against the index. */
+  /** token -> document frequency, measured against the index. Keyed by
+   *  `term(token)` when `term` is given. */
   readonly df: ReadonlyMap<string, number>;
+  /**
+   * The index term of a surface word (`store/stem.ts#stemTerm` since the v7
+   * cache, 2026-10-19). Words sharing one are ONE cue — "bake … baking" is
+   * one word said twice, not two cues reading one posting list. Absent: each
+   * word is its own term, as before.
+   */
+  readonly term?: (token: string) => string;
+  /** The embedder table's weight for a surface word (`Store.wordNorm`), read
+   *  by `everydayFactor`. Absent, or null for a word: no discount. */
+  readonly wordNorm?: (token: string) => number | null;
 }
 
 /**
@@ -161,34 +222,46 @@ export interface CueInput {
  * an I/O call on the hot path.
  */
 export function buildCues(input: CueInput, t: RecallTunables): Cue[] {
-  const counts = new Map<string, number>();
+  const termOf = input.term ?? ((tok: string): string => tok);
+  const isAmbiguous = (tok: string): boolean => (input.aliases?.get(tok)?.length ?? 0) >= 2;
+  const everyday = (tok: string): number => everydayFactor(input.wordNorm?.(tok) ?? null, t);
+  // Surface words grouped by index term, first-seen order; the first form names the cue.
+  const groups = new Map<string, { forms: string[]; tf: number }>();
   for (const tok of tokenize(input.text)) {
     if (tok.length < t.MIN_CUE_LENGTH) continue;
-    counts.set(tok, (counts.get(tok) ?? 0) + 1);
+    const key = termOf(tok);
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, { forms: [tok], tf: 1 });
+    else {
+      g.tf += 1;
+      if (!g.forms.includes(tok)) g.forms.push(tok);
+    }
   }
   const cues: Cue[] = [];
   const seen = new Set<string>();
-  for (const [token, tf] of counts) {
-    const df = input.df.get(token) ?? 0;
+  for (const [key, g] of groups) {
+    const token = g.forms[0] as string;
+    const df = input.df.get(key) ?? 0;
     const idf = informativeness(df, input.storeSize);
     if (idf <= 0) continue;
-    const ids = input.aliases?.get(token);
-    const ambiguous = ids !== undefined && ids.length >= 2;
-    const weight = idf * tfFactor(tf) * (ambiguous ? t.AMBIGUOUS_WEIGHT : 1);
+    const ambiguous = g.forms.some(isAmbiguous);
+    // The most content-like form speaks for the group ("baking" for "bake").
+    const plain = Math.max(...g.forms.map(everyday));
+    const weight = idf * tfFactor(g.tf) * (ambiguous ? t.AMBIGUOUS_WEIGHT : 1) * plain;
     if (weight <= 0) continue;
-    seen.add(token);
-    cues.push({ token, weight, tf, ambiguous, carried: false });
+    seen.add(key);
+    cues.push({ token, weight, tf: g.tf, ambiguous, carried: false, ...(g.forms.length > 1 ? { forms: g.forms } : {}) });
   }
   for (const token of input.carried ?? []) {
-    if (seen.has(token)) continue;
-    const df = input.df.get(token) ?? 0;
+    const key = termOf(token);
+    if (seen.has(key)) continue;
+    const df = input.df.get(key) ?? 0;
     const idf = informativeness(df, input.storeSize);
     if (idf <= 0) continue;
-    const ids = input.aliases?.get(token);
-    const ambiguous = ids !== undefined && ids.length >= 2;
-    const weight = idf * t.CARRY_DECAY * (ambiguous ? t.AMBIGUOUS_WEIGHT : 1);
+    const ambiguous = isAmbiguous(token);
+    const weight = idf * t.CARRY_DECAY * (ambiguous ? t.AMBIGUOUS_WEIGHT : 1) * everyday(token);
     if (weight <= 0) continue;
-    seen.add(token);
+    seen.add(key);
     cues.push({ token, weight, tf: 0, ambiguous, carried: true });
   }
   cues.sort((a, b) => b.weight - a.weight || (a.token < b.token ? -1 : 1));

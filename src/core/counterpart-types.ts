@@ -3,6 +3,7 @@ import type { FlushReport } from "./associate/index.js";
 import type { MintResult } from "./mint.js";
 import type { Stance } from "./observer.js";
 import type { PlainDue } from "./prospective/index.js";
+import type { RecallTunables } from "./recall/index.js";
 import type { Proposal, MalformedReason, InterpretFn, SweepReport } from "./remember/index.js";
 import type { RevisionApplication } from "./revision.js";
 import type { HeldUpdate, SlotOutcome } from "./reconsolidation.js";
@@ -153,7 +154,9 @@ export interface ContiguityPass {
  * to what was in mind when it was written — what a deliberate question showed
  * near the write, and what recall showed its session in the last few turns.
  * Proposed, so room-only: `noRoom` pairs were refused, never forced. Counts
- * only, on the boundary's `associate.flush` row as `atWrite`.
+ * only, on the boundary's `associate.flush` row as `atWrite`. Off by default
+ * since 2026-10-19, as an experiment (`WRITE_LINK_MAX` 0; check ~10-22): the
+ * row then carries no `atWrite`.
  */
 export interface AtWritePass {
   readonly reason: "linked" | "nothing-in-mind" | "failed";
@@ -354,6 +357,12 @@ export interface CounterpartOptions extends Stance {
    * (`CRAFT_AT_DELIVERY`) can be turned off for a whole counterpart.
    */
   selfTunables?: Partial<SelfTunables>;
+  /**
+   * `recall/`'s knobs over its defaults (`recall/tunables.ts`). Absent: the
+   * defaults. Added 2026-10-19 so a test can hold the in-line vector-count
+   * guard (`SEMANTIC_INLINE_MAX_VECTORS`) at a size a fixture reaches.
+   */
+  recallTunables?: Partial<RecallTunables>;
 }
 
 /** What `wake()` returns: the bundle, plus what the host told us about itself. */
@@ -367,6 +376,13 @@ export interface WakeOutcome extends WakeResult {
    * the lookup ledger (`fit.index.wake`).
    */
   readonly lined?: readonly string[];
+  /**
+   * The open threads ("Still open") a wake ASSEMBLED at this delivery kept,
+   * by id (context priming, an experiment, 2026-10-19): the host records them
+   * for the session (`recall/prime.ts#noteWakeOpen`) as part of what is open
+   * here. Empty when it kept none or the published bundle was delivered.
+   */
+  readonly threads?: readonly string[];
 }
 
 /**

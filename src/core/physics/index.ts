@@ -106,6 +106,28 @@ export const TUNABLES = {
    */
   ENGAGED_RECURRENCE_WEIGHT: 0.5,
   /**
+   * A day whose only evidence is a GLIMPSE — shown and not rated (the
+   * 2026-10-19 experiment; check ~10-22) — counts this much of a recurrence day,
+   * never alone and never as the row's anchor (`sleep/consolidate.ts#coreRecurrence`).
+   * Why 0.1: the glimpse's own use weight (`W_SHOWN`); the 10-14 check-in
+   * found ~270 memories shown in 3+ sessions and never used, mostly standing
+   * rulings, and at 0.1 a month of daily footnotes adds 3 days, short of
+   * `CORE_SLOW_DAYS` even before the full-day and anchor rules.
+   */
+  SHOWN_RECURRENCE_WEIGHT: 0.1,
+  /** The same for a day whose only evidence is a rating of 1 (on topic, not needed). Why 0.25: its use weight (`W_ONTOPIC`). */
+  ONTOPIC_RECURRENCE_WEIGHT: 0.25,
+  /**
+   * The lowest use weight that is a full AWAKE return — a lane day, the fast
+   * lane's "came back" (the 2026-10-19 experiment; check ~10-22; revert by
+   * setting it back to `W_REFERENCED`, 1.0, the literal `creditReturn` had).
+   * Why 0.75: a rating of 2
+   * (`W_USEFUL`, "useful background") is the session saying it used the
+   * memory, and the brief counts it toward the core as a full day; the repeat
+   * credit (`W_SURFACED`, 0.25) and the glimpses stay below it.
+   */
+  AWAKE_RETURN_MIN_WEIGHT: 0.75,
+  /**
    * A reflection counts a memory as returned at most once every this many
    * lived days (working default 2026-09-27): "the reflection can't cite the
    * same memory every night", and the SLOW lane gets at most one reflection
@@ -444,10 +466,33 @@ export const TUNABLES = {
    * `session_end` / `chapter`, 2026-10-11): half a use. Display alone still
    * trains nothing — `W_FOOTNOTED` stays 0. Built by the drewOn builder,
    * 2026-10-11, from Mike's 10-10 direction, lightly held. Why: review 05 D1.
+   *
+   * AN EXPERIMENT SINCE 2026-10-19 (Mike, the feedback loop; check ~10-22):
+   * trying drewOn as a FULL use, 1.0 — the session saying a memory shaped what
+   * it did is as good as opening it. At full weight its return is an awake
+   * one (a lane day, a full recurrence day), as an open's is
+   * (`partialSourceOf`); the once-a-lived-day rule and the boundary's cap of 3
+   * stay. Revert by setting it back to 0.5 (the half return comes back with it).
    */
-  W_ENGAGED: 0.5,
+  W_ENGAGED: 1.0,
   W_SURFACED: 0.25,
   W_FOOTNOTED: 0.0,
+  /**
+   * GRADED USE FROM RATINGS — AN EXPERIMENT (2026-10-19, the feedback loop).
+   * Trying each score at the `rated` boundary as a use
+   * (`recall/rated.ts#RATING_TIER`; 0 none, 3 a full `referenced` use) to see
+   * whether the day starts teaching the system (3% of shown memories were
+   * credited, 18% rated useful). Check on ~10-22; revert by reverting the PR
+   * (the only rows it leaves are `returns` of source `shown` / `ontopic`,
+   * which an older build ignores). Why these numbers: the brief's "about 0.1 /
+   * 0.25 / 0.75", deliberately strong so the loop can be seen, then tuned down.
+   */
+  /** Shown in a stretch (a footnote, a loud line, a pointer) and not rated: a glimpse. */
+  W_SHOWN: 0.1,
+  /** Rated 1, on topic but not needed: a quarter of a use. */
+  W_ONTOPIC: 0.25,
+  /** Rated 2, useful background: most of a use, and a full awake return (`AWAKE_RETURN_MIN_WEIGHT`). */
+  W_USEFUL: 0.75,
 
   // --- §5.6 revision ---
   /** Pressure stability, lived days. Same curve FAMILY as memory decay, its own
@@ -1603,7 +1648,28 @@ export function promote(m: MemoryPhysics, d: number, ctx: CoreContext): Promotio
  * #238 gave `awake` — do not "fix" it back to `on-display` (physics
  * CONTRACT §5.11).
  */
-export type ReturnSource = "awake" | "dream" | "reflection" | "engaged";
+export type ReturnSource = "awake" | "dream" | "reflection" | "engaged" | "shown" | "ontopic";
+
+/**
+ * THE PARTIAL RETURNS (2026-10-11 `engaged`; 2026-10-19 `shown`, `ontopic`):
+ * a use below a full return's weight earns a return of its own source that
+ * touches only the `returns` sum — no lane day, no `lastReturnDay`, spaced from
+ * a return of any kind, refused on a day that already counted one. Each is
+ * worth its use's weight (`engaged` its own `ENGAGED_RETURN_WEIGHT`).
+ */
+export const PARTIAL_RETURN_SOURCES: Readonly<Partial<Record<ReturnSource, UseTier>>> = {
+  engaged: "engaged",
+  shown: "shown",
+  ontopic: "ontopic",
+};
+
+/** The partial return source a tier earns, or null when its return is awake (or none). */
+export function partialSourceOf(tier: UseTier): ReturnSource | null {
+  // `engaged` (drewOn) is partial only below a full awake return's weight:
+  // since 2026-10-19 (an experiment) it is a full use and returns as one.
+  if (tier === "engaged") return TUNABLES.W_ENGAGED < TUNABLES.AWAKE_RETURN_MIN_WEIGHT ? "engaged" : null;
+  return tier === "shown" || tier === "ontopic" ? tier : null;
+}
 
 export type ReturnReason =
   | "counted"
@@ -1707,9 +1773,15 @@ export function creditReturn(
         ? TUNABLES.REFLECTION_RETURN_WEIGHT
         : opts.source === "engaged"
           ? TUNABLES.ENGAGED_RETURN_WEIGHT
-          : (opts.tierWeight ?? TUNABLES.W_REFERENCED);
+          : opts.source === "shown"
+            ? TUNABLES.W_SHOWN
+            : opts.source === "ontopic"
+              ? TUNABLES.W_ONTOPIC
+              : (opts.tierWeight ?? TUNABLES.W_REFERENCED);
   if (tier <= 0) return refuse("ignorable-tier");
-  if (opts.source === "awake" && tier < TUNABLES.W_REFERENCED) return refuse("not-referenced");
+  // A full awake return from `AWAKE_RETURN_MIN_WEIGHT` up (2026-10-19: a
+  // rating of 2 is one; it was full weight only).
+  if (opts.source === "awake" && tier < TUNABLES.AWAKE_RETURN_MIN_WEIGHT) return refuse("not-referenced");
   if (d <= m.birthDay) return refuse("birth-day");
   if (opts.source === "awake" && opts.onDisplay === true) return refuse("on-display");
   // AN ENGAGED RETURN (2026-10-11, `drewOn`; ported from #371): half a
@@ -1719,13 +1791,15 @@ export function creditReturn(
   // `lastReturnDay` (those are the core lanes'), no `lastDreamDay`. Only a
   // memory recall showed this session can earn one (`Counterpart#creditDrewOn`
   // refuses the rest), so the wake's display rule does not apply.
-  if (opts.source === "engaged") {
+  // A GLIMPSE OR A RATING OF 1 (2026-10-19) is the same shape at its own
+  // weight (`PARTIAL_RETURN_SOURCES`).
+  if (PARTIAL_RETURN_SOURCES[opts.source] !== undefined) {
     if (gap <= 0) return refuse("already-returned-today");
     const weight = tier * spacingWeight(gap);
     return {
       counted: true,
       reason: "counted",
-      source: "engaged",
+      source: opts.source,
       gap,
       weight,
       next: { ...unchanged, returns: unchanged.returns + weight },
@@ -1763,7 +1837,9 @@ export function creditReturn(
   if (opts.source === "dream" && m.lastDreamDay !== null && m.lastDreamDay !== undefined && d - m.lastDreamDay < TUNABLES.RETURN_SPACING_DAYS) {
     return refuse("dream-spaced");
   }
-  const weight = (opts.source === "awake" ? 1 : tier) * spacingWeight(gap);
+  // An awake return is worth its use's weight (1 for a full use; a rating of
+  // 2 most of one, 2026-10-19), never more than one.
+  const weight = (opts.source === "awake" ? Math.min(1, tier) : tier) * spacingWeight(gap);
   const next = { ...unchanged, returns: unchanged.returns + weight };
   if (opts.source === "dream") {
     next.lastDreamDay = d;
@@ -1842,13 +1918,21 @@ export function symmetryCheck(kind: Kind, counts: { up: number; down: number; un
 // §5.5 Reinforcement
 // ---------------------------------------------------------------------------
 
-export type UseTier = "referenced" | "engaged" | "surfaced" | "footnoted";
+/**
+ * `shown`, `ontopic` and `useful` (2026-10-19, the feedback loop): what a
+ * session's ratings make of what it was shown — unrated, rated 1, rated 2
+ * (`recall/rated.ts#RATING_TIER`; rated 3 is `referenced`).
+ */
+export type UseTier = "referenced" | "engaged" | "surfaced" | "footnoted" | "shown" | "ontopic" | "useful";
 
 export const USE_TIER_WEIGHT: Record<UseTier, number> = {
   referenced: TUNABLES.W_REFERENCED,
   engaged: TUNABLES.W_ENGAGED,
   surfaced: TUNABLES.W_SURFACED,
   footnoted: TUNABLES.W_FOOTNOTED,
+  shown: TUNABLES.W_SHOWN,
+  ontopic: TUNABLES.W_ONTOPIC,
+  useful: TUNABLES.W_USEFUL,
 };
 
 export type CreditReason =

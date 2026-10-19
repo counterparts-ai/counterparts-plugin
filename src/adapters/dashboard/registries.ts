@@ -337,8 +337,8 @@ export const DURABLE_EVENTS = {
   // Durable since 2026-10-02: "Work here" had more lines than the wake carried.
   "self.work.overflow": "a session start had more \"Work here\" lines for its project than it carried — more than the wake shows, so they rotate, or fewer fitted the room (how many, how many shown)",
   "recall.credit": "a boundary decided which memories the replies actually used, and credited them",
-  // Ratings (2026-10-14; Mike's call, tracking only): recorded, acted on by nothing.
-  "recall.rated": "a session scored the memories it was shown, 0 to 3 (by lane, whether each was also drawn on, and how many of the footnotes since its last rating it scored) — tracking only, nothing changes",
+  // Ratings (2026-10-14; Mike's call). Since 2026-10-19 an experiment counts them as use.
+  "recall.rated": "a session scored the memories it was shown, 0 to 3 (by lane, whether each was also drawn on, and how many of the footnotes since its last rating it scored) — and, an experiment since 2026-10-19, what the scores credited and linked",
   // Learned association had no line in the log at all: an edge is its own
   // record, so a flush that never happened read exactly like a credit pass with
   // nothing to wire (2026-09-17, mechanism inventory §3 S3).
@@ -384,7 +384,7 @@ export const DURABLE_EVENTS = {
   // The update guard (2026-10-09). Ids, the reading and its numbers; no text.
   "contradiction.held": "a new memory said it changed or corrected one that looked unrelated to it, so the old one was left as it was and the two were not linked (the writer was shown it and asked to settle it if it meant to)",
   // The slot detector (2026-10-11, Group 2). Ids, the rule and the cosine; no text.
-  "contradiction.proposed": "a new memory read as the newer state of the same thing as an older one (status moved on, or very close in meaning), so the older was marked possibly out of date and faded a little, until the writer or the dream confirms it or says they are two things",
+  "contradiction.proposed": "a new memory read as the newer state of the same thing as an older one (status moved on, or very close in meaning), so the older was marked possibly out of date (faded a little before 2026-10-19; a flag only since, as an experiment), until the writer or the dream confirms it or says they are two things",
   // What is not written up (2026-09-30). Ids and counts only; one row per stretch per state.
   "coverage.owed": "a session left a stretch that is not written up — three pieces or more over a quarter of an hour — and is no longer at work, so it owes a write-up (how many pieces, over how long)",
   "coverage.written": "a stretch of a session was written up (how many pieces, and by whom: the session itself, a \"nothing new\", a chapter, or the next session)",

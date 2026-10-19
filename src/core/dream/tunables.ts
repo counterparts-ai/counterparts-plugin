@@ -99,6 +99,37 @@ export const DREAM_TUNABLES = {
   LOOKBACK_SPREAD: 2,
   LOOKBACK_COUNT: 5,
   /**
+   * THE DAY'S REPLAY (2026-10-19, feedback-loop part E). An experiment, set
+   * strong on purpose so its effect is easy to see; check on ~10-22, then tune
+   * down; revert by setting every lift to 0. What the
+   * day since the last dream did with a memory (`day.ts#readDay`) lifts a
+   * QUEUED memory's replay priority: priority × (1 + lift). Why these: a
+   * `drewOn` or a 3 (the reward tag) and a use are the day's own check on what
+   * matters, so they outrank value × fragility nearly always (×4, ×3); a
+   * rating of 2 the same as a use; a memory only shown gets a nudge (×1.5),
+   * since about half of footnotes are rated noise.
+   */
+  DAY_LIFT: { reward: 3, used: 2, useful: 2, shown: 0.5 },
+  /**
+   * At most this many memories the day used, rated useful or drew on are
+   * listed as tonight's `today`; one already dreamed joins the bundle in the
+   * role `today`. Why 20: the owner's store shows about 4 drewOn and 10 useful
+   * ratings a day, so this rarely cuts.
+   */
+  TODAY_COUNT: 20,
+  /**
+   * At most this many pairs used together in one session are listed
+   * (`todayPairs`). Why 12: a hint for the replay, not a second fresh list,
+   * and a long session's pairs grow with the square of its uses.
+   */
+  TODAY_PAIRS: 12,
+  /**
+   * A `today` memory's place when tonight's room is spent: beside `new` (4),
+   * `on-mind` (3) and `lookback` (2). Why 3.5: the day's lived use is the
+   * night's strongest outside signal after what is new tonight.
+   */
+  TODAY_FIT: 3.5,
+  /**
    * DETAIL BY IMPORTANCE (2026-09-28: was a flat 400 characters each). Every
    * memory shown gets a line; the most important get their whole text, up to
    * this many characters — longer is an excerpt with its whole length said,

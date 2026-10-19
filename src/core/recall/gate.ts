@@ -32,6 +32,7 @@
 import { emotionalIntensity } from "../physics/index.js";
 import { tokenize } from "../store/index.js";
 import type { Candidate } from "./activate.js";
+import { primeOf } from "./activate.js";
 import { MIN_RARITY_STORE, informativeness } from "./cues.js";
 import type { GateState } from "./session.js";
 import { strongFloor } from "./tunables.js";
@@ -46,6 +47,9 @@ export type Verdict =
   | "confidential-withheld"
   /** Boundary: this session already saw it. */
   | "dedup-suppressed"
+  /** This session WROTE it (since its last compaction), so it is already in
+   *  its context: would have been shown, and was not (2026-10-19, part C). */
+  | "echo-skipped"
   /** Hard gate (a). */
   | "dark-uncued"
   /** Hard gate (b), evaluated before any salience adjustment. */
@@ -103,6 +107,18 @@ export interface CandidateVerdict {
    *  this says which lane it came by. Absent for everything the conversation
    *  reached. */
   readonly via?: "link";
+  /** HABITUATED (2026-10-19, `habituation.ts`): rated 0 in enough recent
+   *  sessions that the bar it faced (`bar`) was raised. Absent otherwise. */
+  readonly habituated?: true;
+  /**
+   * PRIMED (context priming, an experiment, 2026-10-19; `prime.ts`): the head
+   * start in `activation` from links (`link`) and the train of thought
+   * (`train`), the kinds of source behind the link part (`from`), and
+   * `lifted` when it was admitted only because of it — the cut without
+   * priming left it out, or its activation without priming was under the bar
+   * it faced. Absent when nothing primed it.
+   */
+  readonly primed?: { readonly link: number; readonly train: number; readonly from: readonly string[]; readonly lifted?: true };
 }
 
 export interface Background {
@@ -128,6 +144,10 @@ export interface GateInput {
   /** The turn stated a feeling (any subject) — the affect flag's turn gate. */
   readonly affectStated: boolean;
   readonly turn: number;
+  /** Memories this session wrote — ambient recall's echo set (`Turn.echo`). */
+  readonly echo?: ReadonlySet<string>;
+  /** Memories habituated this turn (`habituation.ts#habituatedIds`, 2026-10-19). Absent: none. */
+  readonly habituated?: ReadonlyMap<string, number>;
 }
 
 export interface GateResult {
@@ -291,31 +311,66 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   // tier. A candidate only stamps reached, or one kept only because of a stamp
   // (`pastCut` — the words reached it too weakly to make the cut), is outside
   // the sample; its bar is the whole sample's. Absent on every ambient turn, so there nothing changes.
-  const own = (c: Candidate): number => c.activation - (c.stamp ?? 0);
+  // PRIMING (an experiment, 2026-10-19) is measured against the background
+  // the same way, never part of it: a primed cluster in the sample would raise
+  // every other candidate's bar — the tunnel vision the review watches for,
+  // built into the mechanism.
+  const own = (c: Candidate): number => c.activation - (c.stamp ?? 0) - primeOf(c);
   // A head brought in for an earlier memory (`standsFor`, 2026-10-11) is the
-  // same reach counted twice: outside the sample too.
+  // same reach counted twice: outside the sample too — but it faces the bar
+  // of the one it stands for (`barOf`), not the whole sample's.
   const inSample = (c: Candidate): boolean => c.pastCut !== true && c.standsFor === undefined && c.cue - (c.stamp ?? 0) + c.semantic > 0;
-  const acts = input.candidates.filter(inSample).map(own);
+  // A stand-in the words also reached on their own keeps that reach in the
+  // background (`directReach`, review of #526): what the words found, once.
+  const acts = [
+    ...input.candidates.filter(inSample).map(own),
+    ...input.candidates.flatMap((c) => (c.standsFor !== undefined && c.directReach !== undefined ? [c.directReach] : [])),
+  ];
   const bg = background(acts, input.storeSize, t);
   /** The loud-tier floors are in the same unit as hard gate (b)'s (`floorUnit`). */
   const loudUnit = floorUnit(input.storeSize);
   const sum = acts.reduce((a, b) => a + b, 0);
   const sumSq = acts.reduce((a, b) => a + b * b, 0);
   const n = acts.length;
-  const barOf = (c: Candidate, snr: number): number =>
-    inSample(c) ? looBar(own(c), sum, sumSq, n, snr) : bg.mean + snr * bg.sd;
+  // A HEAD STANDING IN FACES THE BAR OF WHAT IT STANDS FOR (2026-10-19, an
+  // experiment): it carries the earlier one's numbers, so with the
+  // whole-sample bar a marginal earlier one cleared its leave-one-out bar and
+  // showed while its head failed. Trying the earlier's own bar to see the
+  // earlier-shown-without-its-head count go to ~0; check ~10-22; revert by
+  // dropping this lookup (docs/decisions.d/fix-head-wins-gap-1019.md).
+  const byId = new Map(input.candidates.map((c) => [c.id, c]));
+  const barOf = (c: Candidate, snr: number): number => {
+    const basis = (c.standsFor !== undefined ? byId.get(c.standsFor) : undefined) ?? c;
+    return inSample(basis) ? looBar(own(basis), sum, sumSq, n, snr) : bg.mean + snr * bg.sd;
+  };
+  // EITHER BAR (2026-10-19, an experiment; the coordinator's call on the
+  // review of #526): a stand-in the words also reached on their own
+  // (`directReach`) passes when it clears the earlier one's bar at the
+  // earlier's numbers OR its own bar at its own reach and salience, so a head
+  // that showed on its own before still does. Its own bar is carried in the
+  // stand-in's units (shifted by the gap between the two reaches), so one
+  // comparison against `activation` decides, and the bar recorded is the one
+  // that let it through.
+  const directBar = (c: Candidate, snr: number): number | undefined =>
+    c.standsFor !== undefined && c.directReach !== undefined
+      ? modulate(looBar(c.directReach, sum, sumSq, n, snr), c.directSal ?? c.sal, bg.regime, t) + (c.activation - c.directReach)
+      : undefined;
+  const either = (c: Candidate, snr: number): number => {
+    const viaEarlier = modulate(barOf(c, snr), c.sal, bg.regime, t);
+    const viaOwn = directBar(c, snr);
+    return viaOwn === undefined ? viaEarlier : Math.min(viaEarlier, viaOwn);
+  };
   const barsFor = (c: Candidate): { admit: number; loud: number } =>
-    bg.regime === "relative"
-      ? {
-          admit: modulate(barOf(c, t.SNR_GLOBAL), c.sal, bg.regime, t),
-          loud: modulate(barOf(c, t.SNR_STRONG), c.sal, bg.regime, t),
-        }
-      : { admit: bg.bar, loud: bg.strongBar };
+    bg.regime === "relative" ? { admit: either(c, t.SNR_GLOBAL), loud: either(c, t.SNR_STRONG) } : { admit: bg.bar, loud: bg.strongBar };
 
   const verdicts: CandidateVerdict[] = [];
   const admitted: { c: Candidate; loud: boolean }[] = [];
   const loudBlock = new Map<string, Verdict>();
   const faced = new Map<string, number>();
+  /** Candidates whose bar habituation raised (marked on their verdicts). */
+  const habituatedIds = new Set<string>();
+  /** Admitted primed candidates priming alone put over their bar or into the cut. */
+  const primeLifted = new Set<string>();
   const record = (c: Candidate, verdict: Verdict): void => {
     const blocked = loudBlock.get(c.id);
     verdicts.push({
@@ -336,8 +391,15 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
       trains: c.trains,
       ...(blocked !== undefined ? { loudBlockedBy: blocked } : {}),
       ...(c.linkOnly === true ? { via: "link" as const } : {}),
+      ...(habituatedIds.has(c.id) ? { habituated: true as const } : {}),
+      ...(c.prime === undefined
+        ? {}
+        : { primed: { link: c.prime.link, train: c.prime.train, from: c.prime.from, ...(primeLifted.has(c.id) ? { lifted: true as const } : {}) } }),
     });
   };
+
+  /** In this session's echo set (`GateInput.echo`). */
+  const echo = (id: string): boolean => input.echo?.has(id) === true;
 
   /** Quiet pointers that passed the boundary gates, in the order activation
    *  ranked them (strongest arrival first). */
@@ -373,6 +435,10 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
         record(c, "dedup-suppressed");
         continue;
       }
+      if (echo(c.id)) {
+        record(c, "echo-skipped");
+        continue;
+      }
       pointerPool.push(c);
       continue;
     }
@@ -389,14 +455,34 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
       continue;
     }
     // Hard gate (b) — the absolute floor, BEFORE any salience adjustment.
-    if (c.activation < bg.floor) {
+    // On the activation WITHOUT priming (2026-10-19): the floor says how weak
+    // the turn's own evidence may be, and a head start is not evidence.
+    if (c.activation - primeOf(c) < bg.floor) {
       record(c, "below-floor");
       continue;
     }
-    const bars = barsFor(c);
+    // HABITUATION (an experiment, 2026-10-19, light): a memory rated 0 in enough recent
+    // sessions faces a raised bar, both tiers — after the floor, so the floor
+    // still means what it meant; a lift, never a veto.
+    const habituated = input.habituated?.has(c.id) === true;
+    const lift = habituated ? 1 + t.HABITUATION_BAR_LIFT : 1;
+    const plain = barsFor(c);
+    const bars = { admit: plain.admit * lift, loud: plain.loud * lift };
+    if (habituated) habituatedIds.add(c.id);
     faced.set(c.id, bars.admit);
     if (c.activation < bars.admit) {
       record(c, "below-bar");
+      continue;
+    }
+    if (c.prime !== undefined && (c.prime.cut === true || c.activation - primeOf(c) < bars.admit)) primeLifted.add(c.id);
+    // THE ECHO SKIP (2026-10-19, feedback-loop part C, an experiment): a memory
+    // this session wrote is already in its context, so handing it back is the
+    // conversation hearing itself. Checked HERE, once it has cleared the floor
+    // and its bar, so `echo-skipped` counts only what would have been shown —
+    // the number a review reads to see what a long session lost. It stays in
+    // the background sample, as a dedup-suppressed candidate does.
+    if (echo(c.id)) {
+      record(c, "echo-skipped");
       continue;
     }
     // Loud-tier eligibility. Hard gate (c) first: arrival makes a memory warm,
@@ -426,7 +512,7 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
     } else if (c.cueFraction < t.MIN_CUE_FRACTION) {
       loud = false;
       loudBlock.set(c.id, "cue-fraction");
-    } else if (c.activation < strongFloor(t, c.kind, loudUnit)) {
+    } else if (c.activation - primeOf(c) < strongFloor(t, c.kind, loudUnit)) {
       loud = false;
       loudBlock.set(c.id, "below-strong-floor");
     } else if (c.activation < bars.loud) {
@@ -447,9 +533,21 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   // Measured on 10-10: earlier versions were shown 55 times after their
   // settle, 51 of them without their successor; the newer only 43.
   const admittedIds = new Set(admitted.map((a) => a.c.id));
+  // HELD BACK WHENEVER ITS HEAD WAS BROUGHT IN (2026-10-19, an experiment; the
+  // coordinator's call on the review of #526, and the 10-19 overdue checks'
+  // "hold back the earlier one"): an earlier one a head stands in for is held
+  // back whether or not the head then shows — the newer state is what counts,
+  // and a head that failed (habituated, say) means this footnote was not
+  // useful. Not when the head is a confidential one withheld from a guest:
+  // the earlier one then shows, labelled, as before.
+  const stoodFor = new Set(
+    input.candidates.flatMap((c) => (c.standsFor !== undefined && !(c.confidential && !input.owner) ? [c.standsFor] : [])),
+  );
   const kept: { c: Candidate; loud: boolean }[] = [];
+  // A head this session WROTE (the echo set, part C) is in its context too:
+  // the earlier version stays inhibited rather than shown in its place.
   for (const a of admitted) {
-    if (a.c.head !== undefined && (admittedIds.has(a.c.head) || input.state.surfaced[a.c.head] !== undefined)) {
+    if (a.c.head !== undefined && (stoodFor.has(a.c.id) || admittedIds.has(a.c.head) || input.state.surfaced[a.c.head] !== undefined || echo(a.c.head))) {
       record(a.c, "inhibited");
       continue;
     }
@@ -502,7 +600,7 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
       continue;
     }
     // A pointer whose head is shown, or already in the session, is its earlier version (2026-10-11).
-    if (p.head !== undefined && (shownIds.has(p.head) || pointers.some((q) => q.id === p.head) || input.state.surfaced[p.head] !== undefined)) {
+    if (p.head !== undefined && (stoodFor.has(p.id) || shownIds.has(p.head) || pointers.some((q) => q.id === p.head) || input.state.surfaced[p.head] !== undefined || echo(p.head))) {
       record(p, "inhibited");
       continue;
     }

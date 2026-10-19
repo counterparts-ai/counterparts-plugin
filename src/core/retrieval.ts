@@ -59,6 +59,9 @@ export interface SpreadSource {
     stop?: string;
     depth?: number;
   };
+  /** Structurally `Associate.partnersOf` — one hop, for context priming
+   *  (2026-10-19). Optional: without it priming's link channel is dark. */
+  partnersOf?(ids: readonly string[], day?: number): ReadonlyMap<string, readonly { id: string; weight: number }[]>;
 }
 
 export interface RetrievalSources {
@@ -95,6 +98,12 @@ export function composeTurn(turn: Turn, sources: RetrievalSources): Turn {
   if (sources.associate !== undefined && turn.spread === undefined) {
     const source = sources.associate;
     out.spread = (seeds, day) => source.spreadFrom(seeds, day);
+  }
+  // CONTEXT PRIMING's link channel (2026-10-19): bound only on a turn that
+  // primes at all — the ambient turn, which set `turn.prime`.
+  if (sources.associate?.partnersOf !== undefined && turn.prime !== undefined && turn.prime.partners === undefined) {
+    const source = sources.associate;
+    out.prime = { ...turn.prime, partners: (ids, day) => source.partnersOf?.(ids, day) ?? new Map() };
   }
   return out;
 }

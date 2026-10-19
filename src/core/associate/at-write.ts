@@ -16,6 +16,10 @@
  * rule. A memory the session NAMES in `drewOn` gets the strong deposit
  * instead (`Counterpart#creditDrewOn`).
  *
+ * OFF by default since 2026-10-19, as an experiment (`WRITE_LINK_MAX` 0, so
+ * this plans nothing and the boundary does not call it; check ~10-22, revert
+ * by setting it back to 4). The planner stays as it was.
+ *
  * Rules the code mechanizes:
  *
  *   1. **What was in mind, nearest first.** The caller orders each memory's

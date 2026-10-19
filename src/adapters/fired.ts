@@ -525,9 +525,11 @@ export const MECHANISMS: readonly Mechanism[] = [
     evidence: { kind: "event", names: ["recall.credit"] },
   },
   {
-    // Mike's call, 2026-10-14: tracking only. Nothing reads the rows to act.
+    // Mike's call, 2026-10-14. Since 2026-10-19 an experiment (check ~10-22)
+    // counts the scores as use, links what was co-used, and habituates a
+    // memory rated 0 twice (`core/recall/rated.ts`, `habituation.ts`).
     id: "rated",
-    label: "a session scored the memories it was shown, 0 to 3 — recorded only, nothing changes",
+    label: "a session scored the memories it was shown, 0 to 3, and the scores count as use (an experiment since 2026-10-19)",
     module: "recall/rated.ts, mcp/server-session-end.ts",
     evidence: { kind: "event", names: ["recall.rated"] },
     since: "2026-10-14",
@@ -2276,6 +2278,9 @@ function readProbes(store: ReadOnlyStore, w: Window): Probed {
     // doctor's Reflection line splits the week's returns by source.
     for (const r of store.returnsOf(id)) {
       if (r.source === "legacy") continue;
+      // A glimpse or a rating of 1 (2026-10-19, an experiment) is a partial
+      // return, not a memory that came back: not counted as one here.
+      if (r.source === "shown" || r.source === "ontopic") continue;
       bump(r.source === "dream" ? "returns.dream" : "returns.awake", { at: r.at });
     }
     if (row !== undefined && row.archived === 0 && row.source === "dreamed") {

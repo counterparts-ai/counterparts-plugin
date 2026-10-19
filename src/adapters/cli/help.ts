@@ -379,7 +379,9 @@ export const COMMAND_DETAIL: Record<string, readonly string[]> = {
     "(recall/render.ts).",
     "",
     "Then the ratings: what sessions scored, 0 to 3, of what they were shown, by",
-    "date and lane, beside drewOn and the hit rate. Tracking only.",
+    "date and lane, beside drewOn and the hit rate. Since 2026-10-19 (an",
+    "experiment) the scores also count as use; doctor's Feedback loop line says",
+    "what they did.",
   ],
   mechanisms: [
     "One line per memory mechanism: ● working this week, ◐ built but not firing,",

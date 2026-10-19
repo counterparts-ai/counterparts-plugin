@@ -59,6 +59,7 @@ import {
 } from "../core/counterpart.js";
 import type { AdapterDurableEventName, DeliveryWarningName, PlainReminder, WakeHere } from "../core/counterpart.js";
 import { readIndex, writeIndex } from "../core/fit/index.js";
+import { noteWakeOpen } from "../core/recall/prime.js";
 import type {
   BoundaryKind,
   CaptureResult,
@@ -150,6 +151,13 @@ export interface SessionInput {
   readonly prompt?: string;
   /** The model that wrote the transcript's last assistant entry, when known. */
   readonly model?: string;
+  /**
+   * When the host last COMPACTED this conversation, epoch ms, when it says so
+   * (Claude Code: the transcript's newest `compact_boundary` line). Ambient
+   * recall's echo skip then counts only memories born since (2026-10-19,
+   * feedback-loop part C); absent, the whole session's.
+   */
+  readonly compactedAt?: number;
   /** Today's calendar date, for the temporal channel and the horizon lane. */
   readonly at?: string;
   /**
@@ -574,7 +582,26 @@ export class Lifecycle implements HostLifecycle {
     );
     this.noteWakeExpectation(input, woke.sentinel);
     this.noteWakeIndex(input, woke.lined ?? []);
+    this.noteWakeThreads(input, woke.threads ?? []);
     return woke;
+  }
+
+  /**
+   * WHAT IS OPEN HERE, FOR CONTEXT PRIMING (an experiment, 2026-10-19;
+   * `recall/prime.ts`): the open threads this session's wake kept, as a gate
+   * record of this session, so its first prompts can count them among what
+   * primes. Not the nightly run's (its prompts recall nothing). Never throws:
+   * a lost record primes nothing.
+   */
+  private noteWakeThreads(input: SessionInput, threads: readonly string[]): void {
+    if (input.nightRun === true || input.sessionId.length === 0 || threads.length === 0) return;
+    const store = this.counterpart.store;
+    if (store.observer) return;
+    try {
+      noteWakeOpen(store, input.sessionId, threads, store.livedDay());
+    } catch {
+      /* priming's input only */
+    }
   }
 
   /**
@@ -1125,6 +1152,11 @@ export class Lifecycle implements HostLifecycle {
         sessionId: input.sessionId,
         text,
         ...(opts.budgetBytes === undefined ? {} : { budgetBytes: opts.budgetBytes }),
+        // A NAMED TRANSCRIPT THAT WOULD NOT READ (review of #523): whether the
+        // conversation compacted is unknown, so the echo skip stands down for
+        // the turn (an empty echo set) rather than hiding the whole session's
+        // memories — failing open, toward showing.
+        ...(input.turnsUnread === true ? { echo: new Set<string>() } : {}),
       },
       {
         ...(input.at === undefined ? {} : { at: input.at }),
@@ -1134,6 +1166,14 @@ export class Lifecycle implements HostLifecycle {
         // handed to it, so none of the person's fires is spent at 00:19.
         // And a turn the host says no person started (review of #453).
         ...(input.nightRun === true || opts.noCues === true ? { noCues: true } : {}),
+        // THE ECHO SKIP'S WINDOW (2026-10-19, feedback-loop part C): what this
+        // session wrote since its last compaction is still in its context, so
+        // ambient recall does not hand it back. Without a compaction, the
+        // whole session; its start (the registry's) only bounds the read.
+        ...this.echoWindow(input),
+        // Context priming (2026-10-19): this directory's handoffs are part of
+        // what is open here.
+        ...(typeof input.scope !== "string" || input.scope.length === 0 ? {} : { scope: input.scope }),
       },
     );
     const decision = result.decision;
@@ -1151,12 +1191,40 @@ export class Lifecycle implements HostLifecycle {
       observer: decision.observer,
       // WHERE the semantic channel's input came from, on the row a coverage
       // watch can read out of the store tomorrow. `semantic: "none"` on every
-      // real turn is exactly the finding this PR closes; anything but
-      // "lagged" here after a worker ran is the lag failing, by name.
+      // real turn is exactly the finding this PR closes. Since 2026-10-19 a
+      // turn the lag never reached (first prompt, stale row) reads `in-line`
+      // (or `in-line-skipped` past the vector-count guard); `in-line` on a
+      // session's later turns is the lag falling behind, by name.
       semantic: decision.semanticSource,
       semanticFrom: decision.semanticFromTurn,
+      // Which window the echo skip counted from (part C): `compaction` when
+      // the host said this session compacted, `unread` when its transcript
+      // would not read (no skip), else `session`. The count is on the
+      // decision row (`echoSkipped`).
+      echoWindow: input.turnsUnread === true ? "unread" : input.compactedAt === undefined ? "session" : "compaction",
+      echoSkipped: decision.echoSkipped,
     });
     return result;
+  }
+
+  /**
+   * The echo skip's window for this turn (part C): `echoSince` when the host
+   * reported a compaction, and the session's registry start as a read bound
+   * (`sessionFrom`) — never a filter, because a memory written before the
+   * record existed is still this session's. Never throws: an unread registry
+   * is no bound, the whole session's rows.
+   */
+  private echoWindow(input: SessionInput): { echoSince?: number; sessionFrom?: number } {
+    let sessionFrom: number | undefined;
+    try {
+      if (input.sessionId.length > 0) sessionFrom = readSession(this.counterpart.store.dir, input.sessionId)?.startedAt;
+    } catch {
+      sessionFrom = undefined;
+    }
+    return {
+      ...(input.compactedAt === undefined ? {} : { echoSince: input.compactedAt }),
+      ...(sessionFrom === undefined ? {} : { sessionFrom }),
+    };
   }
 
   // ── the boundary ───────────────────────────────────────────────────────────

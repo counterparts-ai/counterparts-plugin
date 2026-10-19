@@ -422,6 +422,17 @@ export interface TranscriptRead {
   /** `message.model` of the last assistant entry the model wrote (not a host
    *  stand-in, not a sidechain). Absent when none carried one. */
   readonly model?: string;
+  /**
+   * WHEN THIS CONVERSATION LAST COMPACTED (2026-10-19, feedback-loop part C),
+   * epoch ms: the `timestamp` of the newest `compact_boundary` system line the
+   * host wrote (measured on a 10-16 transcript: `{"type":"system","subtype":
+   * "compact_boundary","timestamp":…,"compactMetadata":{…}}`, the summary
+   * line just after it). Memories born before it may have left the model's
+   * context; ambient recall's echo skip counts only what was born since
+   * (`counterpart.ts#recallForTurn`). Absent: never compacted, or no line
+   * with a readable time. A sidechain's line is not this conversation's.
+   */
+  readonly compactedAt?: number;
 }
 
 /**
@@ -472,6 +483,7 @@ export function parseTranscript(raw: string): TranscriptRead {
   // one or the person sends anything else.
   let pending: string[] = [];
   let model: string | undefined;
+  let compactedAt: number | undefined;
   for (const line of raw.split("\n")) {
     if (line.trim().length === 0) continue;
     let entry: Record<string, unknown>;
@@ -487,6 +499,13 @@ export function parseTranscript(raw: string): TranscriptRead {
     // hole). Counted with the unparseable lines, never silently swallowed.
     if (!isEntry(entry)) {
       corrupt += 1;
+      continue;
+    }
+    // A COMPACTION'S MARK (part C, 2026-10-19): the newest one wins. Not a
+    // turn; nothing else is read off it.
+    if (entry["type"] === "system" && entry["subtype"] === "compact_boundary" && entry["isSidechain"] !== true) {
+      const when = typeof entry["timestamp"] === "string" ? Date.parse(entry["timestamp"]) : Number.NaN;
+      if (Number.isFinite(when) && (compactedAt === undefined || when > compactedAt)) compactedAt = when;
       continue;
     }
     // A prompt typed while the model worked: a turn of its own, where it
@@ -543,7 +562,15 @@ export function parseTranscript(raw: string): TranscriptRead {
       turns.push({ role, text: piece.text, source: piece.source, entry: ordinal });
     }
   }
-  return { turns, ok: true, reason: "read", corrupt, expansions, ...(model === undefined ? {} : { model }) };
+  return {
+    turns,
+    ok: true,
+    reason: "read",
+    corrupt,
+    expansions,
+    ...(model === undefined ? {} : { model }),
+    ...(compactedAt === undefined ? {} : { compactedAt }),
+  };
 }
 
 /**

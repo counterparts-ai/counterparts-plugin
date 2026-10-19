@@ -52,9 +52,10 @@ export async function sessionEndTool(server: McpServer, args: Record<string, unk
   // reads. It is credited whatever the rest of the call does, and its
   // outcome rides out on every answer below.
   const drewOn = server["drewOnField"](args["drewOn"], "session_end");
-  // `rated` (2026-10-14, tracking only) is read in the same place and for the
-  // same reasons, after `drewOn` so each rating can say whether its id was
-  // drawn on. It changes nothing but its own row, and rides out beside it.
+  // `rated` (2026-10-14) is read in the same place and for the same reasons,
+  // after `drewOn` so each rating can say whether its id was drawn on — and,
+  // in the 2026-10-19 experiment, so a 3 lifts drewOn's engaged credit the
+  // same day. It rides out beside it.
   const rated = server["ratedField"](args["rated"], drewOn);
   const extra: Record<string, unknown> = { ...(drewOn === null ? {} : { drewOn }), ...(rated === null ? {} : { rated }) };
   if (typeof args["writeUp"] === "string" && args["writeUp"].length > 0) return server["writeUpField"](args, extra);
@@ -469,8 +470,9 @@ export function drewOnField(server: McpServer, raw: unknown, via: "session_end" 
 }
 
 /**
- * THE `rated` FIELD on `session_end` (2026-10-14; Mike's call, TRACKING ONLY,
- * lightly held): the session scores the memories it was shown, 0–3. Every
+ * THE `rated` FIELD on `session_end` (2026-10-14; Mike's call, lightly held;
+ * since 2026-10-19 an experiment counts the scores as use — `rateShown`): the
+ * session scores the memories it was shown, 0–3. Every
  * rule is `Counterpart#rateShown`'s and `core/recall/rated.ts`'s; this binds
  * the session and supplies what only this server knows — what its tools
  * handed the session (`seenBySession`: by-address opens, question answers,
@@ -484,7 +486,7 @@ export function drewOnField(server: McpServer, raw: unknown, via: "session_end" 
  *
  * Null when the field was not sent or sent empty. A value that is not a list
  * rates nothing and says so; a refused rating never fails its siblings or the
- * call. Nothing here changes strength, ranking or credit.
+ * call. What the scores do is the core's (`Counterpart#rateShown`).
  */
 export function ratedField(server: McpServer, raw: unknown, drewOnOutcome: Record<string, unknown> | null): Record<string, unknown> | null {
   if (raw === undefined || raw === null) return null;

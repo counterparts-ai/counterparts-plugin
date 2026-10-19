@@ -435,6 +435,41 @@ export class Associate {
     return { reason: pairs > 0 ? "buffered" : "nothing-to-link", pairs, blocked, frozen, accepted };
   }
 
+  /**
+   * A DEPOSIT AT A WEIGHT THE CALLER CHOSE (2026-10-19, the feedback loop):
+   * the co-use and shown-together pairs of a `rated` stretch
+   * (`Counterpart#rateShown`), at `CO_USE_DEPOSIT` / `SHOWN_TOGETHER_DEPOSIT`.
+   * The same checks and the same buffer as `contiguity` — both endpoints live,
+   * a pinned memory frozen both ways (G9), an observer buffering nothing (G7)
+   * — so the flush's count cap, outgoing bound, decay and sweep apply as for
+   * any co-use. `site` names it on the event.
+   */
+  deposit(deltas: readonly PairDelta[], site: string): { pairs: number; blocked: number; frozen: number } {
+    if (this.observer) {
+      this.emit("associate.observer.skip", undefined, { site, pairs: deltas.length });
+      return { pairs: 0, blocked: 0, frozen: 0 };
+    }
+    const conductor = this.conductor();
+    let pairs = 0;
+    let blocked = 0;
+    let frozen = 0;
+    for (const d of deltas) {
+      if (d.a === d.b || !(d.delta > 0)) continue;
+      if (!conductor(d.a) || !conductor(d.b)) {
+        blocked += 1;
+        continue;
+      }
+      if (this.store.row(d.a)?.protected === 1 || this.store.row(d.b)?.protected === 1) {
+        frozen += 1;
+        continue;
+      }
+      this.buffer.add(d.a, d.b, d.delta, d.back ?? d.delta);
+      pairs += 1;
+    }
+    this.emit("associate.deposit", undefined, { site, pairs, blocked, frozen, buffered: this.buffer.size });
+    return { pairs, blocked, frozen };
+  }
+
   /** What is buffered right now — copies, for telemetry and tests. */
   pendingDeltas(): PairDelta[] {
     return this.buffer.pending();
@@ -711,6 +746,31 @@ export class Associate {
       },
       this.tunables,
     );
+  }
+
+  /**
+   * ONE HOP, for context priming (recall `prime.ts`, an experiment,
+   * 2026-10-19): each id's partners with the edge's DECAYED weight at a lived
+   * day, conducting edges only, from a live source. Not `spreadFrom`: priming
+   * passes a head start one link out from what the session did, and the hop
+   * channel's multi-hop walk already spreads from what the turn reached. A
+   * read — an observer may ask it. Whether a partner may be recalled is the
+   * caller's to judge (only the turn's own candidates are primed).
+   */
+  partnersOf(ids: readonly string[], day?: number): Map<string, { id: string; weight: number }[]> {
+    const d = day ?? this.store.livedDay();
+    const out = new Map<string, { id: string; weight: number }[]>();
+    for (const id of new Set(ids)) {
+      const row = this.store.row(id);
+      if (row === undefined || row.archived !== 0 || row.superseded_by !== null) continue;
+      const partners: { id: string; weight: number }[] = [];
+      for (const e of this.edgeStates(id)) {
+        const w = edgeWeightAt(e, d, this.tunables);
+        if (conducts(w, this.tunables)) partners.push({ id: e.dst, weight: w });
+      }
+      if (partners.length > 0) out.set(id, partners);
+    }
+    return out;
   }
 
   /** An edge's weight as it stands at a lived day — decay applied, nothing written. */

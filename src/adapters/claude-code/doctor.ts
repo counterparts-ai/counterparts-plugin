@@ -143,6 +143,7 @@ import type { HostReading, DesktopReading } from "./doctor-host.js";
 import { readOwed, crashWriteUpFindings } from "./doctor-write-ups.js";
 import type { OwedSource, OwedReading } from "./doctor-write-ups.js";
 import { worstFirst } from "./doctor-report.js";
+import { feedbackLoopFindings } from "./doctor-feedback.js";
 
 // What moved to the doctor-*.ts parts, re-exported so every import of this file still resolves.
 export { SEVERITIES } from "./doctor-finding.js";
@@ -719,8 +720,8 @@ function withdrawnFinding(input: DoctorInput): Finding | null {
       "embedder",
       "amber",
       RECALL_TITLE,
-      `off in this process — the store's cache was written by a newer Counterparts (cache v${v.found}; this build reads v${v.expected}). Recall still matches on words`,
-      `Either install the newer build again (${byInstall(input, "bun add -g counterparts@latest", "in Claude Code, /plugin → Installed → counterparts → Update now")}), or, to stay on this one, delete ${tilde(input.dir)}/cache/cache.sqlite* (the search cache alone; no memory is kept there, and it is rebuilt) — then in Claude Code run /mcp → Reconnect so the server opens it.`,
+      `off in this process — the store's cache was written by a newer Counterparts (cache v${v.found}; this build reads v${v.expected}). Recall still matches on words, but may miss words the newer build indexed in another form`,
+      `Either install the newer build again (${byInstall(input, "bun add -g counterparts@latest", "in Claude Code, /plugin → Installed → counterparts → Update now")}), or, to stay on this one, delete ${tilde(input.dir)}/cache/cache.sqlite* (the search cache alone; no memory is kept there) and run \`counterparts verify --rebuild --keep-vectors --dir ${tilde(input.dir)}\` to rebuild its word index — then in Claude Code run /mcp → Reconnect so the server opens it.`,
       { cacheAhead: true, found: v.found, expected: v.expected },
     );
   }
@@ -3391,6 +3392,8 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     ["claim", () => claimFindings(store, input.host?.plugin ?? null)],
     // Association build 1 (2026-09-28): what spreading did, and the edges.
     ["association", () => associationFindings(store)],
+    // The feedback loop (2026-10-19, an experiment): ratings as use, co-use links, habituation.
+    ["feedback-loop", () => feedbackLoopFindings(store)],
     // LAST, and deliberately: it is the widest read here — the whole event log,
     // plus a pass over the ids for the table probes — so when the console's
     // reading is cut short this is the group that goes, and the `Budget` finding

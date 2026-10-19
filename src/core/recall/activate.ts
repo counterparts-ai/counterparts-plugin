@@ -56,13 +56,15 @@ import { TUNABLES as PHYSICS, belowReach, curveSal, salArm, softenedFeeling, str
 import type { FeelingRow, Hit, ProseDoc, Store } from "../store/index.js";
 import { askedNames, feelingTokens, isFeelingFrameWord, readFeelingAsk, stampCores } from "./feeling-ask.js";
 import type { FeelingAskInput } from "./feeling-ask.js";
-import { confidentialByMeta, feelingValence, feltDay, reachExempt, rowToPhysics, tokenize } from "../store/index.js";
+import { confidentialByMeta, feelingValence, feltDay, reachExempt, rowToPhysics, stemTerm, tokenize } from "../store/index.js";
 import { buildCues, informativeness } from "./cues.js";
 import type { Cue } from "./cues.js";
 import type { RecallTunables, SemanticPath, SemanticTuning } from "./tunables.js";
 import { semanticTuning } from "./tunables.js";
 import { NO_MOOD, hasMood, moodLift } from "./mood.js";
 import type { Mood } from "./mood.js";
+import { cosine } from "./prime.js";
+import type { PrimeActivation, PrimeSourceKind } from "./prime.js";
 
 export interface Candidate {
   readonly id: string;
@@ -134,9 +136,40 @@ export interface Candidate {
    * is left out of the turn's background (it was not reached on its own).
    */
   readonly standsFor?: string;
+  /** A head standing in that the words ALSO reached on their own, more weakly
+   *  (2026-10-19, an experiment): that reach, which stays in the turn's
+   *  background where its dropped direct candidate sat (review of #526), so
+   *  the stand-in moves no other memory's bar. Absent otherwise. */
+  readonly directReach?: number;
+  /** With `directReach`: the head's own salience as the words reached it, for
+   *  its own bar (the gate's either-bar rule). Absent otherwise. */
+  readonly directSal?: number;
   /** LIFTED BY A LINK (2026-10-11, Group 4 item 7): in the cut only because a
    *  hop raised it — the cut without hops left it out. Absent otherwise. */
   readonly lifted?: true;
+  /**
+   * PRIMED (context priming, an experiment, 2026-10-19; `prime.ts`): the head
+   * start this candidate got from what the session is doing — `link` from the
+   * session's sources along links, `train` from the train of thought, each in
+   * activation units and already in `activation` (never in `cueFraction`),
+   * `from` the kinds of source behind `link`, and `cut` when the cut without
+   * priming left it out. The gate keeps `link + train` out of the background
+   * and the absolute floors. Absent when nothing primed it.
+   */
+  readonly prime?: CandidatePrime;
+}
+
+/** A candidate's priming (`Candidate.prime`). */
+export interface CandidatePrime {
+  readonly link: number;
+  readonly train: number;
+  readonly from: readonly PrimeSourceKind[];
+  readonly cut?: true;
+}
+
+/** The part of a candidate's activation priming gave it; 0 when none. */
+export function primeOf(c: { readonly prime?: CandidatePrime | undefined }): number {
+  return c.prime === undefined ? 0 : c.prime.link + c.prime.train;
 }
 
 /**
@@ -241,6 +274,9 @@ export interface ActivationInput {
    * `feeling`, which only the deliberate ask sets).
    */
   readonly includeBelowReach?: boolean | undefined;
+  /** CONTEXT PRIMING (an experiment, 2026-10-19, `prime.ts`): ambient only, set
+   *  by `Recall.build` from the session's sources and train. Absent: no priming. */
+  readonly prime?: PrimeActivation | undefined;
 }
 
 export interface ActivationResult {
@@ -294,6 +330,23 @@ export interface ActivationResult {
    * feeling's word. Null on an ambient turn. Not a decision-record field.
    */
   readonly feeling: FeelingLane | null;
+  /** What priming did this turn (2026-10-19): candidates it reached that the
+   *  cut kept, how many of those the cut kept only because of it, how many its
+   *  ceiling bound, and how many were scored against the train. Null when it
+   *  did not run. */
+  readonly prime: PrimeStats | null;
+}
+
+/** `ActivationResult.prime`. Counts only. */
+export interface PrimeStats {
+  readonly primed: number;
+  readonly cut: number;
+  readonly capped: number;
+  readonly trainScored: number;
+  /** The cosine a candidate had to beat to get a train head start: the
+   *  mean over the cut before priming when centring is on and it is above the
+   *  embedder's floor, else the floor. Null when no train was scored. */
+  readonly trainCentre: number | null;
 }
 
 export interface FeelingLane {
@@ -439,18 +492,34 @@ export function activate(
   let belowReachCount = 0;
 
   // ── the token channel: one index probe per distinct cue token ────────────
+  // Words are grouped by INDEX TERM (v7 cache, 2026-10-19, an experiment —
+  // `store/stem.ts`): "bake … baking" is one cue, its df counted once over
+  // both forms, so one posting list is never read twice into one score.
   const searchTokens: string[] = [];
+  const formsOf = new Map<string, string[]>();
+  const addForm = (tok: string): boolean => {
+    const key = stemTerm(tok);
+    const forms = formsOf.get(key);
+    if (forms === undefined) {
+      formsOf.set(key, [tok]);
+      return true;
+    }
+    if (!forms.includes(tok)) forms.push(tok);
+    return false;
+  };
   const seenTok = new Set<string>();
   for (const tok of tokenize(input.text)) {
     if (tok.length < t.MIN_CUE_LENGTH || seenTok.has(tok)) continue;
     seenTok.add(tok);
     searchTokens.push(tok);
+    addForm(tok);
     if (searchTokens.length >= t.MAX_CUES * 3) break;
   }
   for (const tok of input.carried ?? []) {
     if (tok.length < t.MIN_CUE_LENGTH || seenTok.has(tok)) continue;
     seenTok.add(tok);
     searchTokens.push(tok);
+    addForm(tok);
   }
 
   // ── rarity FIRST, postings second ───────────────────────────────────────
@@ -471,7 +540,15 @@ export function activate(
   // token (up to `MAX_CUES * 3`). Nothing downstream reads a non-cue's
   // postings, so that is an equivalence and strictly less work — it pays for
   // the df query several times over.
-  const df = store.docFrequency(searchTokens);
+  //
+  // Asked per index term (its forms joined, so a still-mixed index counts
+  // every form), and keyed back by term for `buildCues`.
+  const dfByForms = store.docFrequency([...formsOf.values()].map((f) => f.join(" ")));
+  const df = new Map<string, number>();
+  for (const [key, forms] of formsOf) {
+    const n = dfByForms.get(forms.join(" "));
+    if (n !== undefined) df.set(key, n);
+  }
 
   const cues = buildCues(
     {
@@ -480,6 +557,10 @@ export function activate(
       ...(input.aliases !== undefined ? { aliases: input.aliases } : {}),
       storeSize,
       df,
+      term: stemTerm,
+      // EVERYDAY WORDS (2026-10-19, an experiment): the embedder table's
+      // weight for each word, which scales its rarity (`cues.ts#everydayFactor`).
+      wordNorm: (w: string) => store.wordNorm?.(w) ?? null,
     },
     t,
   );
@@ -503,14 +584,17 @@ export function activate(
   let unfetched = 0;
   for (const cue of cues) {
     if (postings.has(cue.token)) continue;
-    const d = df.get(cue.token);
+    const d = df.get(stemTerm(cue.token));
     if (d !== undefined && informativeness(d, storeSize) < t.CUE_FETCH_MIN_IDF) {
       unfetched += 1;
       postings.set(cue.token, new Map());
       continue;
     }
     const byDoc = new Map<string, number>();
-    for (const h of store.search(cue.token, t.PER_CUE_FETCH, norm, reachFilter)) byDoc.set(h.id, h.score);
+    // Every surface form of the cue (`Cue.forms`): the store stems them, and
+    // asks for the forms as written too, so an unstemmed row still matches (v7).
+    const asked = (cue.forms ?? [cue.token]).join(" ");
+    for (const h of store.search(asked, t.PER_CUE_FETCH, norm, reachFilter)) byDoc.set(h.id, h.score);
     postings.set(cue.token, byDoc);
   }
 
@@ -585,9 +669,11 @@ export function activate(
   // TWO ways in, one scoring rule. `vector` is the caller's own embedding and
   // this pass ranks it (the deliberate ask, which has no latency budget);
   // `hits` is a ranking somebody else already did — the detached worker, one
-  // turn ago (`session.ts`, the lagged semantic cue), because the RANK is what
-  // costs 600-1000 ms on a live-sized index, not the arithmetic below. Supplied
-  // hits win: a caller that has both meant the resolved one.
+  // turn ago (`session.ts`, the lagged semantic cue), because the RANK was what
+  // cost 600-1000 ms on a live-sized index (v1's JSON vectors; ~18 ms cold on
+  // today's live store, `index.ts#Turn.semanticHits`). Since 2026-10-19 an
+  // ambient turn with no fresh lag row passes its own `vector` and is ranked
+  // here too. Supplied hits win: a caller that has both meant the resolved one.
   const semScore = new Map<string, number>();
   let semanticDegraded = false;
   const ranked: readonly Hit[] | null =
@@ -653,6 +739,8 @@ export function activate(
     readonly feeling: number;
     /** The part of `cue` the stamps brought — kept out of the background. */
     readonly stamp: number;
+    /** Priming's head start (2026-10-19), already in `activation`. Absent: none. */
+    readonly prime?: CandidatePrime;
   }
   /** The row, when this id is live memory that may be recalled at all; the
    *  same test for a candidate and for a link-only pointer. */
@@ -931,7 +1019,7 @@ export function activate(
   const rankForCut = (list: Scored[]): void => {
     const sample = list
       .filter((c) => c.cue - c.stamp + c.semantic > 0)
-      .map((c) => c.activation - c.stamp)
+      .map((c) => c.activation - c.stamp - primeOf(c))
       .sort((x, y) => y - x)
       .slice(0, input.maxCandidates);
     const relative = storeSize >= t.COLD_START_MIN_STORE && sample.length >= t.MIN_BACKGROUND_SAMPLE && spreadOf(sample) > 0;
@@ -1034,6 +1122,94 @@ export function activate(
     };
   }
 
+  // ── context priming (an experiment, 2026-10-19; `prime.ts`) ────────────
+  // A head start for what the session is doing, added like a hop — after the
+  // hops, before the cut, so it can lift a memory INTO the cut — and only to a
+  // candidate this turn's words or meaning reached (`cue + semantic > 0`
+  // without stamps): priming never mints a candidate. Never to the echo set.
+  // Two channels. LINK: `PRIME_LINK_UNITS` cue units per unit of source weight
+  // × decayed edge (a folded copy's links are its chapter's). TRAIN: the train
+  // of thought's cosine with the candidate's stored vector, on the in-line
+  // semantic floor and weight of this store's embedder, at
+  // `PRIME_TRAIN_SHARE` of what the turn's own meaning would give, × how much
+  // the train holds (`trainWeight`); only the first `PRIME_TRAIN_POOL` in the
+  // cut's order are read (a vector each). CENTRED on those candidates (review,
+  // 2026-10-19, an experiment — `PRIME_TRAIN_CENTRE`): the cosine to beat is
+  // their mean when that is above the floor, so on a steady topic, where every
+  // candidate is a little near the train, only the ones nearer than their
+  // peers in the cut get a head start — priming picks winners, it does not
+  // lift everyone. A lone candidate has no peers to beat and gets none. The sum is
+  // capped at `PRIME_CEILING` × the candidate's own cue + semantic.
+  let primeRun: { capped: number; trainScored: number; trainCentre: number | null } | null = null;
+  const prePrime = new Set<string>();
+  if (input.prime !== undefined && scored.length > 0) {
+    const pr = input.prime;
+    const reached = (c: Scored): boolean => c.cue - c.stamp + c.semantic > 0;
+    for (const c of scored.filter(reached).slice(0, input.maxCandidates)) prePrime.add(c.id);
+    const trainTuning = semanticTuning(t, identity, "inline");
+    const trainScore = new Map<string, number>();
+    let trainScored = 0;
+    let trainCentre: number | null = null;
+    if (pr.train !== null && t.PRIME_TRAIN_SHARE > 0 && pr.trainWeight > 0) {
+      // Pass 1: each scored candidate's cosine with the train. The mean is
+      // taken over the cut as it stands before priming (the peers a primed
+      // memory must beat to take a place), not the whole pool, whose weak
+      // tail would pull it down until nearly the whole cut cleared it. The
+      // echo set is left out of the mean as it is out of the head start: the
+      // session's own writes sit nearest its train and would raise the bar.
+      const cosines: { id: string; cos: number }[] = [];
+      let peerSum = 0;
+      let peers = 0;
+      for (const c of scored.filter(reached).slice(0, t.PRIME_TRAIN_POOL)) {
+        if (pr.exclude.has(c.id)) continue;
+        const v = store.vectorOf(c.id);
+        if (v === null) continue;
+        const cos = cosine(pr.train, v);
+        cosines.push({ id: c.id, cos });
+        if (prePrime.has(c.id)) {
+          peerSum += cos;
+          peers += 1;
+        }
+      }
+      trainScored = cosines.length;
+      // Pass 2: the head start, above the higher of the floor and the mean.
+      const floor = trainTuning.floor;
+      const mean = peers === 0 ? floor : peerSum / peers;
+      const bar = t.PRIME_TRAIN_CENTRE > 0 ? Math.max(floor, mean) : floor;
+      if (cosines.length > 0) trainCentre = bar;
+      for (const { id, cos } of cosines) {
+        if (!(cos > bar)) continue;
+        const scaled = bar >= 1 ? cos : (cos - bar) / (1 - bar);
+        trainScore.set(id, t.PRIME_TRAIN_SHARE * pr.trainWeight * trainTuning.weight * scaled);
+      }
+    }
+    let capped = 0;
+    const linkUnit = t.PRIME_LINK_UNITS * cueUnit;
+    scored = scored.map((c) => {
+      if (!reached(c) || pr.exclude.has(c.id)) return c;
+      let linkW = 0;
+      const from = new Set<PrimeSourceKind>();
+      for (const id of [c.id, ...(absorbed.get(c.id) ?? [])]) {
+        const l = pr.link.get(id);
+        if (l === undefined) continue;
+        linkW += l.weight;
+        for (const k of l.from) from.add(k);
+      }
+      const link = linkW * linkUnit;
+      const train = trainScore.get(c.id) ?? 0;
+      const raw = link + train;
+      if (!(raw > 0)) return c;
+      const ceiling = t.PRIME_CEILING * (c.cue - c.stamp + c.semantic);
+      const scale = raw > ceiling ? ceiling / raw : 1;
+      if (raw > ceiling) capped += 1;
+      const prime: CandidatePrime = { link: link * scale, train: train * scale, from: [...from].sort() };
+      const activation = c.activation + prime.link + prime.train;
+      return { ...c, activation, cutKey: salienceRank(activation, c.sal, t), prime };
+    });
+    rankForCut(scored);
+    primeRun = { capped, trainScored, trainCentre };
+  }
+
   // THE CUT IS THE WORDS' AND MEANING'S (review of #293, R1). It is taken over
   // the rows those reached, ranked without their stamps, so it keeps exactly
   // what it keeps with no feeling lane at all; then every row a stamp brought
@@ -1100,6 +1276,9 @@ export function activate(
       ...(c.stamp > 0 ? { stamp: c.stamp } : {}),
       ...(topIds.has(id) ? {} : { pastCut: true as const }),
       ...(hops > 0 && topIds.has(id) && !preHop.has(id) ? { lifted: true as const } : {}),
+      ...(c.prime === undefined || !topIds.has(id)
+        ? {}
+        : { prime: primeRun !== null && !prePrime.has(id) ? { ...c.prime, cut: true as const } : c.prime }),
     });
   }
 
@@ -1207,6 +1386,16 @@ export function activate(
     collapsed,
     folded: reachedFold,
     belowReach: belowReachCount,
+    prime:
+      primeRun === null
+        ? null
+        : {
+            primed: candidates.filter((c) => c.prime !== undefined).length,
+            cut: candidates.filter((c) => c.prime?.cut === true).length,
+            capped: primeRun.capped,
+            trainScored: primeRun.trainScored,
+            trainCentre: primeRun.trainCentre,
+          },
     feeling:
       feelingAsk === null
         ? null

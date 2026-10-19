@@ -1,6 +1,5 @@
 /**
- * RATINGS OF WHAT A SESSION WAS SHOWN (2026-10-14; Mike's call, tracking only,
- * lightly held).
+ * RATINGS OF WHAT A SESSION WAS SHOWN (2026-10-14; Mike's call, lightly held).
  *
  * At the boundary the model scores the memories it was shown, so every
  * footnote gets a feedback signal and not only the few a reply opened or
@@ -11,11 +10,26 @@
  *   2 — useful background
  *   3 — changed what was done or said
  *
- * TRACKING ONLY. A rating changes no strength, ranking, credit, decay or link:
- * nothing here reaches physics, the gate state's `credited`, the judged mark,
- * or the association buffer. It is one durable row per call
- * (`RECALL_RATED_EVENT`), read by `probe.ts#probeRatings`. How (or whether)
- * the signal is used is decided later, from those rows.
+ * Tracking only from 2026-10-14. AN EXPERIMENT SINCE 2026-10-19 (the feedback
+ * loop; Mike: "err on too strong, so we can see what it looks like when it's
+ * actually happening"): trying the scores as use, over the STRETCH since the
+ * session's previous rating row (`planRatedUse`), to see whether the day
+ * starts teaching the system. Check on ~10-22; revert by reverting the PR
+ * (or, part by part, the knobs named in `docs/decisions.d`):
+ *
+ *   - each rating is a use at its tier (`RATING_TIER`): 0 none, 1 `ontopic`,
+ *     2 `useful`, 3 `referenced` (a full use); an ambient showing in the
+ *     stretch left unrated is a glimpse (`shown`). Weights are physics'
+ *     (`W_ONTOPIC`, `W_USEFUL`, `W_SHOWN`); the once-a-lived-day rule holds;
+ *   - what was co-used in the stretch (rated `CO_USE_MIN_SCORE` or more, or
+ *     otherwise used there) is linked at `CO_USE_DEPOSIT`, and what was shown
+ *     on the same turn (none of it rated 0) at `SHOWN_TOGETHER_DEPOSIT`
+ *     (`associate/tunables.ts`);
+ *   - a memory rated 0 in `HABITUATION_MIN_SESSIONS` sessions shows less
+ *     readily for a while (`habituation.ts`), read from these same rows.
+ *
+ * Still one durable row per call (`RECALL_RATED_EVENT`), read by
+ * `probe.ts#probeRatings`; it now also says what the call credited and linked.
  *
  * What may be rated: what this session was SHOWN — the ambient lanes in the
  * gate state's `surfaced` (loud, footnotes, quiet pointers), a deliberate
@@ -24,9 +38,10 @@
  * neighbours a `remember` result named). An id in more than one is filed
  * under the first of: ambient lane, `asked`, `opened`.
  *
- * This file is pure: the lanes, the validation and the row. The reads and the
- * one write are `Counterpart#rateShown`'s.
+ * This file is pure: the lanes, the validation, the row and the plan of what
+ * a call credits and links. The reads and the writes are `Counterpart#rateShown`'s.
  */
+import type { UseTier } from "../physics/index.js";
 
 /** The lane a rated memory reached the session through. */
 export type RatedLane = "loud" | "footnotes" | "pointers" | "asked" | "opened";
@@ -91,7 +106,38 @@ export interface RatedResult {
   readonly drewOnUnrated: string[];
   /** Whether the row reached the store. */
   readonly recorded: boolean;
+  /** What the scores did (2026-10-19). */
+  readonly used: RatedUseSummary;
 }
+
+/** What one `rated` call credited and linked (2026-10-19), as its row records it. */
+export interface RatedUseSummary {
+  /** Uses credited, by tier: glimpses (`shown`), rated 1 (`ontopic`), 2 (`useful`), 3 (`referenced`). */
+  readonly credited: { readonly shown: number; readonly ontopic: number; readonly useful: number; readonly referenced: number };
+  /** Uses not credited, by reason (once-a-day, birth day, archived, …). */
+  readonly notCredited: Readonly<Record<string, number>>;
+  /** The stretch's co-used set, and the pairs it sent to be linked at `CO_USE_DEPOSIT`. */
+  readonly coUse: {
+    readonly members: number;
+    readonly capped: number;
+    readonly pairs: number;
+    /** The co-used ids (at most `CO_USE_MAX_MEMBERS`), so a later call on the same turn links each pair once. */
+    readonly ids: readonly string[];
+  };
+  /** Pairs shown on the same turn sent to be linked at `SHOWN_TOGETHER_DEPOSIT`. */
+  readonly together: number;
+  /** Memories habituated after this row (`habituation.ts`); null when the note could not be written. */
+  readonly habituated: number | null;
+}
+
+/** Nothing credited or linked: what an observer's or a refused call reports. */
+export const NO_RATED_USE: RatedUseSummary = {
+  credited: { shown: 0, ontopic: 0, useful: 0, referenced: 0 },
+  notCredited: {},
+  coUse: { members: 0, capped: 0, pairs: 0, ids: [] },
+  together: 0,
+  habituated: null,
+};
 
 /** One shown memory, keyed by id: its lane and, for an ambient showing, its turn. */
 export interface ShownEntry {
@@ -193,4 +239,121 @@ export function ratedCoverage(
   }
   const sum = (c: LaneCount): number => c.footnotes + c.pointers;
   return { shown: s, rated: r, total: { shown: sum(s), rated: sum(r) } };
+}
+
+// ── what the scores do (an experiment, 2026-10-19; check ~10-22) ────────────
+
+/**
+ * The use each score is (2026-10-19). Rated 0 is no use (habituation reads
+ * it); 3 is a full use, as opening it would be. The weights are physics'.
+ */
+export const RATING_TIER: Readonly<Record<RatingScore, UseTier | null>> = {
+  0: null,
+  1: "ontopic",
+  2: "useful",
+  3: "referenced",
+};
+
+/** The use an ambient showing left unrated in its stretch is: a glimpse (`W_SHOWN`). */
+export const UNRATED_TIER: UseTier = "shown";
+
+/** The lanes whose unrated showings are glimpses: what ambient recall showed (a
+ *  footnote, a loud line, a quiet pointer). An `asked` answer or an `opened`
+ *  memory is credited when it is used, as before, not for being handed over. */
+const GLIMPSE_LANES: ReadonlySet<RatedLane> = new Set(["loud", "footnotes", "pointers"]);
+
+/**
+ * The lowest score that makes a memory one of a stretch's CO-USED set (the
+ * brief: "both rated ≥2 or otherwise used"). Why 2: "useful background" is
+ * the first score that says the memory was used; 1 says it was not needed.
+ */
+export const CO_USE_MIN_SCORE: RatingScore = 2;
+
+/**
+ * How many of a session's newest rating rows `rateShown` reads for the same
+ * turn's earlier calls, whose co-used pairs it does not link again (review of
+ * #525: once per pair per stretch). Why 8: a turn rarely ends more than once or
+ * twice; past this, a pair could be linked twice, never lost.
+ */
+export const RATED_SAME_TURN_ROWS = 8;
+
+/** One graded use to credit. */
+export interface RatedCredit {
+  readonly id: string;
+  readonly tier: UseTier;
+}
+
+export interface RatedUsePlan {
+  /** Every rating with a use, then every unrated ambient showing in the stretch at `UNRATED_TIER`. */
+  readonly credits: RatedCredit[];
+  /** The stretch's co-used memories, strongest use first, at most `maxMembers`. */
+  readonly coUse: string[];
+  /** How many co-used memories the cap left out. */
+  readonly coUseCapped: number;
+  /** Unordered pairs shown on the same turn of the stretch, neither rated 0, each once. */
+  readonly together: [string, string][];
+}
+
+/**
+ * WHAT ONE `rated` CALL CREDITS AND LINKS (2026-10-19). Pure.
+ *
+ * The STRETCH is every ambient showing whose turn is past `floor` (the
+ * session's previous rating row's turn, 0 when none) — the same window the
+ * coverage counts. Scoped to the stretch, not the session, because one node
+ * holds at most `MAX_EDGES_PER_NODE` links and a long session's every pair
+ * would fill it in one boundary.
+ *
+ * `otherwiseUsed` is what the session USED in the stretch without rating it
+ * (an id opened or quoted, credited at the credit pass; an id `drewOn`
+ * credited), as the caller found them. Co-use order: rated 3, then otherwise
+ * used, then rated 2 — so the cap leaves out the weakest uses first. An id
+ * rated 0 is never co-used, whatever else said it was used.
+ */
+export function planRatedUse(input: {
+  readonly shown: ReadonlyMap<string, ShownEntry>;
+  readonly rated: readonly StoredRating[];
+  readonly floor: number;
+  readonly otherwiseUsed: readonly string[];
+  readonly maxMembers: number;
+}): RatedUsePlan {
+  const credits: RatedCredit[] = [];
+  const score = new Map<string, RatingScore>();
+  for (const r of input.rated) {
+    score.set(r.id, r.score);
+    const tier = RATING_TIER[r.score];
+    if (tier !== null) credits.push({ id: r.id, tier });
+  }
+  const byTurn = new Map<number, string[]>();
+  for (const [id, e] of input.shown) {
+    if (e.turn === null || e.turn <= input.floor || !GLIMPSE_LANES.has(e.lane)) continue;
+    if (!score.has(id)) credits.push({ id, tier: UNRATED_TIER });
+    if (score.get(id) === 0) continue;
+    const ids = byTurn.get(e.turn) ?? [];
+    ids.push(id);
+    byTurn.set(e.turn, ids);
+  }
+  const ordered: string[] = [];
+  const add = (id: string): void => {
+    if (!ordered.includes(id)) ordered.push(id);
+  };
+  for (const r of input.rated) if (r.score === 3) add(r.id);
+  for (const id of input.otherwiseUsed) if (score.get(id) !== 0) add(id);
+  for (const r of input.rated) if (r.score >= CO_USE_MIN_SCORE) add(r.id);
+  const max = Math.max(0, Math.floor(input.maxMembers));
+  const together: [string, string][] = [];
+  const seen = new Set<string>();
+  for (const turn of [...byTurn.keys()].sort((a, b) => a - b)) {
+    const ids = [...(byTurn.get(turn) ?? [])].sort();
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = ids[i] as string;
+        const b = ids[j] as string;
+        const key = `${a}|${b}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        together.push([a, b]);
+      }
+    }
+  }
+  return { credits, coUse: ordered.slice(0, max), coUseCapped: Math.max(0, ordered.length - max), together };
 }

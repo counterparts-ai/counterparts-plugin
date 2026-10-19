@@ -118,7 +118,7 @@ export function probeCommand(dir: string, io: Io, namedDir: boolean): number {
     const credits = store.eventLog({ name: RECALL_CREDIT_EVENT, order: "desc", limit: PROBE_ROW_CEILING }).reverse();
     const rows = [...decisions, ...credits].map((r) => ({ name: r.name, day: r.day, payload: r.payload }));
     for (const line of renderProbe(probeOQ4(rows))) io.out(line);
-    // THE RATINGS (2026-10-14; Mike's call, tracking only): what sessions
+    // THE RATINGS (2026-10-14; Mike's call; counted as use since 2026-10-19): what sessions
     // scored of what they were shown, beside the hit rate above.
     const ratings = store.eventLog({ name: RECALL_RATED_EVENT, order: "desc", limit: PROBE_ROW_CEILING }).reverse();
     const lookups = store.eventLog({ name: MCP_RECALL_EVENT, order: "desc", limit: PROBE_ROW_CEILING }).reverse();

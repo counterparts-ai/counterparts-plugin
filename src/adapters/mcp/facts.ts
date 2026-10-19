@@ -10,7 +10,11 @@
  *     token index, every hit: `store.search` with a limit of the word's own
  *     document count), each word weighted by its rarity (`cues.ts#
  *     informativeness`); the score is the share of the question's rarity a
- *     memory holds, shaded by how much of it (BM25 within the word);
+ *     memory holds, shaded by how much of it (BM25 within the word). Since
+ *     2026-10-19 (an experiment, the same one ambient recall runs — check
+ *     ~10-22): words sharing a stem are one word ("bake", "baking"; the index
+ *     is stemmed, `store/stem.ts`), and a word's rarity is scaled by how
+ *     everyday the embedder's table says it is (`cues.ts#everydayFactor`);
  *   - **meaning** — the `FACTS_MEANING_CAP` nearest by the question's
  *     embedding, above the floor ambient recall uses for this embedder
  *     (`recall/tunables.ts#semanticTuning`, inline path);
@@ -103,6 +107,7 @@ import { chaptersOf } from "../../core/handoff/last-here.js";
 import {
   OPEN_END,
   OPEN_START,
+  everydayFactor,
   headOf,
   informativeness,
   localKey,
@@ -111,7 +116,7 @@ import {
 } from "../../core/recall/index.js";
 import type { DayWindow, FeelingWhose, SemanticSource, TimeAsk } from "../../core/recall/index.js";
 import { STOPWORDS } from "../../core/recall/reference.js";
-import { tokenize } from "../../core/store/index.js";
+import { stemTerm, tokenize } from "../../core/store/index.js";
 import type { ContradictionRow, RecallRow } from "../../core/store/index.js";
 import { addDays, daysBetween, localDate, localTime, parseCalendarDate } from "../../core/time.js";
 import { UNBOUND_SESSION } from "../../core/types.js";
@@ -160,11 +165,19 @@ export const FACTS_ANCHOR_DAYS = 2;
 export const FACTS_JOURNAL_GLOSS =
   "[journal] = a chapter: the first-person account memories were made from, not a memory — outside decay, dedup and the prune, and not a claim about the world the way a memory is.";
 
-/** Words that ask nothing of their own in a question (beyond `reference.ts#STOPWORDS`). */
+/**
+ * Words that ask nothing of their own in a question (beyond `reference.ts#STOPWORDS`).
+ *
+ * The last row (2026-10-19) is how a person asks for a count or a habit: "how
+ * many", "how often", "in a typical week". "many" counted as a content word,
+ * so it diluted every real match and lifted rows that merely said "many"
+ * (bench 2788b940: the Zumba schedule 32nd of 76, 26th without it).
+ */
 const ASKS_NOTHING = new Set([
   "remember", "remembered", "recall", "tell", "happened", "happen", "happens", "decide", "decided",
   "anything", "something", "everything", "ever", "else", "did", "does", "do", "talk", "talked",
   "discuss", "discussed", "mention", "mentioned", "about", "whats", "who", "whom", "whose",
+  "many", "much", "often", "typical", "typically", "usually",
 ]);
 
 /** The words only a facts question's own wording carries, never its content. */
@@ -513,12 +526,26 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
 
   const words = (text: string): { scores: Map<string, number>; idfTotal: number; tokens: string[] } => {
     const tokens = contentTokens(text);
-    const df = safe(() => store.docFrequency(tokens), new Map<string, number>());
+    // One word per index term: "bake … baking" is asked once, over both forms
+    // (the store stems them, and asks for the forms as written too, so a row
+    // from before the v7 re-stem still matches).
+    const groups = new Map<string, string[]>();
+    for (const tok of tokens) {
+      const key = stemTerm(tok);
+      groups.set(key, [...(groups.get(key) ?? []), tok]);
+    }
+    const asked = [...groups.values()].map((forms) => forms.join(" "));
+    const df = safe(() => store.docFrequency(asked), new Map<string, number>());
     const scores = new Map<string, number>();
     let idfTotal = 0;
-    for (const tok of tokens) {
+    const tunables = ctx.counterpart.recall.tunables;
+    for (const forms of groups.values()) {
+      const tok = forms.join(" ");
       const n = df.get(tok) ?? 0;
-      const idf = informativeness(n, storeSize);
+      // Everyday words weigh less (2026-10-19, an experiment): the most
+      // content-like form speaks for the group.
+      const plain = Math.max(...forms.map((f) => everydayFactor(safe(() => store.wordNorm?.(f) ?? null, null), tunables)));
+      const idf = informativeness(n, storeSize) * plain;
       if (n <= 0 || idf <= 0) continue;
       idfTotal += idf;
       const hits = safe(() => store.search(tok, n), []);

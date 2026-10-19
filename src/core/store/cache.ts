@@ -10,6 +10,7 @@
 import type { Db, SqlValue } from "./db.js";
 import { openDb } from "./db.js";
 import { StoreError } from "./errors.js";
+import { STEMMER_VERSION, stemTerm } from "./stem.js";
 
 /**
  * Bumped to 2 (2026-08-25, SEAMS item J): the `ranking` table joins box 3.
@@ -34,8 +35,27 @@ import { StoreError } from "./errors.js";
  * 1x, 22 s at 10x). Derived from `embeddings` and nothing else; dropped and
  * refilled like the rest of box 3. An older build opening a v6 cache reads it
  * as "ahead" and turns its vector channel off (the existing #187 policy).
+ * Bumped to 7 (2026-10-19, an EXPERIMENT — first-prompt recall diagnosis Bug 2;
+ * check ~10-22): `doc_tokens` holds STEMMED terms (`stem.ts`), so "baking"
+ * meets "bake". The table's shape does not change; what a v7 build WRITES does,
+ * and `cache_meta.terms` says when every row has been re-stemmed. The bump does
+ * NOT re-stem at open — a hook cannot pay that (the diagnosis measured a full
+ * rebuild at 3.3 s on a live-sized copy) — so a migrated cache starts MIXED:
+ * old rows hold surface words, new writes hold stems, and every lookup asks
+ * for both forms (`lookupTerms`; always, not only while mixed — an older build
+ * can still write surface rows here), so no word recall is lost. The worker
+ * re-stems in bounded batches, from `doc_tokens` alone (`restemBatch`), and
+ * sets the marker when it reaches the end. REVERTING is not free: a build that
+ * looks words up unstemmed misses every stemmed row, so the way back is
+ * another bump whose worker step re-indexes from prose — or a build that
+ * indexes surface words again and keeps asking for both forms. AN OLDER BUILD
+ * on this cache reads it as "ahead" (its memory server refuses every tool)
+ * and its hooks miss every stemmed row; the way back there is to delete
+ * `cache/cache.sqlite*` and run `counterparts verify --rebuild --keep-vectors`
+ * on that build (deleting alone leaves the word index empty). `rollback` does
+ * not cover it: it restores a STORE migration, and this is none.
  */
-export const CACHE_SCHEMA_VERSION = 6;
+export const CACHE_SCHEMA_VERSION = 7;
 
 const DDL: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS doc_tokens (
@@ -281,6 +301,12 @@ export function openCache(path: string): Db {
       // a cache stamped v3 with no lengths would score every document as if it
       // were average, silently, which is the failure this version exists to end.
       backfillLengths(db);
+      // v7: an EMPTY index is trivially stemmed — every row it will ever hold
+      // is written by this build. A non-empty one is the worker's to re-stem
+      // (`restemBatch`); lookups ask for both forms meanwhile (and after).
+      if (db.get<{ one: number }>("SELECT 1 AS one FROM doc_tokens LIMIT 1") === undefined) {
+        db.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", TERMS_META_KEY, STEMMER_VERSION);
+      }
       // v5: a tag found on a cache stamped BELOW 5 means a v5 build tagged it
       // and an OLDER build then stamped the version down (any 0.2.0 process,
       // an unrestarted MCP server, a dev checkout) and may have written vectors
@@ -783,6 +809,8 @@ export function resetCache(db: Db, opts: { keepEmbeddings?: boolean } = {}): voi
     for (const t of drop) db.exec(`DROP TABLE IF EXISTS ${t}`);
     for (const sql of DDL) db.exec(sql);
     db.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('schemaVersion', ?)", String(CACHE_SCHEMA_VERSION));
+    // The index is empty now, and everything a rebuild writes is stemmed (v7).
+    db.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", TERMS_META_KEY, STEMMER_VERSION);
     for (const r of tag) db.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", r.key, r.value);
   });
   // No vectors, no tag: the next vector written re-tags (`admitVector`).
@@ -1003,11 +1031,110 @@ export function tokenize(text: string): string[] {
     .filter((t) => t.length >= 2);
 }
 
+// ── stemmed terms (v7, an experiment — see `stem.ts`) ───────────────────────
+
+/**
+ * `cache_meta` key: the `STEMMER_VERSION` every `doc_tokens` row was written
+ * under. Absent means MIXED — a cache migrated from v6 whose old rows still
+ * hold surface words. The worker's progress, not a switch: every lookup asks
+ * for both forms either way (`lookupTerms`).
+ */
+export const TERMS_META_KEY = "terms";
+/** `cache_meta` key: how far the worker's re-stem has got (a memory id), between runs. */
+export const TERMS_CURSOR_META_KEY = "termsCursor";
+
+/** What the index stores for a text: `tokenize`, then `stemTerm` on each token. */
+export function indexTerms(text: string): string[] {
+  return tokenize(text).map(stemTerm);
+}
+
+/** Has every row been written (or re-stemmed) under this build's stemmer? */
+export function termIndexReady(db: Db): boolean {
+  try {
+    return db.get<{ value: string }>("SELECT value FROM cache_meta WHERE key = ?", TERMS_META_KEY)?.value === STEMMER_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The index terms a lookup asks for: the stem AND the surface form, always —
+ * so a row holding the word as written still matches exactly as it did before
+ * v7, whoever wrote it. While the index is MIXED that is a row from before the
+ * migration. After the marker it is still possible: an older build (a
+ * downgrade, `npm i counterparts@<older>`) writes surface rows into this cache
+ * — it leaves a newer cache's stamp alone but still indexes what it writes —
+ * and after the upgrade back the marker says "stemmed" over them (measured on
+ * a bench copy, review of #529: a memory saying "baking" written by the older
+ * build was then found by neither "bake" nor "baking"). On a fully stemmed
+ * index the surface form costs one empty index probe and changes no result:
+ * every row there is a `stemTerm` output, a fixed point, so a surface word
+ * that differs from its stem cannot be in it.
+ */
+export function lookupTerms(tokens: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const t of tokens) {
+    out.add(stemTerm(t));
+    out.add(t);
+  }
+  return [...out];
+}
+
+export interface RestemBatchReport {
+  /** Documents read. */
+  readonly examined: number;
+  /** Documents whose rows changed (the rest were already stemmed). */
+  readonly changed: number;
+  /** The last id read, or null when there were none past `after`. */
+  readonly lastId: string | null;
+  /** Fewer than `batch` documents were left: the walk reached the end. */
+  readonly done: boolean;
+}
+
+/**
+ * Re-stem one batch of documents IN PLACE, from `doc_tokens` alone — no prose
+ * read, no embedder, no vector touched. A document's stemmed rows are a pure
+ * function of its surface rows (the stem of each token, tfs summed), the way
+ * `doc_lens` is a pure function of them too, and the length does not change.
+ * `stemTerm` is idempotent, so a row that is already stemmed (written by this
+ * build since the migration) comes back unchanged and is not rewritten.
+ * One transaction per batch: a crash leaves whole documents, never half of one.
+ */
+export function restemBatch(db: Db, batch = 200, after?: string): RestemBatchReport {
+  const ids = db
+    .all<{ memory_id: string }>(
+      "SELECT memory_id FROM doc_lens WHERE memory_id > ? ORDER BY memory_id LIMIT ?",
+      after ?? "",
+      batch,
+    )
+    .map((r) => r.memory_id);
+  let changed = 0;
+  db.transaction(() => {
+    const ins = db.prepare("INSERT INTO doc_tokens (memory_id, token, tf) VALUES (?, ?, ?)");
+    for (const id of ids) {
+      const rows = db.all<{ token: string; tf: number }>("SELECT token, tf FROM doc_tokens WHERE memory_id = ?", id);
+      const merged = new Map<string, number>();
+      let differs = false;
+      for (const r of rows) {
+        const term = stemTerm(r.token);
+        if (term !== r.token) differs = true;
+        merged.set(term, (merged.get(term) ?? 0) + r.tf);
+      }
+      if (!differs) continue;
+      db.run("DELETE FROM doc_tokens WHERE memory_id = ?", id);
+      for (const [term, tf] of merged) ins.run(id, term, tf);
+      changed += 1;
+    }
+  });
+  return { examined: ids.length, changed, lastId: ids[ids.length - 1] ?? null, done: ids.length < batch };
+}
+
 /** (Re)index one document. Idempotent: the doc's prior rows are replaced wholesale. */
 export function indexDoc(db: Db, id: string, text: string, vec?: readonly number[]): VectorRefusal | null {
   const counts = new Map<string, number>();
   let len = 0;
-  for (const tok of tokenize(text)) {
+  // STEMMED (v7): the index stores `indexTerms`, never raw `tokenize`.
+  for (const tok of indexTerms(text)) {
     counts.set(tok, (counts.get(tok) ?? 0) + 1);
     len += 1;
   }
@@ -1180,7 +1307,9 @@ export function searchIndex(
   norm: LengthNorm = DEFAULT_LENGTH_NORM,
   minStrength: number | null = null,
 ): Hit[] {
-  const tokens = [...new Set(tokenize(cue))];
+  // v7: the cue's words as INDEX TERMS — the stem and the surface form
+  // (`lookupTerms`). Every caller of `search` gets this.
+  const tokens = lookupTerms([...new Set(tokenize(cue))]);
   if (tokens.length === 0) return [];
   const placeholders = tokens.map(() => "?").join(",");
   const avg = avgDocLen(db);
@@ -1232,6 +1361,34 @@ export function searchIndex(
  * 2–4 ms warm for 72 tokens on that same index.
  */
 export function docFrequency(db: Db, tokens: readonly string[]): Map<string, number> {
+  // v7: each KEY is read as a cue — one word, or several surface words that
+  // share a stem ("bake baking") — and counted as the documents holding ANY of
+  // its index terms (`lookupTerms`). The map stays keyed by what the caller
+  // passed, so callers never hold a stem.
+  const termsOf = new Map<string, string[]>();
+  for (const key of new Set(tokens)) termsOf.set(key, lookupTerms([...new Set(tokenize(key))]));
+  const perTerm = termCounts(db, [...new Set([...termsOf.values()].flat())]);
+  const out = new Map<string, number>();
+  for (const [key, terms] of termsOf) {
+    // Only the terms the index holds. One (the common case, and every case on
+    // a stemmed index with a one-word key — the surface form is absent there):
+    // its count. Several: the documents holding any of them, each counted once.
+    const held = terms.filter((t) => (perTerm.get(t) ?? 0) > 0);
+    if (held.length === 0) continue;
+    const n =
+      held.length === 1
+        ? (perTerm.get(held[0] as string) ?? 0)
+        : (db.get<{ n: number }>(
+            `SELECT COUNT(DISTINCT memory_id) AS n FROM doc_tokens WHERE token IN (${held.map(() => "?").join(",")})`,
+            ...held,
+          )?.n ?? 0);
+    if (n > 0) out.set(key, n);
+  }
+  return out;
+}
+
+/** Documents per index term, for the terms that have any. */
+function termCounts(db: Db, tokens: readonly string[]): Map<string, number> {
   const out = new Map<string, number>();
   const unique = [...new Set(tokens)];
   if (unique.length === 0) return out;
@@ -1273,12 +1430,31 @@ export function nearest(db: Db, vec: readonly number[], limit = 10, minStrength:
       : db.all<{ memory_id: string; vec: SqlValue }>("SELECT memory_id, vec FROM embeddings");
   const hits: Hit[] = [];
   for (const row of rows) {
-    const other = decodeVector(row.vec);
-    if (other.length > 0 && other.length !== vec.length) continue;
+    const other = decodedOrSkip(row.vec);
+    if (other === null || (other.length > 0 && other.length !== vec.length)) continue;
     hits.push({ id: row.memory_id, score: cosine(vec, other) });
   }
   hits.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return hits.slice(0, limit);
+}
+
+/**
+ * One row's vector for a SCAN, or null when the row will not decode at all — a
+ * JSON-text row (v3) that does not parse, or parses to something that is not a
+ * list. `decodeVector` throws on those, on purpose (`convertVectorBatch` counts
+ * them as `skipped`), but a scan must not: since 2026-10-19 an ambient turn
+ * with no fresh lag row ranks in line (`recall/session.ts#inLineSemantic`), so
+ * one unreadable row would otherwise throw out of `activate()` and cost the
+ * whole turn's recall, where it should cost that row. Skipped, as a row of
+ * another width is; the census (`vectorFormats`) still names it.
+ */
+function decodedOrSkip(raw: SqlValue): Float32Array | number[] | null {
+  try {
+    const v = decodeVector(raw);
+    return Array.isArray(v) || v instanceof Float32Array ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── neighbours (v6) ──────────────────────────────────────────────────────────

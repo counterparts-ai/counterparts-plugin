@@ -181,9 +181,21 @@ export const CONTRADICTION_TUNABLES = {
   /**
    * The provisional cut on the older (`fade` x this) until the dream or the
    * writer confirms it (to `CHANGED_FADE` in all) or says they are two things
-   * (put back). Mild, because cosine alone is not a reader (04 D1). CAL.
+   * (put back). **1 is no cut** (`changedFade` makes none at 1): the proposal
+   * only flags the older for the dream to confirm, and the fade happens only
+   * on confirmation, as any settle `changed`. CAL.
+   *
+   * FLAG ONLY, as an experiment (2026-10-19, agreed with Mike; check ~10-22).
+   * It was 0.8. Trying no provisional cut to see whether the dream's answers
+   * alone keep wrong proposals from costing anything: by hand-read the
+   * detector was right on 4 of 7 on the owner's store, the dream said "not
+   * the same" on 3 of the 4 it judged, and right and wrong overlap in cosine,
+   * so raising `SLOT_COSINE` would not separate them
+   * (`~/counterparts-notes/2026-10-19-overdue-checks.md`). Proposals made
+   * before carry their cut on the trail, and a withdrawal or a confirmation
+   * still puts it back or lifts it exactly. Revert by setting this back to 0.8.
    */
-  SLOT_FADE: 0.8,
+  SLOT_FADE: 1, // an experiment, 2026-10-19: flag only (was 0.8); check ~10-22
   /** Proposals shown to one night's dream to confirm or undo, oldest first; the rest wait. CAL. */
   SLOT_PER_NIGHT: 4,
   /**
@@ -242,7 +254,7 @@ export const NEIGHBOURS_HINT =
 
 /** The line a write's result carries beside a slot the detector proposed (2026-10-11). */
 export const SLOT_HINT =
-  "This reads as the newer state of the same thing as the memory in `slot`, so that one was marked as possibly out of date and faded a little, provisionally; tonight's dream confirms or undoes it. If it is, settle it now: remember with settle {holds, over, how: changed, why}. If they are two different things, do nothing.";
+  "This reads as the newer state of the same thing as the memory in `slot`, so that one was marked as possibly out of date, provisionally; tonight's dream confirms or undoes it. If it is, settle it now: remember with settle {holds, over, how: changed, why}. If they are two different things, do nothing.";
 
 /** The same ask, for the memory a write named in `updates` that looked unrelated to it (2026-10-09). */
 export const HELD_HINT =
@@ -1300,7 +1312,7 @@ export function detectSlot(store: Store, input: { id: string; exclude?: readonly
       }
       if (rule === null) continue;
       if (headOf(store, id) !== null || store.contradictionEverBetween(input.id, id)) continue;
-      // Already waiting as the older of a proposal: one provisional cut at a time.
+      // Already waiting as the older of a proposal: one open proposal at a time.
       if ((store.contradictionsOf([id]).get(id) ?? []).some((p) => p.state === "unsettled" && p.source === SLOT_SOURCE && p.a === id)) continue;
       found.push({ over: id, cosine: round(cos), rule, sameSession: c.origin_session !== null && c.origin_session === session });
     }
@@ -1329,7 +1341,9 @@ export type SlotOutcome =
  * provisionally. The pair is written UNSETTLED with source `slot`, so recall
  * labels the older "may be out of date" and the dream is shown it to confirm
  * or undo (`slotsToConfirm`); the older's fade is cut by `SLOT_FADE` meanwhile,
- * on the trail so every later step is exact. The same refusals as a settle
+ * on the trail so every later step is exact — no cut at all while `SLOT_FADE`
+ * is 1 (flag only, an experiment since 2026-10-19; check ~10-22), and the
+ * fade comes only with a confirmation. The same refusals as a settle
  * that moves it (`memoryRefusal`).
  */
 export function proposeSlot(
@@ -1385,7 +1399,8 @@ export function proposeSlot(
 /**
  * THE TWO ARE NOT ONE THING'S EARLIER AND LATER STATE: a slot proposal
  * withdrawn (the dream's `slot {same: false}`, or the owner's undo), its
- * provisional cut put back. A withdrawn pair is never proposed again.
+ * provisional cut put back (none to put back for a proposal made with no cut,
+ * flag only since 2026-10-19). A withdrawn pair is never proposed again.
  */
 export function withdrawSlot(
   store: Store,

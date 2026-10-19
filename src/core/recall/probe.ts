@@ -458,7 +458,7 @@ export function probeMemoryHits(rows: readonly ProbeRow[]): MemoryHitReport {
   return { memories, byLane, sessions: { scored, unscored, truncated: cut }, unjudgedShowings };
 }
 
-// ── ratings (2026-10-14; Mike's call, tracking only) ────────────────────────
+// ── ratings (2026-10-14; Mike's call; counted as use since 2026-10-19, an experiment) ──
 
 /** The lanes a rating is filed under (`rated.ts#RatedLane`), in print order. */
 const RATING_LANES = ["loud", "footnotes", "pointers", "asked", "opened"] as const;
@@ -534,11 +534,12 @@ function laneSum(v: unknown): number {
 }
 
 /**
- * THE RATINGS READER (2026-10-14; Mike's call, tracking only, lightly held):
+ * THE RATINGS READER (2026-10-14; Mike's call, lightly held; the scores count
+ * as use since 2026-10-19, an experiment — `rated.ts`):
  * per calendar date and per lane, what sessions were shown, how much of it
  * they rated, the score distribution, and how the scores sit beside the two
  * other signals — `drewOn` (expected 2–3) and the credit pass's used /
- * shown-not-used. Pure, over the store's rows; nothing reads it to act.
+ * shown-not-used. Pure, over the store's rows; this reader acts on nothing.
  *
  * Rows read: `recall.rated` (the ratings), `recall.decision` (the ambient
  * showings, by lane), `mcp.recall` (a question's answer is `asked`, an
@@ -697,7 +698,7 @@ export function probeRatings(rows: readonly ProbeRow[]): RatingReport {
 /** The ratings table a console prints: one line per date per lane that showed something, then the agreements. */
 export function renderRatings(report: RatingReport): string[] {
   const lines: string[] = [];
-  lines.push("Ratings — what sessions scored of what they were shown, 0–3 (tracking only), by calendar date and lane");
+  lines.push("Ratings — what sessions scored of what they were shown, 0–3 (counted as use since 2026-10-19), by calendar date and lane");
   if (report.rows === 0) {
     lines.push("ratings: - (no recall.rated row yet)");
     return lines;
