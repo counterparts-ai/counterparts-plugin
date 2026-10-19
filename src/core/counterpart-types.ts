@@ -382,8 +382,8 @@ export interface WakeHere {
   readonly session?: string | null;
   /**
    * The Counterparts version installed now, as the host adapter reads it
-   * (2026-10-01): a handoff written by an older one says "written before
-   * 0.3.10 was installed". Absent: no such words.
+   * (2026-10-01): a handoff written by an older one says "written on 0.3.9,
+   * 0.3.10 now" (the words since 2026-10-18). Absent: no such words.
    */
   readonly installed?: string | null;
   /**

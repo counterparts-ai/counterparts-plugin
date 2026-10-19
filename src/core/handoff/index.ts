@@ -115,12 +115,14 @@ export const HANDOFF_EXCERPT_BYTES = 160;
  * (2026-09-30), and 1,646 since each says why it may be out of date — an
  * older release wrote it, or a newer chapter was written here (2026-10-01).
  * 1,963 since a "since" line can follow it (2026-10-09): three plans at the
- * title cap and a count, 317 bytes on the widest block (1,646).
+ * title cap and a count, 317 bytes on the widest block (1,646). 1,946 since
+ * each says its staleness as one sentence and the newest no longer counts the
+ * work since it (2026-10-18, the wake-polish builder).
  * In practice the share rule binds first: at the 9,000 bytes the owner's hosts
  * report, no reserve can pass 1,125, so a block that wide is carried with two
  * shown rather than three.
  */
-export const HANDOFF_RESERVE_MAX_BYTES = 1963;
+export const HANDOFF_RESERVE_MAX_BYTES = 1946;
 
 /**
  * Slack on top of the block that actually exists, so a reserve taken at one
@@ -220,7 +222,7 @@ export const HANDOFF_META_MODEL = "model";
 export const HANDOFF_META_WRITTEN_AT = "writtenAt";
 /**
  * The Counterparts version the writing process was running (2026-10-01), so
- * the wake can say a handoff was "written before 0.3.10 was installed".
+ * the wake can say a handoff was "written on 0.3.9, 0.3.10 now" (`staleWords`).
  * Absent on a row written before then, which falls back to the version the
  * writing session OPENED with, from the host's registry (`WakeHere`).
  */
@@ -648,22 +650,39 @@ export function versionOlder(a: string | null | undefined, b: string | null | un
 }
 
 /**
- * WHY A HANDOFF MAY BE OUT OF DATE, in words (2026-10-01, random-f2's item 1):
- * "before 0.3.10 was installed" when the process that wrote it ran an older
- * release than the one installed now, and "a newer chapter here since" when a
- * session wrote a chapter in this directory after it. Computed at delivery
- * from records that already exist; nothing judges whether what it waited on
- * happened. Null when neither holds.
+ * WHY A HANDOFF MAY BE OUT OF DATE, as ONE PLAIN SENTENCE (2026-10-18, the
+ * wake-polish builder, lightly held; first built 2026-10-01 for random-f2's
+ * item 1): how old it is, and what has happened since —
+ *
+ *   `2 days old; since then: a newer chapter here; written on 0.3.24, 0.3.25 now`
+ *
+ * "A newer chapter here" when a session other than its writer wrote a chapter
+ * in this directory after it; the release when the process that wrote it ran
+ * an older one than is installed now. The release is said as what it was and
+ * what it is, not as "installed since": a session that installed the new
+ * release and wrote its handoff before restarting was still on the old one.
+ * `age` is calendar days, in the store's zone, from the day it was written to
+ * the day it is read; said from one day on. Computed at delivery from records
+ * that already exist; nothing judges whether what it waited on happened. Null
+ * when neither holds — a handoff that is only old says its date, as before.
+ * (Before 2026-10-18 the words were "before 0.3.10 was installed, and a newer
+ * chapter here since", and the newest added the work since it with how much
+ * of that was written up; random-6c's 10-17 wake found the line unparseable.)
  */
 export function staleWords(opts: {
   readonly writtenWith?: string | null;
   readonly installed?: string | null;
   readonly newerChapter?: boolean;
+  readonly age?: number | null;
 }): string | null {
+  const release = versionOlder(opts.writtenWith, opts.installed);
+  if (!release && opts.newerChapter !== true) return null;
   const parts: string[] = [];
-  if (versionOlder(opts.writtenWith, opts.installed)) parts.push(`before ${opts.installed as string} was installed`);
-  if (opts.newerChapter === true) parts.push("a newer chapter here since");
-  return parts.length === 0 ? null : parts.join(", and ");
+  const age = opts.age ?? null;
+  if (age !== null && Number.isFinite(age) && age >= 1) parts.push(`${String(Math.floor(age))} ${age < 2 ? "day" : "days"} old`);
+  if (opts.newerChapter === true) parts.push("since then: a newer chapter here");
+  if (release) parts.push(`written on ${opts.writtenWith as string}, ${opts.installed as string} now`);
+  return parts.join("; ");
 }
 
 /**
@@ -752,30 +771,13 @@ export function excerpt(body: string, capBytes = HANDOFF_EXCERPT_BYTES): string 
 /**
  * HOW CURRENT THE POINTER IS (2026-09-30), computed at delivery by whoever
  * splices it: when it was written, as a person reads it in the store's zone,
- * and — when sessions here captured work after that, past the owed floor —
- * when that work ran (the pieces' own times, never the registry's boundary
- * clock, which a close bumps) and whether it has been written up since.
+ * and why it may be out of date (`staleWords`). Since 2026-10-18 it no longer
+ * carries the work done here after it and how much of that is written up:
+ * doctor and `counterparts coverage` say that, and the wake line could not.
  */
 export interface PointerSince {
   /** `09-29 12:47`. */
   readonly written: string;
-  /** `from` and `to` as the caller spells them: `13:02`, or `09-30 13:02`
-   *  when the day is not the one before it. */
-  readonly after: {
-    readonly from: string;
-    readonly to: string;
-    readonly writtenUp: boolean;
-    /**
-     * HOW FAR it is written up when it is not wholly (2026-09-30): the time of
-     * the latest claim on that work, spelled as `to` is, and what made it
-     * (`chapter`, `memories`, …). Absent or null: nothing of it is written up.
-     */
-    readonly upTo?: string | null;
-    readonly by?: string | null;
-    /** Pieces of that work not written up, and how many of them came after `upTo`. */
-    readonly unwritten?: number;
-    readonly unwrittenAfter?: number;
-  } | null;
   /** Why it may be out of date (`staleWords`), or null/absent. */
   readonly stale?: string | null;
 }
@@ -783,22 +785,18 @@ export interface PointerSince {
 /** The widest `PointerSince` the words can take — what the reserve is sized to. */
 export const WIDEST_POINTER_SINCE: PointerSince = {
   written: "12-31 23:59",
-  after: {
-    from: "12-31 23:59",
-    to: "12-31 23:59",
-    writtenUp: false,
-    upTo: "12-31 23:59",
-    // The widest of the written-up forms: "nothing new to write up as of …".
-    by: "nothing new",
-    unwritten: 9999,
-    unwrittenAfter: 0,
-  },
-  stale: staleWords({ writtenWith: "0", installed: "9".repeat(HANDOFF_VERSION_MAX_CHARS), newerChapter: true }),
+  stale: staleWords({
+    writtenWith: "8".repeat(HANDOFF_VERSION_MAX_CHARS),
+    installed: "9".repeat(HANDOFF_VERSION_MAX_CHARS),
+    newerChapter: true,
+    age: 9999,
+  }),
 };
 
 /** The widest stamp an OLDER entry of a several-handoff block can carry —
- *  what the reserve sizes the entries after the newest to. */
-const WIDEST_OLDER_SINCE: PointerSince = { written: "12-31 23:59", after: null, stale: WIDEST_POINTER_SINCE.stale ?? null };
+ *  what the reserve sizes the entries after the newest to. Since 2026-10-18
+ *  the same words as the newest's. */
+const WIDEST_OLDER_SINCE: PointerSince = WIDEST_POINTER_SINCE;
 
 /**
  * A model id as a person says it: `claude-opus-5-5` → `Opus 5.5`, with a
@@ -852,25 +850,10 @@ export function sessionWords(session: string | null, model: string | null, reade
 /** Who wrote a row filed under the unbound server's id, in words. */
 export const UNIDENTIFIED_SESSION_WORDS = "a session that hadn't been identified yet";
 
-/**
- * HOW MUCH OF THE WORK SINCE IS WRITTEN UP, in words (2026-09-30). "Not yet
- * written up" only when nothing of it is: a chapter at 17:50 and three turns
- * after it read as "not yet written up" while the answer was yes or no, which
- * told the next session there was nothing to read (the continuity test).
- */
-function writtenUpWords(after: NonNullable<PointerSince["after"]>): string {
-  if (after.writtenUp) return "written up since";
-  if (after.upTo === undefined || after.upTo === null || after.upTo.length === 0) return "not yet written up";
-  const n = after.unwritten ?? 0;
-  const tail = n === 0 ? "" : `, ${String(n)} ${n === 1 ? "piece" : "pieces"} ${after.unwrittenAfter === n ? "after" : "not yet"}`;
-  // "Nothing new" wrote nothing up: it said there was nothing to (review of
-  // #300 MINOR-7).
-  if (after.by === "nothing new") return `nothing new to write up as of ${after.upTo}${tail}`;
-  return `written up to ${after.upTo}${after.by ? ` (${after.by})` : ""}${tail}`;
-}
-
-/** When it was written, and — for the newest — how current it is. */
-function whenWords(h: Handoff, since: PointerSince | null, author: string | null = null): string {
+/** When it was written, by whom, and — when it may be out of date — why, in
+ *  one sentence: after a dash inside the single pointer's parentheses, in
+ *  parentheses of its own in a several-handoff entry. */
+function whenWords(h: Handoff, since: PointerSince | null, author: string | null = null, nested = false): string {
   const by = author === null ? "" : ` by ${author}`;
   if (since === null || since.written.length === 0) {
     const on = /^\d{4}-\d{2}-\d{2}$/.test(h.writtenOn.trim()) ? h.writtenOn.trim() : "an unrecorded date";
@@ -878,10 +861,8 @@ function whenWords(h: Handoff, since: PointerSince | null, author: string | null
   }
   // WHY IT MAY BE OUT OF DATE (2026-10-01), right after who and when, so it
   // is read before the handoff's own first sentence.
-  const stale = since.stale === undefined || since.stale === null ? "" : `, ${since.stale}`;
-  const written = `written ${since.written}${by}${stale}`;
-  if (since.after === null) return written;
-  return `${written}; work here ${since.after.from}\u2013${since.after.to} since, ${writtenUpWords(since.after)}`;
+  const stale = since.stale === undefined || since.stale === null ? "" : nested ? ` \u2014 ${since.stale}` : ` (${since.stale})`;
+  return `written ${since.written}${by}${stale}`;
 }
 
 /** The pointer's first line: when it was written, by whom, how current it is,
@@ -893,7 +874,7 @@ export function pointerLine(
   since: PointerSince | null = null,
   author: string | null = null,
 ): string {
-  return `Where I left off in this directory (${whenWords(h, since, author)}): ${excerpt(h.body, capBytes)}`;
+  return `Where I left off in this directory (${whenWords(h, since, author, true)}): ${excerpt(h.body, capBytes)}`;
 }
 
 /** The pointer's second line: the door to the whole of it, and its life. */
@@ -938,10 +919,8 @@ export function pointerBlock(
  * Every line flattened, for `pointerBlock`'s reason; no `- ` bullet, because
  * the pointer is furniture and a bullet is what an element looks like.
  *
- * `since[i]` is how current the i-th one is. Only the NEWEST says whether work
- * ran here after it: for an older one the answer is always yes — the newer
- * handoffs are that work — and the words would cost a line's worth of bytes
- * each to say so.
+ * `since[i]` is how current the i-th one is: each says its own staleness
+ * sentence (`staleWords`, 2026-10-18).
  */
 export function pointerBlockMany(
   hs: readonly Handoff[],
@@ -962,8 +941,7 @@ export function pointerBlockMany(
     `Where the work in this directory was left off \u2014 ${live.length} handoffs, one per session, newest first:`,
   ];
   live.slice(0, shown).forEach((h, i) => {
-    const raw = opts.since?.[i] ?? null;
-    const since = raw === null || i === 0 ? raw : { written: raw.written, after: null, stale: raw.stale ?? null };
+    const since = opts.since?.[i] ?? null;
     const when = whenWords(h, since);
     lines.push(`${i + 1}) From ${authorWords(h, reader)}, ${since === null ? `on ${when}` : when}: ${excerpt(h.body)} (${h.id})`);
   });
@@ -1006,6 +984,15 @@ export function pointerLadder(
     readonly lifeDays?: number;
     /** What was planned here since the newest (`Handoffs#plansSince`). */
     readonly plans?: PlansSince | null;
+    /**
+     * WHEN EVERY ONE IT WOULD LIST IS STALE, LIST ONE (2026-10-18, the
+     * wake-polish builder, lightly held): the newest in full and the rest by
+     * id ("+3 older here: …"), not three stale handoffs a line each. On by
+     * default; the boundary's reserve sizing turns it off, because the
+     * widest words it sizes to are always stale and a fresh morning's three
+     * need their room (`Handoffs#liveBlockBytesByScope`).
+     */
+    readonly collapseStale?: boolean;
   } = {},
 ): { block: string; shown: readonly Handoff[]; plans: readonly string[] }[] {
   const lifeDays = opts.lifeDays ?? HANDOFF_LIFE_DAYS;
@@ -1014,8 +1001,15 @@ export function pointerLadder(
   if (first === undefined) return [];
   const single = pointerBlock(first, day, lifeDays, opts.since?.[0] ?? null, opts.reader ?? null);
   const out: { block: string; shown: readonly Handoff[]; several: boolean }[] = [];
+  const widest = Math.min(HANDOFF_WAKE_SHOWN, live.length);
+  const allStale =
+    opts.collapseStale !== false &&
+    live.slice(0, widest).every((_, i) => {
+      const st = opts.since?.[i]?.stale;
+      return st !== undefined && st !== null && st.length > 0;
+    });
   if (live.length > 1) {
-    for (let k = Math.min(HANDOFF_WAKE_SHOWN, live.length); k >= 1; k--) {
+    for (let k = allStale ? 1 : widest; k >= 1; k--) {
       const block = pointerBlockMany(live, day, { ...opts, shown: k });
       if (block !== null) out.push({ block, shown: live.slice(0, k), several: true });
     }
@@ -1262,7 +1256,7 @@ export class Handoffs {
       // What was planned here since the newest, as it stands now (2026-10-09):
       // sized to the line that exists, as the rest of the block is.
       const plans = hs[0] === undefined ? null : this.plansSince(scope, hs[0]);
-      const rungs = pointerLadder(hs, d, { since, plans }).map((rung) => byteLengthOf(rung.block));
+      const rungs = pointerLadder(hs, d, { since, plans, collapseStale: false }).map((rung) => byteLengthOf(rung.block));
       if (rungs.length > 0) out.set(scope, rungs);
     }
     return out;
@@ -1348,8 +1342,8 @@ export class Handoffs {
       // into the wake. Left out rather than stored as null, so a row says
       // nothing it does not know.
       ...(isModelId(input.model) ? { [HANDOFF_META_MODEL]: input.model } : {}),
-      // The release that wrote it (2026-10-01): what "written before 0.3.10
-      // was installed" compares. Left out when the caller knew none.
+      // The release that wrote it (2026-10-01): what "written on 0.3.9, 0.3.10
+      // now" compares (`staleWords`). Left out when the caller knew none.
       ...(isVersion(input.build) ? { [HANDOFF_META_BUILD]: input.build } : {}),
     };
     // THIS SESSION'S row here, and only its own (2026-09-30): a different
@@ -1481,8 +1475,8 @@ export class Handoffs {
    * EVERY BLOCK THIS WAKE MAY SPLICE, widest first (`pointerLadder`), or none.
    * Pure — it writes nothing, so a caller that finds no room can drop it
    * without having claimed it was shown. `since` is how current each shown one
-   * is (`PointerSince`), asked with `newest` so the caller can skip the work
-   * count for the older ones, which never print it. `reader` is the waking
+   * is (`PointerSince`), asked with `newest` (since 2026-10-18 every one
+   * shown prints the same words, so the caller may ignore it). `reader` is the waking
    * session, so its own handoff reads "by this session".
    */
   pointerChoices(

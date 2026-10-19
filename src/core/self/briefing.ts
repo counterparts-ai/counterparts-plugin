@@ -361,11 +361,26 @@ function overdueAmong(lane: LaneName, ids: readonly string[], overdue: readonly 
 /** The overdue word, and its count line's form when every id is overdue. */
 export const OVERDUE_WORD = "overdue";
 
-/** `(3 more still open; recall ids: mem_…, mem_…, mem_…)`, and for "Coming up"
+/**
+ * WHAT "STILL OPEN"'S COUNT SAYS OF ITS OLD ONES (2026-10-18, the wake-polish
+ * builder, lightly held): `(56 more still open, 19 untouched for 2+ weeks;
+ * recall ids …)` — the threads untouched for `STILL_OPEN_STALE_DAYS` (14)
+ * lived days, which rank last (`identity.ts#byThreadLive`). Fourteen lived
+ * days are at least two weeks of the calendar: a lived day is a day the
+ * memory was used.
+ */
+export const STALE_OPEN_WORDS = "untouched for 2+ weeks";
+
+/** `(3 more still open; recall ids: mem_…, mem_…, mem_…)`, `(56 more still
+ *  open, 19 untouched for 2+ weeks; recall ids: …)`, and for "Coming up"
  *  `(2 overdue, 4 more coming up; recall ids: …)` or `(2 overdue; recall ids: …)`. */
-export function moreLine(lane: LaneName, ids: readonly string[], overdue?: readonly string[]): string {
+export function moreLine(lane: LaneName, ids: readonly string[], overdue?: readonly string[], stale?: readonly string[]): string {
   const late = overdueAmong(lane, ids, overdue);
-  if (late === 0) return `(${String(ids.length)} more ${MORE_NOUN[lane]}; ${recallIds(ids)})`;
+  if (late === 0) {
+    const old = lane !== "threads" || stale === undefined || stale.length === 0 ? 0 : ids.filter((id) => stale.includes(id)).length;
+    const said = old === 0 ? "" : `, ${String(old)} ${STALE_OPEN_WORDS}`;
+    return `(${String(ids.length)} more ${MORE_NOUN[lane]}${said}; ${recallIds(ids)})`;
+  }
   const rest = ids.length - late;
   return `(${String(late)} ${OVERDUE_WORD}${rest === 0 ? "" : `, ${String(rest)} more ${MORE_NOUN[lane]}`}; ${recallIds(ids)})`;
 }
@@ -424,7 +439,8 @@ export function countedLanes(text: string): Partial<Record<LaneName, number>> {
       out[collapsed] = Number(/^\D*(\d+) — /.exec(line.slice(heading.length))?.[1] ?? 0);
       continue;
     }
-    const more = /^\((\d+) more (.+?); recall ids/.exec(line);
+    // "Still open"'s old ones ride inside the count (2026-10-18): `(56 more still open, 19 untouched for 2+ weeks; …)`.
+    const more = new RegExp(`^\\((\\d+) more (.+?)(?:, \\d+ ${STALE_OPEN_WORDS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})?; recall ids`).exec(line);
     const lane = more === null ? undefined : byNoun.get(more[2] ?? "");
     if (more !== null && lane !== undefined) {
       out[lane] = Number(more[1]);
@@ -485,7 +501,7 @@ export function collapsedLine(lane: LaneName, ids: readonly string[], counted?: 
 
 /** What "Coming up" counts rather than lists, as a composition's request
  *  carries it (`BriefingRequest.horizonLater`, `.horizonOverdue`). */
-export type HorizonCounted = Pick<BriefingRequest, "horizonLater" | "horizonOverdue">;
+export type HorizonCounted = Pick<BriefingRequest, "horizonLater" | "horizonOverdue" | "threadsStale">;
 
 /** The lane a collapsed line (`collapsedLine`) speaks for, or null for any other line. */
 export function collapsedLane(line: string): LaneName | null {
@@ -731,6 +747,10 @@ export interface BriefingRequest {
   /** Those of `horizonLater` past their date (review of #511): the line
    *  counts them as overdue. Absent: none said so. */
   readonly horizonOverdue?: readonly string[];
+  /** "Still open"'s threads untouched for `STILL_OPEN_STALE_DAYS` lived days
+   *  (`Lanes.threadsStale`, 2026-10-18): its count line says how many of what
+   *  it counts are that old. Absent: nothing said. */
+  readonly threadsStale?: readonly string[];
 }
 
 export interface TrimEvent {

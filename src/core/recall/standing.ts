@@ -51,6 +51,31 @@ function ids(list: readonly string[]): string {
   return list.slice(0, STANDING_MAX_POINTERS).map((x) => `[${x}]`).join(", ");
 }
 
+/** `id` is the OLDER of a standing unsettled pair (`Unsettled — may be out of date`). */
+function unsettledIn(store: StandingStore, id: string, pairs: readonly ContradictionRow[]): boolean {
+  return pairs.some((p) => p.via === null && p.state === "unsettled" && p.a === id && live(store, p.a) && live(store, p.b));
+}
+
+/**
+ * THE ONES AMONG `ids` THAT A LANE WOULD SHOW AS "Unsettled — may be out of
+ * date" (2026-10-18, the wake-polish builder): one read of their pairs, for a
+ * ranking that puts them after the rest ("Still open", `self/identity.ts`).
+ * The same rule `standingOf` labels by. Empty when none, or unreadable.
+ */
+export function unsettledAmong(store: StandingStore, ids: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  if (ids.length === 0) return out;
+  try {
+    const all = store.contradictionsOf(ids);
+    for (const id of ids) {
+      if (unsettledIn(store, id, all.get(id) ?? [])) out.add(id);
+    }
+  } catch {
+    return new Set();
+  }
+  return out;
+}
+
 /**
  * The standing of one memory, or null when it has none. `byId`: the caller
  * asked for this memory by its address, so a replaced row says so too.
@@ -80,7 +105,7 @@ export function standingOf(
       } else if (p.how === "open") {
         disagrees.push(other);
       }
-    } else if (p.state === "unsettled" && p.a === id && live(store, p.a) && live(store, p.b)) {
+    } else if (unsettledIn(store, id, [p])) {
       unsettled.push(p.b);
     }
   }

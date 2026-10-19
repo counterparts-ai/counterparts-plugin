@@ -424,16 +424,48 @@ export function chaptersOn(store: Store, date: string, opts: { fromDay?: number 
  * would not. No model run: titles and ids only. Null when that day has no
  * chapter.
  *
- * `hidden` (2026-10-11): how many more of that day's episodes the caller
- * left out of `day` because their directory's chapters may not be named
- * here (`Counterpart#yesterdayFor`'s gate). They join the count, never by
- * title or id; when they are all there is, the line is the count alone.
+ * `places` (2026-10-18, the wake-polish builder, lightly held; a bare count
+ * of "sessions in other projects" from 2026-10-11): that day's episodes the
+ * caller left out of `day` because their directory's chapters may not be
+ * named here (`Counterpart#yesterdayFor`'s gate), BY FOLDER — "and 2 sessions
+ * in ~/random" — never by title or id. A folder name is not content: the
+ * caller lists only the folders the "Today, elsewhere" line may name (the
+ * scope setting on; not this one, not the store's own), and the rest are not
+ * said at all, as that line does not say them. When they are all there is,
+ * the line is the folders alone.
  */
-export function yesterdayLine(day: readonly ChaptersOnDate[], date: string, titles = YESTERDAY_SHOWN, hidden = 0, dated = true): string | null {
+export interface YesterdayPlace {
+  readonly scope: string;
+  readonly sessions: number;
+}
+
+/** How many folders the Yesterday line names; the rest are counted (`+2
+ *  more`). As many as "Today, elsewhere" names (`TODAY_ELSEWHERE_MAX_DIRS`). */
+export const YESTERDAY_PLACES_SHOWN = 5;
+
+/** `3 sessions in ~/random (2), ~/deadfront`, or null for none. */
+function placesWords(places: readonly YesterdayPlace[]): string | null {
+  const real = places.filter((p) => p.sessions > 0 && p.scope.trim().length > 0);
+  if (real.length === 0) return null;
+  const sorted = [...real].sort((a, b) => b.sessions - a.sessions || (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0));
+  const total = sorted.reduce((n, p) => n + p.sessions, 0);
+  const shown = sorted.slice(0, YESTERDAY_PLACES_SHOWN).map((p) => `${placeWords(p.scope)}${p.sessions > 1 && sorted.length > 1 ? ` (${String(p.sessions)})` : ""}`);
+  const more = sorted.length - shown.length;
+  return `${total === 1 ? "a session" : `${String(total)} sessions`} in ${shown.join(", ")}${more > 0 ? `, +${String(more)} more` : ""}`;
+}
+
+export function yesterdayLine(
+  day: readonly ChaptersOnDate[],
+  date: string,
+  titles = YESTERDAY_SHOWN,
+  places: readonly YesterdayPlace[] = [],
+  dated = true,
+): string | null {
   const head = dated ? `Yesterday, ${stampWords(date.slice(5))}:` : "Yesterday:";
+  const where = placesWords(places);
   if (day.length === 0) {
-    if (hidden <= 0) return null;
-    return flatten(`${head} ${String(hidden)} session${hidden === 1 ? "" : "s"} in other projects.`);
+    if (where === null) return null;
+    return flatten(`${head} ${where}.`);
   }
   // The first `YESTERDAY_SHOWN` are named, the first `titles` of them by
   // title and id and the rest by id alone — pointers instead of titles
@@ -442,8 +474,10 @@ export function yesterdayLine(day: readonly ChaptersOnDate[], date: string, titl
   const shown = day.slice(0, named).map((c, i) => {
     return c.title === null || i >= titles ? c.id : `"${excerpt(c.title, YESTERDAY_TITLE_BYTES)}" (${c.id})`;
   });
-  const rest = day.length - shown.length + Math.max(0, hidden);
-  return flatten(`${head} ${shown.join("; ")}${rest > 0 ? `; and ${String(rest)} more` : ""}.`);
+  const rest = day.length - shown.length;
+  const more = rest > 0 ? `; and ${String(rest)} more` : "";
+  const elsewhere = where === null ? "" : rest > 0 ? `; ${where}` : `; and ${where}`;
+  return flatten(`${head} ${shown.join("; ")}${more}${elsewhere}.`);
 }
 
 /**
@@ -466,13 +500,13 @@ export const YESTERDAY_UNDATED_AT_START = true;
  * the count past them is the whole line's. The wake steps down these to make
  * room for what ranks above the line (`self/briefing.ts#ROOM_ORDER`): the
  * Arriving lane and "Still open"'s first item; the count is honest because it
- * is counted here, where the chapters are. `hidden` as `yesterdayLine`'s.
+ * is counted here, where the chapters are. `places` as `yesterdayLine`'s.
  */
-export function yesterdayShorter(day: readonly ChaptersOnDate[], date: string, hidden = 0, dated = true): string[] {
+export function yesterdayShorter(day: readonly ChaptersOnDate[], date: string, places: readonly YesterdayPlace[] = [], dated = true): string[] {
   const out: string[] = [];
-  let last = yesterdayLine(day, date, YESTERDAY_SHOWN, hidden, dated);
+  let last = yesterdayLine(day, date, YESTERDAY_SHOWN, places, dated);
   for (let n = Math.min(YESTERDAY_SHOWN, day.length) - 1; n >= 0; n--) {
-    const line = yesterdayLine(day, date, n, hidden, dated);
+    const line = yesterdayLine(day, date, n, places, dated);
     if (line === null || last === null || line.length >= last.length) continue;
     out.push(line);
     last = line;
@@ -584,13 +618,18 @@ export function todayElsewhereLines(
         (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0),
     );
   const clock = (at: number): string => localStamp(at, zone).split(" ")[1] ?? "";
+  // A session that started on an earlier day and is still active today
+  // (2026-10-18, random-6c's wake: "open since 09:08" for a start the day
+  // before) says its start with the day. `lastAt` is today's, by the caller.
+  const start = (firstAt: number, lastAt: number | null): string =>
+    lastAt !== null && localDate(firstAt, zone) !== localDate(lastAt, zone) ? localStamp(firstAt, zone) : clock(firstAt);
   const one = (d: TodayElsewhere, chapters: boolean): string => {
     const when =
       d.firstAt === null
         ? ""
         : d.live
-          ? ` open since ${clock(d.firstAt)} (live)`
-          : ` ${clock(d.firstAt)}–${clock(d.lastAt ?? d.firstAt)}`;
+          ? ` open since ${start(d.firstAt, d.lastAt)} (live)`
+          : ` ${start(d.firstAt, d.lastAt)}–${clock(d.lastAt ?? d.firstAt)}`;
     const chapter = !chapters || d.chapter === null ? "" : ` — ${chapterWords(d.chapter)}`;
     const count = d.memories === 0 ? "" : `, ${String(d.memories)} ${d.memories === 1 ? "memory" : "memories"}`;
     return `${placeWords(d.scope)}${when}${chapter}${count}`;

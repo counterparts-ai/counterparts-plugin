@@ -569,7 +569,7 @@ export function writeHandoffField(server: McpServer, raw: unknown): Record<strin
         session: server.session,
         model: server["sessionModel"]() ?? null,
         // The release this server is running (2026-10-01): the wake says
-        // "written before 0.3.10 was installed" once a newer one is.
+        // "written on 0.3.9, 0.3.10 now" once a newer one is (`staleWords`).
         build: server["identity"]?.build.version ?? installedVersion(),
       });
     }

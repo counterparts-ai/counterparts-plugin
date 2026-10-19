@@ -97,7 +97,7 @@ export function pinnedLines(
   for (const lane of LANE_ORDER) {
     const ids = pinned[lane];
     if (ids === undefined || ids.length === 0) continue;
-    out[lane] = lane !== "identity" && kept[lane].length === 0 ? collapsedLine(lane, ids, counted) : moreLine(lane, ids, counted?.horizonOverdue);
+    out[lane] = lane !== "identity" && kept[lane].length === 0 ? collapsedLine(lane, ids, counted) : moreLine(lane, ids, counted?.horizonOverdue, counted?.threadsStale);
   }
   return out;
 }
@@ -547,7 +547,7 @@ export function tellLost(ctx: {
   for (const lane of MORE_ORDER) {
     const ids = ctx.lost[lane];
     if (ids === undefined || ids.length === 0) continue;
-    lines[lane] = lane !== "identity" && ctx.kept[lane].length === 0 ? collapsedLine(lane, ids, ctx.req) : moreLine(lane, ids, ctx.req.horizonOverdue);
+    lines[lane] = lane !== "identity" && ctx.kept[lane].length === 0 ? collapsedLine(lane, ids, ctx.req) : moreLine(lane, ids, ctx.req.horizonOverdue, ctx.req.threadsStale);
     const candidate = at(lines);
     if (candidate.bytes > ctx.limit) {
       delete lines[lane];

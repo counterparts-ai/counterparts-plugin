@@ -121,12 +121,12 @@ import {
   staleWords,
 } from "./handoff/index.js";
 import type { Handoff, HandoffRefusal, HandoffWrite, PointerSince } from "./handoff/index.js";
-import { CLAIM_CHAPTER, askFromStretch, chapterClaims, claimUnwritten, sessionStretch, sessionsHere, workSince } from "./coverage/index.js";
+import { CLAIM_CHAPTER, askFromStretch, chapterClaims, claimUnwritten, sessionStretch, sessionsHere } from "./coverage/index.js";
 import { LAST_HERE_LIFE_DAYS, LAST_HERE_NOROOM_EVENT, chaptersBySession, chaptersHere, chaptersOn, elsewhereLine, lastHereLadder, sinceElsewhereLines, stampWords, todayElsewhereLines, YESTERDAY_UNDATED_AT_START, yesterdayLine, yesterdayShorter } from "./handoff/last-here.js";
 import type { ChapterHere, LastHere, SinceElsewhere, TodayElsewhere } from "./handoff/last-here.js";
 import { LAST_EXCHANGE_LINE_MAX_BYTES, exchangeLikely, lastExchange, lastExchangeLine, withExchange } from "./handoff/last-exchange.js";
 import type { LastExchange } from "./handoff/last-exchange.js";
-import { addDays, isDay, localStamp, localStampAfter, startOfLocalDay, yearOf } from "./time.js";
+import { addDays, daysBetween, isDay, localDate, localStamp, localStampAfter, startOfLocalDay, yearOf } from "./time.js";
 import type { Recurrence } from "./time.js";
 import { EPISODE_REGROWN_REASON, leftAs } from "./leaving.js";
 import type { LeftAs } from "./leaving.js";
@@ -1033,7 +1033,7 @@ export class Counterpart {
     const scope = here?.scope?.trim() ?? "";
     if (scope.length === 0 || !result.ok) return result;
     // ONE chapter walk for the whole delivery (the line, its no-room row, and
-    // each handoff's "a newer chapter here since"): a session start waits on it.
+    // each handoff's "since then: a newer chapter here"): a session start waits on it.
     let chapters: Map<string, ChapterHere> = new Map();
     let allHere: ReturnType<Counterpart["chaptersHereFor"]> = [];
     try {
@@ -1048,7 +1048,7 @@ export class Counterpart {
       ladder = this.handoffs.pointerChoices(
         scope,
         undefined,
-        (h, newest) => this.handoffSince(h, scope, newest, here, allHere),
+        (h) => this.handoffSince(h, scope, here, allHere),
         here?.session ?? null,
       );
     } catch {
@@ -1412,7 +1412,9 @@ export class Counterpart {
    * line's gate — a copy marked about me, us or the owner, and that
    * directory's scope setting on (`WakeHere.exportsFrom`; no way to ask, or a
    * chapter whose row recorded no directory, and it is not named). One this
-   * session's own directory wrote is named as before. The rest are counted.
+   * session's own directory wrote is named as before. The rest are said by
+   * folder, where "Today, elsewhere" may name it, and otherwise not at all
+   * (2026-10-18; a bare count from 2026-10-11).
    * Without `reader` — the turn-end's and `rebrief`'s published render, which
    * no one session reads — the line is store-wide, as it was.
    */
@@ -1423,12 +1425,26 @@ export class Counterpart {
       const fromDay = Math.max(0, this.store.livedDay() - LAST_HERE_LIFE_DAYS + 1);
       const all = chaptersOn(this.store, date, { fromDay });
       const day = reader === undefined ? all : all.filter((c) => this.nameableHere(c.scope ?? null, c.aboutMe === true, reader.here));
-      const hidden = all.length - day.length;
+      // The ones left out, BY FOLDER (2026-10-18, the wake-polish builder):
+      // only a folder the "Today, elsewhere" line may name (`elsewhereGate`)
+      // — the rest are not said, as that line does not say them.
+      const places = new Map<string, number>();
+      if (reader !== undefined && day.length < all.length) {
+        const gate = this.elsewhereGate(reader.here);
+        const kept = new Set(day.map((c) => c.id));
+        for (const c of all) {
+          const scope = c.scope ?? null;
+          if (kept.has(c.id) || scope === null || gate === null || !gate.named(scope)) continue;
+          const key = gate.norm(scope);
+          places.set(key, (places.get(key) ?? 0) + 1);
+        }
+      }
+      const elsewhere = [...places].map(([scope, sessions]) => ({ scope, sessions }));
       // Undated at a session start, read under its `Now:` line (2026-10-16).
       const dated = reader === undefined || !YESTERDAY_UNDATED_AT_START;
-      const line = yesterdayLine(day, date, undefined, hidden, dated);
+      const line = yesterdayLine(day, date, undefined, elsewhere, dated);
       if (line === null) return {};
-      const shorter = yesterdayShorter(day, date, hidden, dated);
+      const shorter = yesterdayShorter(day, date, elsewhere, dated);
       return shorter.length === 0 ? { yesterday: line } : { yesterday: line, yesterdayShorter: shorter };
     } catch {
       return {};
@@ -1472,47 +1488,22 @@ export class Counterpart {
 
   /**
    * HOW CURRENT THIS DIRECTORY'S POINTER IS, at delivery (2026-09-30): when
-   * it was written, in the store's zone, and — when sessions here captured work
-   * past the owed floor after that, not counting the writing session's own turn
-   * — when that work ran, by the pieces' own times, and whether it is written up
-   * (`coverage/#workSince`). Null when the write time is unknown: the line then
-   * says the date alone, as it always did. An OLDER handoff in a directory
-   * that holds several (`newest` false) is asked only when it was written: it
-   * never prints the rest, so the span read is skipped.
+   * it was written, in the store's zone, and why it may be out of date
+   * (`handoffStale`) — one sentence, for each handoff shown (2026-10-18; the
+   * work since and how much of it was written up left the wake line that day,
+   * for doctor and `counterparts coverage` to say). Null when the write time
+   * is unknown: the line then says the date alone, as it always did.
    */
   private handoffSince(
     h: Handoff,
     scope: string,
-    newest = true,
     here?: WakeHere,
     allHere?: ReturnType<Counterpart["chaptersHereFor"]>,
   ): PointerSince | null {
     const writtenAt = this.handoffs.writtenAt(h);
     if (writtenAt === null) return null;
     const zone = this.store.zone();
-    const stale = this.handoffStale(h, scope, writtenAt, here, allHere);
-    if (!newest) return { written: localStamp(writtenAt, zone), after: null, stale };
-    const work = workSince(this.spans, scope, writtenAt, { writer: h.session });
-    if (!work.overFloor || work.firstAt === null || work.lastAt === null) {
-      return { written: localStamp(writtenAt, zone), after: null, stale };
-    }
-    // A clock time alone while the day is the one before it; the day as well
-    // when it is not.
-    return {
-      written: localStamp(writtenAt, zone),
-      stale,
-      after: {
-        from: localStampAfter(work.firstAt, writtenAt, zone),
-        to: localStampAfter(work.lastAt, work.firstAt, zone),
-        writtenUp: work.unwritten === 0,
-        // How far, when not wholly (2026-09-30): the latest claim's time,
-        // spelled as `to` is, and what made it.
-        upTo: work.writtenUpTo === null ? null : localStampAfter(work.writtenUpTo, work.firstAt, zone),
-        by: work.writtenUpBy,
-        unwritten: work.unwritten,
-        unwrittenAfter: work.unwrittenAfter,
-      },
-    };
+    return { written: localStamp(writtenAt, zone), stale: this.handoffStale(h, scope, writtenAt, here, allHere) };
   }
 
   /**
@@ -1548,7 +1539,16 @@ export class Counterpart {
       } catch {
         newerChapter = false;
       }
-      return staleWords({ writtenWith, installed: here?.installed ?? null, newerChapter });
+      // How old, in calendar days of the store's zone (2026-10-18): what a
+      // person means by "two days old", which lived days are not.
+      let age: number | null = null;
+      try {
+        const zone = this.store.zone();
+        age = daysBetween(localDate(writtenAt, zone), localDate(this.store.now(), zone));
+      } catch {
+        age = null;
+      }
+      return staleWords({ writtenWith, installed: here?.installed ?? null, newerChapter, age });
     } catch {
       return null;
     }

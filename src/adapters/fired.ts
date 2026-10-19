@@ -61,6 +61,7 @@
  *      came and went unanswered is the finding, and stays one.
  */
 import { TUNABLES as ENCODE } from "../core/encode/tunables.js";
+import { TUNABLES as RECALL } from "../core/recall/tunables.js";
 import {
   DATE_FROM_META,
   DATE_LINEAGE_MAX,
@@ -469,6 +470,12 @@ export const MECHANISMS: readonly Mechanism[] = [
     module: "recall/mood.ts",
     evidence: { kind: "event", names: ["recall.decision"], positive: "moodMatched" },
     since: "2026-09-26",
+    // Off since 2026-10-10 (review 02 C3: both weights 0, code kept). Read,
+    // not retyped, as the classifier's row above: doctor read its silence as
+    // "gone quiet" on the owner's store, 2026-10-18.
+    ...(RECALL.MOOD_SAME_WEIGHT > 0 || RECALL.MOOD_CROSS_WEIGHT > 0
+      ? {}
+      : { disabled: "mood matching is off (both mood weights 0 in recall/tunables.ts, since 2026-10-10) — a named decision, not a fault" }),
   },
   {
     id: "salience",

@@ -1105,7 +1105,30 @@ function channelWords(semantic: SemanticSource): string | null {
 }
 
 /** The labeled lines of one result. */
-function itemLines(m: FactItem, i: number, today: string, excerptChars: number, time: string | undefined): string[] {
+/**
+ * " · may be inside the time asked" for an event date coarser than the window
+ * (a month, a year, a range) that only partly overlaps it. Checked against the
+ * window as asked (`said`), not the stretched one the filter uses: a
+ * neighbouring month touches "last month" only through the stretch, and is
+ * not inside it. Such a fact is
+ * kept by the window, but read beside a day window ("04-30..05-30") a bare
+ * "2023-04" looked outside it, and the reader left the snake plant out of
+ * "plants I got in the last month" (bench 3a704032, 2026-10-18).
+ *
+ * Benchmark-motivated and held lightly (Mike, 2026-10-18): kept because the
+ * label is true for a real user too. Revisit around 2026-10-25: drop it if
+ * live use shows it as noise.
+ */
+function partlyInWindow(occurredOn: string | null, window: DayWindow | null): string {
+  if (occurredOn === null || window === null) return "";
+  const c = parseCalendarDate(occurredOn);
+  if (c === null || c.precision === "day") return "";
+  const overlaps = c.first <= window.to && c.last >= window.from;
+  const contained = c.first >= window.from && c.last <= window.to;
+  return overlaps && !contained ? " · may be inside the time asked" : "";
+}
+
+function itemLines(m: FactItem, i: number, today: string, excerptChars: number, time: string | undefined, window: DayWindow | null): string[] {
   const out: string[] = [];
   const mark = m.journal ? "[journal] " : "";
   const ch = m.chapter === undefined ? "" : ` (chapter ${String(m.chapter.n)} of ${String(m.chapter.of)})`;
@@ -1118,7 +1141,7 @@ function itemLines(m: FactItem, i: number, today: string, excerptChars: number, 
     const occurred =
       m.occurredOn === null
         ? "no event date"
-        : `${m.status === "planned" || m.status === "proposed" || m.status === "asked" ? "for" : "happened"} ${shortDateWithWeekday(m.occurredOn, today)}`;
+        : `${m.status === "planned" || m.status === "proposed" || m.status === "asked" ? "for" : "happened"} ${shortDateWithWeekday(m.occurredOn, today)}${partlyInWindow(m.occurredOn, window)}`;
     out.push(`   ${said} · ${status} · ${occurred}`);
     const where = m.where === null ? "" : ` in ${m.where}`;
     const who = m.who === null ? "" : ` · ${m.who}`;
@@ -1289,7 +1312,7 @@ function renderAt(r: FactsResult, today: string, excerpt: number): string {
   const times = sameDayTimes(r.memories);
   r.memories.forEach((m, i) => {
     lines.push("");
-    lines.push(...itemLines(m, first + i + 1, today, excerpt, times.get(m.id)));
+    lines.push(...itemLines(m, first + i + 1, today, excerpt, times.get(m.id), r.time?.said ?? r.time?.window ?? null));
   });
   lines.push("");
   const foot: string[] = [];

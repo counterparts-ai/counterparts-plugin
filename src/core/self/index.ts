@@ -192,7 +192,7 @@ import type { SelfTunables } from "./tunables.js";
 import { calendarDate } from "./calendar.js";
 import { isDay, yearOf } from "../time.js";
 import { markWakeBehind } from "./behind.js";
-import { pairOrder, standingOf } from "../recall/standing.js";
+import { pairOrder, standingOf, unsettledAmong } from "../recall/standing.js";
 
 export * from "./behind.js";
 export * from "./briefing.js";
@@ -936,6 +936,9 @@ export class Self {
     const lanes: Lanes = {
       ...rankLanes(scanned, horizon, this.tunables, {
         settledOver: settledOver(this.store),
+        // "Still open"'s unsettled ones rank after the rest (2026-10-18): one
+        // read of the pairs, for the open candidates only.
+        unsettled: unsettledAmong(this.store, scanned.filter((s) => s.unresolved || s.reconsidering === true).map((s) => s.id)),
         coveredByPage: this.pageCovers(scanned),
         workAtDelivery: this.tunables.CRAFT_AT_DELIVERY,
         ...(coming.more.length === 0 || req.omit !== undefined ? {} : { horizonMore: coming.more }),
@@ -1023,6 +1026,7 @@ export class Self {
     }
     const fresh = rankLanes(open, horizon, this.tunables, {
       settledOver: settled,
+      unsettled: unsettledAmong(this.store, open.map((s) => s.id)),
       workAtDelivery: this.tunables.CRAFT_AT_DELIVERY,
       ...(coming.more.length === 0 ? {} : { horizonMore: coming.more }),
       ...(coming.later.length === 0 ? {} : { later: coming.later }),
@@ -1065,6 +1069,7 @@ export class Self {
       },
       ...(coming.later.length === 0 ? {} : { later: coming.later }),
       ...(coming.overdue.length === 0 ? {} : { overdue: coming.overdue }),
+      ...(fresh.threadsStale === undefined ? {} : { threadsStale: fresh.threadsStale }),
     };
     return this.composeLanes(lanes, docs, sources, {
       day,
@@ -1224,6 +1229,8 @@ export class Self {
           ...(lanes.later === undefined || lanes.later.length === 0 || req.omit !== undefined ? {} : { horizonLater: lanes.later }),
           // And which of them are past their date, so it says "overdue" (review of #511).
           ...(lanes.overdue === undefined || lanes.overdue.length === 0 || req.omit !== undefined ? {} : { horizonOverdue: lanes.overdue }),
+          // And which open threads are weeks old, so "Still open"'s count says so (2026-10-18).
+          ...(lanes.threadsStale === undefined || lanes.threadsStale.length === 0 || req.omit !== undefined ? {} : { threadsStale: lanes.threadsStale }),
           ...(req.elsewhereShorter === undefined || req.elsewhere === undefined || req.omit !== undefined
             ? {}
             : { elsewhereShorter: req.elsewhereShorter }),

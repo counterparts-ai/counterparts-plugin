@@ -46,6 +46,15 @@ export interface Ranked {
   readonly tieKey?: string;
   /** Threads only: person-scoped debts trim last (behavioral-spec §1 G4). */
   readonly personScoped: boolean;
+  /**
+   * Threads only (2026-10-18): the lived day it was last TOUCHED — born or
+   * used, whichever is later (`physics.lastUsedDay`), as #489 D's
+   * `staleOpen` reads "untouched". Absent: its born day.
+   */
+  readonly touchedDay?: number;
+  /** Threads only (2026-10-18): it would show as "Unsettled — may be out of
+   *  date" (`recall/standing.ts#unsettledAmong`), so it ranks after the rest. */
+  readonly unsettled?: boolean;
   /** Lived day this element last rendered in a wake; -1 never. Identity only. */
   readonly lastRendered: number;
   /** Hints only: why it ranked where it did (`hintReading`). */
@@ -306,14 +315,54 @@ function byRotation(day: number | undefined): (a: Ranked, b: Ranked) => number {
 }
 
 /**
- * Threads order: person-scoped first, then oldest-opened first. The trim eats
- * from the END of the lane, so long-held relational debts drop last
- * (behavioral-spec §1 G4 — *truncation must never be iteration luck*).
+ * Threads order (2026-10-18, the wake-polish builder, lightly held; before
+ * it, person-scoped first and then oldest-opened first): WHAT IS LIVE FIRST.
+ * The trim eats from the END of the lane, so the order is what shows.
+ *
+ *   1. touched within `staleDays` lived days before one untouched for longer
+ *      (`SelfTunables.STILL_OPEN_STALE_DAYS`) — the weeks-old question that
+ *      nobody closed waits behind this week's;
+ *   2. a plain open item before one that is "Unsettled — may be out of date";
+ *   3. person-scoped first — long-held relational debts still drop last among
+ *      their peers (behavioral-spec §1 G4);
+ *   4. the most recently touched first, then the most recently born;
+ *   5. the words' hash, then the id.
+ *
+ * Measured on the owner's 10-18 snapshot (self NOTES, 2026-10-18): the old
+ * order's plain item was born on lived day 10 of 27; the new one's on day 25.
  */
-function byThreadAge(a: Ranked, b: Ranked): number {
+function byThreadLive(day: number, staleDays: number): (a: Ranked, b: Ranked) => number {
+  const stale = (r: Ranked): boolean => day - (r.touchedDay ?? r.bornDay) >= staleDays;
+  return (a, b) => {
+    const sa = stale(a);
+    const sb = stale(b);
+    if (sa !== sb) return sa ? 1 : -1;
+    const ua = a.unsettled === true;
+    const ub = b.unsettled === true;
+    if (ua !== ub) return ua ? 1 : -1;
+    if (a.personScoped !== b.personScoped) return a.personScoped ? -1 : 1;
+    const ta = a.touchedDay ?? a.bornDay;
+    const tb = b.touchedDay ?? b.bornDay;
+    if (ta !== tb) return tb - ta;
+    if (a.bornDay !== b.bornDay) return b.bornDay - a.bornDay;
+    return byContentThenId(a, b);
+  };
+}
+
+/** The core memories being reconsidered, before their rotation: person-scoped
+ *  first, then oldest-opened first (the threads order before 2026-10-18). */
+function byOpened(a: Ranked, b: Ranked): number {
   if (a.personScoped !== b.personScoped) return a.personScoped ? -1 : 1;
   if (a.bornDay !== b.bornDay) return a.bornDay - b.bornDay;
   return byContentThenId(a, b);
+}
+
+/**
+ * Of the open threads, those untouched for `staleDays` lived days or more —
+ * what "Still open"'s count line says of what it counts (2026-10-18).
+ */
+function staleAmong(lane: readonly Ranked[], day: number, staleDays: number): string[] {
+  return lane.filter((r) => day - (r.touchedDay ?? r.bornDay) >= staleDays).map((r) => r.id);
 }
 
 /** Hints order: the hint score (organic strength x habituation), then as `byStrength`. */
@@ -339,6 +388,7 @@ export function rankedAs(s: Scanned, lane: LaneName, hint?: HintReading): Ranked
     tieKey: createHash("sha256").update(s.doc.body).digest("hex"),
     personScoped: s.kind === "person",
     lastRendered: s.lastRendered,
+    touchedDay: Math.max(s.doc.bornDay, s.physics.lastUsedDay),
   };
 }
 
@@ -364,6 +414,12 @@ export interface Lanes {
   later?: readonly string[];
   /** Those of `later` past their date (review of #511): counted as overdue. */
   overdue?: readonly string[];
+  /**
+   * "STILL OPEN"'S OLD ONES, by id (2026-10-18): open threads untouched for
+   * `STILL_OPEN_STALE_DAYS` lived days or more. They rank last, and the
+   * lane's count line says how many of what it counts are that old.
+   */
+  threadsStale?: readonly string[];
 }
 
 /**
@@ -380,9 +436,11 @@ export interface Lanes {
  *   craft    — skill-kind, not already in identity, above the warm floor. The
  *              procedural self is rendered as CONTENT, never a pointer (§1).
  *              Empty under `workAtDelivery` (below): composed per directory.
- *   threads  — `unresolved` memories: person-scoped first, oldest-opened first;
- *              and a core memory being reconsidered (2026-10-11), which waits
- *              on a decision and so is listed here, not under identity.
+ *   threads  — `unresolved` memories, what is live first (`byThreadLive`,
+ *              2026-10-18: the recently touched before the weeks-old, plain
+ *              before unsettled, person-scoped first among peers); and a core
+ *              memory being reconsidered (2026-10-11), which waits on a
+ *              decision and so is listed here, not under identity, first.
  *   hints    — everything else warm enough to be worth a nudge, by `hintReading`:
  *              organic strength x habituation, so one strong memory cannot
  *              hold the lane every day (2026-09-26).
@@ -430,6 +488,10 @@ export function rankLanes(
     /** "Coming up"'s later dates (`Lanes.later`, 2026-10-16): counted under
      *  that lane, so in no other — as a listed arriving item is in none. */
     readonly later?: readonly string[];
+    /** Open ids that would show as "Unsettled — may be out of date"
+     *  (`recall/standing.ts#unsettledAmong`, 2026-10-18): ranked after the
+     *  rest of "Still open", the core memories being reconsidered included. */
+    readonly unsettled?: ReadonlySet<string>;
   } = {},
 ): Lanes {
   const identity: Ranked[] = [];
@@ -442,11 +504,16 @@ export function rankLanes(
   const horizon = horizonIn.filter((h) => !inIdentity.has(h.id) && !settledOver.has(h.id));
   const arriving = new Set(horizon.map((h) => h.id));
   const later = new Set(opts.later ?? []);
+  const unsettled = opts.unsettled ?? new Set<string>();
+  const asThread = (s: Scanned): Ranked => {
+    const r = rankedAs(s, "threads");
+    return unsettled.has(s.id) ? { ...r, unsettled: true } : r;
+  };
 
   for (const s of scanned) {
     // A core memory being reconsidered waits on a decision: "Still open" (2026-10-11).
     if (s.band === "identity" && s.reconsidering === true) {
-      reconsidering.push(rankedAs(s, "threads"));
+      reconsidering.push(asThread(s));
       continue;
     }
     if (s.band === "identity") {
@@ -455,7 +522,7 @@ export function rankLanes(
     }
     if (arriving.has(s.id) || later.has(s.id) || settledOver.has(s.id)) continue;
     if (s.unresolved) {
-      threads.push(rankedAs(s, "threads"));
+      threads.push(asThread(s));
       continue;
     }
     if (
@@ -482,16 +549,26 @@ export function rankLanes(
 
   identity.sort(byRotation(scanned.find((s) => s.day !== undefined)?.day));
   craft.sort(byStrength);
-  threads.sort(byThreadAge);
+  const turn = scanned.find((s) => s.day !== undefined)?.day ?? 0;
+  threads.sort(byThreadLive(turn, t.STILL_OPEN_STALE_DAYS));
   // A few core memories being reconsidered lead "Still open" (2026-10-11):
   // at most `RECONSIDERING_MAX`, the rest counted with the lane's overflow
-  // ("more still open"), one decision at a time.
+  // ("more still open"), one decision at a time. Not aged: a core memory
+  // waits on a decision however long ago it was touched.
   // They TAKE TURNS by lived day (review of #430): a fixed order would show
   // the same one every wake while the others waited unseen behind it.
-  reconsidering.sort(byThreadAge);
-  const turn = scanned.find((s) => s.day !== undefined)?.day ?? 0;
-  const turns = reconsidering.length === 0 ? 0 : ((turn % reconsidering.length) + reconsidering.length) % reconsidering.length;
-  const rotated = [...reconsidering.slice(turns), ...reconsidering.slice(0, turns)];
+  // One that is also "Unsettled — may be out of date" (2026-10-18) takes its
+  // turn only after the plain ones: its prefix replaces the "keep or retire
+  // it" words, and the pair it is in has its own answer.
+  reconsidering.sort(byOpened);
+  const rotate = (pool: readonly Ranked[]): Ranked[] => {
+    const k = pool.length === 0 ? 0 : ((turn % pool.length) + pool.length) % pool.length;
+    return [...pool.slice(k), ...pool.slice(0, k)];
+  };
+  const rotated = [...rotate(reconsidering.filter((r) => r.unsettled !== true)), ...rotate(reconsidering.filter((r) => r.unsettled === true))];
+  // Which open threads are old, for the count line — before the core
+  // memories join the lane: those are not aged.
+  const threadsStale = staleAmong(threads, turn, t.STILL_OPEN_STALE_DAYS);
   const shownFlags = Math.min(rotated.length, t.RECONSIDERING_MAX);
   threads.unshift(...rotated.slice(0, shownFlags));
   const flagsWaiting = rotated.slice(shownFlags).map((r) => r.id);
@@ -514,6 +591,7 @@ export function rankLanes(
         ...(opts.horizonMore ?? []).filter((id) => !inIdentity.has(id) && !settledOver.has(id) && !arriving.has(id)),
       ],
     },
+    ...(threadsStale.length === 0 ? {} : { threadsStale }),
   };
 }
 
