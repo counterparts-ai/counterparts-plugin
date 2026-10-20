@@ -152,6 +152,28 @@ export interface SelfTunables {
    * page within it prints whole on every day.
    */
   PAGE_ROOM_BYTES: number;
+  /**
+   * THE NIGHTLY WRITERS ARE HELD TO THE ROOM (2026-10-20, Mike's go, lightly
+   * held, an experiment). On: a page past `PAGE_ROOM_BYTES` from the nightly
+   * page writer or the reflection (`by` `writer` / `reflection`) is refused
+   * each door's first time in a night — "N bytes over; cut, don't add a short
+   * version" — and that door's next send past it in the same session is
+   * kept as before; a held page not sent again is kept at the
+   * run's end (`Self#keepHeldPage`) — or, with no run end, at the worker's next
+   * boundary once it has settled — so no night loses its rewrite to this. A
+   * session's and the owner's pages are not held: the room stays their
+   * target. Off: the room is every writer's target, as from 2026-10-10.
+   */
+  PAGE_HELD_TO_ROOM: boolean;
+  /**
+   * PAST THE ROOM, THE SHORT VERSION FIRST (2026-10-20, with the hold). On: the
+   * wake skips the whole page's rung for a page past `PAGE_ROOM_BYTES` that
+   * has a short version written with it, so the short version (within the
+   * room) is what sessions read and the lanes beside it keep their room. A
+   * page past it with no short version still prints whole when it fits, as
+   * before. Off: the whole page whenever it fits (2026-10-10's ladder).
+   */
+  PAGE_SHORT_PAST_ROOM: boolean;
   /** Calendar days after which the wake says the page has not been revised.
    *  CALENDAR, not lived: the lived clock has run seven days across fifteen
    *  calendar ones on the owner's own store, so a lived window would report a
@@ -289,6 +311,8 @@ export const SELF_TUNABLES: SelfTunables = {
 
   PAGE_MAX_BYTES: 16_384,
   PAGE_ROOM_BYTES,
+  PAGE_HELD_TO_ROOM: true,
+  PAGE_SHORT_PAST_ROOM: true,
   PAGE_STALE_DAYS: 14,
   PAGE_EMPTY_SHOWS_LIST: true,
   PAGE_ON_EGRESS: true,

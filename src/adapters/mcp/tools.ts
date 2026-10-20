@@ -63,7 +63,7 @@
 import { CORE_EMOTIONS } from "../../core/feelings-wheel.js";
 import { LAST_EXCHANGE_HANDLE } from "../../core/handoff/last-exchange.js";
 import { RECALL_MAX_IDS } from "./deliberate.js";
-import { FACTS_MEANING_CAP, FACTS_PAGE_SIZE } from "./facts.js";
+import { FACTS_MEANING_CAP, FACTS_PAGE_SIZE, FACTS_TAIL_SIZE } from "./facts.js";
 import { RECURRENCES } from "../../core/time.js";
 import { PAGE_ROOM_BYTES } from "../../core/self/briefing.js";
 import { MEET_STEPS } from "../../core/onboarding.js";
@@ -422,7 +422,7 @@ const TRAITS_PROPERTY = {
 const EVENT_DATE_PROPERTY = {
   type: ["string", "null"],
   description:
-    'Optional: the calendar date this memory is ABOUT, when that is a future date — so it comes back around then (when it already happened, that is occurredOn). Decision, kill/renew dates and outside deadlines are eventDates. Write it yourself, in one of four shapes: a day "2026-10-15", a month "2026-10", a range of two days "2026-10-20..2026-10-31" (that is how to say "late October"), or a year "2026" (a year alone never comes back on its own). Say "before the 15th" as the day or a range ending on it. Leave it out when nothing is dated; a date written only in the text is never read. An unreadable date is refused, and nothing is stored. Revising a dated memory by its id with `updates`: its date, remind and recurring carry over unless you send new ones; send null to drop the date (done, cancelled).',
+    'Optional: the calendar date this memory is ABOUT, when that is a future date — so it comes back around then (when it already happened, that is occurredOn). Decision, kill/renew dates and outside deadlines are eventDates. Write it yourself, in one of four shapes: a day "2026-10-15", a month "2026-10", a range of two days "2026-10-20..2026-10-31" (that is how to say "late October"), or a year "2026" (a year alone never comes back on its own). Say "before the 15th" as the day or a range ending on it. Leave it out when nothing is dated; a date written only in the text is never read. An unreadable date is refused, and nothing is stored. Revising a dated memory by its id with `updates`: its date, remind and recurring carry over unless you send new ones; send null to drop the date (done, cancelled). A repeating one done just this time: send `status: "done"` and leave eventDate out — only this occurrence closes.',
 } as const;
 
 /**
@@ -434,7 +434,7 @@ const RECURRING_PROPERTY = {
   type: ["string", "null"],
   enum: [...RECURRENCES, null],
   description:
-    'Optional, with a day eventDate: "daily", "weekly", "monthly" or "yearly" — it then comes back every time, counted from that day (a birthday: its date, "yearly"); null on a revision stops it repeating.',
+    'Optional, with a day eventDate: "daily", "weekly", "monthly" or "yearly" — it then comes back every time, counted from that day (a birthday: its date, "yearly"); null on a revision stops it repeating (one time done: status "done").',
 } as const;
 
 /**
@@ -460,7 +460,7 @@ const STATUS_PROPERTY = {
   type: "string",
   enum: ["done", "planned", "proposed", "asked"],
   description:
-    'Optional: what kind of thing it is — "done" (it happened), "planned" (decided, not done yet), "proposed" (put forward, not decided), "asked" (a question or request still open).',
+    'Optional: what kind of thing it is — "done" (it happened; with `updates` at a repeating reminder, this occurrence is done and the repeat stays), "planned" (decided, not done yet), "proposed" (put forward, not decided), "asked" (a question or request still open).',
 } as const;
 
 /** The privilege `remember` and `session_end` share for the three fields (v12). */
@@ -706,7 +706,7 @@ const REMEMBER: ToolSpec = {
       updates: {
         type: "string",
         description:
-          "The id or handle of a memory this revises, if it revises one. A field — never written into the text. To close a dated or open memory whose work got done: its id, with `eventDate: null` or `unresolved: false`.",
+          "The id or handle of a memory this revises, if it revises one. A field — never written into the text. To close a dated or open memory whose work got done: its id, with `eventDate: null` or `unresolved: false`. A REPEATING reminder done this time (the weekly backup ran): its id with `status: done` and no eventDate closes this occurrence only, and it comes back on its next date; `eventDate: null` ends the repeat.",
       },
       how: HOW_PROPERTY,
       settle: SETTLE_PROPERTY,
@@ -838,8 +838,8 @@ const RECALL: ToolSpec = {
         "src/adapters/mcp/facts.ts#factsRecall (store.search per word with a limit of its document count; schemas#subjectsIn -> store.memoriesNaming; FACTS_MEANING_CAP)",
     },
     {
-      claim: `A facts answer opens with a count of distinct facts — \"12 match · showing ${String(FACTS_PAGE_SIZE)} · 2 more → page 2\" — and pages with page: 2, 3, … in a stable order. It says \"may not be everything\" only when a cap cut something or weak matches were left out, and says which.`,
-      mechanizedBy: "src/adapters/mcp/facts.ts#renderFacts (FACTS_PAGE_SIZE, FACTS_WEAK_FRACTION, meaningCapped)",
+      claim: `A facts answer opens with a count of distinct facts — \"12 match · showing ${String(FACTS_PAGE_SIZE)} · 2 more → page 2\" — and pages with page: 2, 3, … in a stable order. After the page's results it lists the next ${String(FACTS_TAIL_SIZE)} by title, id and date, one line each, to open by id (2026-10-20, from the benchmark loss read; helps real recall too; lightly held, revisit). It says \"may not be everything\" only when a cap cut something or weak matches were left out, and says which.`,
+      mechanizedBy: "src/adapters/mcp/facts.ts#renderFacts (FACTS_PAGE_SIZE, FACTS_TAIL_SIZE, FACTS_WEAK_FRACTION, meaningCapped)",
     },
     {
       claim:
@@ -883,7 +883,7 @@ const RECALL: ToolSpec = {
       },
       handle: {
         type: "string",
-        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored.`,
+        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads a short summary of that night, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored.`,
       },
       ids: {
         type: "array",
@@ -891,7 +891,7 @@ const RECALL: ToolSpec = {
         // The cap is one number, imported. A literal here and a constant in
         // `deliberate.ts` is the drift the registry audit exists to prevent.
         maxItems: RECALL_MAX_IDS,
-        description: `Memory ids from an earlier answer or an index (a dream's, a reflection's), to read whole — up to ${RECALL_MAX_IDS} at once. A long body comes in parts: see part. Not combinable with handle or question; takes no mode.`,
+        description: `Memory ids from an earlier answer or an index (a dream's, a reflection's), to read whole — up to ${RECALL_MAX_IDS} at once; a dream or reflection id (drm_…, rfl_…) among them comes back as that night's summary. A long body comes in parts: see part. Not combinable with handle or question; takes no mode.`,
       },
       part: {
         type: "integer",
@@ -961,7 +961,7 @@ const DREW_ON_PROPERTY = {
 /** The claim `session_end` and `chapter` share about `drewOn`. */
 const DREW_ON_PRIVILEGE = {
   claim:
-    "`drewOn` credits only memories this session was shown — its footnotes, loud memories and recall answers — as a full use (an experiment since 2026-10-19), at most 3 per boundary and once a day each. An id it was not shown, a handoff, a superseded memory or one faded under a newer one is refused by name, and nothing is credited for it. A dated memory it names stops coming back as a footnote for that date.",
+    "`drewOn` credits only memories this session was shown — its footnotes, loud memories and recall answers — as a full use (an experiment since 2026-10-19), at most 3 per boundary and once a day each. An id it was not shown, a handoff, a superseded memory or one faded under a newer one (unless this session replaced it) is refused by name, and nothing is credited for it. A dated memory it names stops coming back as a footnote for that date.",
   mechanizedBy: "src/core/counterpart.ts#creditDrewOn -> src/core/prospective/index.ts#Prospective.actedOn",
 };
 
@@ -1172,7 +1172,7 @@ const SESSION_END: ToolSpec = {
             updates: {
               type: "string",
               description:
-                "The id or handle of a memory this revises, if it revises one. A field — never written into `content`. To close a dated or open memory whose work got done: its id, with `eventDate: null` or `unresolved: false`.",
+                "The id or handle of a memory this revises, if it revises one. A field — never written into `content`. To close a dated or open memory whose work got done: its id, with `eventDate: null` or `unresolved: false`. A REPEATING reminder done this time (the weekly backup ran): its id with `status: done` and no eventDate closes this occurrence only, and it comes back on its next date; `eventDate: null` ends the repeat.",
             },
             how: HOW_PROPERTY,
             eventDate: EVENT_DATE_PROPERTY,
@@ -1431,7 +1431,7 @@ const SELF_PAGE: ToolSpec = {
       mechanizedBy: "src/core/self/index.ts#revisePage (SELF_PAGE_REVISED_EVENT / SELF_PAGE_REFUSED_EVENT -> store.appendEvent)",
     },
     {
-      claim: `The wake never cuts the page. It prints it WHOLE when the day's room holds it — a page within ${String(PAGE_ROOM_BYTES)} bytes (UTF-8) always fits at the default ceiling — and otherwise, in this order, the short version written with this exact text, each \`##\` section's heading and first sentence, the headings alone, or one line; each says what it is, how big the page is, and that this tool reads it whole. A short version is kept only beside a page past that room, only within it, and only until the page is rewritten without one. A page past 16,384 bytes is refused, never trimmed.`,
+      claim: `The wake never cuts the page. It prints it WHOLE when the day's room holds it — a page within ${String(PAGE_ROOM_BYTES)} bytes (UTF-8) always fits at the default ceiling; a page past that with a short version shows the short version — and otherwise, in this order, the short version written with this exact text, each \`##\` section's heading and first sentence, the headings alone, or one line; each says what it is, how big the page is, and that this tool reads it whole. A short version is kept only beside a page past that room, only within it, and only until the page is rewritten without one. A page past 16,384 bytes is refused, never trimmed.`,
       mechanizedBy:
         "src/core/self/index.ts#revisePage (PAGE_MAX_BYTES -> too-large; short -> PAGE_META_SHORT) + #pageBlock (the ladder, briefing.ts#PageRung) + src/core/self/briefing.ts#PAGE_ROOM_BYTES",
     },
@@ -1639,9 +1639,9 @@ const REFLECT: ToolSpec = {
   name: "reflect",
   annotations: annotate("Reflect", { readOnly: false }),
   summary:
-    "Reflection: a few quiet, awake minutes — usually at the end of the nightly run, after the dream — answering two or three questions about yourself, the owner and the two of you, citing the memories your thoughts rest on. It keeps a lived entry, may rewrite your self page from the memories it cites, leaves a short morning share for the owner, can record how a memory feels to you now and what a memory is about. Phases: `launch` (a reflection on its own, for a background agent), `begin` / `part` / `finish` (the reflecting mind's — `part` fetches the rest of a bundle that came in parts), `settle` (two memories it was shown that disagree, when the reason is plain), `told` (the share was told), `close` (a yes to closing what the share proposed).",
+    "Reflection: a few quiet, awake minutes — usually at the end of the nightly run, after the dream — answering two or three questions about yourself, the owner and the two of you, citing the memories your thoughts rest on. It keeps a lived entry, may rewrite your self page from the memories it cites, leaves a short morning share for the owner, can record how a memory feels to you now and what a memory is about. Phases: `launch` (a reflection on its own, for a background agent), `begin` / `part` / `finish` (the reflecting mind's — `part` fetches the rest of a bundle that came in parts), `settle` (two memories it was shown that disagree, when the reason is plain), `told` (the share was told), `close` (a yes to what the share asked), `reopen` (a no to one it closed).",
   admission:
-    "The nightly run calls `begin` and `finish` after the dream, as its prompt says. Call `launch` only when the owner asks you to reflect, and hand its prompt to a background agent. Call `told` after you told the owner a morning share, in your own words. Call `close` only on the owner's yes to closing what a share proposed.",
+    "The nightly run calls `begin` and `finish` after the dream, as its prompt says. Call `launch` only when the owner asks you to reflect, and hand its prompt to a background agent. Call `told` after you told the owner a morning share, in your own words. Call `close` or `reopen` only on the owner's word about a share's open threads.",
   negativeExamples: [
     "Do NOT make up depth: a night with nothing much to say is a short entry that cites nothing — it rewrites nothing and shares nothing.",
     "Do NOT store a thought about the owner as a fact about them: say it to them tentatively in the share, or not at all — never a list of flaws.",
@@ -1685,8 +1685,8 @@ const REFLECT: ToolSpec = {
     },
     {
       claim:
-        "It may propose closing only open threads it was shown as stale, and closes none itself: `close` closes only ids a reflection proposed, after the owner's yes, with the checks a deposit that answers a thread makes.",
-      mechanizedBy: "src/core/dream/reflect.ts#Reflections.finish (close) + #Reflections.close",
+        "It may close or propose closing only open threads it was shown as stale: one it closes itself carries its why, is never protected or confidential (any folder, since 2026-10-20), is said in the morning share, and `reopen` puts it back (after which it may only be asked about); `close` closes only ids a reflection proposed, after the owner's yes, with the same checks.",
+      mechanizedBy: "src/core/dream/reflect.ts#Reflections.finish (closeNow, close) + #Reflections.close + #Reflections.reopen",
     },
     {
       claim:
@@ -1699,13 +1699,31 @@ const REFLECT: ToolSpec = {
     properties: {
       phase: {
         type: "string",
-        enum: ["launch", "begin", "part", "finish", "settle", "told", "close"],
-        description: "Which step: launch, begin, part, finish, settle, told, or close.",
+        enum: ["launch", "begin", "part", "finish", "settle", "told", "close", "reopen"],
+        description: "Which step: launch, begin, part, finish, settle, told, close, or reopen.",
       },
       close: {
         type: "array",
         items: { type: "string" },
-        description: "`finish`, optional: ids from the bundle's staleOpen that look done — proposed, closed only on a yes. `close`: the proposed ids the owner agreed are done.",
+        description: "`finish`, optional: ids from the bundle's staleOpen that look done but you are not sure of — asked in the share, closed only on a yes. `close`: the proposed ids the owner agreed are done.",
+      },
+      closeNow: {
+        type: "array",
+        description: "`finish`, optional: ids from the bundle's staleOpen that a memory you read plainly shows finished — closed now, and said in the share. When in doubt, use `close` instead.",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            why: { type: "string", description: "What shows it done, in a line." },
+            shows: { type: "string", description: "The id of the memory that shows it done." },
+          },
+          required: ["id", "why"],
+        },
+      },
+      reopen: {
+        type: "array",
+        items: { type: "string" },
+        description: "`reopen`: ids of threads a reflection closed itself that the owner says are not done — the id alone is enough.",
       },
       holds: { type: "string", description: "`settle`: the memory that holds now." },
       over: { type: "string", description: "`settle`: the memory it changes, corrects or disagrees with." },
@@ -1720,14 +1738,14 @@ const REFLECT: ToolSpec = {
       reflection: {
         type: "string",
         description:
-          "`part`, `finish` and `told`: the reflection id `begin` returned. `finish` may be called again the same day with the same id to send the parts a first call did not write (page, share, feelings, about, traits); the entry stands, and a share not yet told may be replaced.",
+          "`part`, `finish` and `told`: the reflection id `begin` returned (`close`: the one the share named; `reopen`: optional). `finish` may be called again the same day with the same id to send the parts a first call did not write (page, share, feelings, about, traits); the entry stands, and a share not yet told may be replaced.",
       },
       title: { type: "string", description: "`finish`: a short title for the entry." },
       entry: { type: "string", description: "`finish`: your reflection, first person. Required the first time; may be left out on a second finish." },
       cites: { type: "array", items: { type: "string" }, description: "`finish`: the memory ids the entry rests on." },
       page: {
         type: "object",
-        description: `\`finish\`, optional: the self page rewritten whole, and the memory ids it rests on (the core first). With a page past ${String(PAGE_ROOM_BYTES)} bytes, its \`short\` version too (under ${String(PAGE_ROOM_BYTES)} bytes, the whole of it condensed) — or \`short\` alone on a second \`finish\`, to add one to the page this reflection wrote.`,
+        description: `\`finish\`, optional: the self page rewritten whole, within its ${String(PAGE_ROOM_BYTES)}-byte room, and the memory ids it rests on (the core first). A page past the room is sent back once to be cut; \`short\` (under ${String(PAGE_ROOM_BYTES)} bytes, the whole of it condensed) is for a page kept past it — beside it, or alone on a second \`finish\`.`,
         properties: { text: { type: "string" }, cites: { type: "array", items: { type: "string" } }, short: { type: "string" } },
       },
       share: {

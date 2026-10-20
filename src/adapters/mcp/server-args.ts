@@ -1,6 +1,6 @@
 /** The MCP tools' argument readers — kinds, dimensions, reminders, feelings, traits, facts, `about` — and the echoes that say back what was read (moved out of `server.ts`, 2026-10-11). */
 import type { DepositResult, SentFacts } from "../../core/counterpart.js";
-import { isRecurrence, occurrenceOnOrAfter, parseCalendarDate, readableRecurrence } from "../../core/time.js";
+import { isRecurrence, occurrenceOnOrAfter, parseCalendarDate, readableDate, readableRecurrence } from "../../core/time.js";
 import type { Recurrence } from "../../core/time.js";
 import { AUTHOR_DIMENSIONS } from "../../core/remember/index.js";
 import {
@@ -39,6 +39,15 @@ export interface RecallRowFields {
   readonly time?: string;
   /** Meaning mode's own counts (`MeaningResult.counts`). */
   readonly counts?: Readonly<Record<string, number>>;
+  /** By address: the dreams and reflections opened (`nights.ts`) — not memories, so not `expanded`. */
+  readonly nights?: number;
+  /**
+   * A facts answer's title tail, by id (`facts.ts#FACTS_TAIL_SIZE`; 2026-10-20,
+   * from the benchmark loss read; helps real recall too; lightly held,
+   * revisit): listed, not delivered — kept apart from the delivered ids
+   * so a later open by id can be joined against it (the ~10-27 check).
+   */
+  readonly tail?: readonly string[];
 }
 
 /**
@@ -206,15 +215,46 @@ function dateNote(eventDate: string, today: string, recurring: Recurrence | null
 /** The reminder half of a deposit's answer: what was RECORDED — after a
  *  revision's carry-over, not merely what was sent — or why `remind` had
  *  nothing to shape. Nothing when neither field was sent or nothing minted. */
+/** Beside a done at a repeating reminder that sent no title (2026-10-20). */
+const OCCURRENCE_TITLE_NOTE =
+  "No title was given, and the reminder's was not carried over: this memory says one time was done, and the reminder's title would read as the reminder itself. Give it a short one of its own (\"Backup ran, Oct 20\").";
+
 /** What a revision did with its title (2026-10-14, `counterpart-deposit.ts#carryTitle`). */
 export function titleEcho(deposit: DepositResult, askedNote: string): Record<string, unknown> {
   if (!deposit.deposited) return {};
-  if (deposit.titleAsked === true) return { titleAsked: askedNote };
+  // A done at a repeat closes one time, not the reminder (2026-10-20).
+  if (deposit.titleAsked === true) return { titleAsked: deposit.occurrence === undefined ? askedNote : OCCURRENCE_TITLE_NOTE };
   return deposit.titleCarried === undefined ? {} : { titleCarried: { title: deposit.titleCarried.title, from: deposit.titleCarried.from } };
+}
+
+/**
+ * DONE FOR THIS TIME, said plainly (2026-10-20, an experiment): which
+ * occurrence a `done` at a repeating reminder closed, that the reminder kept
+ * its date and repeat, when it comes back, and how to end the repeat instead.
+ */
+function occurrenceEcho(o: NonNullable<DepositResult["occurrence"]>): Record<string, unknown> {
+  const back = o.next === null ? "" : ` It comes back ${readableDate(o.next)}.`;
+  const how = " To end the repeat instead: updates its id with eventDate: null.";
+  const note =
+    o.closed === null
+      ? `No occurrence of it is open today, so nothing was closed; the reminder is unchanged.${back}`
+      : o.already === true
+        ? `This occurrence (${readableDate(o.closed)}) was already closed; the reminder keeps its date and its repeat.${back}`
+        : `Closed this occurrence only (${readableDate(o.closed)}): it will not come up again this time. The reminder keeps its date and its repeat, and nothing about it faded.${back}${how}`;
+  return {
+    occurrenceClosed: o.closed !== null && o.already !== true,
+    ...(o.closed === null ? {} : { occurrence: o.closed }),
+    recurring: o.recurring,
+    from: o.reminder,
+    ...(o.next === null ? {} : { next: o.next }),
+    note,
+  };
 }
 
 export function reminderEcho(deposit: DepositResult, dated: ReminderRead, today: string): Record<string, unknown> {
   if ("refused" in dated || !deposit.deposited) return {};
+  const occurrence = deposit.occurrence;
+  if (occurrence !== undefined) return { reminder: occurrenceEcho(occurrence) };
   const carried = deposit.reminder;
   if (carried !== undefined) {
     const unmoved = carried.moved ? {} : { unmoved: true };

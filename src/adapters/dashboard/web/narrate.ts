@@ -942,6 +942,10 @@ export const NARRATORS = {
           : ` ${String(total)} more ${total === 1 ? "was" : "were"} kept out (most often ${worst[0]}).`;
     if (s(t, "path") === "handle") {
       const opened = n(t, "expanded") ?? 0;
+      const nights = n(t, "nights") ?? 0;
+      if (opened === 0 && nights > 0) {
+        return calm(`${nights === 1 ? "A dream or a reflection was" : `${String(nights)} dreams or reflections were`} read back by id.${stopped}`);
+      }
       return calm(
         opened === 0
           ? `Something was asked for by name and I had nothing at that address.${stopped}`

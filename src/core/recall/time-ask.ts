@@ -13,7 +13,9 @@
  *   - **days**: "today", "yesterday", "this morning", a clock time
  *     (`recency-ask.ts`'s reading, reused), "N days ago" (and "3-4 days ago",
  *     "3 or 4 days ago": both ends; review of #345), "a few days ago",
- *     "the other day", "past N days", "recently", "last Saturday" (and "this
+ *     "the other day", "past N days", "recently" / "lately" / "these days" /
+ *     "nowadays" (the past week, SOFT since 2026-10-20, from the benchmark loss read;
+ *     helps real recall too; lightly held, revisit: `SOFT_WORDS`), "last Saturday" (and "this
  *     past Saturday": the most recent Saturday BEFORE today, so asked on a
  *     Saturday it is a week ago; 2026-10-09). "This Saturday" and "on
  *     Saturday" are not read: either can be the coming one;
@@ -93,7 +95,25 @@ export interface TimeAsk {
   readonly anchor: TimeAnchor | null;
   /** The question with the time words taken out. */
   readonly rest: string;
+  /**
+   * A soft word ("lately", `SOFT_WORDS`): the window is a preference for the
+   * recent, not a filter, unless the question is only time. Absent otherwise.
+   */
+  readonly soft?: true;
 }
+
+/**
+ * The soft time words (2026-10-20, from the benchmark loss read; helps real
+ * recall too; lightly held, revisit): how a person says "not long ago" without
+ * meaning a cutoff. A bench question asked "what digestive issue did Sam
+ * experience lately?" and the past-week filter hid the October answer three
+ * months back (loc-conv-49-122). "these days" and "nowadays" are new (they
+ * filtered nothing before); "of late" is left out, as in "because of late
+ * fees". "most recent" is not here: it names a session ("most recent
+ * session") or orders a kind ("my most recent trip"), not a stretch of days.
+ */
+export const SOFT_WORDS = /\b(?:recently|lately|these days|nowadays)\b/i;
+const SOFT_WORDS_ALL = new RegExp(SOFT_WORDS.source, "gi");
 
 const MONTH_NAMES = [
   ["january", "jan"],
@@ -420,7 +440,7 @@ function ask(
   said: DayWindow | null,
   stretch: number,
   rest: string,
-  extra: { clock?: TimeAsk["clock"]; anchor?: TimeAnchor | null } = {},
+  extra: { clock?: TimeAsk["clock"]; anchor?: TimeAnchor | null; soft?: true } = {},
 ): TimeAsk {
   return {
     cue,
@@ -429,7 +449,10 @@ function ask(
     stretch,
     clock: extra.clock ?? null,
     anchor: extra.anchor ?? null,
-    rest,
+    // A soft word left beside another time ("recently, in September") asks
+    // nothing of its own: it is not a word to search for (review of #544).
+    rest: rest.replace(SOFT_WORDS_ALL, " ").replace(/\s+/g, " ").trim(),
+    ...(extra.soft === true ? { soft: true as const } : {}),
   };
 }
 
@@ -628,9 +651,16 @@ export function readTimeAsk(text: string, clock: { now: number; zone: string }):
     const n = Math.max(1, numberOf(pastDays[3] as string) ?? 3);
     return ask(pastDays[0], { from: addDays(today, -(n - 1)), to: today }, 0, without(text, pastDays[0]));
   }
-  if (/\b(recently|lately)\b/i.test(text)) {
-    const found = /\b(recently|lately)\b/i.exec(text)?.[0] ?? "recently";
-    return ask(found, { from: addDays(today, -6), to: today }, 0, without(text, found));
+  // SOFT words (2026-10-20, from the benchmark loss read; helps real recall
+  // too; lightly held, revisit): "lately" is how a person talks, not a
+  // cutoff. The window is still read (the past week) and marked `soft`; the
+  // caller ranks what is inside it first instead of filtering, except when the
+  // question is only time ("what happened lately?"), where the window is the
+  // question. Read after every explicit window, so "recently, in September"
+  // still means September.
+  const soft = SOFT_WORDS.exec(text);
+  if (soft !== null) {
+    return ask(soft[0], { from: addDays(today, -6), to: today }, 0, without(text, soft[0]), { soft: true });
   }
 
   // ── a named day or a clock: `recency-ask.ts`'s reading ───────────────────

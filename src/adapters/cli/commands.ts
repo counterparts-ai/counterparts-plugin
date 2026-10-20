@@ -111,6 +111,7 @@ import {
   catchUpEntry,
   selfPageCommand,
   dreamCommand,
+  nightCommand,
   coreCommand,
   claimsEraCommand,
   settleCommand,
@@ -222,6 +223,10 @@ export const COMMANDS = [
   // each both reads and writes, so neither is on `OWNER_OPS`: reading works
   // under observer, and the write refuses at the core's own seam.
   "dream",
+  // Last night, read-only (2026-10-20): a dream or a reflection by id, or the
+  // newest. It has no write at all — `dream --undo` stays on `dream` — so a
+  // session can run it to review the night with the owner.
+  "night",
   "core",
   // Contradictions (2026-09-29): what is unsettled and what was settled, and
   // the owner's settle and undo. Reads and writes, like `dream`; the write
@@ -574,6 +579,7 @@ export const COMMAND_FLAGS: Record<Command, readonly string[]> = {
   // session does not belong there.
   "self-page": ["write", "file", "stdin", "short", "reason", "versions", "version", "restore", "clear", "if-version"],
   dream: ["list", "show", "undo", "all", "setting"],
+  night: ["all"],
   core: ["list", "demote", "reaffirm", "reason", "reflected-feeling"],
   settle: ["list", "pair", "holds", "against", "how", "why", "undo"],
   about: ["why"],
@@ -653,6 +659,8 @@ export const COMMAND_BLURB: Record<Command, string> = {
     "The written page the wake opens with. With no flags it prints the page, its date and its size; --write --file <path> or --write --stdin replaces it whole, keeping every earlier version; --short <file> beside them gives a page past its room the short version sessions read on a day the wake has no room for it whole (alone, with --write, it is added to the page as it stands); --versions lists those and --version <seq> prints one. Reading works under observer; writing refuses there.",
   dream:
     "What each dream did, and its undo — and what the waking self made of it. With no flags (or --list), the newest 20 dreams (--list --all for every one): date, state, title and what changed, then the recent reflections; --show <id> prints one dream's journal, every change it made and the reflection after it (--show <rfl_…> prints one reflection: its questions, entry, what it rests on and its morning share); --undo <id> reverses that dream's whole batch (merges come apart, links and gists go, replays and nominations are taken back) and keeps its journal, marked undone — a reflection is lived and stays. Reading works under observer; --undo refuses there.",
+  night:
+    "Last night, read-only: what a dream did and what the waking self made of it. It changes nothing — it opens the store as an observer, so it runs the same under --observer. With nothing after it (or list), the recent dreams and reflections, newest first (--all for every dream); last prints the newest dream — its journal, every change it made, and the reflection after it (last-reflection: the newest reflection); an id (drm_… or rfl_…) prints that one, and show <id|last> means the same. Undoing a dream stays on `counterparts dream`, the owner's door.",
   core:
     "The core — the memories about me and about us that do not fade. With no flags (or --list), what it holds and which lane carried each one there, what dreams have nominated, what is being reconsidered, and what was sent back; --demote <id> --reason \"...\" sends one back to ordinary fading from today, records why, and keeps the lanes from promoting it again; --reaffirm <id> --reason \"...\" keeps one that is being reconsidered (it is not flagged again for what it is); --reflected-feeling on|off opens or closes the core to reflection alone. On (the default): a feeling a reflection records later and a reflection citing a memory both count toward the fast lane, and a reflection may re-label what a memory is about either way — each re-label is recorded with its reason, and one into me, us or the owner is told in the next morning share. Off: nothing reaches the core on a reflection alone — the fast lane needs a feeling felt at the time (not one a reflection recorded later) and an ordinary use after a gap (not a reflection citing it), and a reflection may only move what a memory is about toward work or world. Reading works under observer; the changes refuse there.",
   settle:
@@ -688,6 +696,7 @@ const COMMAND_ARGS: Partial<Record<Command, string>> = {
   disconnect: " [claude-code]",
   help: " [advanced | <command>]",
   dream: " [--list [--all] | --show <id> | --undo <id>]",
+  night: " [list [--all] | last | last-reflection | [show] <drm_…|rfl_…>]",
   core: " [--demote <id> --reason \"...\" | --reaffirm <id> --reason \"...\" | --reflected-feeling on|off]",
   settle: " [--list | --pair <id> --holds <id> --how changed|corrected|open --why \"...\" | --undo <pair>]",
   about: " <id> [me|us|owner|work|world] [--why \"...\"]",
@@ -922,6 +931,11 @@ const DREAM_FLAG_HELP: Record<string, string> = {
     "auto, ask or off — the nightly run (page writer, dream, reflection). ask (the default): the first session of a day shows you the question in the terminal and waits for you to say \"dream\" (or \"dream on your own\", which turns on auto); auto: the first session of a day starts it by itself, in a separate windowless claude -p in the background, and says so in one line; off: no dreams. `counterparts dream` prints the setting.",
 };
 
+/** `night`'s one flag (2026-10-20): `--all` means something else on other pages. */
+const NIGHT_FLAG_HELP: Record<string, string> = {
+  all: "with the list: every dream the store holds, not only the newest 20",
+};
+
 /** `settle`'s own seven (2026-09-29): `--list` and `--undo` mean something else on other pages. */
 const SETTLE_FLAG_HELP: Record<string, string> = {
   list: "what is unsettled, and what was settled lately — the default",
@@ -1015,6 +1029,8 @@ export function commandHelp(command: Command): string {
               ? HOST_FLAG_HELP
               : command === "dream"
                 ? DREAM_FLAG_HELP
+                : command === "night"
+                  ? NIGHT_FLAG_HELP
                 : command === "core"
                   ? CORE_FLAG_HELP
                   : command === "claims-era"
@@ -1679,6 +1695,8 @@ export async function run(argv: readonly string[], opts: RunOptions): Promise<nu
         );
       case "dream":
         return dreamCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string");
+      case "night":
+        return nightCommand(dir, io, parsed, typeof parsed.flags["dir"] === "string");
       case "core":
         return coreCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string");
       case "claims-era":

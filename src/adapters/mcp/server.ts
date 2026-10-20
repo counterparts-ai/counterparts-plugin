@@ -113,7 +113,7 @@ import { TUNABLES as ADAPTER_TUNABLES } from "../config.js";
 import type { AdapterConfig } from "../config.js";
 import { Lifecycle, plainContextLine } from "../lifecycle.js";
 import type { SessionInput } from "../lifecycle.js";
-import { ONE_TAG_LINE, wakeTagLead } from "../store-id.js";
+import { ONE_TAG_LINE, tagLead } from "../store-id.js";
 import { NIGHT_CHILD_ENV, NIGHT_RUN_ENV, WORKER_RUNNER_PATH } from "../spawn.js";
 import type { Spawner } from "../spawn.js";
 import {
@@ -151,6 +151,8 @@ import {
   embedQuestion,
 } from "./deliberate.js";
 import type { DeliberateResult } from "./deliberate.js";
+import { NIGHTS_GLOSS } from "./nights.js";
+import type { NightSummary } from "./nights.js";
 import { factsRecall, renderFacts } from "./facts.js";
 import { meaningRecall, renderMeaning } from "./meaning.js";
 import {
@@ -187,6 +189,7 @@ import {
   RECALL_MODE_WORDS,
   DESKTOP_DREAM_NOTE,
   STILL_DATED_HINT,
+  ANSWERS_HINT,
   STILL_DATED_SHOWN,
   TITLE_ASKED_NOTE,
 } from "./server-words.js";
@@ -1666,6 +1669,8 @@ export class McpServer {
     const deposit = await this.counterpart.submitJot(draft, {
       session,
       scope: this.scope,
+      // The day this server reads, for a done that closes one occurrence (2026-10-20).
+      at: this.today(),
       ownSpanHash,
       facts: facts.sent,
       // What it is about sets an unclaimed memory's default floor (2026-10-10).
@@ -1697,6 +1702,7 @@ export class McpServer {
       ...(neighbours.length === 0 ? {} : { neighbours, neighboursHint: NEIGHBOURS_HINT }),
       ...this.slotOf(deposit),
       ...this.stillDatedNear(deposit, dated, facts.sent.status, [], session),
+      ...this.answersReminder(deposit, facts.sent, neighbours),
       ...(settle === null ? {} : { settle }),
       ...(feltNow === null ? {} : { feelingsNow: feltNow }),
       // AN ERROR ONLY WHEN NOTHING LANDED (review of #316): a refused note
@@ -1860,7 +1866,7 @@ export class McpServer {
       };
       this.emit("mcp.remember.core", id, { ok: out.ok, reason: out.reason, decision });
       return out.ok
-        ? { ok: true, reason: out.reason, id, note: decision === "keep" ? "Kept in the core; it is no longer being reconsidered for what it is." : "Retired: it fades like any other memory from today, and the core's lanes will not promote it again." }
+        ? { ok: true, reason: out.reason, id, note: out.reason === "restored" ? "Back in the core: a reflection had retired it, and this keep undoes that. It is not reconsidered again for what it is." : out.reason === "confirmed" ? "A reflection had already retired it; this retire is now recorded as mine, so a session's keep will not put it back (the owner's still can)." : decision === "keep" ? "Kept in the core; it is no longer being reconsidered for what it is." :"Retired: it fades like any other memory from today, and the core's lanes will not promote it again." }
         : { ok: false, reason: out.reason, detail: detail[out.reason] ?? out.reason };
     } catch (err) {
       return { ok: false, reason: "threw", detail: String((err as Error).message ?? err) };
@@ -1999,6 +2005,33 @@ export class McpServer {
   }
 
   /**
+   * A WRITE THAT LOOKS LIKE IT ANSWERS A REMINDER DUE NOW (2026-10-20, an
+   * experiment, lightly held). "The backup ran" written as a fresh memory —
+   * no `updates` — leaves the weekly reminder open, and it comes back the
+   * same day. So when a write says something was `done`, or that the owner
+   * said it, and one of its listed neighbours (already shown, close by the
+   * neighbours' own bars) is a dated memory whose occurrence is due today or
+   * overdue inside its window (or, in the next one's lead days, the one
+   * before it still unclosed: what a done would close) and not yet closed,
+   * it is named with the way to close it. Never closed here: a close neighbour can be another thing.
+   */
+  private answersReminder(deposit: DepositResult, sent: { readonly status?: unknown; readonly saidBy?: unknown }, neighbours: readonly Neighbour[]): Record<string, unknown> {
+    if (!deposit.deposited || deposit.memoryId === null || neighbours.length === 0) return {};
+    if ((deposit.proposal?.updates?.declared ?? null) !== null) return {};
+    if (sent.status !== "done" && sent.saidBy !== "owner") return {};
+    const today = this.today();
+    const out: { id: string; title: string | null; due: string; recurring?: string }[] = [];
+    for (const n of neighbours) {
+      // The occurrence a done would close (`doneOccurrence`, review of #540):
+      // in the next one's lead days, an overdue one still unclosed.
+      const open = this.counterpart.prospective.doneOccurrence(n.id, today);
+      if (open === null || open.closed || today < open.firstDay) continue;
+      out.push({ id: n.id, title: n.title, due: open.occurrence, ...(open.recurring === null ? {} : { recurring: open.recurring }) });
+    }
+    return out.length === 0 ? {} : { answers: out, answersHint: ANSWERS_HINT };
+  }
+
+  /**
    * OTHER OPEN DATED MEMORIES NEAR A CLOSE (2026-10-14, Group 1 check-in,
    * lightly held). One obligation was found on several memories — a plain
    * reminder, a moved chain, a list — and a "done" that `updates` one left the
@@ -2006,10 +2039,12 @@ export class McpServer {
    * with `eventDate: null` or `status: done`), the nearest memories of the
    * new one and of the one it closed that still hold a date are LISTED, by id
    * and title, so the writer can close them in the same step. Never closed
-   * here: a nearby date can be another obligation. Empty when none.
+   * here: a nearby date can be another obligation. Empty when none. Not
+   * beside a `done` that closed one occurrence of a repeat (2026-10-20): the
+   * reminder stays, so there is no obligation ended to look for copies of.
    */
   private stillDatedNear(deposit: DepositResult, dated: ReminderRead, sentStatus: unknown, siblings: readonly string[], session: string | null): Record<string, unknown> {
-    if (!deposit.deposited || deposit.memoryId === null) return {};
+    if (!deposit.deposited || deposit.memoryId === null || deposit.occurrence !== undefined) return {};
     const closed = deposit.reminder !== undefined && deposit.reminder.eventDate === null;
     const declared = (deposit.proposal?.updates?.declared ?? null) !== null;
     const meant = declared && (("fields" in dated && dated.fields.eventDate === null) || sentStatus === "done");
@@ -2183,6 +2218,7 @@ export class McpServer {
         storeSize: result.storeSize,
         expanded: result.path === "handle" ? result.memories.length : 0,
         blockedBy: addressBlocked(result),
+        ...(Array.isArray(payload["nights"]) && payload["nights"].length > 0 ? { nights: payload["nights"].length } : {}),
       },
       askedIds.length,
       question,
@@ -2296,6 +2332,10 @@ export class McpServer {
     if (mode === "facts") {
       const r = factsRecall(ctx, question, { page });
       answer = renderFacts(r);
+      // The page's results only: the title tail (`r.tail`) is listed, not
+      // shown with its words, so it is not seen, not quotable and not in
+      // `ids` (2026-10-20, from the benchmark loss read; helps real recall
+      // too; lightly held, revisit).
       ids = r.memories.map((m) => m.id);
       body = {
         matched: r.matched,
@@ -2316,7 +2356,8 @@ export class McpServer {
         shown: r.memories.length,
         faded: r.faded,
         page: r.page,
-        ...(r.time === null ? {} : { time: r.time.anchor?.kind ?? "window" }),
+        ...(r.time === null ? {} : { time: r.time.soft === true ? "soft" : (r.time.anchor?.kind ?? "window") }),
+        ...(r.tail.length === 0 ? {} : { tail: r.tail.map((t) => t.id) }),
       };
     } else {
       const r = meaningRecall(ctx, question, { page });
@@ -2430,6 +2471,7 @@ export class McpServer {
   ): void {
     const byAddress = row.path === "handle";
     const shown = row.shown ?? 0;
+    const listed = row.tail === undefined ? null : boundedIds(row.tail);
     this.telemetry(() => {
       this.counterpart.noteAdapterEvent(MCP_RECALL_EVENT, {
         ...(session === UNBOUND_SESSION ? {} : { session }),
@@ -2445,6 +2487,9 @@ export class McpServer {
         // expansion answered an address, a question's answer showed results.
         surfaced: byAddress ? 0 : shown,
         expanded: byAddress ? row.expanded : 0,
+        // A night opened by its id (review of #538): counted apart, so a row
+        // that opened a dream does not read as an address that held nothing.
+        ...(row.nights === undefined ? {} : { nights: row.nights }),
         ...(row.matched === undefined ? {} : { matched: row.matched }),
         ...(row.faded === undefined ? {} : { faded: row.faded }),
         ...(row.page === undefined ? {} : { page: row.page }),
@@ -2464,6 +2509,11 @@ export class McpServer {
         // What it DELIVERED, by id, bounded (2026-10-11): the memories a
         // look-up opened or a question's answer showed.
         ...boundedIds(delivered),
+        // What a facts answer LISTED by title only (2026-10-20, from the
+        // benchmark loss read; helps real recall too; lightly held, revisit
+        // ~10-27): not delivered,
+        // so apart from `ids`; joined later against opens by id.
+        ...(listed === null || listed.idCount === 0 ? {} : { tail: listed.idCount, tailIds: listed.ids }),
       });
       // The ring emit above already carries this call; a telemetry write that
       // failed must not become the answer the model receives (`telemetry`).
@@ -2560,6 +2610,24 @@ export class McpServer {
     // past the total waiting by name.
     const bounded = boundById(result.memories, part);
     const lastPart = Math.max(1, ...bounded.memories.map((m) => m.parts ?? 1));
+    // NIGHTS SHARE THE SAME ROOM (review of #538): a summary is bounded on its
+    // own (`nights.ts`'s caps), but ten of them beside the memories could
+    // still pass the ceiling. They take what the memories left, weighed the
+    // way `boundById` weighs, and a night past it WAITS by id like a memory.
+    let wire = bounded.memories.reduce((n, m) => n + 2 * wireChars(JSON.stringify(m, null, 2)), 0);
+    const nights: NightSummary[] = [];
+    const nightsWaiting: string[] = [];
+    for (const n of result.nights ?? []) {
+      const cost = 2 * wireChars(JSON.stringify(n, null, 2));
+      const shipped = bounded.memories.length + nights.length > 0;
+      if (nightsWaiting.length > 0 || (shipped && wire + cost > RECALL_ID_RESULT_CHARS)) {
+        nightsWaiting.push(n.id);
+        continue;
+      }
+      wire += cost;
+      nights.push(n);
+    }
+    const waiting = [...(bounded.waiting ?? []), ...nightsWaiting];
     return {
       path: result.path,
       reason: result.reason,
@@ -2574,10 +2642,10 @@ export class McpServer {
             budget: `By id, a body comes in parts of ${RECALL_BODY_CHARS} characters ("part" of "parts" on each; bodyChars is the whole length).${part < lastPart ? ` Ask again with the same ids and part: ${String(part + 1)} for the next.` : " That was the last part."}`,
           }
         : {}),
-      ...(bounded.waiting !== undefined
+      ...(waiting.length > 0
         ? {
-            waiting: [...bounded.waiting],
-            more: `No room for ${String(bounded.waiting.length)} of the ids in one result: ask again with ids: [${bounded.waiting.join(", ")}].`,
+            waiting,
+            more: `No room for ${String(waiting.length)} of the ids in one result: ask again with ids: [${waiting.join(", ")}].`,
           }
         : {}),
       ...(result.ambiguous.length > 0 ? { ambiguous: [...result.ambiguous] } : {}),
@@ -2588,9 +2656,17 @@ export class McpServer {
       ...(result.reason === "handle-confidential-withheld"
         ? {
             withheld:
-              "That memory is marked confidential and this is not the owner's own session. It exists; it is not being shown.",
+              result.nightAsked !== undefined
+                ? `That ${result.nightAsked} rests on a memory marked confidential, and this is not the owner's own session. It exists; it is not being shown.`
+                : "That memory is marked confidential and this is not the owner's own session. It exists; it is not being shown.",
           }
         : {}),
+      ...(result.reason === "handle-unknown" && result.nightAsked !== undefined
+        ? { notFound: `No ${result.nightAsked} by that id in this memory. The console's read-only \`counterparts night\` lists the recent ones.` }
+        : {}),
+      // A NIGHT asked for by its id (2026-10-20, `nights.ts`): a read-only
+      // summary beside the memories. Opening one credits nothing.
+      ...(nights.length > 0 ? { nights: nights.map((n) => ({ ...n })), nightsGloss: NIGHTS_GLOSS } : {}),
       ...(result.reason === "both-arguments"
         ? { refused: "One kind of ask per call: a question (with a mode), ids, or a handle." }
         : {}),
@@ -2660,16 +2736,17 @@ export class McpServer {
       at: localDate(now, store.zone()),
     };
     lc.noteSession("start", input);
-    const woke = lc.composeWake(input, this.lifecycleOpts.config?.injectionBudgetBytes);
+    // The first meeting's marker rides in the wake's head tag (2026-10-20,
+    // ONE TAG), as a Claude Code session start carries it.
+    const woke = lc.composeWake(input, this.lifecycleOpts.config?.injectionBudgetBytes, () => [lc.onboardingMarker(input)]);
     const plain = lc.plainFor(input);
     const told = lc.claimPlain(input, plain.due);
     const spawn = lc.spawnWorker(input);
     const dream = this.wakeDreamLine(input);
     const notices = [this.wakeUpdateLine(), this.wakeDoctorLine()].filter((l): l is string => l !== null);
     const head = `Counterparts session for this chat: ${input.sessionId}. Pass session: ${input.sessionId} on session_end, chapter, dream and reflect in this chat.`;
-    // The first meeting's marker on the wake's head line (`wakeTagLead`,
-    // 2026-10-16, lightly held), as a Claude Code session start carries it.
-    const tags = wakeTagLead([lc.onboardingMarker(input)], woke.text);
+    // Or, when the wake has no head tag, as one tag in front of it (`tagLead`).
+    const tags = tagLead(woke.tags ?? [lc.onboardingMarker(input)], woke.text, woke.tagged === true);
     const lead = [lc.nowLine(), ...(ONE_TAG_LINE ? [] : [tags.trimEnd()]), ...told.map((r) => plainContextLine(r))].join("\n");
     // THE FIRST MEETING'S LINE (2026-10-11): the same offer, or the second
     // session's memory, a Claude Code session start carries. A tool result is

@@ -64,6 +64,17 @@ export const UPDATES_META_KEY = "updates";
 export const CLAIMED_DEFAULT_META_KEY = "claimedDefault";
 /** An open loop is an ordinary memory with a flag (`remember/` CONTRACT §4). */
 export const UNRESOLVED_META_KEY = "unresolved";
+/**
+ * WHO CLOSED AN OPEN THREAD, when the nightly reflection did (2026-10-20, an
+ * experiment): `{reflection, why, shows?}` — the reflection's id, what shows it
+ * done in its words, and a memory id that shows it. Set beside the flag.
+ */
+export const THREAD_CLOSED_BY_META_KEY = "threadClosedBy";
+/**
+ * A thread the owner reopened after the reflection closed it (2026-10-20): the
+ * reflection's id. The reflection may still ask about it, never close it again.
+ */
+export const THREAD_REOPENED_BY_META_KEY = "threadReopenedBy";
 
 /** Structurally `Self.noteSelfConfirmation` — this file imports no class. */
 export interface FreezeSeam {

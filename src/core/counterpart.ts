@@ -39,7 +39,7 @@ import { randomUUID } from "node:crypto";
 
 import { Associate, appendPendingDeltas, claimPending, releasePending } from "./associate/index.js";
 import type { CoactivateResult, Credited, FlushReport, PairDelta, PendingClaim } from "./associate/index.js";
-import { horizonFor } from "./briefing.js";
+import { READ_TODAY_AT_START, horizonFor } from "./briefing.js";
 import { episodeGate } from "./bridge.js";
 import { Dreams, Reflections } from "./dream/index.js";
 import { meetingDay } from "./onboarding.js";
@@ -133,8 +133,8 @@ import {
 } from "./handoff/index.js";
 import type { Handoff, HandoffRefusal, HandoffWrite, PointerSince } from "./handoff/index.js";
 import { CLAIM_CHAPTER, askFromStretch, chapterClaims, claimUnwritten, sessionStretch, sessionsHere } from "./coverage/index.js";
-import { LAST_HERE_LIFE_DAYS, LAST_HERE_NOROOM_EVENT, chaptersBySession, chaptersHere, chaptersOn, elsewhereLine, lastHereLadder, sinceElsewhereLines, stampWords, todayElsewhereLines, YESTERDAY_UNDATED_AT_START, yesterdayLine, yesterdayShorter } from "./handoff/last-here.js";
-import type { ChapterHere, LastHere, SinceElsewhere, TodayElsewhere } from "./handoff/last-here.js";
+import { ELSEWHERE_TITLES_MAX, elsewhereNamedIn, LAST_HERE_LIFE_DAYS, LAST_HERE_NOROOM_EVENT, chaptersBySession, chaptersHere, chaptersOn, elsewhereLine, lastHereLadder, sinceElsewhereLines, stampWords, todayElsewhereLines, YESTERDAY_UNDATED_AT_START, yesterdayLine, yesterdayShorter } from "./handoff/last-here.js";
+import type { ChapterHere, HereSession, LastHere, MemoryHere, SinceElsewhere, TodayElsewhere } from "./handoff/last-here.js";
 import { LAST_EXCHANGE_LINE_MAX_BYTES, exchangeLikely, lastExchange, lastExchangeLine, withExchange } from "./handoff/last-exchange.js";
 import type { LastExchange } from "./handoff/last-exchange.js";
 import { addDays, daysBetween, isDay, localDate, localStamp, localStampAfter, startOfLocalDay, yearOf } from "./time.js";
@@ -151,10 +151,12 @@ import {
   markWakeBehind,
   nearDue,
   pageRoomNote,
+  pastRoomWords,
   readSentinel,
   settledOver,
   threadsShown,
   spliceBeforeSentinel,
+  withHeadFields,
   WORK_OVERFLOW_EVENT,
   rotateWork,
   workHere,
@@ -162,6 +164,7 @@ import {
   workHereBytes,
   writerInstruction,
   fitNightWriter,
+  isWorkMemory,
 } from "./self/index.js";
 import type {
   BriefingResult,
@@ -433,6 +436,14 @@ export class Counterpart {
   /** True for the length of one delivery; the chapter walk it made, kept
    *  for the rest of it (`chaptersInWindow`). */
   private delivering = false;
+  /**
+   * EACH EPISODE ONCE, AND AT LEAST ONCE (2026-10-20, review of #536): the
+   * episode a delivery's Yesterday line left to "Last here" (`yesterdayFor`),
+   * and whether the line is to keep it after all — set by `wake` when the
+   * splice would carry no "Last here" (`carriesLastHere`). Delivery-scoped.
+   */
+  private yesterdayLeftOut: string | null = null;
+  private yesterdayKeepsNewest = false;
   private deliveryWalk: { day: number; chapters: Map<string, ChapterHere> } | null = null;
 
   private constructor(opts: CounterpartOptions) {
@@ -645,7 +656,7 @@ export class Counterpart {
       page: () => this.self.page()?.body ?? null,
       pageInfo: () => {
         const p = this.self.page();
-        return p === null ? null : { version: p.version, by: p.by, revisedOn: p.revisedOn };
+        return p === null ? null : { version: p.version, by: p.by, revisedOn: p.revisedOn, bytes: p.bytes };
       },
       pageWrites: opts.pageWriterMode !== "off",
       today: () => this.store.today(),
@@ -671,7 +682,16 @@ export class Counterpart {
         );
         return written.written && written.version !== null
           ? { ok: true, version: written.version, note }
-          : written.reason === "too-large"
+          : written.reason === "past-room"
+            ? // HELD TO THE ROOM (2026-10-20): the numbers and the words to cut by.
+              {
+                ok: false,
+                reason: written.reason,
+                bytes: written.bytes,
+                limit: this.self.tunables.PAGE_ROOM_BYTES,
+                note: pastRoomWords(written.bytes, this.self.tunables.PAGE_ROOM_BYTES),
+              }
+            : written.reason === "too-large"
             ? { ok: false, reason: written.reason, bytes: written.bytes, limit: this.self.tunables.PAGE_MAX_BYTES, note }
             : { ok: false, reason: written.reason, note };
       },
@@ -743,18 +763,58 @@ export class Counterpart {
     // The open threads it kept (context priming, 2026-10-19): the host records
     // them for this session, as part of what is open here.
     let threads: readonly string[] = [];
+    let tagged = false;
     this.delivering = delivery !== undefined;
     try {
-      const assembled = delivery === undefined ? null : this.assembleWake(delivery, here);
+      this.yesterdayLeftOut = null;
+      this.yesterdayKeepsNewest = false;
+      let assembled = delivery === undefined ? null : this.assembleWake(delivery, here);
+      let result = delivery === undefined ? this.self.wake() : this.self.wake(delivery, assembled?.text);
+      this.deliveredThreads = assembled === null ? null : new Set(assembled.kept.threads);
+      // AT LEAST ONCE (review of #536): the Yesterday line left its newest
+      // episode to "Last here", but when the splice will carry no "Last here"
+      // (no room this time, measured on 10 of 61 full-wake ceilings with no
+      // handoff here) the episode would be in no line. The wake is then
+      // assembled again with the line keeping it — reads only, so the second
+      // assembly costs time and writes nothing.
+      if (delivery !== undefined && assembled !== null && this.yesterdayLeftOut !== null && !this.carriesLastHere(result, here)) {
+        // The line's own no-room row, as the splice would have left it.
+        this.noteLastHereNoRoom(this.yesterdayLeftOut, { budget: this.reportedBudget, was: result.bytes, besideHandoff: false });
+        this.yesterdayKeepsNewest = true;
+        const again = this.assembleWake(delivery, here);
+        if (again !== null) {
+          assembled = again;
+          result = this.self.wake(delivery, again.text);
+          this.deliveredThreads = new Set(again.kept.threads);
+        }
+      }
       lined = assembled?.lined ?? [];
       threads = assembled?.kept.threads ?? [];
-      const result = delivery === undefined ? this.self.wake() : this.self.wake(delivery, assembled?.text);
-      this.deliveredThreads = assembled === null ? null : new Set(assembled.kept.threads);
       withPointer = delivery === undefined ? result : this.addHandoffPointer(result, here);
+      // ONE TAG (2026-10-20): the host's fields go into the head tag AFTER
+      // the furniture is spliced, and only when the whole still fits the
+      // ceiling; otherwise the head is left as it was and the host carries
+      // them in a tag of its own (`tagged` false). After, not before (review
+      // of #536): put in first, they took the room "Last here" was spliced
+      // into, and since the Yesterday line leaves that line's episode to it,
+      // the episode was then in no line at all — on 8 of 61 ceilings from
+      // 8,700 to 9,300 in a full fixture. The fields are cosmetic; the line
+      // is not.
+      const fields = here?.headFields ?? [];
+      if (delivery !== undefined && withPointer.ok && fields.length > 0) {
+        const head = withHeadFields(withPointer.text, fields);
+        const budget = this.reportedBudget;
+        if (head.applied && (budget === null || head.bytes <= budget)) {
+          withPointer = { ...withPointer, text: head.text, bytes: head.bytes, sentinel: head.sentinel };
+          tagged = true;
+        }
+      }
     } finally {
       this.deliveredThreads = null;
       this.delivering = false;
       this.deliveryWalk = null;
+      this.yesterdayLeftOut = null;
+      this.yesterdayKeepsNewest = false;
     }
     this.emit("counterpart.wake", undefined, {
       ok: withPointer.ok,
@@ -763,7 +823,7 @@ export class Counterpart {
       preface: withPointer.preface !== null,
       budgetBytes: this.reportedBudget,
     });
-    return { ...withPointer, budgetBytes: this.reportedBudget, lined, threads };
+    return { ...withPointer, budgetBytes: this.reportedBudget, lined, threads, ...(tagged ? { tagged } : {}) };
   }
 
   /**
@@ -796,7 +856,9 @@ export class Counterpart {
       const stored = this.store.getMeta(BRIEFING_KEY);
       if (stored === undefined || stored.length === 0 || !readSentinel(stored).intact) return null;
       const day = this.store.livedDay();
-      const asked = horizonFor(this.prospective, at, day);
+      // Read today, so a plain reminder is due today only on its own date
+      // (2026-10-20, `horizonFor`'s `readToday`), not the day before it too.
+      const asked = horizonFor(this.prospective, at, day, { readToday: READ_TODAY_AT_START });
       // FIRST CLAIM ON THE SESSION-START ROOM (2026-10-12, RANDOM's ruling,
       // lightly held): a dated item due today or within the next few days
       // takes room before "Last here", "Last said here", "Today, elsewhere"
@@ -849,12 +911,17 @@ export class Counterpart {
    *     there is no line;
    *   - this session's own directory, this session, and the nightly run's
    *     directory (the store's own) are never named — "Last here" and the
-   *     handoffs speak for this directory;
+   *     handoffs speak for this directory — except, since 2026-10-20, the
+   *     other sessions still open in it, by id and work titles, in a clause
+   *     of their own ("Here, also open:", `hereSessions`);
    *   - a chapter's title only on the "About me, from another directory"
    *     line's gate: not confidential, and a copy marked about me, us or the
    *     owner — never one the line already names;
-   *   - memories as COUNTS only (confidential ones to the owner only); never
-   *     a work memory's title, a word of a span, or a handoff's body.
+   *   - memories as counts (confidential ones to the owner only), and since
+   *     2026-10-20 (Mike's go, an experiment) one or two of today's by title
+   *     a directory (`elsewhereTitles`): never a confidential one, one marked
+   *     about me, us or the owner, this session's own, or one this wake
+   *     lists under "Still open"; never a word of a span or a handoff's body.
    *
    * Empty when there is nothing to say; never throws.
    */
@@ -866,13 +933,13 @@ export class Counterpart {
       const zone = this.store.zone();
       const since = startOfLocalDay(at, zone);
       const until = startOfLocalDay(addDays(at, 1), zone);
-      type Dir = { scope: string; firstAt: number | null; lastAt: number | null; live: boolean; chapter: ChapterHere | null; memories: number };
+      type Dir = { scope: string; firstAt: number | null; lastAt: number | null; live: boolean; chapter: ChapterHere | null; memories: number; titles: MemoryHere[] };
       const dirs = new Map<string, Dir>();
       const dirOf = (scope: string): Dir => {
         const key = gate.norm(scope);
         let d = dirs.get(key);
         if (d === undefined) {
-          d = { scope: key, firstAt: null, lastAt: null, live: false, chapter: null, memories: 0 };
+          d = { scope: key, firstAt: null, lastAt: null, live: false, chapter: null, memories: 0, titles: [] };
           dirs.set(key, d);
         }
         return d;
@@ -887,6 +954,11 @@ export class Counterpart {
       for (const { scope, count } of this.store.memoryCountsByScopeSince(since, { confidential: this.owner })) {
         if (named(scope)) dirOf(scope).memories = count;
       }
+      // What "Still open" may list in this wake is that lane's to name (the
+      // store's read leaves every open thread out too, review of #543).
+      for (const [scope, titles] of this.elsewhereTitles(gate, since, until, new Set(this.store.openThreadIds()))) {
+        if (dirs.has(scope)) dirOf(scope).titles = titles;
+      }
       const chapters = this.chaptersInWindow(this.store.livedDay());
       // The chapter the "About me, from another directory" line names — with
       // the chapters "Last here" names in this directory set aside, as that
@@ -899,7 +971,9 @@ export class Counterpart {
         const d = dirOf(c.scope);
         if (d.chapter === null || d.chapter.writtenAt < c.writtenAt) d.chapter = c;
       }
-      const lines = todayElsewhereLines([...dirs.values()] as TodayElsewhere[], zone);
+      // This folder's other open sessions (2026-10-20), the same title gates.
+      const mine = this.hereSessions(gate, here?.sessions?.() ?? [], since, until, { skip: new Set(this.store.openThreadIds()), startedSince: false });
+      const lines = todayElsewhereLines([...dirs.values()] as TodayElsewhere[], zone, mine);
       if (lines === null) return {};
       return lines.shorter.length === 0 ? { elsewhere: lines.line } : { elsewhere: lines.line, elsewhereShorter: lines.shorter };
     } catch {
@@ -919,14 +993,20 @@ export class Counterpart {
    *     directory" line's gate — not confidential, a copy marked about me, us
    *     or the owner, not the reader's own, from a directory `named` lets
    *     through.
-   * Memories cross as COUNTS only (confidential ones to the owner only); the
-   * callers read no work memory's title, no word of a span and no handoff.
+   * Memories cross as counts (confidential ones to the owner only), and since
+   * 2026-10-20 one or two by title a directory (`elsewhereTitles`): a
+   * directory `named` lets through, not this session's own, and not a row the
+   * store's read leaves out — confidential (whoever reads), marked about me,
+   * us or the owner, identity, a chapter's copy, the nightly run's. The
+   * callers read no word of a span and no handoff.
    */
   private elsewhereGate(here?: WakeHere): {
     named(scope: string): boolean;
     crosses(c: ChapterHere): boolean;
     norm(scope: string): string;
     reader: string | null;
+    /** This session's own directory, normalized ("" when none). */
+    own: string;
   } | null {
     const exportsFrom = here?.exportsFrom;
     if (exportsFrom === undefined) return null;
@@ -953,7 +1033,97 @@ export class Counterpart {
       if (reader !== null && c.session === reader) return false;
       return named(c.scope);
     };
-    return { named, crosses, norm, reader };
+    return { named, crosses, norm, reader, own };
+  }
+
+  /**
+   * THE MEMORIES AN ELSEWHERE LINE NAMES BY TITLE (2026-10-20, Mike's go,
+   * lightly held, an experiment): for each directory `gate` lets through, the
+   * one or two (`ELSEWHERE_TITLES_MAX`) written in `[since, until)` that say
+   * most about the work there — work only (`self/work.ts#isWorkMemory`, the
+   * wake's own rule), one with a `status` mark first (planned, proposed,
+   * asked or done: work in progress, or finished today), newest first within
+   * each, and nothing else — no chit-chat, nothing personal, a status mark
+   * or not
+   * (`Store#memoryTitlesByScopeSince`, which also leaves out what may never
+   * cross). Not this session's own, and not one in `skip`. Keyed by the gate's normalized directory. Reads the
+   * columns only; throws only what the store throws.
+   */
+  private elsewhereTitles(
+    gate: { named(scope: string): boolean; norm(scope: string): string; reader: string | null },
+    since: number,
+    until: number,
+    skip: ReadonlySet<string> = new Set(),
+  ): Map<string, MemoryHere[]> {
+    const out = new Map<string, (MemoryHere & { tier: number })[]>();
+    for (const m of this.store.memoryTitlesByScopeSince(since, { until, perScope: ELSEWHERE_TITLES_MAX })) {
+      if (skip.has(m.id) || (gate.reader !== null && m.session === gate.reader) || !gate.named(m.scope)) continue;
+      // Work, by the wake's own rule of what work is; a status mark puts it
+      // first, never makes a personal memory work (review of #543: an
+      // unmarked person or self memory, or Desktop chat's unmarked fact).
+      if (!isWorkMemory({ about: m.about, kind: m.kind as Kind, originScope: m.scope, journal: false })) continue;
+      const key = gate.norm(m.scope);
+      const held = out.get(key) ?? [];
+      held.push({ id: m.id, title: m.title, at: m.at, tier: m.tier });
+      out.set(key, held);
+    }
+    const chosen = new Map<string, MemoryHere[]>();
+    for (const [key, held] of out) {
+      held.sort((a, b) => a.tier - b.tier || b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      chosen.set(key, held.slice(0, ELSEWHERE_TITLES_MAX).map(({ id, title, at }) => ({ id, title, at })));
+    }
+    return chosen;
+  }
+
+  /**
+   * THE OTHER SESSIONS OPEN IN THIS FOLDER (2026-10-20, Mike's go via the
+   * coordinator, an experiment): the commoner case of parallel work, several
+   * sessions in one folder at once, which both elsewhere lines skipped by
+   * design. Each live session in `gate.own` — not this one, not the nightly
+   * run's (the store's own folder) — with up to two of its memories written
+   * in `[since, until)` by the same title rules as another folder's
+   * (`Store#memoryTitlesByScopeSince` by session, `isWorkMemory`, not in
+   * `skip`), filed in this folder. The folder's own scope needs no asking:
+   * a session here reads this folder's work anyway. `startedSince`: the
+   * start is said only when it falls inside the window ("Since you started").
+   * Throws only what the store throws.
+   */
+  private hereSessions(
+    gate: { norm(scope: string): string; reader: string | null; own: string },
+    sessions: readonly WakeSession[],
+    since: number,
+    until: number,
+    opts: { readonly skip?: ReadonlySet<string>; readonly startedSince: boolean },
+  ): HereSession[] {
+    const own = gate.own;
+    if (own.length === 0 || own === gate.norm(this.store.dir)) return [];
+    const live = sessions.filter(
+      (s) => s.live && s.session !== gate.reader && s.startedAt < until && gate.norm(s.scope) === own,
+    );
+    if (live.length === 0) return [];
+    const ids = [...new Set(live.map((s) => s.session))];
+    const titles = new Map<string, (MemoryHere & { tier: number })[]>();
+    for (const m of this.store.memoryTitlesByScopeSince(since, { until, perScope: ELSEWHERE_TITLES_MAX, sessions: ids })) {
+      if (m.session === null || opts.skip?.has(m.id) === true || gate.norm(m.scope) !== own) continue;
+      if (!isWorkMemory({ about: m.about, kind: m.kind as Kind, originScope: m.scope, journal: false })) continue;
+      const held = titles.get(m.session) ?? [];
+      held.push({ id: m.id, title: m.title, at: m.at, tier: m.tier });
+      titles.set(m.session, held);
+    }
+    const out: HereSession[] = [];
+    for (const id of ids) {
+      const s = live.filter((x) => x.session === id).sort((a, b) => b.lastAt - a.lastAt)[0];
+      if (s === undefined) continue;
+      const held = (titles.get(id) ?? []).sort((a, b) => a.tier - b.tier || b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      out.push({
+        session: id,
+        model: s.model ?? null,
+        startedAt: opts.startedSince && s.startedAt < since ? null : s.startedAt,
+        lastAt: s.lastAt,
+        titles: held.slice(0, ELSEWHERE_TITLES_MAX).map(({ id: mid, title, at }) => ({ id: mid, title, at })),
+      });
+    }
+    return out;
   }
 
   /**
@@ -962,7 +1132,9 @@ export class Counterpart {
    * `here.scope`, what changed in the other directories inside `window` —
    * from when it last heard (its wake, or the last such line) until now: a
    * session there that started and is still open, one that ended, a chapter,
-   * and how many memories. A directory where only time passed is not named.
+   * and how many memories — and since 2026-10-20 one or two of them by title
+   * (`elsewhereTitles`), written inside `window`, so a title one line named
+   * the next does not name again. A directory where only time passed is not named.
    *
    * The same gate as "Today, elsewhere" (`elsewhereGate`), and the same reads:
    * the host's registry, the store's counts, the fortnight's chapter walk.
@@ -980,13 +1152,13 @@ export class Counterpart {
     try {
       const { named, reader } = gate;
       const { since, until } = window;
-      type Dir = { scope: string; startedAt: number | null; live: boolean; endedAt: number | null; chapter: ChapterHere | null; memories: number };
+      type Dir = { scope: string; startedAt: number | null; live: boolean; endedAt: number | null; chapter: ChapterHere | null; memories: number; titles: MemoryHere[] };
       const dirs = new Map<string, Dir>();
       const dirOf = (scope: string): Dir => {
         const key = gate.norm(scope);
         let d = dirs.get(key);
         if (d === undefined) {
-          d = { scope: key, startedAt: null, live: false, endedAt: null, chapter: null, memories: 0 };
+          d = { scope: key, startedAt: null, live: false, endedAt: null, chapter: null, memories: 0, titles: [] };
           dirs.set(key, d);
         }
         return d;
@@ -1005,12 +1177,16 @@ export class Counterpart {
       for (const { scope, count } of this.store.memoryCountsByScopeSince(since, { confidential: this.owner })) {
         if (named(scope)) dirOf(scope).memories = count;
       }
+      for (const [scope, titles] of this.elsewhereTitles(gate, since, until)) {
+        if (dirs.has(scope)) dirOf(scope).titles = titles;
+      }
       for (const c of this.chaptersInWindow(this.store.livedDay()).values()) {
         if (c.scope === null || c.writtenAt < since || c.writtenAt >= until || !gate.crosses(c)) continue;
         const d = dirOf(c.scope);
         if (d.chapter === null || d.chapter.writtenAt < c.writtenAt) d.chapter = c;
       }
-      return sinceElsewhereLines([...dirs.values()] as SinceElsewhere[], { at: since, started: window.started, now: until }, this.store.zone());
+      const mine = this.hereSessions(gate, here.sessions?.() ?? [], since, until, { startedSince: true });
+      return sinceElsewhereLines([...dirs.values()] as SinceElsewhere[], { at: since, started: window.started, now: until }, this.store.zone(), mine);
     } catch {
       return null;
     }
@@ -1051,74 +1227,10 @@ export class Counterpart {
    * and the newest the rest (the header and the door).
    */
   private addHandoffPointer(result: WakeResult, here?: WakeHere): WakeResult {
-    const scope = here?.scope?.trim() ?? "";
-    if (scope.length === 0 || !result.ok) return result;
-    // ONE chapter walk for the whole delivery (the line, its no-room row, and
-    // each handoff's "since then: a newer chapter here"): a session start waits on it.
-    let chapters: Map<string, ChapterHere> = new Map();
-    let allHere: ReturnType<Counterpart["chaptersHereFor"]> = [];
-    try {
-      chapters = this.chaptersInWindow(this.store.livedDay());
-      allHere = this.chaptersHereFor(scope, null, chapters);
-    } catch {
-      chapters = new Map();
-      allHere = [];
-    }
-    let ladder: ReturnType<Handoffs["pointerChoices"]> = [];
-    try {
-      ladder = this.handoffs.pointerChoices(
-        scope,
-        undefined,
-        (h) => this.handoffSince(h, scope, here, allHere),
-        here?.session ?? null,
-      );
-    } catch {
-      // A store that will not answer is not a reason to fail a wake (§1 G7).
-      ladder = [];
-    }
-    // LAST HERE (2026-09-30): the session that last wrote a chapter in this
-    // directory, finished or not — above the handoff, and the first thing
-    // given up when there is not room for both (`handoff/last-here.ts`).
-    const lastHere = this.lastHereLadder(scope, here?.session ?? null, chapters, here?.exportsFrom);
-    // LAST SAID HERE (2026-10-11): the last exchange in this directory, one
-    // line at the foot of the blocks above the handoff — the first thing they
-    // give up, at each of their widths (`withExchange`).
-    const exchange = here === undefined ? null : this.lastExchangeLine(here);
-    const aboveLadder = withExchange(lastHere, exchange);
-    // Which chapter the line would name first, for its durable no-room row.
-    const reader = here?.session ?? null;
-    // Only for a "Last here" line proper: the about-me line alone names no
-    // chapter here, and its drop is not this row's (review of #311, NIT).
-    const named = lastHere.some((b) => b.startsWith("Last here:"));
-    const lastHereId = !named ? null : (allHere.find((c) => (reader === null || c.chapter.session !== reader) && (this.owner || c.chapter.confidential !== true))?.chapter.id ?? null);
-    const newest = ladder[0];
-    const budget = this.reportedBudget;
-    // THIS DIRECTORY'S WORK (2026-10-01, lane 8): the craft lane, composed
-    // here because the stored bundle has no directory. It goes ABOVE whatever
-    // handoff block is chosen, in the room that block leaves — the handoff and
-    // "Last here" are chosen first and never give way to it (`withWorkHere`).
-    const work = this.workHereLines(scope);
-    if (newest === undefined && aboveLadder.length === 0) return this.withWorkHere(result, null, work, budget, scope);
-    const fits = (block: string): ReturnType<typeof spliceBeforeSentinel> | null => {
-      const spliced = spliceBeforeSentinel(result.text, block);
-      return spliced.applied && (budget === null || spliced.bytes <= budget) ? spliced : null;
-    };
-    // THE HANDOFF FIRST (review of #300 MAJOR-1): the widest handoff rung that
-    // fits ALONE is the one carried — unfinished work outranks orientation —
-    // and only then is the line tried above it, widest first, with that rung
-    // alone as the fallback. The line alone only when no handoff rung fits.
-    // With no chapter here this is the handoff ladder as it was, rung for rung.
-    // A bundle that is not a clean render is delivered as found.
-    if (!spliceBeforeSentinel(result.text, ladder[0]?.block ?? aboveLadder[0] ?? "").applied) return result;
-    const best = ladder.find((rung) => fits(rung.block) !== null) ?? null;
-    const tries: { rung: (typeof ladder)[number] | null; above: string | null }[] =
-      best !== null
-        ? [...aboveLadder.map((above) => ({ rung: best, above })), { rung: best, above: null }]
-        : aboveLadder.map((above) => ({ rung: null, above }));
-    // What `no-room` reports: the SMALLEST handoff rung, which is the one that
-    // decided there was no room for it (review of #295, NIT-3).
-    const last = ladder[ladder.length - 1];
-    const smallest = last === undefined ? null : spliceBeforeSentinel(result.text, last.block);
+    const plan = this.pointerPlan(result, here);
+    if (plan.kind === "as-found") return result;
+    if (plan.kind === "work-only") return this.withWorkHere(result, null, plan.work, plan.budget, plan.scope);
+    const { scope, lastHere, exchange, lastHereId, newest, budget, work, tries, smallest, fits } = plan;
     for (const { rung, above } of tries) {
       const block = [above, rung?.block ?? null].filter((b): b is string => b !== null).join("\n");
       const spliced = fits(block);
@@ -1164,6 +1276,129 @@ export class Counterpart {
     if (lastHere.length > 0) this.noteLastHereNoRoom(lastHereId, { budget, was: result.bytes, besideHandoff: false });
     if (exchange !== null) this.emit("counterpart.lastexchange.noroom", undefined, { bytes: byteLength(exchange) });
     return this.withWorkHere(result, null, work, budget, scope);
+  }
+
+  /**
+   * WOULD THIS DELIVERY CARRY "LAST HERE"? (2026-10-20, review of #536.) The
+   * same choice `addHandoffPointer` makes (`pointerPlan`, the first block
+   * that fits), asked without writing anything — so the wake can tell, before
+   * it splices, whether the Yesterday line may leave the line's newest
+   * episode to it. True when there is no such line to carry.
+   */
+  private carriesLastHere(result: WakeResult, here?: WakeHere): boolean {
+    try {
+      const plan = this.pointerPlan(result, here);
+      if (plan.kind !== "full") return plan.kind === "as-found" || !plan.lastHere.some((b) => b.startsWith("Last here:"));
+      for (const { rung, above } of plan.tries) {
+        const block = [above, rung?.block ?? null].filter((b): b is string => b !== null).join("\n");
+        if (plan.fits(block) === null) continue;
+        return above !== null && above.split("\n").some((l) => l.startsWith("Last here:"));
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * WHAT THE POINTER'S SPLICE WILL TRY, widest first, and how it fits — reads
+   * only (the ring aside), shared by `addHandoffPointer`, which then records
+   * what it carried, and `carriesLastHere`, which only asks.
+   */
+  private pointerPlan(
+    result: WakeResult,
+    here?: WakeHere,
+  ):
+    | { kind: "as-found" }
+    | { kind: "work-only"; scope: string; budget: number | null; work: { lines: string[]; found: number }; lastHere: string[] }
+    | {
+        kind: "full";
+        scope: string;
+        ladder: ReturnType<Handoffs["pointerChoices"]>;
+        lastHere: string[];
+        exchange: string | null;
+        lastHereId: string | null;
+        newest: ReturnType<Handoffs["pointerChoices"]>[number] | undefined;
+        budget: number | null;
+        work: { lines: string[]; found: number };
+        tries: { rung: ReturnType<Handoffs["pointerChoices"]>[number] | null; above: string | null }[];
+        smallest: ReturnType<typeof spliceBeforeSentinel> | null;
+        fits: (block: string) => ReturnType<typeof spliceBeforeSentinel> | null;
+      } {
+    const scope = here?.scope?.trim() ?? "";
+    if (scope.length === 0 || !result.ok) return { kind: "as-found" };
+    // ONE chapter walk for the whole delivery (the line, its no-room row, and
+    // each handoff's "since then: a newer chapter here"): a session start waits on it.
+    let chapters: Map<string, ChapterHere> = new Map();
+    let allHere: ReturnType<Counterpart["chaptersHereFor"]> = [];
+    try {
+      chapters = this.chaptersInWindow(this.store.livedDay());
+      allHere = this.chaptersHereFor(scope, null, chapters);
+    } catch {
+      chapters = new Map();
+      allHere = [];
+    }
+    let ladder: ReturnType<Handoffs["pointerChoices"]> = [];
+    try {
+      ladder = this.handoffs.pointerChoices(
+        scope,
+        undefined,
+        (h) => this.handoffSince(h, scope, here, allHere),
+        here?.session ?? null,
+      );
+    } catch {
+      // A store that will not answer is not a reason to fail a wake (§1 G7).
+      ladder = [];
+    }
+    // LAST HERE (2026-09-30): the session that last wrote a chapter in this
+    // directory, finished or not — above the handoff, and the first thing
+    // given up when there is not room for both (`handoff/last-here.ts`).
+    // An episode the body above already names (the Yesterday line) is not
+    // named again below it (2026-10-20, each episode once).
+    const lastHere = this.lastHereLadder(scope, here?.session ?? null, chapters, here?.exportsFrom, (id) => result.text.includes(id));
+    // LAST SAID HERE (2026-10-11): the last exchange in this directory, one
+    // line at the foot of the blocks above the handoff — the first thing they
+    // give up, at each of their widths (`withExchange`).
+    const exchange = here === undefined ? null : this.lastExchangeLine(here);
+    const aboveLadder = withExchange(lastHere, exchange);
+    // Which chapter the line would name first, for its durable no-room row.
+    const reader = here?.session ?? null;
+    // Only for a "Last here" line proper: the about-me line alone names no
+    // chapter here, and its drop is not this row's (review of #311, NIT).
+    const named = lastHere.some((b) => b.startsWith("Last here:"));
+    const lastHereId = !named ? null : (allHere.find((c) => (reader === null || c.chapter.session !== reader) && (this.owner || c.chapter.confidential !== true))?.chapter.id ?? null);
+    const newest = ladder[0];
+    const budget = this.reportedBudget;
+    // THIS DIRECTORY'S WORK (2026-10-01, lane 8): the craft lane, composed
+    // here because the stored bundle has no directory. It goes ABOVE whatever
+    // handoff block is chosen, in the room that block leaves — the handoff and
+    // "Last here" are chosen first and never give way to it (`withWorkHere`).
+    // A memory the elsewhere line printed above already names — another
+    // session here at work on it (2026-10-20) — is that line's, not repeated
+    // as a work line; one the line gave up for room is still a work line.
+    const work = this.workHereLines(scope, elsewhereNamedIn(result.text));
+    if (newest === undefined && aboveLadder.length === 0) return { kind: "work-only", scope, budget, work, lastHere };
+    const fits = (block: string): ReturnType<typeof spliceBeforeSentinel> | null => {
+      const spliced = spliceBeforeSentinel(result.text, block);
+      return spliced.applied && (budget === null || spliced.bytes <= budget) ? spliced : null;
+    };
+    // THE HANDOFF FIRST (review of #300 MAJOR-1): the widest handoff rung that
+    // fits ALONE is the one carried — unfinished work outranks orientation —
+    // and only then is the line tried above it, widest first, with that rung
+    // alone as the fallback. The line alone only when no handoff rung fits.
+    // With no chapter here this is the handoff ladder as it was, rung for rung.
+    // A bundle that is not a clean render is delivered as found.
+    if (!spliceBeforeSentinel(result.text, ladder[0]?.block ?? aboveLadder[0] ?? "").applied) return { kind: "as-found" };
+    const best = ladder.find((rung) => fits(rung.block) !== null) ?? null;
+    const tries: { rung: (typeof ladder)[number] | null; above: string | null }[] =
+      best !== null
+        ? [...aboveLadder.map((above) => ({ rung: best, above })), { rung: best, above: null }]
+        : aboveLadder.map((above) => ({ rung: null, above }));
+    // What `no-room` reports: the SMALLEST handoff rung, which is the one that
+    // decided there was no room for it (review of #295, NIT-3).
+    const last = ladder[ladder.length - 1];
+    const smallest = last === undefined ? null : spliceBeforeSentinel(result.text, last.block);
+    return { kind: "full", scope, ladder, lastHere, exchange, lastHereId, newest, budget, work, tries, smallest, fits };
   }
 
   /**
@@ -1214,7 +1449,7 @@ export class Counterpart {
    * `WORK_HERE_MAX` chosen from them (`rotateWork`, 2026-10-02); `found` is
    * how many were ranked, for the overflow row. Never throws.
    */
-  private workHereLines(scope: string): { lines: string[]; found: number } {
+  private workHereLines(scope: string, skip: ReadonlySet<string> = new Set()): { lines: string[]; found: number } {
     const t = this.self.tunables;
     if (!t.CRAFT_AT_DELIVERY || scope.trim().length === 0) return { lines: [], found: 0 };
     try {
@@ -1224,7 +1459,7 @@ export class Counterpart {
         max: t.WORK_HERE_MAX,
         pool: t.WORK_HERE_POOL,
         excerpt: t.WORK_HERE_EXCERPT,
-        skip: settledOver(this.store),
+        skip: skip.size === 0 ? settledOver(this.store) : new Set([...settledOver(this.store), ...skip]),
         year: yearOf(this.store.today()),
       });
       return { lines: rotateWork(ranked, t.WORK_HERE_MAX, day), found: ranked.length };
@@ -1339,6 +1574,7 @@ export class Counterpart {
     reader: string | null,
     chapters?: ReadonlyMap<string, ChapterHere>,
     exportsFrom?: (scope: string) => boolean,
+    named?: (id: string) => boolean,
   ): string[] {
     try {
       const all = chapters ?? this.chaptersInWindow(this.store.livedDay());
@@ -1350,11 +1586,17 @@ export class Counterpart {
         // `09-30 17:50` → `Sep 30`.
         date: stampWords(localStamp(f.chapter.writtenAt, zone).split(" ")[0] ?? ""),
       }));
-      const base = entries.length === 0 ? [] : lastHereLadder(entries, reader);
+      // EACH EPISODE ONCE (2026-10-20): what the wake's body already names
+      // (the Yesterday line) is not named again in "Before it", "+N more" or
+      // the about-me line below.
+      // When this delivery found no room for the line and its Yesterday line
+      // took the newest episode back (`yesterdayKeepsNewest`), the line is
+      // not tried again: room the re-assembly freed would only repeat it.
+      const base = entries.length === 0 || this.yesterdayKeepsNewest ? [] : lastHereLadder(entries, reader, named);
       // ABOUT ME, FROM ANOTHER DIRECTORY (2026-10-01): one more line on the
       // widest rungs, given up first; alone when nothing was written here.
       const away = this.selfChapterElsewhere(all, new Set(found.map((f) => f.chapter.id)), reader, exportsFrom);
-      if (away === null) return base;
+      if (away === null || named?.(away.id) === true) return base;
       const line = elsewhereLine(away, stampWords(localStamp(away.writtenAt, zone).split(" ")[0] ?? ""), reader);
       return base.length === 0 ? [line] : [...base.map((b) => `${b}\n${line}`), ...base];
     } catch {
@@ -1444,7 +1686,17 @@ export class Counterpart {
     try {
       const date = addDays(at, -1);
       const fromDay = Math.max(0, this.store.livedDay() - LAST_HERE_LIFE_DAYS + 1);
-      const all = chaptersOn(this.store, date, { fromDay });
+      // EACH EPISODE ONCE (2026-10-20, Mike's go, lightly held): at a session
+      // start, the episode "Last here" names first is left to that line,
+      // which says when and how it began (`lastHereNewest`); it is neither
+      // listed nor counted here. Every other one of yesterday's is this
+      // line's, and the furniture below leaves out what this line names.
+      // Unless the delivery found "Last here" has no room this time
+      // (`yesterdayKeepsNewest`, review of #536): then it is this line's.
+      const newest = reader === undefined || this.yesterdayKeepsNewest ? null : this.lastHereNewest(reader.here);
+      const listed = chaptersOn(this.store, date, { fromDay });
+      const all = listed.filter((c) => c.id !== newest);
+      if (all.length < listed.length) this.yesterdayLeftOut = newest;
       const day = reader === undefined ? all : all.filter((c) => this.nameableHere(c.scope ?? null, c.aboutMe === true, reader.here));
       // The ones left out, BY FOLDER (2026-10-18, the wake-polish builder):
       // only a folder the "Today, elsewhere" line may name (`elsewhereGate`)
@@ -1469,6 +1721,22 @@ export class Counterpart {
       return shorter.length === 0 ? { yesterday: line } : { yesterday: line, yesterdayShorter: shorter };
     } catch {
       return {};
+    }
+  }
+
+  /**
+   * THE EPISODE "LAST HERE" NAMES FIRST in a wake for `here` — the newest
+   * chapter written in its directory by another session, as
+   * `lastHereLadder` reads it — or null: no directory, none here, or a store
+   * that will not answer. Every rung of that line names it. Never throws.
+   */
+  private lastHereNewest(here: WakeHere | undefined): string | null {
+    const scope = here?.scope?.trim() ?? "";
+    if (scope.length === 0) return null;
+    try {
+      return this.chaptersHereFor(scope, here?.session ?? null, this.chaptersInWindow(this.store.livedDay()))[0]?.chapter.id ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -2051,7 +2319,7 @@ export class Counterpart {
    * never credited here. Physics keeps its own refusals (birth day, already
    * credited today). Never throws into the turn.
    */
-  private creditOccurrence(memoryId: string, windowKey: string, day: number, via: "quiet" | "plain"): void {
+  private creditOccurrence(memoryId: string, windowKey: string, day: number, via: "quiet" | "plain" | "done"): void {
     try {
       const out = this.store.reinforce(memoryId, day, "surfaced");
       this.emit("counterpart.prospective.occurrence.credited", memoryId, {
@@ -2544,7 +2812,9 @@ export class Counterpart {
    *
    * Then, each by name: an id that names nothing, an archived row, a handoff
    * (E1), and — never revived by engagement — a superseded memory or one faded
-   * under a newer one (synthesis collision G). At most
+   * under a newer one (synthesis collision G) — unless this session replaced
+   * it, or the memory that did was born this lived day (F6b, 2026-10-20:
+   * `replacedHere`, credited as drawn on). At most
    * `DREW_ON_MAX_PER_BOUNDARY` land per boundary, the first in the order
    * given; the rest come back `capped`. Once per lived day per memory is
    * recall's and physics' own rule (`already-credited-at-or-above`,
@@ -2564,6 +2834,24 @@ export class Counterpart {
    * Under observer stance nothing is read or written: every id comes back
    * refused `observer`.
    */
+  /**
+   * The memory that now stands for `id` (`recall/standing.ts#headOf`: its
+   * successor, or the memory settled over it), when this session wrote it or
+   * it was born on lived day `day` — the session replaced it itself (F6b,
+   * 2026-10-20). Null otherwise, or when no head can be read.
+   */
+  private replacedHere(id: string, sessionId: string, day: number): string | null {
+    try {
+      const head = headOf(this.store, id);
+      if (head === null) return null;
+      const row = this.store.row(head);
+      if (row === undefined) return null;
+      return row.origin_session === sessionId || row.birth_day === day ? head : null;
+    } catch {
+      return null;
+    }
+  }
+
   creditDrewOn(sessionId: string, named: readonly string[], opts: { at?: string } = {}): DrewOnResult {
     const day = this.store.livedDay();
     const ids = [...new Set(named.map((id) => id.trim()).filter((id) => id.length > 0))];
@@ -2571,8 +2859,9 @@ export class Counterpart {
     const refused: { id: string; reason: string }[] = [];
     const capped: string[] = [];
     const actedOn: string[] = [];
+    const replacedHere: { id: string; by: string }[] = [];
     let linked = 0;
-    const done = (): DrewOnResult => ({ day, named: ids.length, credited, refused, capped, actedOn, linked });
+    const done = (): DrewOnResult => ({ day, named: ids.length, credited, refused, capped, actedOn, linked, ...(replacedHere.length === 0 ? {} : { replacedHere }) });
     if (this.observer) {
       for (const id of ids) refused.push({ id, reason: "observer" });
       return done();
@@ -2614,13 +2903,23 @@ export class Counterpart {
       // ENGAGEMENT NEVER REVIVES WHAT A NEWER MEMORY REPLACED (ported from
       // #371; synthesis collision G). Opening an old memory on purpose still
       // credits it, as before.
-      if (row.superseded_by !== null) {
-        refuse("superseded");
-        continue;
-      }
-      if (fadeOf({ fade: row.fade }) < 1) {
-        refuse("faded-under-newer");
-        continue;
+      //
+      // UNLESS THIS SESSION REPLACED IT (F6b, 2026-10-20, lightly held): the
+      // memory that replaced it was written by this session, or on this lived
+      // day. Then the stale memory is what made the session catch and fix the
+      // record — it was drawn on, and nothing here revives it: the settle or
+      // supersession that this session itself made still stands, and still
+      // ranks the new one first. The OLD one is credited, not the head: the
+      // head was born today, and physics never credits a memory on its birth
+      // day (`creditUse`'s `birth-day`), so redirecting would credit nothing.
+      const replacedAs = row.superseded_by !== null ? "superseded" : fadeOf({ fade: row.fade }) < 1 ? "faded-under-newer" : null;
+      if (replacedAs !== null) {
+        const by = this.replacedHere(id, sessionId, day);
+        if (by === null) {
+          refuse(replacedAs);
+          continue;
+        }
+        replacedHere.push({ id, by });
       }
       if (opts.at !== undefined && row.event_date !== null) {
         try {
@@ -3599,8 +3898,17 @@ export class Counterpart {
     const nominated = this.store
       .coreEvents({ action: "nominated" })
       .map((e) => ({ id: e.memory_id, day: e.day, reason: e.reason, dream: e.dream_id }));
+    // Each retired memory once, by its latest retire, and not one put back
+    // in the core since (review of #542: a restored memory, or a confirmed
+    // retire, was listed twice).
+    const seenDemoted = new Set<string>();
     const demoted = this.store
       .coreEvents({ action: "demoted" })
+      .filter((e) => {
+        if (seenDemoted.has(e.memory_id)) return false;
+        seenDemoted.add(e.memory_id);
+        return this.store.coreDemoted(e.memory_id);
+      })
       .map((e) => ({ id: e.memory_id, day: e.day, reason: e.reason }));
     const reconsidering = this.store.coreReconsidering().map((r) => ({ id: r.id, day: r.day, reason: r.reason }));
     return { core, nominated, demoted, reconsidering };

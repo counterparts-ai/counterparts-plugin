@@ -100,6 +100,8 @@ export type { DreamAction } from "./tunables.js";
 export { MIND_TUNABLES, mindRanked, onMyMind } from "./mind.js";
 export type { MindItem } from "./mind.js";
 export { CORE_MENTIONED_PREFIX, REFLECT_QUESTIONS, REFLECT_TUNABLES, Reflections, reflectionOpener } from "./reflect.js";
+export { coreAsks, coreWaiting } from "./core-ask.js";
+export type { CoreAsk, CoreDecided } from "./core-ask.js";
 export { FEELING_WEEKS_TUNABLES, awakeFeelingCounts, feelingWeeks } from "./feeling-weeks.js";
 export type { FeelingWeeks } from "./feeling-weeks.js";
 export type { ReflectBundle, ReflectContext, ReflectFinish, ReflectItem, ReflectOutcome, ReflectRefusal } from "./reflect.js";
@@ -1585,7 +1587,7 @@ export class Dreams {
       ],
       writer: (n) => [
         "The page writer — sleep's quiet self-update, a different job from reflecting: amend who you are from the day just lived, keeping every sentence that still holds.",
-        `${String(n())}. Call the counterparts dream tool: phase "writer", session: ${input.session}${dreamFirst ? ", dream: <id>" : ""}. If it hands you a day to read, do what it says — rewrite your self page with the self_page tool, or leave it as it stands (that is an answer too). A page past its room is kept, and wants a short version with it: if self_page's answer has a roomNote, do what it says before you go on. If it says there is no page writing tonight, go on.`,
+        `${String(n())}. Call the counterparts dream tool: phase "writer", session: ${input.session}${dreamFirst ? ", dream: <id>" : ""}. If it hands you a day to read, do what it says — rewrite your self page with the self_page tool, or leave it as it stands (that is an answer too). Keep the whole page within its room, in bytes: one past it is sent back once with how many bytes over — cut it and send it again, without a short version; if self_page's answer has a roomNote, do what it says before you go on. If it says there is no page writing tonight, go on.`,
       ],
       reflection: (n) => [
         "The reflection — waking up and thinking about yourself: awake, lived, your own.",

@@ -36,7 +36,7 @@ import { strength } from "../physics/index.js";
 import type { UseTier } from "../physics/index.js";
 import type { ProseDoc, ProspectiveInput, ProspectiveRow, Store } from "../store/index.js";
 import { RECURRING_META } from "../store/index.js";
-import { addDays, daysBetween, isDay, isRecurrence, occurrenceBetween } from "../time.js";
+import { addDays, daysBetween, isDay, isRecurrence, occurrenceBetween, occurrenceOnOrAfter } from "../time.js";
 import type { Recurrence } from "../time.js";
 import { derive } from "./derive.js";
 import type { DerivableMemory, DeriveReason, ExtractedDate, Prospectivity } from "./derive.js";
@@ -324,6 +324,27 @@ export type PlainBeat =
   | "opens"
   /** A month or range item, on the last day it names. */
   | "last-day";
+
+/** The occurrence of a dated memory open on a day (`Prospective#openOccurrence`, 2026-10-20). */
+export interface OpenOccurrence {
+  readonly memoryId: string;
+  readonly windowKey: string;
+  /** The date this occurrence is for: a repeat's occurrence, or a one-off's date as stated. */
+  readonly occurrence: string;
+  /** The first day the date covers (lead days excluded): on or after it, the occurrence is DUE. */
+  readonly firstDay: string;
+  readonly recurring: Recurrence | null;
+  /** A repeat's next occurrence after this one; null for a one-off. */
+  readonly next: string | null;
+  /** Already referenced: stopped by `drewOn`, or closed as done. */
+  readonly closed: boolean;
+}
+
+/** `Prospective#closeOccurrence`'s answer (2026-10-20). */
+export interface ClosedOccurrence extends OpenOccurrence {
+  /** True when this call wrote the close; false when it was closed already (or the write was lost). */
+  readonly closedNow: boolean;
+}
 
 /**
  * A plain item due to be told today. Records only — like `Arrival`, no words:
@@ -883,6 +904,10 @@ export class Prospective {
       if (precision === null || precision === "year") continue;
       const w = windowFor(dated.eventDate, precision, this.tunables, id);
       if (w === null) continue;
+      // CLOSED AS DONE (2026-10-20, `closeOccurrence`): nothing left to tell.
+      // Only that writer references a plain window before its last beat
+      // (`actedOn` waits for the telling), so this skips nothing else.
+      if (this.firingRowsFor(id).get(w.key)?.state === "suppressed") continue;
       const late = dated.lateUntil !== undefined;
       if (late) {
         // Missed, and still inside its grace; written by its day (else it was never missed).
@@ -1280,9 +1305,10 @@ export class Prospective {
    *
    * A PLAIN item keeps its day: until its last beat is told (`toldForGood`)
    * its window is left alone, because the person asked to be told on the day
-   * and a session that drew on it the day before has not told them. The
-   * plain line never reads this state anyway; leaving the window open keeps
-   * the item first under "Arriving:" on its day too. Returns the keys it
+   * and a session that drew on it the day before has not told them — and
+   * since 2026-10-20 the plain line skips a referenced window (a `done`,
+   * `closeOccurrence`), so this wait is what keeps it told. Leaving the window
+   * open keeps the item first under "Arriving:" on its day too. Returns the keys it
    * referenced. Observer: none.
    */
   actedOn(memoryId: string, at: string, day?: number): string[] {
@@ -1300,6 +1326,119 @@ export class Prospective {
       if (this.reference(memoryId, w.key, d).recorded) out.push(w.key);
     }
     return out;
+  }
+
+  /**
+   * THE OCCURRENCE OF A DATED MEMORY OPEN ON `at` (2026-10-20), or null when
+   * none is: a repeating date's one open window (`recurringWindowAt`), or a
+   * one-off day, month or range whose window — lead to grace — holds `at`. A
+   * read; no eligibility predicate, since the person is the one asking.
+   * `closed`: that window is already referenced (stopped by `drewOn`, or
+   * closed as done by `closeOccurrence`). `next`: a repeat's next occurrence
+   * after this one, null for a one-off.
+   */
+  openOccurrence(memoryId: string, at: string): OpenOccurrence | null {
+    if (!isDay(at)) return null;
+    let doc: ProseDoc;
+    try {
+      doc = this.store.read(memoryId).doc;
+    } catch {
+      return null;
+    }
+    const date = doc.eventDate;
+    if (date === undefined) return null;
+    const rule = recurrenceOf(doc);
+    let w: Window | null;
+    if (rule !== null) {
+      w = recurringWindowAt(date, rule, at, this.tunables, memoryId);
+    } else {
+      const precision = precisionOf(date);
+      w = precision === null || precision === "year" ? null : windowFor(date, precision, this.tunables, memoryId);
+    }
+    if (w === null || phaseOf(w, at) !== "arrived") return null;
+    const next = rule === null ? null : (occurrenceOnOrAfter(date, rule, addDays(w.eventDate, 1))?.date ?? null);
+    return {
+      memoryId,
+      windowKey: w.key,
+      occurrence: w.eventDate,
+      firstDay: w.firstDay,
+      recurring: rule,
+      next,
+      closed: this.firingRowsFor(memoryId).get(w.key)?.state === "suppressed",
+    };
+  }
+
+  /**
+   * THE OCCURRENCE A `done` SAID ON `at` IS ABOUT (review of #540,
+   * 2026-10-20, lightly held): the one open on `at` (`openOccurrence`) —
+   * unless `at` is still in the NEXT occurrence's lead days and the one
+   * before it is unclosed, inside its own grace, and was owed (the reminder
+   * was written by its day). Then the late one is meant: a weekly backup
+   * done on Saturday, when Tuesday's was never closed, is Tuesday's done
+   * late, and closing next Tuesday's would silence the next one instead.
+   * Only a weekly date meets this with the shipped tunables (a daily one has
+   * no lead; a monthly or yearly one's grace ends long before the next
+   * lead). A read.
+   */
+  doneOccurrence(memoryId: string, at: string): OpenOccurrence | null {
+    const open = this.openOccurrence(memoryId, at);
+    if (open === null || open.recurring === null || at >= open.firstDay) return open;
+    try {
+      const doc = this.store.read(memoryId).doc;
+      const anchor = doc.eventDate;
+      if (anchor === undefined) return open;
+      const w = recurringWindowAt(anchor, open.recurring, at, this.tunables, memoryId);
+      if (w === null) return open;
+      const prev = recurringWindowAt(anchor, open.recurring, addDays(w.opensOn, -1), this.tunables, memoryId);
+      if (prev === null || prev.eventDate >= open.occurrence) return open;
+      if (at > addDays(prev.eventDate, this.tunables.GRACE_DAYS)) return open;
+      const written = doc.learnedOn.slice(0, 10);
+      if (!isDay(written) || written > prev.eventDate) return open;
+      if (this.firingRowsFor(memoryId).get(prev.key)?.state === "suppressed") return open;
+      return {
+        memoryId,
+        windowKey: prev.key,
+        occurrence: prev.eventDate,
+        firstDay: prev.firstDay,
+        recurring: open.recurring,
+        next: open.occurrence,
+        closed: false,
+      };
+    } catch {
+      return open;
+    }
+  }
+
+  /**
+   * DONE FOR THIS TIME (2026-10-20, Mike's go, an experiment, lightly held):
+   * a write that says a REPEATING reminder was done (`status: done` at its id,
+   * no date sent — `counterpart-deposit.ts#carryReminder`) closes the one
+   * occurrence it is about on `at` (`doneOccurrence`: the one open, or an
+   * overdue one in the next one's lead days), and nothing else: the date, the repeat and the
+   * memory stay as they are, and the next occurrence is its own window, armed
+   * as ever. The window is referenced (`reference`, `why: done`), so the cue
+   * path and the wake's lane drop it as they drop one `drewOn` stopped — and,
+   * unlike `actedOn`, a PLAIN one too, before its line is told: the person
+   * said it is done, so there is nothing left to tell them (`plainDue` skips
+   * a referenced window). Null when no occurrence is open on `at` (a monthly
+   * or yearly date between windows): nothing is closed, and a window not yet
+   * open owes this nothing. Observer: null, nothing written.
+   */
+  closeOccurrence(memoryId: string, at: string, opts: { by?: string; day?: number } = {}): ClosedOccurrence | null {
+    if (this.observer) return null;
+    const open = this.doneOccurrence(memoryId, at);
+    if (open === null || open.recurring === null) return null;
+    if (open.closed) return { ...open, closedNow: false };
+    const d = opts.day ?? this.store.livedDay();
+    const out = this.write("reference", memoryId, open.windowKey, (parsed, row) => ({
+      state: "suppressed",
+      fires: row?.fires ?? 0,
+      lastFiredDay: row?.last_fired_day ?? null,
+      eventDate: parsed.eventDate,
+      precision: parsed.precision,
+      extra: { day: d, why: "done", ...(opts.by === undefined ? {} : { by: opts.by }) },
+    }));
+    return { ...open, closed: out.recorded, closedNow: out.recorded };
   }
 
   /**

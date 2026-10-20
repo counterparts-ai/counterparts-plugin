@@ -88,6 +88,8 @@ import {
   parseOnboardingMarker,
   parseStoreMarker,
   savedItems,
+  savedSince,
+  savesMemory,
   surfacedIds,
   titled,
 } from './feed'
@@ -365,6 +367,8 @@ async function poll($: EngineInterface): Promise<boolean> {
     const dreams = events.filter(e => e.name === 'dream.begun' || e.name === 'dream.journaled' || e.name === 'dream.changed' || e.name === 'dream.undone')
     const lastDream = dreams.sort((a, b) => a.seq - b.seq).at(-1)
     if (lastDream !== undefined) await foxEvent($, lastDream.name === 'dream.begun' ? 'dream' : 'dreamEnd')
+    // A save for this session the memory tools' own hook did not already write down (see `savedSince`).
+    if (run.saving === 0 && savedSince(events, run.session, stage.director?.saveAt ?? -Infinity, await $.clock.now())) await foxEvent($, 'note')
     return first || events.length > 0
   } catch {
     return false
@@ -892,7 +896,7 @@ function stopStage(): void {
 async function foxEvent($: EngineInterface, ev: FoxEvent): Promise<void> {
   const now = await $.clock.now()
   stage.director ??= newDirector(now)
-  trigger(stage.director, ev, now)
+  if (!trigger(stage.director, ev, now)) return
   if (stage.live) {
     stage.gen += 1
     const gen = stage.gen
@@ -1215,28 +1219,38 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const name = String(e.tool)
     const ours = ourTool(name)
-    // The fox dreams while this session's dream runs.
-    if (ours?.tool === 'dream') await foxEvent($, 'dream')
-    let ran: Awaited<ReturnType<typeof next>>
+    // A memory tool's save is written on the notepad as its call returns; till then the poll leaves its rows be.
+    const saves = ours !== null && savesMemory(ours.tool)
+    if (saves) run.saving += 1
     try {
-      ran = await next(e)
+      // Any call (any tool, a subagent's too) is the session working: the fox stays up while it runs.
+      await foxEvent($, 'busy').catch(() => undefined)
+      // The fox dreams while this session's dream runs.
+      if (ours?.tool === 'dream') await foxEvent($, 'dream').catch(() => undefined)
+      let ran: Awaited<ReturnType<typeof next>>
+      try {
+        ran = await next(e)
+      } finally {
+        if (ours?.tool === 'dream') await foxEvent($, 'dreamEnd').catch(() => undefined)
+        await foxEvent($, 'busyEnd').catch(() => undefined)
+      }
+      if (ran.deny !== undefined || ran.isError === true) return ran
+      if (ours === null) return ran
+      // Core's first-meeting tool ran: the fox says hello.
+      if (ours.tool === 'meet') await foxEvent($, 'hello').catch(() => undefined)
+      try {
+        const args = e as unknown as Record<string, unknown>
+        const opened = openedIds(name, args)
+        if (opened.ids.length > 0 || opened.handle !== null) await onOpened($, opened.ids, opened.handle)
+        run.liveSeq += 1
+        await onSaved($, savedItems(name, args, ran.text, await $.clock.now(), run.liveSeq))
+      } catch {
+        // the call stands whatever the sidebar made of it
+      }
+      return ran
     } finally {
-      if (ours?.tool === 'dream') await foxEvent($, 'dreamEnd')
+      if (saves) run.saving = Math.max(0, run.saving - 1)
     }
-    if (ran.deny !== undefined || ran.isError === true) return ran
-    if (ours === null) return ran
-    // Core's first-meeting tool ran: the fox says hello.
-    if (ours.tool === 'meet') await foxEvent($, 'hello')
-    try {
-      const args = e as unknown as Record<string, unknown>
-      const opened = openedIds(name, args)
-      if (opened.ids.length > 0 || opened.handle !== null) await onOpened($, opened.ids, opened.handle)
-      run.liveSeq += 1
-      await onSaved($, savedItems(name, args, ran.text, await $.clock.now(), run.liveSeq))
-    } catch {
-      // the call stands whatever the sidebar made of it
-    }
-    return ran
   }).catch(($, e, next) => next(e))
 
   // A prompt the person sent: the fox looks up.

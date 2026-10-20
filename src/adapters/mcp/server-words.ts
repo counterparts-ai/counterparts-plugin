@@ -19,7 +19,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.27";
+export const SERVER_VERSION = "0.3.28";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -161,6 +161,8 @@ export const PAGE_REFUSAL_DETAIL: Record<string, string> = {
   empty: "A page has to say something. Nothing worth writing is a real answer — leave the page alone instead.",
   "too-large":
     "That page is past the write ceiling (`limit` bytes, UTF-8; `bytes` is what was sent, `over` how much to take out) — a sanity bound far past the page's room. It was refused rather than cut: what gets cut at write time is the only copy. Say the same thing shorter — tighten, merge or drop what no longer holds — and send the whole page again.",
+  "past-room":
+    "That page is past its room (`room` bytes, UTF-8; `bytes` is what was sent, `over` how much to take out), so tonight's first send was not written. Cut it and send the whole page again — cut, don't add a short version: keep it thin. Sent again still past the room, it is kept; not sent again, it is kept when the run ends.",
   "short-not-needed":
     "The page is within its room, so the wake shows it whole and a short version would never be read. Nothing was written.",
   "short-refused":
@@ -241,6 +243,10 @@ export const STILL_DATED_SHOWN = 5;
 /** The line beside them (`McpServer#stillDatedNear`, 2026-10-14). */
 export const STILL_DATED_HINT =
   "These nearby memories still hold a date. If one is the same obligation as the one you just closed, close it too now: remember with updates: its id and eventDate: null (or status: done). If it is something else, leave it.";
+
+/** Beside a "done" or owner-said write that lands close to a reminder due now (`McpServer#answersReminder`, 2026-10-20). */
+export const ANSWERS_HINT =
+  "This looks like it answers the reminder in `answers`, which is due now. If it does, close it: remember with updates: its id, status: done, and a short text (\"Done for this week\"). A repeating one closes for this time only and comes back on its next date; eventDate: null would end it. If it is something else, leave it.";
 
 /** Beside a write that closed a dated memory and sent no title (2026-10-14). */
 export const TITLE_ASKED_NOTE =

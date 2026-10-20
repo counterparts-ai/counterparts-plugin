@@ -558,6 +558,40 @@ export function savedItems(tool: string, args: Record<string, unknown>, resultTe
   return [];
 }
 
+/** A memory tool that saves (`remember`, the old `note`, `session_end`); a chapter is a journal entry. */
+export function savesMemory(tool: string): boolean {
+  return REMEMBER.has(tool) || tool === 'session_end';
+}
+
+/** A save older than this when the status file is next read (a pane hidden a while) is not played as new. */
+export const SAVE_FRESH_MS = 2 * 60000;
+
+/**
+ * Whether the status file's new rows hold a save for this session that the
+ * fox has not written down yet (2026-10-20): a `gate.deposit` naming the
+ * session, with `accepted` > 0, written after the last save the fox heard
+ * (`after`, `Director.saveAt`) and within SAVE_FRESH_MS of `now`.
+ *
+ * Every deposit comes through the memory tools (`session_end`, `remember`),
+ * and the `tool.call` hook hears the save as the call returns, after the
+ * call's rows were written: so those rows are older than `after`, and the
+ * same save does not write twice (a second call inside one notepad's run
+ * plays nothing more, and still moves `after`). What is left is a save that hook did not
+ * see (a reload mid-call, an answer it could not read). A burst read in two
+ * looks writes once: the first look's notepad is newer than the rest.
+ */
+export function savedSince(events: readonly DashEvent[], session: string, after: number, now: number): boolean {
+  if (session === '') return false;
+  return events.some(
+    e =>
+      e.name === 'gate.deposit' &&
+      e.at > after &&
+      now - e.at < SAVE_FRESH_MS &&
+      num(e, 'accepted') > 0 &&
+      e.detail?.some(d => (d.key === 'session' || d.key === 'actorId') && d.value === session) === true,
+  );
+}
+
 /** The ids a `recall` call opened by address: its `ids`, or a `handle` that is an id. */
 export function openedIds(tool: string, args: Record<string, unknown>): { ids: string[]; handle: string | null } {
   const ours = ourTool(tool);
@@ -747,14 +781,21 @@ export function parseOnboarding(text: string): SidebarOnboarding {
 /**
  * THE ONE PLACE THE WAKE'S MARKER IS SPELLED. Core writes it on its own line
  * in every SessionStart wake (done included; `start-fresh` resets it to
- * not_started): `<!-- counterparts:onboarding meet=<state> -->`. No marker:
- * an older core, the state unknown. Change the text here if core's changes.
+ * not_started): `<!-- counterparts:onboarding meet=<state> -->`. Since
+ * 2026-10-20 (core's ONE TAG, `adapters/store-id.ts`) it is a field of the
+ * wake's own head tag, `<!-- counterparts:wake meet=<state> store=st_…
+ * elements=… bytes=… -->`, or of `<!-- counterparts:session meet=<state> … -->`
+ * in front of a wake that has no head tag; all three forms are read, so this
+ * sidebar reads an older core's wake too. No marker: an older core, the
+ * state unknown. Change the text here if core's changes.
  */
-export const ONBOARDING_MARKER = /<!--\s*counterparts:onboarding\s+meet=([a-z_]+)\s*-->/;
+export const ONBOARDING_MARKER =
+  /<!--\s*counterparts:(?:onboarding\s+meet=([a-z_]+)\s*|(?:wake|session)\s+(?:[a-z]+=[^\s>]+\s+)*meet=([a-z_]+)(?:\s[^>]*)?)-->/;
 
 /** The state the wake's marker names, or null: no marker, or a state the sidebar doesn't know. */
 export function parseOnboardingMarker(text: string): SidebarMeet | null {
-  const state = ONBOARDING_MARKER.exec(text)?.[1];
+  const m = ONBOARDING_MARKER.exec(text);
+  const state = m?.[1] ?? m?.[2];
   return state !== undefined && (MEET_STATES as readonly string[]).includes(state) ? (state as SidebarMeet) : null;
 }
 
@@ -764,13 +805,17 @@ export function parseOnboardingMarker(text: string): SidebarMeet | null {
  * names the store that wrote it (`storeId`). Two stores on one machine can
  * share one configuration folder, so the sidebar shows the file's numbers only
  * when the two agree; either unknown (no marker, an older core, a store whose
- * id is not minted yet: null) is "can't tell", and it carries on.
+ * id is not minted yet: null) is "can't tell", and it carries on. Since
+ * 2026-10-20 it is the `store=` field of the wake's head tag (or of the
+ * `counterparts:session` tag), read as the onboarding marker's `meet=` is.
  */
-export const STORE_MARKER = /<!--\s*counterparts:store\s+id=(st_[0-9a-f]{16})\s*-->/
+export const STORE_MARKER =
+  /<!--\s*counterparts:(?:store\s+id=(st_[0-9a-f]{16})\s*|(?:wake|session)\s+(?:[a-z]+=[^\s>]+\s+)*store=(st_[0-9a-f]{16})(?:\s[^>]*)?)-->/
 
 /** The store the wake names, or null. */
 export function parseStoreMarker(text: string): string | null {
-  return STORE_MARKER.exec(text)?.[1] ?? null
+  const m = STORE_MARKER.exec(text)
+  return m?.[1] ?? m?.[2] ?? null
 }
 
 /** Whether a status file written by `dash`'s store belongs to another store than the wake's: only when both are known and differ. */

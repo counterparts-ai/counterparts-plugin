@@ -384,3 +384,52 @@ export function spliceBeforeSentinel(text: string, block: string): PrefacedBundl
     applied: true,
   };
 }
+
+/** How the head tag opens (`briefing.ts#headerLine`). */
+const HEAD_PREFIX = "<!-- counterparts:wake ";
+
+/** One field the head may carry: `name=value`, no space, `>` or newline, and
+ *  never one of the two the head already states. */
+const HEAD_FIELD = /^(?!elements=|bytes=)[a-z]+=[^\s>]+$/;
+
+/**
+ * FIELDS IN THE HEAD TAG (2026-10-20, Mike's go, lightly held: one tag at the
+ * top of a session-start wake, not three). `fields` (`meet=done`,
+ * `store=st_…`: the host's markers, `adapters/store-id.ts#ONE_TAG`) go into
+ * the opening comment right after `counterparts:wake`, where `day=` sat until
+ * 2026-10-16 — every reader of the head matches the prefix and
+ * `elements=… bytes=…` and allows any field between — and both byte counts
+ * are re-solved, `spliceBeforeSentinel`'s mechanism, so the delivered block
+ * still states its own length. A bundle that is not a clean render, or no
+ * field, or a field that is not one `name=value` token, is returned
+ * untouched (`applied` false), for that function's reason.
+ */
+export function withHeadFields(text: string, fields: readonly string[]): PrefacedBundle {
+  const lines = text.split("\n");
+  const open = lines[0] ?? "";
+  const tail = lines[lines.length - 1] ?? "";
+  const clean = fields.length > 0 && fields.every((f) => HEAD_FIELD.test(f));
+  if (!clean || lines.length < 2 || !open.startsWith(HEAD_PREFIX) || !OPEN_RE.test(open) || !SENTINEL_RE.test(tail)) {
+    return {
+      text,
+      bytes: byteLength(text),
+      sentinel: SENTINEL_RE.test(tail) ? tail : null,
+      applied: false,
+    };
+  }
+  const head = `${HEAD_PREFIX}${fields.join(" ")} ${open.slice(HEAD_PREFIX.length)}`;
+  const build = (stated: string): string[] => [
+    head.replace(BYTES_FIELD, `bytes=${stated}`),
+    ...lines.slice(1, -1),
+    tail.replace(BYTES_FIELD, `bytes=${stated}`),
+  ];
+  const skeleton = byteLength(build("").join("\n"));
+  const composed = build(String(fixedPointTotal(skeleton, 2)));
+  const out = composed.join("\n");
+  return {
+    text: out,
+    bytes: byteLength(out),
+    sentinel: composed[composed.length - 1] ?? null,
+    applied: true,
+  };
+}

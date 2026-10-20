@@ -23,6 +23,7 @@ import { strength } from "../physics/index.js";
 import type { ProseDoc, ReadOnlyStore, Store, WakeDisplayRow } from "../store/index.js";
 import type { SelfTunables } from "./tunables.js";
 import { isWorkMemory } from "./work.js";
+import { TUNABLES as SLEEP_TUNABLES } from "../sleep/tunables.js";
 
 export type LaneName = "identity" | "craft" | "threads" | "hints" | "horizon";
 
@@ -207,6 +208,16 @@ export interface Scanned {
 export function reconsideringIds(store: Store): Set<string> {
   try {
     return new Set(store.coreReconsidering().map((r) => r.id));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Of those, the ones flagged `CORE_WAITING_DAYS` lived days before `day` or
+ *  earlier (2026-10-20): they lead "Still open". Empty when none or unreadable. */
+export function waitingIds(store: Store, day: number): Set<string> {
+  try {
+    return new Set(store.coreReconsidering().filter((r) => day - r.day >= SLEEP_TUNABLES.CORE_WAITING_DAYS).map((r) => r.id));
   } catch {
     return new Set();
   }
@@ -492,6 +503,10 @@ export function rankLanes(
      *  (`recall/standing.ts#unsettledAmong`, 2026-10-18): ranked after the
      *  rest of "Still open", the core memories being reconsidered included. */
     readonly unsettled?: ReadonlySet<string>;
+    /** Core memories being reconsidered that have waited a week or more for
+     *  a decision (`sleep/tunables.ts#CORE_WAITING_DAYS`, 2026-10-20): they
+     *  take "Still open"'s first slot. */
+    readonly waiting?: ReadonlySet<string>;
   } = {},
 ): Lanes {
   const identity: Ranked[] = [];
@@ -557,15 +572,19 @@ export function rankLanes(
   // waits on a decision however long ago it was touched.
   // They TAKE TURNS by lived day (review of #430): a fixed order would show
   // the same one every wake while the others waited unseen behind it.
-  // One that is also "Unsettled — may be out of date" (2026-10-18) takes its
-  // turn only after the plain ones: its prefix replaces the "keep or retire
-  // it" words, and the pair it is in has its own answer.
+  // ONE THAT HAS WAITED A WEEK LEADS (2026-10-20, an experiment): the ones
+  // flagged `CORE_WAITING_DAYS` lived days ago or more take their turns
+  // first, then the rest — ONE rotation over plain and unsettled alike, as
+  // #430 asked (2026-10-18 had put the unsettled ones after the plain, and on
+  // the owner's store they never led). Its line keeps the "keep or retire it"
+  // words beside the unsettled label (`Self#resolveStatement`).
   reconsidering.sort(byOpened);
   const rotate = (pool: readonly Ranked[]): Ranked[] => {
     const k = pool.length === 0 ? 0 : ((turn % pool.length) + pool.length) % pool.length;
     return [...pool.slice(k), ...pool.slice(0, k)];
   };
-  const rotated = [...rotate(reconsidering.filter((r) => r.unsettled !== true)), ...rotate(reconsidering.filter((r) => r.unsettled === true))];
+  const waiting = opts.waiting ?? new Set<string>();
+  const rotated = [...rotate(reconsidering.filter((r) => waiting.has(r.id))), ...rotate(reconsidering.filter((r) => !waiting.has(r.id)))];
   // Which open threads are old, for the count line — before the core
   // memories join the lane: those are not aged.
   const threadsStale = staleAmong(threads, turn, t.STILL_OPEN_STALE_DAYS);

@@ -22,6 +22,7 @@ import { withEmbedderDefault } from "../config.js";
 import { openEmbedder } from "../claude-code/embed-client.js";
 import type { LiveEmbedder } from "../claude-code/embed-client.js";
 import { exportStore } from "./export.js";
+import { dreamShowLines } from "./dream-core.js";
 import { BIN } from "./install.js";
 // The console's shared manners (2026-09-21): is there a person here, ask them,
 // and say one marked line back.
@@ -369,6 +370,13 @@ export async function recallCommand(
         // number, and `status` prints the split.
         `${result.storeSize} live rows · returned ${result.memories.length}`,
     );
+    // A NIGHT BY ITS ID (2026-10-20): the console's own words for it, the
+    // ones `counterparts night` prints (read-only, like this whole path).
+    if (result.nights !== undefined && result.nights.length > 0) {
+      io.out("");
+      for (const line of dreamShowLines(counterpart, idFlag) ?? []) io.out(line);
+      return EXIT.ok;
+    }
     if (result.memories.length === 0) {
       io.out("");
       // NOTHING CAME, said as a sentence rather than as an absence. A blank

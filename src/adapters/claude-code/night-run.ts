@@ -713,6 +713,14 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
       // usually rendered the morning's wake before the writer wrote. The
       // host's budget came with the store (`openNightCounterpart`); without
       // one the render refuses, as everywhere. Its own try: never the record.
+      // First, A PAGE HELD TO THE ROOM AND NOT SENT AGAIN IS KEPT (2026-10-20,
+      // `Self#keepHeldPage`), so the night never loses its rewrite to the hold.
+      // Bounded by this run's start, not the date: a run may cross midnight.
+      try {
+        c.self.keepHeldPage({ sinceAt: startedAt });
+      } catch {
+        /* the held page stays on its refusal row */
+      }
       try {
         c.refreshWake({ at: c.store.today(), trigger: "run-end" });
       } catch {

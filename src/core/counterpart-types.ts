@@ -105,6 +105,13 @@ export interface DrewOnResult {
    * pending file; the boundary's worker lands them. 0 when fewer than two.
    */
   readonly linked: number;
+  /**
+   * Named memories replaced by THIS session (F6b, 2026-10-20, lightly held):
+   * superseded, or faded under a newer one, by a memory this session wrote or
+   * one born today (`by`). Not refused: each went on to be credited like any
+   * other (and may still be refused for its day cadence). Absent when none.
+   */
+  readonly replacedHere?: { id: string; by: string }[];
 }
 
 /** What one boundary's temporal contiguity pass did. Counts only. */
@@ -383,6 +390,8 @@ export interface WakeOutcome extends WakeResult {
    * here. Empty when it kept none or the published bundle was delivered.
    */
   readonly threads?: readonly string[];
+  /** The head tag carries `WakeHere.headFields` (2026-10-20, ONE TAG). */
+  readonly tagged?: boolean;
 }
 
 /**
@@ -394,6 +403,16 @@ export interface WakeOutcome extends WakeResult {
 export interface WakeHere {
   /** The canonical directory this session opened in. */
   readonly scope?: string;
+  /**
+   * THE HOST'S FIELDS FOR THE HEAD TAG (2026-10-20, ONE TAG): `meet=…`,
+   * `store=…`, put into the wake's opening comment after the furniture is
+   * spliced (`self/briefing.ts#withHeadFields`), and only when the whole still
+   * fits the ceiling, so they never take the room "Last here" needs (review
+   * of #536). When they would not fit, the head is left as it was and
+   * `Counterpart#wake`'s outcome says so (`tagged` false): the host then
+   * carries them in a tag of its own.
+   */
+  readonly headFields?: readonly string[];
   /** The session id, for the `handoff.shown` row. Never guessed. */
   readonly session?: string | null;
   /**
@@ -435,6 +454,9 @@ export interface WakeSession {
   /** When the host closed it, epoch ms; null or absent while it has not
    *  (the "Since you started" line's "ended", 2026-10-11). */
   readonly endedAt?: number | null;
+  /** The model the host last saw in it, or null/absent (2026-10-20: the
+   *  "Here, also open" clause names a session as "Last here" does). */
+  readonly model?: string | null;
 }
 
 /**
@@ -467,6 +489,13 @@ export interface DepositFacts {
 export interface DepositContext {
   session: string;
   scope: string;
+  /**
+   * The writer's calendar day (2026-10-20), when the door knows it from its
+   * own clock: what a `done` at a repeating reminder closes the occurrence
+   * open on (`counterpart-deposit.ts#closeOccurrenceFor`). Absent: the
+   * store's today. A write-up's `happenedOn` wins over it.
+   */
+  at?: string;
   /** v12: the writer's three fields, as sent (`SentFacts`). Absent: none sent. */
   facts?: SentFacts;
   /**
@@ -552,6 +581,14 @@ export interface DepositResult {
    * where it came from (`Counterpart#carryReminder`, review N7).
    */
   readonly reminder?: DepositReminder;
+  /**
+   * DONE FOR THIS TIME (2026-10-20, an experiment): a `status: done` at a
+   * REPEATING reminder's id, with no date sent, closed the occurrence open
+   * today and left the reminder as it was — its date, its repeat, its
+   * standing (`counterpart-deposit.ts#carryReminder`). `closed` is null when
+   * no occurrence was open today, so nothing was closed.
+   */
+  readonly occurrence?: DepositOccurrence;
   /**
    * What the declared `updates:` did (2026-09-29): which arm of the revision
    * dispatch ran, and — on the ordinary-memory arm — how the old memory was
@@ -642,6 +679,19 @@ export interface DepositReminder {
   readonly chainSkipped?: readonly string[];
 }
 
+/** What a `done` at a repeating reminder closed (`DepositResult.occurrence`, 2026-10-20). */
+export interface DepositOccurrence {
+  /** The memory holding the repeating reminder; it keeps its date and its repeat. */
+  readonly reminder: string;
+  readonly recurring: Recurrence;
+  /** The occurrence closed (its date), or null when none was open today. */
+  readonly closed: string | null;
+  /** True when it had been closed already (named in `drewOn`, or done earlier). */
+  readonly already?: boolean;
+  /** The next occurrence after the one closed (or after today), which comes back as normal. */
+  readonly next: string | null;
+}
+
 /** `carryReminder`'s answer: the proposal to mint, and what it took from where. */
 export interface ReminderCarryPlan {
   readonly proposal: Proposal;
@@ -649,6 +699,12 @@ export interface ReminderCarryPlan {
   readonly from: string | null;
   readonly inherited: readonly ("eventDate" | "remind" | "recurring")[];
   readonly recurringDropped?: boolean;
+  /**
+   * A `done` at a REPEATING reminder (2026-10-20): the memory holding it,
+   * whose open occurrence the deposit closes. `from` is null then: nothing is
+   * carried or moved, and the new memory is undated.
+   */
+  readonly occurrence?: { readonly holder: string; readonly recurring: Recurrence };
 }
 
 export interface SweepEntry {

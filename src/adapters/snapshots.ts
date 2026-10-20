@@ -52,7 +52,7 @@
  * directory, a failed copy, a failed rename, an aborted run — is a
  * `snapshot.failed` row carrying its `reason` and the `step` it died at.
  */
-import { cpSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
 
@@ -156,6 +156,8 @@ export interface SnapshotsConfig {
 export type SnapshotReason =
   | "taken"
   | "observer"
+  // Today's copy is there — or, since 2026-10-20, another run holds today's
+  // claim and is taking it (`claimDay`).
   | "already-today"
   | "no-default-dir"
   | "attempts-exhausted"
@@ -434,8 +436,31 @@ export function runSnapshot(input: SnapshotRunInput): SnapshotRunReport {
   // copy taken at 00:00:05 on the 19th for a run about the 18th reads
   // `2026-09-18T00-00-05-000Z`, which looks odd and is harmless: sorting is by
   // date and there is at most one copy per date.
+  //
+  // ONE COPY A DAY WHEN TWO RUNS START TOGETHER (2026-10-20). Two workers
+  // spawned at the same boundary (a Stop and a SessionEnd, two sessions
+  // ending at once) both passed the look above before either renamed its
+  // copy into place, and the owner's snapshots folder held two copies ~50 ms
+  // apart on four days. Each run now CLAIMS the day first — one file created
+  // exclusively (`claimDay`), so exactly one run holds it — looks again under
+  // the claim, and lets it go once its copy is in place or has failed. The
+  // run that finds the claim held writes nothing, as `already-today` never
+  // has: the other run's `snapshot.taken` row is the record. A claim a killed
+  // run left is stale after `PARTIAL_STALE_MS` and taken over; a claim that
+  // cannot be made at all (not "held") takes the copy without one, as before:
+  // a second copy beats no copy.
+  const claim = claimDay(dir, date, now);
+  if (claim === "held" || (claim !== null && todaysSnapshot(dir, date) !== null)) {
+    if (claim !== "held") releaseClaim(claim, errors);
+    return done("already-today", dir, null, 0, withCleaned(cleaned), null, errors, started);
+  }
   const name = `${date}T${snapshotName(now).slice(11)}`;
-  const copy = copyInto(store, dir, name, errors);
+  let copy: ReturnType<typeof copyInto>;
+  try {
+    copy = copyInto(store, dir, name, errors);
+  } finally {
+    releaseClaim(claim, errors);
+  }
   if (!copy.ok) {
     note(counterpart, SNAPSHOT_FAILED_EVENT, { date, step: copy.step, reason: copy.why }, undefined);
     // NO ROTATION after a failed copy. Deleting the oldest good backup on the
@@ -1072,9 +1097,74 @@ export function todaysSnapshot(dir: string, date: string): string | null {
 }
 
 /**
+ * THE DAY'S CLAIM (2026-10-20): `<dir>/.taking-<date>`, a FILE, created
+ * exclusively (`wx`) by the run about to copy, so two runs racing at one
+ * boundary cannot both take the day's copy. A file rather than a directory:
+ * every reader of this folder looks at directories only (`readSnapshotsDir`,
+ * rotation, doctor, "delete every backup"), so it is invisible to them. Its
+ * shape is the whole name, so the sweep removes nothing else.
+ */
+export const CLAIM_PREFIX = ".taking-";
+export const CLAIM_NAME_RE = /^\.taking-\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Claim `date`'s copy in `dir`: the claim's path when this run holds it,
+ * `"held"` when another run does (made less than `PARTIAL_STALE_MS` ago), or
+ * null when no claim could be made for any other reason — the caller then
+ * copies without one, as it did before claims. A claim older than that is a
+ * killed run's: it is removed and taken over (once; a run that loses the
+ * retake to another reads "held"). Never throws.
+ */
+export function claimDay(dir: string, date: string, now: number): string | "held" | null {
+  const path = join(dir, `${CLAIM_PREFIX}${date}`);
+  try {
+    // The first copy ever makes the folder; the claim needs it a moment sooner.
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    return null;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(path, `${String(process.pid)}\n`, { flag: "wx" });
+      return path;
+    } catch (err) {
+      // Not "someone holds it": a folder that will not take a file (a full
+      // disk, a permission) will not take the copy either, and the copy's
+      // own failure says so, by its step, on the row the cap counts.
+      if (codeOf(err) !== "EEXIST") return null;
+    }
+    try {
+      // ABSOLUTE, for `cleanPartials`'s reason: a claim from the future is not fresh forever.
+      if (Math.abs(now - statSync(path).mtimeMs) < PARTIAL_STALE_MS) return "held";
+      unlinkSync(path);
+    } catch (err) {
+      // Gone between the two looks: the other run let it go; try again.
+      if (codeOf(err) !== "ENOENT") return "held";
+    }
+  }
+  return "held";
+}
+
+/** Let a claim go. Null or "held" is nothing to release. Never throws. */
+export function releaseClaim(claim: string | "held" | null, errors: string[]): void {
+  if (claim === null || claim === "held") return;
+  try {
+    unlinkSync(claim);
+  } catch (err) {
+    if (codeOf(err) !== "ENOENT") errors.push(`could not let go of today's claim: ${messageOf(err)}`);
+  }
+}
+
+function codeOf(err: unknown): string | null {
+  return err !== null && typeof err === "object" && typeof (err as { code?: unknown }).code === "string" ? (err as { code: string }).code : null;
+}
+
+/**
  * Remove `.partial-…` directories a killed run left behind — but only ones old
  * enough that no live run could still be writing into them. A sweep that deleted
  * a fresh partial would be this module destroying its own concurrent copy.
+ * A killed run's day claim (`CLAIM_NAME_RE`, a file) goes by the same rule; it
+ * is not counted as cleaned, which counts copies.
  */
 export function cleanPartials(dir: string, now: number, errors: string[]): number {
   let entries;
@@ -1085,6 +1175,15 @@ export function cleanPartials(dir: string, now: number, errors: string[]): numbe
   }
   let cleaned = 0;
   for (const entry of entries) {
+    if (entry.isFile() && CLAIM_NAME_RE.test(entry.name)) {
+      const path = join(dir, entry.name);
+      try {
+        if (Math.abs(now - statSync(path).mtimeMs) >= PARTIAL_STALE_MS) unlinkSync(path);
+      } catch {
+        /* another run took it over or let it go */
+      }
+      continue;
+    }
     if (!entry.isDirectory()) continue;
     if (!PARTIAL_NAME_RE.test(entry.name)) continue;
     const path = join(dir, entry.name);

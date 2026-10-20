@@ -108,6 +108,7 @@ export {
   prefaceLine,
   readSentinel,
   spliceBeforeSentinel,
+  withHeadFields,
 } from "./briefing-delivery.js";
 export type { PrefaceFacts, PrefacedBundle, SentinelReading } from "./briefing-delivery.js";
 
@@ -723,8 +724,9 @@ export interface BriefingRequest {
    * THE "TODAY, ELSEWHERE" LINE (2026-10-10): one line, composed by the caller
    * at session start from the host's session registry and the store — which
    * other directories were worked in today, when, the chapter written there
-   * (scope and confidential gates), and how many memories, as counts. Never
-   * a word of a span, a work memory's title or a handoff from there.
+   * (scope and confidential gates), and how many memories, with up to two
+   * work titles a folder since 2026-10-20 (an experiment, the same gates).
+   * Never a word of a span or a handoff from there.
    * Furniture, printed above "Nearby", at most `TODAY_ELSEWHERE_MAX_BYTES`
    * (a longer form is not printed). It takes room from the lanes below it in
    * `ROOM_ORDER` and gives way to those above it — "Arriving:", "Still
@@ -977,7 +979,16 @@ export function datePrefix(r: Resolved): string {
 export function elementLine(item: Ranked, resolve: Resolve): string {
   const r = resolve(item.id);
   const standing = r.standing?.prefix ?? "";
-  const statement = asLine(item, r) ? lineText(item.id, r) : flatten(r.statement);
+  // A "COMING UP" ITEM CARRIES ITS OWN ID, whole as well as a line
+  // (2026-10-20, Mike's ask from ~/random): a recurring reminder printed
+  // whole showed only its earlier occurrence's id — "(earlier: [mem_…])" —
+  // and a session had no handle for the one due, which is the id it names
+  // to close it. The id goes before the standing's pointer, as a line's does.
+  const statement = asLine(item, r)
+    ? lineText(item.id, r)
+    : item.lane === "horizon" && HORIZON_OWN_ID
+      ? lineText(item.id, { ...r, line: r.statement })
+      : flatten(r.statement);
   let date = datePrefix(r);
   // ONE DATE, NOT TWO (2026-10-01, the wake review): a statement that already
   // opens with the very date the prefix would state ("2026-09-26: …") read
@@ -1004,6 +1015,12 @@ export function elementLine(item: Ranked, resolve: Resolve): string {
 export function asLine(item: Ranked, r: Resolved): boolean {
   return r.line !== undefined && item.lane !== "identity" && item.due !== true && item.whole !== true;
 }
+
+/**
+ * EVERY "COMING UP" ITEM NAMES ITS OWN ID (2026-10-20, lightly held; see
+ * `elementLine`). `false`: a whole item prints its words alone, as before.
+ */
+export const HORIZON_OWN_ID = true;
 
 /** The line's words, the id once: not again when its standing already names it. */
 function lineText(id: string, r: Resolved): string {

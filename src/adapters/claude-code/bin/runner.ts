@@ -72,6 +72,7 @@ import { fileURLToPath } from "node:url";
 
 import { Counterpart, RUNNER_FAILED_EVENT } from "../../../core/counterpart.js";
 import { recordCoverage } from "../../../core/coverage/index.js";
+import { PAGE_HELD_SETTLE_MS } from "../../../core/self/index.js";
 import { clearIdleCarries } from "../../../core/recall/index.js";
 import { RETENTION_EVENT, retentionRow, retentionRuns } from "../../../core/remember/index.js";
 import type { HostSessionEvidence, RetentionReport } from "../../../core/remember/index.js";
@@ -454,6 +455,15 @@ export async function runOnce(input: {
     // render re-renders it now, not at the next lived day. After the cycle, whose own render already caught up to what was
     // marked before it; nothing marked, nothing rendered.
     // Its own try: a render that fails costs the refresh, and the mark stays.
+    // First, A HELD PAGE NO RUN END KEPT (review of #541): a night launched
+    // from a session (the default `ask`) or a run killed after the hold never
+    // reaches `runNight`'s keep, so a boundary keeps it once it has settled —
+    // only while the page still stands where it was held.
+    try {
+      counterpart.self.keepHeldPage({ settledMs: PAGE_HELD_SETTLE_MS });
+    } catch {
+      /* the held page stays on its refusal row for the next boundary */
+    }
     try {
       const wake = counterpart.refreshWake({ at: today });
       if (wake.reason !== "current") emit("runner.wake", { reason: wake.reason, triggers: wake.triggers.join(","), bytes: wake.bytes });

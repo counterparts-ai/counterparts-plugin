@@ -124,6 +124,52 @@ export function dreamCommand(dir: string, io: Io, parsed: Parsed, observer: bool
 }
 
 /**
+ * `night` — last night, read-only (2026-10-20). The same lines `dream`
+ * prints (`dream-core.ts`), behind a command with no write at all, so a
+ * session can run it to review the night with the owner: `dream` also undoes,
+ * and a host's safety check refuses a command that can change shared data.
+ * It always opens the store as an observer, so `--observer` changes nothing
+ * here. `last` is the newest dream (and the reflection after it); with no
+ * dream yet, the newest reflection. `last-reflection` is the newest reflection.
+ */
+export function nightCommand(dir: string, io: Io, parsed: Parsed, namedDir: boolean): number {
+  if (!storeExists(dir)) {
+    io.err(`No store at ${dir}. Run 'counterparts init${namedDir ? ` --dir ${dir}` : ""}' to create one.`);
+    return EXIT.usage;
+  }
+  const words = parsed.positional[0] === "show" || parsed.positional[0] === "list" ? parsed.positional.slice(1) : parsed.positional;
+  const listing = parsed.positional[0] === "list" || words.length === 0;
+  if (parsed.positional[0] === "show" && words.length === 0) {
+    io.err("refused: show needs an id (drm_… or rfl_…) or last. counterparts night lists them.");
+    return EXIT.usage;
+  }
+  const counterpart = openCounterpart(dir, true);
+  try {
+    if (listing) {
+      for (const line of dreamListLines(counterpart, parsed.flags["all"] === true ? "all" : undefined, "night")) io.out(line);
+      return EXIT.ok;
+    }
+    const asked = (words[0] ?? "").trim();
+    let id: string | null = asked;
+    if (asked === "last") id = counterpart.dreams.list(1)[0]?.dream.id ?? counterpart.reflections.list(1)[0]?.id ?? null;
+    else if (asked === "last-reflection") id = counterpart.reflections.list(1)[0]?.id ?? null;
+    if (id === null) {
+      io.out(asked === "last-reflection" ? "No reflections yet." : "No dreams yet.");
+      return EXIT.ok;
+    }
+    const lines = id.startsWith("drm_") || id.startsWith("rfl_") ? dreamShowLines(counterpart, id) : null;
+    if (lines === null) {
+      io.err(`refused: no dream or reflection ${id} in this store. counterparts night lists them.`);
+      return EXIT.refused;
+    }
+    for (const line of lines) io.out(line);
+    return EXIT.ok;
+  } finally {
+    counterpart.close();
+  }
+}
+
+/**
  * `settle` — contradictions, the owner's door (2026-09-29). The list reads
  * under any stance; a settle and an undo go through `Counterpart
  * .settleContradiction` / `.undoContradiction`, which decide everything and
@@ -368,7 +414,7 @@ export function coreCommand(dir: string, io: Io, parsed: Parsed, observer: boole
         io.err(`refused: ${why[out.reason] ?? out.reason}. Nothing was changed.`);
         return EXIT.refused;
       }
-      io.out(`Kept ${keep} in the core.`);
+      io.out(out.reason === "restored" ? `Put ${keep} back in the core: it had been retired.` : `Kept ${keep} in the core.`);
       io.out(`  Why, as recorded: ${reason.trim()}`);
       io.out("  It is no longer being reconsidered, and it is not flagged again for what it is — only if it stops coming back.");
       return EXIT.ok;
@@ -393,6 +439,12 @@ export function coreCommand(dir: string, io: Io, parsed: Parsed, observer: boole
         };
         io.err(`refused: ${why[out.reason] ?? out.reason}. Nothing was changed.`);
         return EXIT.refused;
+      }
+      if (out.reason === "confirmed") {
+        io.out(`A reflection had already retired ${demote}; it is now recorded as your retire.`);
+        io.out(`  Why, as recorded: ${reason.trim()}`);
+        io.out("  It keeps fading, and no session can put it back in the core — only you can (counterparts core --reaffirm).");
+        return EXIT.ok;
       }
       io.out(`Sent ${demote} back to ordinary fading, from today.`);
       io.out(`  Why, as recorded: ${reason.trim()}`);

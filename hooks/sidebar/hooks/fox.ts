@@ -133,7 +133,8 @@ export function stepKey(s: Pick<Step, 'frame' | 'fx'>): string {
  * Mike 2026-10-13): a still hold of 4–9 s, then one small moment at random by
  * weight (a blink, the tail tip's flick, an ear, a glance; rarely the whole
  * tail or a yawn). The first hold after the fox appears is short and ends in
- * the tail tip's flick. After 45 s with nothing happening he lies down (the
+ * the tail tip's flick. After 45 s with nothing happening (no prompt, no tool
+ * call begun, ended or still running: 2026-10-20) he lies down (the
  * loaf: `lieIn`, the pose changing behind shut eyes), keeps small moments
  * lying (`lieWeights`), and at 2 min settles into a nap from there
  * (`lieNapIn`), which a prompt (or anything real) wakes. The real-state
@@ -153,13 +154,44 @@ export type Director = {
   dreamSince: number
   /** The first hold is still to come: a short one, then the tail tip's flick. */
   fresh: boolean
+  /** Tool calls running now (`busy` in, `busyEnd` out): while any runs, he never lies down. */
+  busy: number
+  /** When the count last went up from none: a count left up BUSY_MAX_MS from there is dropped (an end never heard). */
+  busySince: number
+  /** When the last save's notepad began: another save inside NOTE_SPAN_MS writes no second time. */
+  noteAt: number
+  /** When the last save was heard, written on the notepad or folded into one already running: its rows are older. */
+  saveAt: number
 }
 
 const STILL: Step = { frame: 'idle', ms: 0, fx: [], moment: 'rest' }
 const STILL_LIE: Step = { frame: 'lie0', ms: 0, fx: [], moment: 'lieRest' }
 
 export function newDirector(now: number): Director {
-  return { mode: 'idle', queue: [], cur: STILL, until: now, idleSince: now, napSince: 0, dreamSince: 0, fresh: true }
+  return { mode: 'idle', queue: [], cur: STILL, until: now, idleSince: now, napSince: 0, dreamSince: 0, fresh: true, busy: 0, busySince: 0, noteAt: -Infinity, saveAt: -Infinity }
+}
+
+/** A tool call that never said it ended stops holding him awake after this long. */
+export const BUSY_MAX_MS = 30 * 60000
+
+/** How long a save's notepad runs (it writes twice): a burst of saves inside it writes once. */
+export const NOTE_SPAN_MS = 2 * momentSteps('note').reduce((a, s) => a + s.ms, 0)
+
+/**
+ * When the idle clock last ran from: the last activity, or now while a tool
+ * call runs (a long command or an agent is work, not nobody being there).
+ */
+function idleFrom(d: Director, now: number): number {
+  return d.busy > 0 && now - d.busySince < BUSY_MAX_MS ? Math.max(d.idleSince, now) : d.idleSince
+}
+
+/**
+ * A count up for BUSY_MAX_MS since it last rose from none is dropped: one
+ * call whose end was never heard would otherwise, with any call at all every
+ * half hour, keep him up for good. Calls running then end into a count of none.
+ */
+function expireBusy(d: Director, now: number): void {
+  if (d.busy > 0 && now - d.busySince >= BUSY_MAX_MS) d.busy = 0
 }
 
 /** A dream that never said it ended stops after this long. */
@@ -216,7 +248,8 @@ function plan(d: Director, now: number, rand: () => number): void {
     d.queue.push(...momentSteps('nap'))
     return
   }
-  const napAt = d.idleSince + SCHEDULE.napAfterMs
+  const since = idleFrom(d, now)
+  const napAt = since + SCHEDULE.napAfterMs
   if (d.mode === 'lie') {
     if (now >= napAt) {
       d.mode = 'nap'
@@ -234,7 +267,7 @@ function plan(d: Director, now: number, rand: () => number): void {
     d.queue.push(...momentSteps('napIn'))
     return
   }
-  const lieAt = d.idleSince + SCHEDULE.lieAfterMs
+  const lieAt = since + SCHEDULE.lieAfterMs
   if (now >= lieAt) {
     d.mode = 'lie'
     d.queue.push(...momentSteps('lieIn'))
@@ -276,7 +309,13 @@ export function advance(d: Director, now: number, rand: () => number = Math.rand
   return { step: d.cur, next: d.until }
 }
 
-export type FoxEvent = 'came' | 'note' | 'hello' | 'dream' | 'dreamEnd' | 'prompt'
+/**
+ * `busy` and `busyEnd`: a tool call began or ended, any tool, ours or not, a
+ * subagent's too (2026-10-20). Activity, not a moment: the idle clock starts
+ * over and a lie-down or nap on its way is called off, as a prompt does, but
+ * nothing plays.
+ */
+export type FoxEvent = 'came' | 'note' | 'hello' | 'dream' | 'dreamEnd' | 'prompt' | 'busy' | 'busyEnd'
 
 /**
  * What gets him up from the pose on screen, so an event's first frame never
@@ -292,41 +331,55 @@ function getUp(d: Director): Step[] {
   return f === 'idle' || f === 'blink' || f === 'drowsy' ? [] : momentSteps('bridge')
 }
 
-/** Something real happened: its moment plays at once, once he is up (from a nap or lying down); a dream holds until it ends. */
-export function trigger(d: Director, ev: FoxEvent, now: number): void {
+/**
+ * Something real happened: its moment plays at once, once he is up (from a nap or lying down); a dream holds until it ends.
+ * Says whether what is on screen next changed (false: the timer already waiting still stands).
+ */
+export function trigger(d: Director, ev: FoxEvent, now: number): boolean {
   const pose = poseOf(d.cur.frame)
+  if (ev === 'busy' || ev === 'busyEnd') expireBusy(d, now)
+  if (ev === 'busy') {
+    if (d.busy === 0) d.busySince = now
+    d.busy += 1
+  } else if (ev === 'busyEnd') d.busy = Math.max(0, d.busy - 1)
+  else if (ev === 'note') d.saveAt = now
   if (ev === 'dream') {
-    if (d.mode === 'dream') return
+    if (d.mode === 'dream') return false
     d.queue = pose === 'asleep' ? [] : momentSteps(pose === 'lie' ? 'lieNapIn' : 'napIn')
     d.mode = 'dream'
     d.dreamSince = now
     d.until = now
-    return
+    return true
   }
   if (ev === 'dreamEnd') {
-    if (d.mode !== 'dream') return
+    if (d.mode !== 'dream') return false
     d.mode = 'idle'
     d.idleSince = now
     d.queue = momentSteps('napOut')
     d.until = now
-    return
+    return true
   }
   // While a dream runs, it is what the fox does.
-  if (d.mode === 'dream') return
+  if (d.mode === 'dream') return false
   d.idleSince = now
-  if (ev === 'prompt') {
-    // Awake and sitting, nothing on screen changes; a lie-down or nap on its way is called off.
-    if (d.mode === 'idle' && pose === 'sit') return
+  // A save while the last one's notepad still runs: it is the same burst, written once.
+  if (ev === 'note' && now - d.noteAt < NOTE_SPAN_MS) return false
+  if (ev === 'prompt' || ev === 'busy' || ev === 'busyEnd') {
+    // Awake (sitting, or a get-up or a moment already playing), it stands: only the clock starts over.
+    // A lie-down or nap, or one on its way, is called off.
+    if (d.mode === 'idle') return false
     d.mode = 'idle'
     d.queue = pose === 'sit' ? [] : getUp(d)
     d.until = now
-    return
+    return true
   }
+  if (ev === 'note') d.noteAt = now
   // Lying, something coming to mind perks him up where he lies, then he sits up (round 8's lab).
   const moment = ev === 'came' && pose === 'lie' ? [...momentSteps('cameLie'), ...momentSteps('lieOut')] : [...getUp(d), ...momentSteps(ev)]
   d.queue = [...moment, ...(ev === 'note' ? momentSteps('note') : [])]
   d.mode = 'idle'
   d.until = now
+  return true
 }
 
 // ── colours ─────────────────────────────────────────────────────────────────

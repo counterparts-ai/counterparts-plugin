@@ -82,7 +82,7 @@ import { nightRowTimeoutMs, planNightRunner } from "./night-run.js";
 import { NOTHING_OWED_BEFORE_KEY, catchUpOf, catchUpWords, owedBefore } from "./night-catch-up.js";
 import type { NightKind } from "./night-run.js";
 import { spawnDetached } from "../spawn.js";
-import { ONE_TAG_LINE, wakeTagLead } from "../store-id.js";
+import { ONE_TAG_LINE, tagLead } from "../store-id.js";
 import type { SpawnOutcome } from "../spawn.js";
 import { NO_ARRIVAL, STOP_ASK_OPENER, readWakeArrival, startedByHost } from "./transcript.js";
 import type { WakeArrival } from "./transcript.js";
@@ -538,7 +538,7 @@ export const RESUME_WAKE_LINE =
   "Counterparts: this session was resumed; the wake it was handed when it started (above) still holds.";
 
 /** What `sessionStart` hands the host: a composed wake, or a resume's line. */
-type WokeHere = Pick<ReturnType<Lifecycle["composeWake"]>, "text" | "ok" | "bytes" | "sentinel" | "preface" | "lined"> & {
+type WokeHere = Pick<ReturnType<Lifecycle["composeWake"]>, "text" | "ok" | "bytes" | "sentinel" | "preface" | "lined" | "tags" | "tagged"> & {
   readonly reason: string;
 };
 
@@ -642,7 +642,10 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // the "Since you started" line says what changed elsewhere since it
       // last heard. No wake is composed, so no new expectation is written for
       // the delivery check, and the since-line's state is left to the line.
-      const woke: WokeHere = resumed ? this.resumeWake(input) : this.composeWake(input, budget);
+      // The markers ride in the composed wake's head tag (2026-10-20, ONE
+      // TAG; `Lifecycle#composeWake`).
+      const markers = (): readonly string[] => [this.onboardingMarker(input), this.storeMarker()];
+      const woke: WokeHere = resumed ? this.resumeWake(input) : this.composeWake(input, budget, markers);
       // The wake has just said what the other directories did today, so the
       // prompt's "Since you started" line counts from here (2026-10-11).
       if (!resumed) this.noteSinceWoke(input);
@@ -701,8 +704,10 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // says which store this session opened, so the mod can tell this
       // store's dashboard from another's. Since 2026-10-16 both ride on the
       // wake's own head line, just above its body (`wakeTagLead`, lightly
-      // held); `ONE_TAG_LINE` off puts them back under the clock.
-      const tags = wakeTagLead([this.onboardingMarker(input), this.storeMarker()], woke.text);
+      // held), and since 2026-10-20 inside its head tag (`ONE_TAG`), or as
+      // one tag of their own in front of a wake that has none (`tagLead`);
+      // `ONE_TAG_LINE` off puts them back under the clock.
+      const tags = tagLead(woke.tags ?? markers(), woke.text, woke.tagged === true);
       const lead = `${woke.text.length === 0 && plain.context.length === 0 && codeTab === null ? "" : `${this.nowLine()}\n`}${ONE_TAG_LINE ? "" : tags}${codeTab === null ? "" : `${codeTab}\n`}${plain.context}${ONE_TAG_LINE ? tags : ""}`;
       const sent = woke.bytes + Buffer.byteLength(lead, "utf8");
       const rides =

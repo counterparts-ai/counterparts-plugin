@@ -4670,6 +4670,37 @@ export class Store {
   }
 
   /**
+   * WHAT EACH DIRECTORY WROTE SINCE A MOMENT, by TITLE (2026-10-20, Mike's go,
+   * an experiment: the elsewhere lines name what was written, not only how
+   * much): per `origin_scope`, live memories born in `[at, until)`, at most
+   * `perScope × 4` per directory (the caller drops this session's own and
+   * what the wake already lists, then keeps `perScope`), work in progress
+   * first — a `status` mark (`STATUSES`: planned, proposed, asked, done) is
+   * tier 0, a work memory (`about = 'work'`, or unmarked and a skill, fact,
+   * entity or place, as `workCandidates`) tier 1 — then newest; nothing
+   * else (no chit-chat: the caller confirms tier 1 on `self/work.ts#isWorkMemory`,
+   * hence `about` and `kind` beside it). Never a dated row (a reminder:
+   * "Coming up" names it, as `workCandidates` leaves it out), a confidential row (whoever asks), an identity-band row,
+   * one marked about me, us or the owner (`CORE_ABOUT_MARKS`: those are not
+   * work, and cross only as the about-me chapter line's), a chapter's copy,
+   * the nightly run's, an open thread (`unresolved`: "Still open"'s, never a
+   * work line), or a write-up of an ended session (`secondHand`: the night's
+   * catch-up files them under the subject's folder; review of #543). The
+   * caller confirms EVERY row on `isWorkMemory`, the status-marked too. The
+   * title, or the body's first 240 characters when
+   * there is none; the columns only, no prose read. Which DIRECTORY may be
+   * named is the caller's gate (`Counterpart#elsewhereGate`). With `sessions`
+   * (2026-10-20, the other sessions open in this folder), only those sessions'
+   * rows, and the limit is per session instead of per directory.
+   */
+  memoryTitlesByScopeSince(
+    at: number,
+    opts?: { readonly until?: number; readonly perScope?: number; readonly sessions?: readonly string[] },
+  ): { id: string; scope: string; session: string | null; title: string; at: number; tier: number; about: string | null; kind: string }[] {
+    return memoryReads.memoryTitlesByScopeSince(this, at, opts);
+  }
+
+  /**
    * THE OPEN QUESTIONS, by id (2026-10-10): live memories whose meta says
    * `unresolved` — what the wake's "Still open:" lane is drawn from, read at
    * session start without the full scan (`self/#assemble`). The SQL match is

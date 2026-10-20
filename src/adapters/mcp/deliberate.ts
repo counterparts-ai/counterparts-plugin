@@ -31,6 +31,8 @@ import { belowReach, strength } from "../../core/physics/index.js";
 import type { MemoryPhysics } from "../../core/types.js";
 import { isConfidential, isSelfPage, standingOf } from "../../core/recall/index.js";
 import { parseChapterAddress, resolveChapter } from "../../core/self/chapter-address.js";
+import { nightKindOf, readNight } from "./nights.js";
+import type { NightSummary } from "./nights.js";
 import { localStamp } from "../../core/time.js";
 import { UNBOUND_SESSION } from "../../core/types.js";
 import type { SemanticSource } from "../../core/recall/index.js";
@@ -294,6 +296,15 @@ export interface DeliberateResult {
    *  asked. A multi-id lookup is still a DIRECT lookup, so each id's refusal is
    *  stated by name rather than folded into one total (§9.1 G5). */
   readonly perId?: readonly { id: string; reason: DeliberateReason }[];
+  /**
+   * A DREAM OR A REFLECTION asked for by its id (`drm_…`, `rfl_…`,
+   * 2026-10-20): a read-only summary (`nights.ts`). Beside `memories`, never
+   * in it — a night is not a memory, so nothing that credits an open, marks a
+   * memory seen or logs a title's resolution reads this field.
+   */
+  readonly nights?: readonly NightSummary[];
+  /** Set when the handle was a night's id, so a refusal says a night's words, not a memory's. */
+  readonly nightAsked?: "dream" | "reflection";
 }
 
 export interface DeliberateInput {
@@ -415,6 +426,16 @@ export function expandHandle(
   // `self/chapter-address.ts#resolveChapter`. Exact, like every other
   // address: an episode or a chapter that is not there is not-found.
   if (parseChapterAddress(handle) !== null) return expandChapter(counterpart, handle.trim(), opts, base);
+
+  // A NIGHT, `drm_…` or `rfl_…` (2026-10-20): the wake names last night's
+  // dream and the share its reflection by id, and the id now opens. Exact,
+  // like every address; the confidentiality boundary is stated (`nights.ts`).
+  const night = nightKindOf(handle);
+  if (night !== null) {
+    const got = readNight(counterpart, handle, { owner: opts.owner });
+    if (!got.ok) return { ...base, reason: got.reason, memories: [], considered: got.reason === "handle-unknown" ? 0 : 1, nightAsked: night };
+    return { ...base, reason: "expanded", memories: [], considered: 1, nights: [got.night] };
+  }
 
   const matches: string[] = [];
   // AN OLD ID READS AS ITSELF (2026-09-29, contradictions): a replaced row
@@ -722,19 +743,22 @@ export function expandIds(
   const memories: Recalled[] = [];
   const ambiguous: string[] = [];
   const perId: { id: string; reason: DeliberateReason }[] = [];
+  const nights: NightSummary[] = [];
   for (const id of unique) {
     const one = expandHandle(counterpart, id, opts);
     perId.push({ id, reason: one.reason });
     memories.push(...one.memories);
     ambiguous.push(...one.ambiguous);
+    nights.push(...(one.nights ?? []));
   }
   return {
     ...base,
-    reason: memories.length > 0 ? "expanded" : (perId[0]?.reason ?? "handle-unknown"),
+    reason: memories.length > 0 || nights.length > 0 ? "expanded" : (perId[0]?.reason ?? "handle-unknown"),
     memories,
     considered: unique.length,
     ambiguous,
     perId,
+    ...(nights.length > 0 ? { nights } : {}),
   };
 }
 

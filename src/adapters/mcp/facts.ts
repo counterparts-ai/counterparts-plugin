@@ -91,6 +91,22 @@
  *   2. Old gym schedule · mem_… · words · faded: weak, below reach
  *      …its lines and body, as for any result
  *
+ *   next 20, titles only (open any by id):
+ *   11. Gym bag left at the office · mem_… · 09-14
+ *   12. earlier (now a later version): Gym at 7 · mem_… · 08-02
+ *   …one line each for the next matches, by rank (`FACTS_TAIL_SIZE`,
+ *   2026-10-20, from the benchmark loss read; helps real recall too; lightly
+ *   held, revisit): shown, never credited, gated as the bodies are (a
+ *   settled-over one shown on its own carries `earlier (now …)`); the first
+ *   to go when the answer runs out of room, before any excerpt is cut
+ *
+ * A SOFT time word ("lately", "recently", "these days", "nowadays"; since
+ * 2026-10-20, from the benchmark loss read; helps real recall too; lightly
+ * held, revisit) filters nothing when the question asks anything
+ * else: the past week's matches rank first (`FACTS_SOFT_RECENT_BONUS`) and
+ * the header says "nothing filtered by date". Only time ("what happened
+ * lately?") keeps the past week as a filter.
+ *
  * The header counts DISTINCT facts (folded versions are not counted apart).
  * "may not be everything" is said only when a cap cut or a weak tail was left
  * out, with the reason. `page: N` pages in a stable order. Unknown fields say
@@ -107,6 +123,7 @@ import { chaptersOf } from "../../core/handoff/last-here.js";
 import {
   OPEN_END,
   OPEN_START,
+  earlierMark,
   everydayFactor,
   headOf,
   informativeness,
@@ -156,6 +173,35 @@ export const FACTS_CORRECTED_SHOWN = 3;
 export const FACTS_NEAR_DUPLICATE = 0.85;
 /** How far an event anchor's window reaches each side of its date. */
 export const FACTS_ANCHOR_DAYS = 2;
+
+/**
+ * THE TITLE TAIL (2026-10-20, from the benchmark loss read; helps real recall
+ * too; lightly held, revisit ~10-27). After a page's bodies, the next matches
+ * in rank order as one line each — title · id · date — so a memory ranked 11th
+ * to 30th is in sight and can be opened by id without paging. The loss read's
+ * biggest miss: the memory existed and never reached the answerer, buried
+ * among 50–100 matches and lacking the question's category word ("What pet
+ * does Caroline have?": the guinea pig 29th of 51). A real session's Claude
+ * does not page either. The step-0 replay on the bench stores: on 21 of the 50
+ * RECALL losses the needed memory sat inside this tail on some call where its
+ * body never showed. A listed line is not a result: it credits nothing, it is
+ * not in the answer's `ids`, the seen set or the quotable record; opening it
+ * by id credits it as any open does. The size and the wording are for Mike's
+ * review.
+ */
+export const FACTS_TAIL_SIZE = 20;
+/** A tail line's title, cut here: 20 lines stay near 1.5 KB with an id and a date (2026-10-20, from the benchmark loss read; helps real recall too; lightly held, revisit; Mike's review). */
+export const FACTS_TAIL_TITLE_CHARS = 48;
+
+/**
+ * SOFT TIME WORDS (2026-10-20, from the benchmark loss read; helps real recall
+ * too; lightly held, revisit): with "lately" (`recall/time-ask.ts#SOFT_WORDS`)
+ * nothing is filtered by date; a match inside the past week gains this share
+ * of the best match's score, for the ORDER only (after the weak tail is cut,
+ * so the bar does not move). Mild on purpose: a near tie goes to the recent
+ * one, a strong old match still beats a weak recent one.
+ */
+export const FACTS_SOFT_RECENT_BONUS = 0.25;
 
 /**
  * The journal label, once per answer that shows a chapter (owner ruling
@@ -308,6 +354,34 @@ export interface FactsTime {
   };
   /** Matches that fell outside the window (the same ways, not weak). */
   readonly outside: number;
+  /**
+   * A soft word ("lately"): `said` is the past week, `window` is null —
+   * nothing was filtered; matches inside `said` were ranked first. Absent for
+   * a window that filters (a soft word in a question that is only time).
+   */
+  readonly soft?: true;
+}
+
+/**
+ * One line of the title tail (`FACTS_TAIL_SIZE`): the next matches after the
+ * page's bodies, by rank. Shown, never credited.
+ */
+export interface FactTailItem {
+  readonly id: string;
+  /** The title (or the start of the words), cut at `FACTS_TAIL_TITLE_CHARS`. */
+  readonly line: string;
+  /** Its event date, else when it was learned (a chapter: when first written); null when none is known. */
+  readonly date: string | null;
+  readonly journal: boolean;
+  readonly faded: boolean;
+  /**
+   * Settled over and shown on its own (its current version is one this asker
+   * may not see, so it did not fold): the end of its chain, as a body's
+   * `now` names it, or "a later version". The one mark a settled-over memory
+   * carries wherever its title is shown (`recall/standing.ts#earlierMark`;
+   * review of #544).
+   */
+  readonly now?: string;
 }
 
 export interface FactsResult {
@@ -320,6 +394,12 @@ export interface FactsResult {
   readonly pages: number;
   /** The page's results, in order. */
   readonly memories: readonly FactItem[];
+  /**
+   * The title tail: up to `FACTS_TAIL_SIZE` matches after this page's, in
+   * rank order (they are the next page's results). Not results: never in the
+   * answer's `ids`, never credited for being listed.
+   */
+  readonly tail: readonly FactTailItem[];
   /** How many of the `matched` facts are faded (below reach): ranked with the rest, each labeled. */
   readonly faded: number;
   readonly weak: number;
@@ -603,6 +683,15 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
     const weight = Math.min(1, informativeness(members.length, storeSize) / unit);
     for (const m of members) subjectScore.set(m, Math.max(subjectScore.get(m) ?? 0, Math.max(weight, 0.05)));
   }
+  // A soft word ("lately") filters nothing when the question asks something
+  // besides time: its window becomes a preference (2026-10-20, from the
+  // benchmark loss read; helps real recall too; lightly held, revisit).
+  // "What happened lately?" asks for the window itself, and keeps it.
+  let softWindow: DayWindow | null = null;
+  if (time?.soft === true && window !== null && (w.tokens.length > 0 || subjectIds.length > 0)) {
+    softWindow = window;
+    window = null;
+  }
   // A question that is only time asks for the window, and its meaning is
   // "what happened": the embedding of that would rank noise.
   const onlyTime = window !== null && w.tokens.length === 0 && subjectIds.length === 0;
@@ -761,6 +850,17 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
   let outside = 0;
   for (const c of beyond.values()) if (onlyTime || topAll <= 0 || c.score >= FACTS_WEAK_FRACTION * topAll) outside += 1;
 
+  // ── a soft word: the recent first, nothing filtered ─────────────────────
+  // After the weak tail, so the bar is the matches' own; the ORDER only.
+  if (softWindow !== null && top > 0) {
+    for (const c of pool.values()) {
+      const r = rows.get(c.id) as RecallRow;
+      if (inWindow(r, softWindow, null, zone, chapterDates) === null) continue;
+      c.score += FACTS_SOFT_RECENT_BONUS * top;
+      c.ways.add("time");
+    }
+  }
+
   // ── faded, and the order ────────────────────────────────────────────────
   // One ranking: a faded match is ranked with the live ones by how strongly
   // it matched, and only labeled (revised 2026-10-10, see the header's FADED).
@@ -801,7 +901,11 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
   const keptLikeness: Likeness[] = [];
   let duplicates = 0;
   let unreadable = 0;
-  const need = page * FACTS_PAGE_SIZE;
+  // This page and its title tail (`FACTS_TAIL_SIZE`; 2026-10-20, from the
+  // benchmark loss read; helps real recall too; lightly held, revisit). The
+  // walk goes the tail's length deeper, so `matched` below has checked those
+  // for near-duplicates too; the order, and so every page, is unchanged.
+  const need = page * FACTS_PAGE_SIZE + FACTS_TAIL_SIZE;
   let walked = 0;
   for (const c of main) {
     if (kept.length >= need) break;
@@ -845,6 +949,25 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
   const memories = shown.map((c) =>
     factItem(ctx, c, rows.get(c.id) as RecallRow, read(c.id) as { title: string | null; body: string }, pairs, w.tokens, today, zone, window, canName, fadedIds.has(c.id)),
   );
+  // The title tail: the next matches, one line each, from what the walk kept.
+  const tail: FactTailItem[] = kept.slice(page * FACTS_PAGE_SIZE, page * FACTS_PAGE_SIZE + FACTS_TAIL_SIZE).map((c) => {
+    const r = rows.get(c.id) as RecallRow;
+    const doc = read(c.id) as { title: string | null; body: string };
+    const title = r.title ?? doc.title;
+    const journal = r.type === "episode";
+    const event = journal ? null : (r.occurred_on ?? null);
+    // As `factItem` reads it: changed over, and a head after it, named when it may be.
+    const over = pairs.some((p) => p.state === "settled" && p.how === "changed" && p.over === c.id && p.holds !== null);
+    const head = over ? headOf(store, c.id) : null;
+    return {
+      id: c.id,
+      line: plainLine(title !== null && title.trim().length > 0 ? title : doc.body, FACTS_TAIL_TITLE_CHARS),
+      date: event !== null && event.length > 0 ? event : learnedOf(r, zone),
+      journal,
+      faded: fadedIds.has(c.id),
+      ...(head === null ? {} : { now: canName(head) ? head : "a later version" }),
+    };
+  });
 
   return {
     mode: "facts",
@@ -854,6 +977,7 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
     page,
     pages,
     memories,
+    tail,
     faded: fadedMatched,
     weak,
     duplicates,
@@ -868,6 +992,7 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
             stretch: anchor?.kind === "event" && anchor.date !== null ? FACTS_ANCHOR_DAYS : time.stretch,
             ...(anchor === undefined ? {} : { anchor }),
             outside,
+            ...(softWindow === null ? {} : { soft: true as const }),
           },
     subjects,
     considered,
@@ -1271,17 +1396,50 @@ function sameDayTimes(memories: readonly FactItem[]): ReadonlyMap<string, string
 
 /**
  * The answer a facts question returns, as labeled lines. Bounded by
- * `RECALL_RESULT_CHARS`: past it, excerpts are cut shorter until it fits.
+ * `RECALL_RESULT_CHARS`: past it, the title tail goes first, then excerpts
+ * are cut shorter until it fits.
  */
 export function renderFacts(r: FactsResult): string {
-  for (const excerpt of [RECALL_EXCERPT_CHARS, 150, 60, 0]) {
-    const text = renderAt(r, r.today, excerpt);
+  // The title tail goes before any excerpt is cut (2026-10-20, from the
+  // benchmark loss read; helps real recall too; lightly held, revisit; first
+  // after the excerpts reached 60, changed on the review of #544): the page's
+  // own results outrank a sight of the next ones.
+  const steps: readonly (readonly [number, boolean])[] = [
+    [RECALL_EXCERPT_CHARS, true],
+    [RECALL_EXCERPT_CHARS, false],
+    [150, false],
+    [60, false],
+    [0, false],
+  ];
+  for (const [excerpt, withTail] of steps) {
+    const text = renderAt(r, r.today, excerpt, withTail);
     if (text.length <= RECALL_RESULT_CHARS || excerpt === 0) return text.length <= RECALL_RESULT_CHARS ? text : cutExcerpt(text, RECALL_RESULT_CHARS);
   }
   return "";
 }
 
-function renderAt(r: FactsResult, today: string, excerpt: number): string {
+/**
+ * The title tail's lines (`FACTS_TAIL_SIZE`; 2026-10-20, from the benchmark
+ * loss read; helps real recall too; lightly held, revisit). The wording is for
+ * Mike's review:
+ *
+ *   next 20, titles only (open any by id):
+ *   11. Caroline's guinea pig Oscar · mem_e452d021afb1 · 2023-08-23
+ *   12. [journal] The 10-12 release · epi_… · 10-12 · faded
+ */
+function tailLines(r: FactsResult, today: string): string[] {
+  if (r.tail.length === 0) return [];
+  const first = (r.page - 1) * FACTS_PAGE_SIZE + r.memories.length;
+  const out = [`next ${String(r.tail.length)}, titles only (open any by id):`];
+  r.tail.forEach((t, i) => {
+    const date = t.date === null ? "" : ` · ${shortDate(t.date, today)}`;
+    const earlier = t.now === undefined ? "" : `${earlierMark(t.now)}: `;
+    out.push(`${String(first + i + 1)}. ${t.journal ? "[journal] " : ""}${earlier}${t.line} · ${t.id}${date}${t.faded ? " · faded" : ""}`);
+  });
+  return out;
+}
+
+function renderAt(r: FactsResult, today: string, excerpt: number, withTail = true): string {
   const lines: string[] = [];
   const first = (r.page - 1) * FACTS_PAGE_SIZE;
   const shown = r.memories.length;
@@ -1316,6 +1474,9 @@ function renderAt(r: FactsResult, today: string, excerpt: number): string {
       const what = t.anchor.kind === "event" ? `${t.anchor.phrase} → ${shortDate(t.anchor.date, today)}${t.anchor.id === undefined ? "" : ` (${t.anchor.id})`}` : `${t.cue} → ${shortDate(t.anchor.date, today)}${t.anchor.session === undefined ? "" : ` (session ${t.anchor.session.slice(0, 8)}, its rows first)`}`;
       const stretch = t.anchor.kind === "event" ? `, window ${span(t.window)}` : "";
       lines.push(`time: ${what}${stretch}${out}`);
+    } else if (t.soft === true) {
+      // A soft word (2026-10-20, from the benchmark loss read; helps real recall too; lightly held, revisit): read as a preference, said so.
+      lines.push(`time: ${t.cue} → ${span(t.said)} first, nothing filtered by date`);
     } else {
       const stretch = t.stretch > 0 ? `, stretched ${String(t.stretch)} day${t.stretch === 1 ? "" : "s"} each side` : "";
       lines.push(`time: ${t.cue} → ${span(t.said)}${stretch}${out}`);
@@ -1337,15 +1498,22 @@ function renderAt(r: FactsResult, today: string, excerpt: number): string {
     return lines.join("\n");
   }
   const times = sameDayTimes(r.memories);
+  // A soft word's past week is not a window the facts were kept by: no "may be inside the time asked".
+  const asked = r.time?.soft === true ? null : (r.time?.said ?? r.time?.window ?? null);
   r.memories.forEach((m, i) => {
     lines.push("");
-    lines.push(...itemLines(m, first + i + 1, today, excerpt, times.get(m.id), r.time?.said ?? r.time?.window ?? null));
+    lines.push(...itemLines(m, first + i + 1, today, excerpt, times.get(m.id), asked));
   });
+  const tail = withTail ? tailLines(r, today) : [];
+  if (tail.length > 0) {
+    lines.push("");
+    lines.push(...tail);
+  }
   lines.push("");
   const foot: string[] = [];
-  if (r.memories.some((m) => !m.whole)) foot.push(`read any whole with ids: [...] (up to ${String(RECALL_MAX_IDS)})`);
+  if (r.memories.some((m) => !m.whole) || tail.length > 0) foot.push(`read any whole with ids: [...] (up to ${String(RECALL_MAX_IDS)})`);
   if (r.page < r.pages) foot.push(`page: ${String(r.page + 1)} for the next`);
   if (foot.length > 0) lines.push(`${foot.join(" · ")}.`);
-  if (r.memories.some((m) => m.journal)) lines.push(FACTS_JOURNAL_GLOSS);
+  if (r.memories.some((m) => m.journal) || (tail.length > 0 && r.tail.some((t) => t.journal))) lines.push(FACTS_JOURNAL_GLOSS);
   return lines.join("\n").trimEnd();
 }

@@ -263,11 +263,11 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
             about: out.about,
             ifVersion: out.version ?? NO_PAGE_VERSION,
             read: out.text,
-            // THE SHORT VERSION, IN THE SAME CALL (2026-10-10; #358 had a
-            // tighten-and-resend retry here, for a limit that refused): a
-            // page past its room is kept, and the writer is asked for the
-            // short version sessions read on a day the wake cannot hold it.
-            how: `Read the block. If something about who you are moved on ${out.about}, call the self_page tool with the WHOLE page, reason, ifVersion: ${String(out.version ?? NO_PAGE_VERSION)} and session: ${session}; if nothing moved, write nothing — that is an answer too. Aim the page under ${String(server.counterpart.self.tunables.PAGE_ROOM_BYTES)} bytes; if it runs past that, send \`short\` with it in the same call — a short version under ${String(server.counterpart.self.tunables.PAGE_ROOM_BYTES)} bytes, the whole of it condensed. If the answer has a roomNote, do what it says before you go on.`,
+            // HELD TO THE ROOM (2026-10-20; #358 had a tighten-and-resend
+            // retry here, and 2026-10-10 a short version in the same call):
+            // the room in bytes, said plainly; a page past it is sent back
+            // once, with how far over, to be cut and sent again.
+            how: `Read the block. If something about who you are moved on ${out.about}, call the self_page tool with the WHOLE page, reason, ifVersion: ${String(out.version ?? NO_PAGE_VERSION)} and session: ${session}; if nothing moved, write nothing — that is an answer too. The whole page has ${String(server.counterpart.self.tunables.PAGE_ROOM_BYTES)} bytes of room (UTF-8), and should stay thin. If self_page answers past-room, cut by \`over\` bytes or more and send the whole page again — cut, don't add a short version. If the answer has a roomNote, do what it says before you go on.`,
             ...(next === null ? {} : { next: `Then: ${next}` }),
           },
           false,
@@ -398,6 +398,8 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
           core: Array.isArray(args["core"]) ? (args["core"] as never) : [],
           traits: Array.isArray(args["traits"]) ? (args["traits"] as never) : [],
           close: ids(args["close"]),
+          closeNow: Array.isArray(args["closeNow"]) ? (args["closeNow"] as never) : [],
+          scope: server.scope,
           model: model ?? null,
         });
         if (!out.ok) {
@@ -426,13 +428,15 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
             about: o.about,
             ...(o.traits.length > 0 ? { traits: o.traits } : {}),
             ...(o.refusedCites.length > 0 ? { refusedCites: o.refusedCites } : {}),
-            ...(o.close.proposed.length > 0 || o.close.refused.length > 0 ? { close: o.close } : {}),
+            ...(o.close.proposed.length > 0 || o.close.closed.length > 0 || o.close.refused.length > 0 ? { close: o.close } : {}),
             // WHAT WAS NOT WRITTEN, and that it can be sent again (2026-09-28).
             ...(o.retry === null ? {} : { again: o.retry }),
             say:
               o.retry === null
                 ? "Return `handBack` as your final message, unchanged."
-                : "Some parts were not written (see `again`). You may fix them and call finish again with the same reflection and just those parts; then return the `handBack` of your last finish call as your final message, unchanged. Never say a part was written when it was not.",
+                : o.page.reason === "past-room"
+                  ? "The page was sent back past its room (see `again`): cut it and call finish again with the same reflection and just page, before anything else; fix any other part in `again` the same way. Then return the `handBack` of your last finish call as your final message, unchanged. Never say a part was written when it was not."
+                  : "Some parts were not written (see `again`). You may fix them and call finish again with the same reflection and just those parts; then return the `handBack` of your last finish call as your final message, unchanged. Never say a part was written when it was not.",
           },
           false,
         );
@@ -480,8 +484,24 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
         server["emit"]("mcp.reflect", reflection, { phase: "close", closed: out.closed.length, refused: out.refused.length });
         return server["result"]({ phase, reflection, closed: out.closed, ...(out.already.length > 0 ? { alreadyClosed: out.already } : {}), ...(out.refused.length > 0 ? { refused: out.refused } : {}) }, out.closed.length === 0 && out.already.length === 0);
       }
+      case "reopen": {
+        // THE WAY BACK (2026-10-20, an experiment): the owner said a thread the
+        // reflection closed itself is not done. The thread's id is enough (review
+        // of #535): the reflection is the one the memory names.
+        const reflection = typeof args["reflection"] === "string" && args["reflection"].length > 0 ? args["reflection"] : null;
+        const reopen = ids(args["reopen"]);
+        if (reopen.length === 0) {
+          return refused("reopen-required", "Pass `reopen`: the ids of the threads the owner says are not done.");
+        }
+        const out = reflections.reopen({ reflection, session, ids: reopen, scope: server.scope });
+        if (!out.ok) {
+          return refused(out.reason, out.reason === "nothing-closed" ? "That reflection closed nothing itself." : "Nothing was reopened.");
+        }
+        server["emit"]("mcp.reflect", reflection ?? undefined, { phase: "reopen", reopened: out.reopened.length, refused: out.refused.length });
+        return server["result"]({ phase, ...(reflection === null ? {} : { reflection }), reopened: out.reopened, ...(out.already.length > 0 ? { alreadyOpen: out.already } : {}), ...(out.refused.length > 0 ? { refused: out.refused } : {}) }, out.reopened.length === 0 && out.already.length === 0);
+      }
       default:
-        return refused("phase-unknown", "phase is one of launch, begin, part, finish, settle, told, close.");
+        return refused("phase-unknown", "phase is one of launch, begin, part, finish, settle, told, close, reopen.");
     }
   } catch (err) {
     return refused("threw", String((err as Error).message ?? err));
@@ -600,7 +620,9 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
           ? ""
           : written.reason === "too-large"
             ? pageTooLargeDetail(written.bytes, server.counterpart.self.tunables.PAGE_MAX_BYTES)
-            : written.reason,
+            : written.reason === "past-room" && written.overRoom !== null
+              ? `past-room: ${String(written.bytes)} bytes, ${String(written.bytes - written.overRoom)} over the ${String(written.overRoom)}-byte room`
+              : written.reason,
         bytesAfter: written.written ? written.bytes : 0,
       });
     } catch {
@@ -615,6 +637,10 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
     return server["refuse"]("self_page", written.reason, {
       bytes: written.bytes,
       ...(written.reason === "too-large" ? { limit, over: written.bytes - limit } : {}),
+      // HELD TO THE ROOM (2026-10-20): the room and how far over, to cut by.
+      ...(written.reason === "past-room" && written.overRoom !== null
+        ? { room: written.overRoom, over: written.bytes - written.overRoom }
+        : {}),
       ...(written.short === null ? {} : { short: written.short }),
       ...(written.gate === null ? {} : { gate: written.gate }),
       // On a stale write, hand back what is actually there so the session can

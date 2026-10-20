@@ -74,7 +74,7 @@ import {
 } from "../../core/store/index.js";
 import { heldCorrections } from "../../core/reconsolidation.js";
 import { bundledModelDir } from "../runtime.js";
-import { acceptsReflectedFeeling, laterFeelingWasAwake, laterFeelingWasReflections, selfRelevantFeeling } from "../../core/sleep/index.js";
+import { TUNABLES as SLEEP_TUNABLES, acceptsReflectedFeeling, laterFeelingWasAwake, laterFeelingWasReflections, selfRelevantFeeling } from "../../core/sleep/index.js";
 import { TUNABLES as ASSOCIATE_TUNABLES, isDead, pairKey } from "../../core/associate/index.js";
 import type { EventRow } from "../../core/store/index.js";
 // The ask allowance the amber hint names, read rather than retyped: a number in
@@ -84,7 +84,7 @@ import { WORK_OVERFLOW_EVENT } from "../../core/self/work.js";
 import { HANDOFF_REFUSED_EVENT } from "../../core/handoff/index.js";
 import { LAST_HERE_NOROOM_EVENT } from "../../core/handoff/last-here.js";
 import { TOOL_RESULT_CEILING } from "../../core/fit/index.js";
-import { awakeFeelingCounts, nightRunOf } from "../../core/dream/index.js";
+import { awakeFeelingCounts, coreWaiting, nightRunOf } from "../../core/dream/index.js";
 import type { DreamingSetting } from "../../core/dream/index.js";
 import type { AskReason } from "../../core/self/episodes.js";
 // The what-fired reading, shared with the console's `fired` command and the
@@ -2280,7 +2280,18 @@ export function reflectionFindings(input: DoctorInput, store: Store): Finding[] 
           last.entry_id === null ? "nothing much" : "an entry"
         }${last.page_version === null ? "" : ", the self page rewritten"}, ${share[last.share_state] ?? last.share_state}`;
   const byHow = `returns this week — awake ${String(returns.awake)}, reflection ${String(returns.reflection)}, dream ${String(returns.dream)}`;
+  // CORE QUESTIONS THAT WAITED (2026-10-20, an experiment): flagged a week
+  // or more ago with no decision since — what the reflection is offered.
+  let coreWaited = 0;
+  try {
+    coreWaited = coreWaiting(store, store.livedDay()).length;
+  } catch {
+    coreWaited = 0;
+  }
   const aloneLine =
+    (coreWaited > 0
+      ? `; ${String(coreWaited)} core ${coreWaited === 1 ? "memory has" : "memories have"} waited ${String(SLEEP_TUNABLES.CORE_WAITING_DAYS)}+ lived days for a keep or retire (counterparts core --list shows them)`
+      : "") +
     (promotionsUnread
       ? `; how many became core on reflection alone is unknown: more than ${String(PROMOTED_ROWS)} promotions in the log, and only the newest ${String(PROMOTED_ROWS)} were read`
       : "") +
@@ -2325,6 +2336,7 @@ export function reflectionFindings(input: DoctorInput, store: Store): Finding[] 
         awakeFeelings: awake.total,
         awakeFeelingsFast: awake.fast,
         awakeFeelingsOwner: awake.owner,
+        coreWaited,
       },
     ),
   ];

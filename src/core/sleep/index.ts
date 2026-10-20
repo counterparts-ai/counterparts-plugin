@@ -88,7 +88,7 @@ export {
   slotOf,
 } from "./consolidate.js";
 export type { IdentityBlock } from "./consolidate.js";
-export { CORE_RECONSIDER_REASONS, keepCore, reconsiderWords, retireCore, weighCore } from "./core-standing.js";
+export { CORE_RECONSIDER_REASONS, keepCore, reconsiderWords, retireCore, retiredByReflection, weighCore } from "./core-standing.js";
 export type { CoreDecision, CoreDecisionActor, CoreReconsiderReason, CoreWeighing } from "./core-standing.js";
 export { V8_CENSUS_EVENT, V8_CENSUS_KEY, V8_UPGRADE_KEY, censusDue, preV8, projectedPruneDay, upgradeCensus, v7WouldPromote } from "./upgrade.js";
 export type { UpgradeCensus } from "./upgrade.js";

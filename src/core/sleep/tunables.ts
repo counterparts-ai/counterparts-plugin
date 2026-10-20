@@ -37,6 +37,19 @@ export const TUNABLES = {
   CORE_QUIET_DAYS: 60,
 
   /**
+   * A CORE MEMORY THAT HAS WAITED (2026-10-20, Mike's go, lightly held, an
+   * experiment): flagged "being reconsidered" this many lived days ago or
+   * more, with no decision since. The waking session has had the first week;
+   * after it, the wake's "Still open" leads with one and the nightly
+   * reflection is offered it to decide (`dream/core-ask.ts`). On 10-20 three
+   * of five flagged on 10-13 still waited. CAL.
+   */
+  CORE_WAITING_DAYS: 7,
+
+  /** At most this many waiting core memories are offered to one reflection (2026-10-20). CAL. */
+  CORE_ASK_MAX: 3,
+
+  /**
    * Below this change in cached strength, the row is left alone — CALM BY
    * DEFAULT (§3, v1 §11 G8). Exponential decay moves a floor memory by ~1e-9 a
    * day; without a quantum every quiet day would rewrite the whole cache and

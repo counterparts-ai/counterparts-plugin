@@ -103,6 +103,8 @@ export const run = {
   statusStamp: '',
   status: null as Status | null,
   liveSeq: 0,
+  /** Memory tool calls (`savesMemory`) running now: the poll writes no notepad for their rows; the call's own return does. */
+  saving: 0,
   /** An unasked pane this surface could not place yet: the tail says `/counterparts opens the sidebar` until it draws. */
   hint: false,
   /** When this session began: an event naming no session, from after it, is taken as this session's. */

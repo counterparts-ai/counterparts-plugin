@@ -632,7 +632,8 @@ export const MEET_LINE_OPEN = "<counterparts-meet>";
  * folder. Hooks never start the dashboard, so on a fresh install the mod reads
  * this from the hook's context first and uses `/api/onboarding` only to
  * refresh. Present in every state, `done` included, so "done" and "an older
- * build, no marker" read differently.
+ * build, no marker" read differently. Since 2026-10-20 the hosts deliver it
+ * as the `meet=` field of the wake's head tag (`adapters/store-id.ts#ONE_TAG`).
  */
 export function onboardingMarker(state: MeetState): string {
   return `<!-- counterparts:onboarding meet=${state} -->`;

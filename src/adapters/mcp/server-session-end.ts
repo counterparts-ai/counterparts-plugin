@@ -306,6 +306,8 @@ export async function depositEntries(
       result = await server.counterpart.submitSessionEnd(draft, {
         session,
         scope: scope ?? server.scope,
+        // The day this server reads, for a done that closes one occurrence (2026-10-20).
+        at: server["today"](),
         owner: server.owner,
         facts: facts.sent,
         // What it is about sets an unclaimed entry's default floor (2026-10-10).
@@ -351,6 +353,7 @@ export async function depositEntries(
       ...(neighbours.length === 0 ? {} : { neighbours }),
       ...server["slotOf"](result),
       ...server["stillDatedNear"](result, dated, facts.sent.status, batch, session),
+      ...server["answersReminder"](result, facts.sent, neighbours),
     });
   }
   return { outcomes, deposited, duplicates, entries };
@@ -466,6 +469,8 @@ export function drewOnField(server: McpServer, raw: unknown, via: "session_end" 
     ...(out.actedOn.length === 0
       ? {}
       : { actedOn: out.actedOn, actedOnNote: "Dated memories you acted on: they will not come back as footnotes around this date again." }),
+    // F6b (2026-10-20): replaced by this session, so counted all the same.
+    ...(out.replacedHere === undefined ? {} : { replacedHere: out.replacedHere }),
   };
 }
 
