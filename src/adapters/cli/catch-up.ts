@@ -14,13 +14,12 @@
  * typed in a terminal was not started from any project, and a directory set
  * `off` must not be where its child's tools are pinned.
  */
-import { CATCH_UP_RUN_PREFIX, CATCH_UP_TOOLS, catchUpWords, newCatchUpRunId, plannedParts, runCatchUp } from "../claude-code/night-catch-up.js";
+import { CATCH_UP_RUN_PREFIX, catchUpWords, newCatchUpRunId, plannedParts, runCatchUp } from "../claude-code/night-catch-up.js";
 import { applyReowe, reoweLine, reowePlan } from "../claude-code/reowe.js";
 import type { Io } from "./commands.js";
 import { typed } from "./ui.js";
 import type { CatchUpPlan, CatchUpReport } from "../claude-code/night-catch-up.js";
-import { openNightCounterpart, planNightChild } from "../claude-code/night-run.js";
-import { startChild } from "../claude-code/child.js";
+import { claudeCodeSeat, openNightCounterpart } from "../claude-code/night-run.js";
 import type { ChildPlan, ChildResult } from "../claude-code/child.js";
 import { TUNABLES } from "../config.js";
 import type { AdapterConfig } from "../config.js";
@@ -64,20 +63,14 @@ export async function catchUpCommand(input: CatchUpCommandInput): Promise<number
       config,
       run,
       scope,
-      plan: ({ prompt, runner }) =>
-        planNightChild({
-          config,
-          run,
-          prompt,
-          scope,
-          session: runner,
-          tools: CATCH_UP_TOOLS,
-          maxTurns: TUNABLES.NIGHT_WRITE_UP_MAX_TURNS,
-          timeoutMs: TUNABLES.NIGHT_WRITE_UP_MS,
-          baseEnv: input.env,
-          ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
-        }),
-      start: input.start ?? ((p: ChildPlan) => startChild(p)),
+      seat: claudeCodeSeat({
+        config,
+        open: () => openNightCounterpart(config, log.event),
+        now: input.now,
+        baseEnv: input.env,
+        ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
+        ...(input.start === undefined ? {} : { startCatchUp: input.start }),
+      }),
       now: input.now,
       // The command's ceiling, run on purpose: four nights' worth (Mike, 2026-10-11).
       parts: TUNABLES.CATCH_UP_COMMAND_PARTS,

@@ -109,6 +109,8 @@ This is everything it reaches outside its own pane.
   - The name of each tool call, to find Counterparts' own; of those, the arguments and the
     result, to show what was saved. Of each prompt, where it came from (typed, or sent by
     a plugin), so the fox looks up.
+  - When each of Claude's turns in the main session starts, takes a step and ends, so the
+    fox is at work while a turn runs. Nothing of the turn's content.
   - Of a prompt a plugin sent, whether it is its own "Meet your new counterpart.". Before
     it speaks first (below): whether you have run a slash command or sent a prompt, how
     many turns the session has, and whether your prompt box holds a draft, so it never
@@ -140,9 +142,9 @@ Memories and Subconscious stay empty (a resumed session shows what the status fi
 first looked), it can't check the status file is this session's memory's, and
 it never speaks first.
 
-The sidebar's lines from `claude plugin validate`, Claude Code 2.1.301:
+The sidebar's lines from `claude plugin validate`, Claude Code 2.1.306:
 
-    ❯ ./sidebar/hooks/full.tsx hooks: ui.message{data has {click=fill:meet|fill:dash}}, session.start, command.run{command=counterparts}, tool.call, prompt.submit, session.append{door=hook-context}, session.end, ui.close{id=counterparts}, ui.message, ui.render{component=PromptHint}, ui.render{component=AbovePrompt}, ui.render{component=Pane, requestId=counterparts}, session.start{isInteractive=true}, command.run{origin has {kind=/"^(composer|bridge)$"/}}, prompt.submit{origin has {kind=/"^(composer|bridge|plugin)$"/}}, session.append{door=hook-context, origin has {kind=hook, event=SessionStart}}
+    ❯ ./sidebar/hooks/full.tsx hooks: ui.message{data has {click=fill:meet|fill:dash}}, session.start, command.run{command=counterparts}, tool.call, prompt.submit, turn.start, turn.step, turn.complete, session.append{door=hook-context}, session.end, ui.close{id=counterparts}, ui.message, ui.render{component=PromptHint}, ui.render{component=AbovePrompt}, ui.render{component=Pane, requestId=counterparts}, session.start{isInteractive=true}, command.run{origin has {kind=/"^(composer|bridge)$"/}}, prompt.submit{origin has {kind=/"^(composer|bridge|plugin)$"/}}, session.append{door=hook-context, origin has {kind=hook, event=SessionStart}}
     ❯ ./sidebar/hooks/full.tsx calls: $.clock.after, $.clock.every, $.clock.now, $.command.register, $.env.get, $.fs.exists (via findPngDir, readScopeFile, readStatus, readText), $.fs.read (via pngData, readScopeFile, readStatus, readText), $.fs.stat (via canonicalPath, readStatus), $.prompt.fill (via fillPrompt), $.prompt.read (via draftNow, fillPrompt), $.prompt.submit (via speakFirst), $.session.id, $.session.turns (via turnsSoFar), $.state.get, $.state.set, $.store.get, $.store.set (via setAvatar, setDetail, setTheme, setView, speakFirst, takeMeet), $.ui.blit (via stageStep), $.ui.close (via closeQuiet), $.ui.invalidate, $.ui.open (via openPane), $.ui.panes (via paneShown), $.ui.resolve, $.ui.status (via refreshStatus)
     ❯ ./sidebar/hooks/full.tsx env writes: nothing
     ❯ ./sidebar/hooks/full.tsx env reads: CLAUDE_CONFIG_DIR, COUNTERPARTS_CONFIG, COUNTERPARTS_SIDEBAR_SESSION, HOME, KITTY_WINDOW_ID, TERM, TERM_PROGRAM, USERPROFILE, WEZTERM_EXECUTABLE

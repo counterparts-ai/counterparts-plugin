@@ -233,7 +233,7 @@ export const NARRATORS = {
     // A NOMINATION IS NOT A CHANGE ANYTHING ACTS ON (2026-09-27, home round 3):
     // nothing reads it but `counterparts core`, so it is said apart, as a
     // suggestion, rather than listed beside merges as if it will happen.
-    const kinds = ["merge", "link", "replayed", "gist", "contradiction", "feeling-now"]
+    const kinds = ["merge", "fold", "link", "replayed", "gist", "contradiction", "feeling-now"]
       .map((k) => [k, n(t, k) ?? 0] as const)
       .filter(([, v]) => v > 0)
       .map(([k, v]) => `${v} ${k}`);

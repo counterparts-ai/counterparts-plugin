@@ -39,7 +39,10 @@ export interface SelfTunables {
    *  threads 0, hints 0, horizon 0 — while v1's wake the same day carried 20
    *  elements across four lanes. 0.5 leaves ~4.5 KB for the other four lanes at
    *  that ceiling, which is v1's whole non-identity wake, and still gives
-   *  identity four of the long migrated elements (or ~20 v2-native ones). */
+   *  identity four of the long migrated elements (or ~20 v2-native ones).
+   *
+   *  For now, the identity list and this share apply only while no self page
+   *  exists: with a page, the page replaces the list. */
   IDENTITY_SHARE: number;
   /** Most craft (skill-kind) elements considered. CAL. Read only while
    *  `CRAFT_AT_DELIVERY` is off. */

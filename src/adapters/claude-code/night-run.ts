@@ -76,8 +76,8 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { Counterpart, MCP_SPILLED_EVENT } from "../../core/counterpart.js";
-import type { CounterpartEvent } from "../../core/counterpart.js";
+import { Counterpart, MCP_SPILLED_EVENT, seatAsk } from "../../core/counterpart.js";
+import type { CounterpartEvent, Seat, SeatAnswer, SeatAsk, SeatTool } from "../../core/counterpart.js";
 import { CATCH_UP_ONLY_REASONS } from "../../core/dream/index.js";
 import type { CatchUpOnlyReason, NightChildRun, NightPart, NightRun } from "../../core/dream/index.js";
 import { CONFIG_ENV as CONFIG_PATH_ENV } from "../config-path.js";
@@ -89,7 +89,7 @@ import { OBSERVER_ENV, OWNER_ENV } from "../stance-env.js";
 import { TUNABLES } from "../config.js";
 import type { AdapterConfig } from "../config.js";
 import { DEFAULT_HOST_COMMAND, KILL_GRACE_MS, PERMISSION_MODE, REAP_GRACE_MS, startChild } from "./child.js";
-import { CATCH_UP_TOOLS, runCatchUp } from "./night-catch-up.js";
+import { runCatchUp } from "./night-catch-up.js";
 import type { CatchUpReport } from "./night-catch-up.js";
 import { parseToolSpills } from "./transcript.js";
 import type { ToolSpills } from "./transcript.js";
@@ -483,6 +483,13 @@ export interface NightRunInput {
   readonly start?: NightStarter;
   /** TESTS ONLY: the catch-up child's starter (`night-catch-up.ts`); absent, a real child. */
   readonly startCatchUp?: NightStarter;
+  /**
+   * Who answers the night's asks (`core/seat.ts`, 2026-10-20). Absent, Claude
+   * Code's own (`claudeCodeSeat`), built from the fields above — what every
+   * user has. Given, those fields (`start`, `startCatchUp`, `command`,
+   * `baseEnv`, `configPath`) are not read: the seat brings its own.
+   */
+  readonly seat?: Seat<NightAnswer>;
   readonly now?: () => number;
   /** The process log's (`adapters/log/`), for what the store does not write. */
   readonly onEvent?: (e: CounterpartEvent) => void;
@@ -535,27 +542,28 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   const ended = (fields: Pick<NightRun, "state" | "reason" | "detail" | "code"> & Partial<Pick<NightRun, "dream" | "reflection" | "parts" | "transcript" | "spills" | "requeued">>): NightRun =>
     record({ ...base(null), endedAt: now(), dream: null, reflection: null, ...(children.length === 0 ? {} : { children: [...children] }), ...fields });
 
+  // WHO ANSWERS (2026-10-20): every child below is an ask to the seat.
+  const seat =
+    input.seat ??
+    claudeCodeSeat({
+      config: input.config,
+      open: input.open,
+      now,
+      ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
+      ...(input.baseEnv === undefined ? {} : { baseEnv: input.baseEnv }),
+      ...(input.command === undefined ? {} : { command: input.command }),
+      ...(input.start === undefined ? {} : { start: input.start }),
+      ...(input.startCatchUp === undefined ? {} : { startCatchUp: input.startCatchUp }),
+      ...(input.onEvent === undefined ? {} : { onEvent: input.onEvent }),
+    });
+
   if (input.kind.kind === "night") {
     const report = await runCatchUp({
       open: input.open,
       config: input.config,
       run: input.run,
       scope: input.scope,
-      plan: ({ prompt: text, runner }) =>
-        planNightChild({
-          config: input.config,
-          run: input.run,
-          prompt: text,
-          scope: input.scope,
-          session: runner,
-          tools: CATCH_UP_TOOLS,
-          maxTurns: TUNABLES.NIGHT_WRITE_UP_MAX_TURNS,
-          timeoutMs: TUNABLES.NIGHT_WRITE_UP_MS,
-          ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
-          ...(input.baseEnv === undefined ? {} : { baseEnv: input.baseEnv }),
-          ...(input.command === undefined ? {} : { command: input.command }),
-        }),
-      start: input.startCatchUp ?? ((p: ChildPlan) => startChild(p)),
+      seat,
       now,
       // The night's ceiling, not the command's (Mike, 2026-10-11).
       parts: TUNABLES.NIGHT_WRITE_UP_PARTS,
@@ -596,34 +604,24 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   } catch (err) {
     return ended({ state: "could-not-start", reason: "refused", detail: err instanceof Error ? err.name : "UNKNOWN", code: null });
   }
-  const childInput = (child: NightChild, text: string): NightChildInput => ({
-    config: input.config,
-    run: input.run,
-    prompt: text,
-    scope: input.scope,
-    session: input.session,
-    child,
-    ...(child === "dream" ? { tools: DREAM_CHILD_TOOLS, deny: DREAM_CHILD_DENIED } : {}),
-    ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
-    ...(input.baseEnv === undefined ? {} : { baseEnv: input.baseEnv }),
-    ...(input.command === undefined ? {} : { command: input.command }),
-  });
-  const firstInput = childInput(input.kind.kind === "night" ? "dream" : "reflection", prompt);
-  const check = planNightChild(firstInput);
-  if (!check.ok) return ended({ state: "could-not-start", reason: "refused", detail: check.reason, code: null });
-
-  const start = input.start ?? ((p: ChildPlan) => startChild(p));
-  const ran: NightChildOutcome[] = [];
+  // The night's own turn ceiling and watchdog on every ask: the row's watchdog
+  // is computed from the same two (`nightChildrenTimeoutMs`), whoever answers.
+  const limits = { turns: nightMaxTurns(input.config), ms: nightTimeoutMs(input.config) };
+  const askFor = (act: NightChild, text: string): SeatAsk => seatAsk(act, { prompt: text, run: input.run, session: input.session, scope: input.scope, limits });
+  const firstAct: NightChild = input.kind.kind === "night" ? "dream" : "reflection";
+  const ran: NightAnswer[] = [];
+  let one: NightAnswer;
   try {
-    ran.push(await runNightChild(input, firstInput, start, now));
+    one = await seat.answer(askFor(firstAct, prompt));
   } catch (err) {
     return ended({ state: "could-not-start", reason: "spawn-failed", detail: err instanceof Error ? err.name : "UNKNOWN", code: null });
   }
-  const one = ran[0] as NightChildOutcome;
-  children.push(childRunOf(firstInput.child ?? "dream", one));
-  if (one.neverStarted) {
-    const missing = one.result.spawnCode === "ENOENT";
-    return ended({ state: "could-not-start", reason: missing ? "no-claude" : "spawn-failed", detail: one.result.spawnCode ?? one.result.error, code: null });
+  if (one.refused !== null) return ended({ state: "could-not-start", reason: "refused", detail: one.refused, code: null });
+  ran.push(one);
+  children.push(childRunOf(firstAct, one));
+  if (!one.started) {
+    const missing = one.spawnCode === "ENOENT";
+    return ended({ state: "could-not-start", reason: missing ? "no-claude" : "spawn-failed", detail: one.spawnCode ?? one.error, code: null });
   }
 
   // THE REFLECTION, A CHILD OF ITS OWN (2026-10-11): after the dream's child
@@ -635,12 +633,12 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
     const next = reflectionAfter(input.open, one, input.session, startedAt);
     if ("skipped" in next) children.push({ child: "reflection", code: null, ms: 0, skipped: next.skipped });
     else {
-      const second = childInput("reflection", next.prompt);
       try {
-        const two = await runNightChild(input, second, start, now);
-        // One that never started (no `claude` now, a spawn that failed) is
-        // said as not started: the run's exit stays the dream child's.
-        if (two.neverStarted) children.push({ child: "reflection", code: null, ms: 0, skipped: two.result.spawnCode === "ENOENT" ? "no-claude" : "spawn-failed" });
+        const two = await seat.answer(askFor("reflection", next.prompt));
+        // One that never started (no `claude` now, a spawn that failed, a
+        // seat that would not take it) is said as not started: the run's exit
+        // stays the dream child's.
+        if (two.refused !== null || !two.started) children.push({ child: "reflection", code: null, ms: 0, skipped: two.spawnCode === "ENOENT" ? "no-claude" : "spawn-failed" });
         else {
           ran.push(two);
           children.push(childRunOf("reflection", two));
@@ -654,12 +652,12 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   // THE RUN'S EXIT, from its children: stopped if any was stopped; the first
   // non-zero exit, else the last child's. Its code is that child's own (a
   // stopped child has none), never another child's.
-  const lastRun = ran[ran.length - 1] as NightChildOutcome;
-  const stopped = ran.find((r) => r.result.timedOut);
-  const failing = ran.find((r) => r.result.code !== 0 && !r.neverStarted);
-  const result: ChildResult = stopped?.result ?? failing?.result ?? lastRun.result;
+  const lastRun = ran[ran.length - 1] as NightAnswer;
+  const stopped = ran.find((r) => r.timedOut);
+  const failing = ran.find((r) => r.code !== 0 && r.started);
+  const result: NightAnswer = stopped ?? failing ?? lastRun;
   const exitCode = result.code;
-  const spill = mergeSpills(ran.map((r) => r.spill));
+  const spill = mergeSpills(ran.map((r) => r.spill ?? null));
 
   // WHAT THE RUN DID, from the store.
   let dream: string | null = null;
@@ -804,6 +802,124 @@ function catchUpOnlyEnd(
   }
 }
 
+/**
+ * WHAT THE NIGHT READS OF AN ANSWER (2026-10-20): the seat's own fields
+ * decide; two more are read where a seat has them — the OS's code when it
+ * could not start at all (`ENOENT` is said as "no claude"), and what the host
+ * cut of our tool results. A seat without either answers with a plain
+ * `SeatAnswer`.
+ */
+export interface NightAnswer extends SeatAnswer {
+  readonly spawnCode?: string;
+  readonly spill?: ToolSpills | null;
+}
+
+/**
+ * WHAT CLAUDE CODE'S SEAT SAW OF ONE ASK: the child's own exit as the starter
+ * returned it, and what the host cut (read from its `stream-json` output;
+ * none for a catch-up).
+ */
+export interface ClaudeCodeAnswer extends NightAnswer {
+  readonly result: ChildResult;
+  readonly spill: ToolSpills | null;
+}
+
+export interface ClaudeCodeSeatInput {
+  readonly config: AdapterConfig;
+  /** Opens the store: a child that exits at once is retried plain only when it began nothing there. */
+  readonly open: () => Counterpart;
+  readonly now?: () => number;
+  readonly configPath?: string;
+  readonly baseEnv?: Readonly<Record<string, string | undefined>>;
+  /** TESTS ONLY — see `NightChildInput.command`. */
+  readonly command?: string;
+  /** TESTS ONLY: the night children's starter; absent, a real `claude -p`. */
+  readonly start?: NightStarter;
+  /** TESTS ONLY: the catch-up children's starter; absent, a real `claude -p`. */
+  readonly startCatchUp?: NightStarter;
+  readonly onEvent?: (e: CounterpartEvent) => void;
+}
+
+/** A memory tool as the host names it: `mcp__counterparts__<tool>`. */
+export function hostToolName(tool: SeatTool): string {
+  return `mcp__${NIGHT_MCP_SERVER}__${tool}`;
+}
+
+/**
+ * CLAUDE CODE IN THE SEAT (2026-10-20): each ask is a `claude -p` child,
+ * locked down as this file's header says, answering through the counterparts
+ * MCP server. A write-up owed (`catch-up`) is a plain child; the dream and the
+ * reflection run under their own session id with their output read for the
+ * host's cut, retried plain once when the host refused those arguments
+ * (`runNightChild`). Refused, with nothing started, when the child could not
+ * be planned (`planNightChild`'s reasons).
+ */
+export function claudeCodeSeat(input: ClaudeCodeSeatInput): Seat<ClaudeCodeAnswer> {
+  const now = input.now ?? ((): number => Date.now());
+  return {
+    name: "claude-code",
+    async answer(ask: SeatAsk): Promise<ClaudeCodeAnswer> {
+      const childInput: NightChildInput = {
+        config: input.config,
+        run: ask.run,
+        prompt: ask.prompt,
+        scope: ask.scope,
+        session: ask.session,
+        tools: ask.tools.map(hostToolName),
+        ...(ask.withhold.length === 0 ? {} : { deny: ask.withhold.map(hostToolName) }),
+        ...(ask.act === "catch-up" ? {} : { child: ask.act }),
+        ...(ask.limits?.turns === undefined ? {} : { maxTurns: ask.limits.turns }),
+        ...(ask.limits?.ms === undefined ? {} : { timeoutMs: ask.limits.ms }),
+        ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
+        ...(input.baseEnv === undefined ? {} : { baseEnv: input.baseEnv }),
+        ...(input.command === undefined ? {} : { command: input.command }),
+      };
+      const check = planNightChild(childInput);
+      if (!check.ok) {
+        return { refused: check.reason, started: false, code: null, timedOut: false, error: null, ms: 0, result: { code: null, timedOut: false, error: null }, spill: null };
+      }
+      if (ask.act === "catch-up") {
+        const at = now();
+        const result = await (input.startCatchUp ?? ((p: ChildPlan) => startChild(p)))(check);
+        const neverStarted = neverStartedOf(result);
+        return {
+          refused: null,
+          started: !neverStarted,
+          code: result.code,
+          timedOut: result.timedOut,
+          error: result.error,
+          ms: now() - at,
+          ...(result.spawnCode === undefined ? {} : { spawnCode: result.spawnCode }),
+          result,
+          spill: null,
+        };
+      }
+      const out = await runNightChild(
+        { open: input.open, run: ask.run, session: ask.session, ...(input.onEvent === undefined ? {} : { onEvent: input.onEvent }) },
+        childInput,
+        input.start ?? ((p: ChildPlan) => startChild(p)),
+        now,
+      );
+      return {
+        refused: null,
+        started: !out.neverStarted,
+        code: out.result.code,
+        timedOut: out.result.timedOut,
+        error: out.result.error,
+        ms: out.ms,
+        ...(out.result.spawnCode === undefined ? {} : { spawnCode: out.result.spawnCode }),
+        result: out.result,
+        spill: out.spill,
+      };
+    },
+  };
+}
+
+/** A child that could not be started at all: the OS refused it, or it ended with neither a code nor a watchdog, only an error. */
+function neverStartedOf(result: ChildResult): boolean {
+  return result.spawnCode !== undefined || (result.code === null && !result.timedOut && result.error !== null);
+}
+
 /** What one child of the run came to: its exit, its time, and what the host cut. */
 interface NightChildOutcome {
   readonly result: ChildResult;
@@ -813,8 +929,8 @@ interface NightChildOutcome {
 }
 
 /** The row's line for a child that ran. */
-function childRunOf(child: NightChild, out: NightChildOutcome): NightChildRun {
-  return { child, code: out.result.code, ms: out.ms, ...(out.result.timedOut ? { timedOut: true as const } : {}) };
+function childRunOf(child: NightChild, out: NightAnswer): NightChildRun {
+  return { child, code: out.code, ms: out.ms, ...(out.timedOut ? { timedOut: true as const } : {}) };
 }
 
 /**
@@ -823,7 +939,12 @@ function childRunOf(child: NightChild, out: NightChildOutcome): NightChildRun {
  * and read for the host's cut; retried once plain when the host refused those
  * arguments. Throws only what the starter throws.
  */
-async function runNightChild(input: NightRunInput, childInput: NightChildInput, start: NightStarter, now: () => number): Promise<NightChildOutcome> {
+async function runNightChild(
+  input: { readonly open: () => Counterpart; readonly run: string; readonly session: string; readonly onEvent?: (e: CounterpartEvent) => void },
+  childInput: NightChildInput,
+  start: NightStarter,
+  now: () => number,
+): Promise<NightChildOutcome> {
   // THE CHILD'S OWN SESSION, CHOSEN HERE (2026-10-09). Its transcript was
   // once looked up by this name; since 2026-10-12 the cut is read from the
   // child's own output instead, and the name only keeps the children apart.
@@ -853,7 +974,7 @@ async function runNightChild(input: NightRunInput, childInput: NightChildInput, 
     result = await start(planNightChild(childInput));
   }
   const ms = now() - childAt;
-  const neverStarted = result.spawnCode !== undefined || (result.code === null && !result.timedOut && result.error !== null);
+  const neverStarted = neverStartedOf(result);
   // WHAT THE HOST CUT (2026-10-09, U14 item 3), read from the child's own
   // `stream-json` output — the messages the model saw, not the child's prose.
   // A child that never started said nothing; one retried plain kept nothing.
@@ -877,14 +998,13 @@ async function runNightChild(input: NightRunInput, childInput: NightChildInput, 
  * a second `claude` would stop the same way), when a reflection already
  * finished today, or when the store will not open. Never throws.
  */
-function reflectionAfter(open: () => Counterpart, first: NightChildOutcome, session: string, since: number): { prompt: string; dream: string | null } | { skipped: string } {
+function reflectionAfter(open: () => Counterpart, first: NightAnswer, session: string, since: number): { prompt: string; dream: string | null } | { skipped: string } {
   try {
     const c = open();
     try {
       const dreams = c.store.dreams({ sinceAt: since, limit: 5 });
       const began = dreams.length > 0 || c.pageWriterRuns({ limit: 20 }).some((r) => r.at >= since && r.session === session);
-      const r = first.result;
-      if (!began && r.code !== 0 && !r.timedOut && first.ms < TUNABLES.NIGHT_QUICK_EXIT_MS) return { skipped: "quick-exit" };
+      if (!began && first.code !== 0 && !first.timedOut && first.ms < TUNABLES.NIGHT_QUICK_EXIT_MS) return { skipped: "quick-exit" };
       const today = c.store.today();
       if (c.store.reflections({ limit: 5 }).some((x) => x.state === "reflected" && x.date === today)) return { skipped: "reflected-today" };
       const dream = dreams.find((d) => d.state === "journaled")?.id ?? null;

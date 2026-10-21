@@ -13,6 +13,7 @@ import { api, fail } from "../../shared/api.js";
 import { $, esc } from "../../shared/dom.js";
 import * as dreams from "./sections/dreams.js";
 import * as journal from "./sections/journal.js";
+import * as layers from "./sections/layers.js";
 import * as page from "./sections/page.js";
 import * as settling from "./sections/settling.js";
 import * as traits from "./sections/traits.js";
@@ -22,7 +23,7 @@ import { q, wireTips } from "../../shared/widgets/tips.js";
 const markup = `
     <h2 class="sp-title" id="mind-opening"></h2>
     <div class="self-top">
-      <div class="self-main">${page.mainMarkup}
+      <div class="self-main">${page.mainMarkup}${layers.markup}
       </div>
       <aside class="self-side">${page.sideMarkup}${wake.markup}
       </aside>
@@ -41,6 +42,7 @@ const PANELS = [
   { name: "page", slice: (d) => [d.page, d.pageAbsent], paint: page.paintPage },
   { name: "behind", slice: (d) => [d.pageBehind, d.pageAbsent], paint: page.paintBehind },
   { name: "history", slice: (d) => [d.pageHistory, d.pageDays, d.pageDaysUndated, d.pageDaysEarlier], paint: page.paintHistory },
+  { name: "layers", slice: (d) => [d.pageHistory, d.page && d.page.trace, d.pageAbsent], paint: layers.paint },
   { name: "wake", slice: (d) => [d.wake, d.wakeList], paint: wake.paint },
   { name: "settling", slice: (d) => [d.settling, d.stories, d.map], paint: settling.paint },
   { name: "traits", slice: (d) => [d.traits], paint: traits.paint },

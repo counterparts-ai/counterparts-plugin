@@ -361,6 +361,11 @@ export { DREW_ON_MAX_PER_BOUNDARY };
 // (`types.ts#boundedIds`); re-exported for the adapters that write such rows.
 export { ROW_IDS_MAX, boundedIds } from "./types.js";
 
+// The seat (2026-10-20): the interface whoever answers the memory's own asks
+// implements (`seat.ts`), here so a host reaches it through the package entry.
+export { SEAT_TOOLS, seatAsk } from "./seat.js";
+export type { Seat, SeatAct, SeatAnswer, SeatAsk, SeatTool } from "./seat.js";
+
 const EVENT_RING = REMEMBER.CONSUMED_LEDGER_MAX;
 
 /**
@@ -674,14 +679,18 @@ export class Counterpart {
         const written =
           body === null
             ? this.self.addPageShort(o.short ?? "", { ...common, ...(o.ifVersion === undefined ? {} : { ifVersion: o.ifVersion }) })
-            : this.self.revisePage(body, { ...common, ...(o.short === undefined ? {} : { short: o.short }) });
+            : this.self.revisePage(body, {
+                ...common,
+                ...(o.short === undefined ? {} : { short: o.short }),
+                ...(o.trace === undefined ? {} : { trace: o.trace }),
+              });
         const note = pageRoomNote(
           written,
           this.self.tunables.PAGE_ROOM_BYTES,
           "call finish again with page.short alone (the entry and the page stand)",
         );
         return written.written && written.version !== null
-          ? { ok: true, version: written.version, note }
+          ? { ok: true, version: written.version, note, ...(written.traced === undefined ? {} : { unmatched: written.traced.unmatched }) }
           : written.reason === "past-room"
             ? // HELD TO THE ROOM (2026-10-20): the numbers and the words to cut by.
               {

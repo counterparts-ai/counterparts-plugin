@@ -16,6 +16,8 @@ import {
 import type { DreamingSetting } from "../../core/dream/index.js";
 // The page's own reader, so this line cannot drift from what the wake prints.
 import { clearedMarker, findPageRow, readSelfPage } from "../../core/self/page.js";
+import { coreSupport, pageTrace } from "../../core/self/measures.js";
+import type { CoreSupportRow } from "../../core/self/measures.js";
 import {
   dayBefore,
   hasDayBefore,
@@ -263,6 +265,75 @@ export function selfPageFindings(store: Store): Finding[] {
       : short
         ? finding("self-page", "amber", "Self page", detail, fix, data)
         : finding("self-page", "green", "Self page", detail, "", data),
+  ];
+}
+
+/**
+ * WHAT THE PAGE'S CLAIMS REST ON (2026-10-20, an experiment; `self/measures.ts`).
+ * A reading, always green: its claims (sentences), the memories it cites and
+ * where they stand now, and the claims with no memory behind them — hypotheses,
+ * shown as such, never removed. A page from before cites were kept with it says
+ * so rather than reading as all hypotheses. Silent with no page: the Self page
+ * line already says why.
+ */
+export function selfPageTraceFindings(store: Store): Finding[] {
+  const page = readSelfPage(store);
+  if (page === null) return [];
+  const t = pageTrace(store, page);
+  const n = (k: number, one: string, many: string): string => `${String(k)} ${k === 1 ? one : many}`;
+  const cited =
+    t.source === "none"
+      ? `no cites kept with it (written by ${page.by ?? "an unrecorded door"})`
+      : `${t.source === "reflection" ? "its reflection's record cites" : "cites"} ${n(t.cites, "memory", "memories")}, ${String(t.live)} live, ${String(t.archivedOrMissing)} archived or missing`;
+  const perClaim =
+    t.uncited === null
+      ? t.source === "none"
+        ? ""
+        : "; cites were not kept per claim for this version"
+      : `; ${n(t.uncited, "claim", "claims")} with no memory behind ${t.uncited === 1 ? "it" : "them"}`;
+  return [
+    finding(
+      "self-page-trace",
+      "green",
+      "Self page claims",
+      `${n(t.claims, "claim", "claims")}; ${cited}${perClaim}`,
+      "",
+      { claims: t.claims, source: t.source, cites: t.cites, live: t.live, archivedOrMissing: t.archivedOrMissing, uncited: t.uncited },
+    ),
+  ];
+}
+
+/**
+ * WHAT STANDS BEHIND THE CORE (2026-10-20, an experiment; `self/measures.ts`).
+ * A reading, always green: nothing promotes or demotes on it. "One episode
+ * behind it" is an element whose returns and derivations all sit on one lived
+ * day; links are counted beside them and widen no span (review of #550). Reads every live row and every edge, so it stays out of the
+ * session-start reading.
+ */
+export function coreSupportFindings(store: Store): Finding[] {
+  const s = coreSupport(store);
+  const els = s.elements;
+  if (els.length === 0) return [finding("core-support", "green", "Core", "no elements yet", "", { elements: 0 })];
+  const range = (pick: (e: CoreSupportRow) => number): string => {
+    const v = els.map(pick);
+    const lo = Math.min(...v);
+    const hi = Math.max(...v);
+    return lo === hi ? String(lo) : `${String(lo)}–${String(hi)}`;
+  };
+  return [
+    finding(
+      "core-support",
+      "green",
+      "Core",
+      `${String(els.length)} ${els.length === 1 ? "element" : "elements"}; ${String(s.oneEpisode)} with one episode behind ${s.oneEpisode === 1 ? "it" : "them"}; ` +
+        `span ${range((e) => e.days)} ${range((e) => e.days) === "1" ? "day" : "days"}, ${range((e) => e.contexts)} ${range((e) => e.contexts) === "1" ? "context" : "contexts"}; returns ${range((e) => e.returns)}, derivations ${range((e) => e.derivations)}, links ${range((e) => e.links)}`,
+      "",
+      {
+        elements: els.length,
+        oneEpisode: s.oneEpisode,
+        rows: els.map((e) => `${e.id}:${String(e.returns)}/${String(e.derivations)}/${String(e.links)}/${String(e.days)}d/${String(e.contexts)}c`).join(" "),
+      },
+    ),
   ];
 }
 

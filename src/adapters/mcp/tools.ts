@@ -66,6 +66,7 @@ import { RECALL_MAX_IDS } from "./deliberate.js";
 import { FACTS_MEANING_CAP, FACTS_PAGE_SIZE, FACTS_TAIL_SIZE } from "./facts.js";
 import { RECURRENCES } from "../../core/time.js";
 import { PAGE_ROOM_BYTES } from "../../core/self/briefing.js";
+import { CLAIM_PREFIX_MIN_CHARS } from "../../core/self/page.js";
 import { MEET_STEPS } from "../../core/onboarding.js";
 
 /**
@@ -238,7 +239,7 @@ const ABOUT_PROPERTY = {
   type: "string",
   enum: ["me", "us", "owner", "work", "world"],
   description:
-    "What this is about, by meaning — me (who I am), us (the owner and me), owner (the owner, as a person), work (the craft: how a job is done), world (anything else). Mark anything personal — people, feelings, life outside the work — owner or us: left unmarked, a fact written in a project counts as that project's work and is shown only there. Left out on a revision (`updates`), it keeps the mark of the memory it revises. Only me and us can become part of who I am — never a plan.",
+    "What this is about, by meaning — me (who I am), us (the owner and me), owner (the owner, as a person), work (the craft: how a job is done), world (anything else). Mark anything personal — people, feelings, life outside the work — owner or us, so it reaches every folder: a friend visiting this weekend, how a long week left the owner. Work belongs to the folder it was written in, though sessions elsewhere may see its title. Left unmarked, a fact written here counts as this folder's work and is shown only here — so mark the personal ones. Left out on a revision (`updates`), it keeps the mark of the memory it revises. Only me and us can become part of who I am — never a plan.",
 };
 
 /**
@@ -1290,7 +1291,7 @@ const CHAPTER: ToolSpec = {
         type: "string",
         enum: ["me", "us", "owner", "work", "world"],
         description:
-          "What this session was about, by meaning — me, us, owner, work or world, as for a memory. Please set it: it goes to the chapter's summary, and only me, us or owner carry the chapter into a wake in another directory. A session that was only building is work; one about people, feelings or life outside the work is owner or us.",
+          "What this session was about, by meaning — me, us, owner, work or world, as for a memory. Please set it: it goes to the chapter's summary, and only me, us or owner carry the chapter into a wake in another directory. A session that was only building is work, and stays with this folder, though sessions elsewhere may see its title; one about people, feelings or life outside the work is owner or us.",
       },
       summary: {
         type: "string",
@@ -1745,8 +1746,19 @@ const REFLECT: ToolSpec = {
       cites: { type: "array", items: { type: "string" }, description: "`finish`: the memory ids the entry rests on." },
       page: {
         type: "object",
-        description: `\`finish\`, optional: the self page rewritten whole, within its ${String(PAGE_ROOM_BYTES)}-byte room, and the memory ids it rests on (the core first). A page past the room is sent back once to be cut; \`short\` (under ${String(PAGE_ROOM_BYTES)} bytes, the whole of it condensed) is for a page kept past it — beside it, or alone on a second \`finish\`.`,
-        properties: { text: { type: "string" }, cites: { type: "array", items: { type: "string" } }, short: { type: "string" } },
+        description: `\`finish\`, optional: the self page rewritten whole, within its ${String(PAGE_ROOM_BYTES)}-byte room, and the memory ids it rests on (the core first). A page past the room is sent back once to be cut; \`short\` (under ${String(PAGE_ROOM_BYTES)} bytes, the whole of it condensed) is for a page kept past it — beside it, or alone on a second \`finish\`. \`claims\`: each sentence (as written, or its first several words: ${String(CLAIM_PREFIX_MIN_CHARS)} characters or more) and the ids it rests on; a sentence with none stands as a hypothesis.`,
+        properties: {
+          text: { type: "string" },
+          cites: { type: "array", items: { type: "string" } },
+          short: { type: "string" },
+          claims: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { text: { type: "string" }, cites: { type: "array", items: { type: "string" } } },
+            },
+          },
+        },
       },
       share: {
         type: "object",

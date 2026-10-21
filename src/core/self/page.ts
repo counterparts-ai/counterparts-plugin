@@ -188,6 +188,11 @@ export interface SelfPage {
    * (`PAGE_META_SHORT`).
    */
   readonly short: PageShort | null;
+  /**
+   * What its claims rest on (2026-10-20, `PAGE_META_TRACE`), or null: none
+   * was written with this text (a page from before, a session's, the owner's).
+   */
+  readonly trace: PageTrace | null;
 }
 
 /** The short version stored beside a body, when it condenses THAT body. Pure. */
@@ -306,6 +311,7 @@ export function readSelfPage(store: Store): SelfPage | null {
     reason: typeof reason === "string" && reason.length > 0 ? reason : null,
     version: row?.revision ?? 0,
     short: shortOf(doc.meta, doc.body),
+    trace: traceOf(doc.meta, doc.body),
   };
 }
 
@@ -597,4 +603,209 @@ export function outlineText(outline: PageOutline): string | null {
 /** The headings alone, as the wake prints them, or null when the page has none. Pure. */
 export function headingsText(outline: PageOutline): string | null {
   return outline.entries.length === 0 ? null : outline.entries.map((e) => e.heading).join("\n");
+}
+
+// ── what each claim rests on (2026-10-20, an experiment) ────────────────────
+
+/**
+ * THE PAGE'S TRACE, on its own prose meta: `{ of, cites, claims }`, where `of`
+ * is the content hash of the page text it traces (as `PAGE_META_SHORT`'s is),
+ * `cites` the memory ids the whole page rests on, and `claims` one entry per
+ * sentence its writer said rests on memories: `{ of, cites }`, `of` that
+ * sentence's key (`claimKey`). `claims` is null when the writer sent only the
+ * whole-page list. No schema change: JSON on the row, written in the same
+ * `revise`, and every archived version keeps its own.
+ *
+ * Mike, 10-20: a claim is a sentence, to start. A sentence no passage names
+ * is a claim with no memory behind it, a hypothesis: shown as one, never
+ * removed. Tied to the text like the short version: a page rewritten without
+ * a trace reads as untraced, never with the last page's.
+ */
+export const PAGE_META_TRACE = "trace";
+
+/** One claim of the page as read: its sentence and the ids behind it ([] for none). */
+export interface PageClaim {
+  readonly text: string;
+  readonly cites: readonly string[];
+}
+
+/** The trace as read, only ever the one written with the text standing. */
+export interface PageTrace {
+  /** The ids the whole page rests on, as its writer sent them (and every claim's). */
+  readonly cites: readonly string[];
+  /** Every claim on the page, in order; null when its writer sent cites for the whole page only. */
+  readonly claims: readonly PageClaim[] | null;
+}
+
+/** What `Self#revisePage` stores under `PAGE_META_TRACE`. */
+export interface StoredTrace {
+  readonly of: string;
+  readonly cites: readonly string[];
+  readonly claims: readonly { readonly of: string; readonly cites: readonly string[] }[] | null;
+}
+
+/** What a writer sent: the whole page's ids, and passages (a sentence or a few, as on the page) with theirs. */
+export interface TraceInput {
+  readonly cites: readonly string[];
+  /** `text`: the words as on the page; `of`: a sentence's key instead (a restore carries the keys it stored). */
+  readonly claims?: readonly { readonly text?: string; readonly of?: string; readonly cites: readonly string[] }[] | null;
+}
+
+/** Sentences inside one flat run of words, by the rule `firstSentence` uses. */
+function sentencesOf(flat: string): string[] {
+  const out: string[] = [];
+  let from = 0;
+  for (const m of flat.matchAll(SENTENCE_END)) {
+    const at = m.index ?? 0;
+    const word = (/(\S+)$/.exec(flat.slice(from, at))?.[1] ?? "").toLowerCase().replace(/^[("'“‘*_]+/u, "");
+    if (m[0].startsWith(".") && (ABBREVIATIONS.has(word) || /^[a-z]$/i.test(word))) continue;
+    const s = flat.slice(from, at + m[0].length).trim();
+    if (s.length > 0) out.push(s);
+    from = at + m[0].length;
+  }
+  const rest = flat.slice(from).trim();
+  if (rest.length > 0) out.push(rest);
+  return out;
+}
+
+/**
+ * THE PAGE'S CLAIMS: its sentences, in order (2026-10-20). Headings are not
+ * claims, nor is anything inside a code fence; each list entry and each
+ * paragraph is split at the ends of its sentences, skipping the abbreviations
+ * `firstSentence` skips. A run of words with no full stop is one claim. Pure.
+ */
+export function pageClaims(body: string): string[] {
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  let fenced = false;
+  const flush = (): void => {
+    const flat = cur.join(" ").replace(/\s+/g, " ").trim();
+    if (flat.length > 0) blocks.push(flat);
+    cur = [];
+  };
+  for (const raw of body.split("\n")) {
+    if (FENCE.test(raw)) {
+      flush();
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    const line = raw.trim();
+    if (line.length === 0 || HEADING.test(raw.trimEnd())) {
+      flush();
+      continue;
+    }
+    const quoted = line.replace(/^>\s?/u, "");
+    if (LIST_ENTRY.test(quoted)) {
+      flush();
+      cur.push(quoted.replace(LIST_ENTRY, ""));
+      continue;
+    }
+    cur.push(quoted);
+  }
+  flush();
+  return blocks.flatMap(sentencesOf);
+}
+
+/** A claim's words as matched: emphasis, code marks and curly quotes aside, spacing and case folded. */
+function claimNorm(text: string): string {
+  return text
+    .replace(/[*_`]/g, "")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** The key a sentence is stored under in a trace: the hash of its folded words. Pure. */
+export function claimKey(sentence: string): string {
+  return hashText(claimNorm(sentence));
+}
+
+/** The shortest opening a passage may be sent as and still name its sentence. */
+export const CLAIM_PREFIX_MIN_CHARS = 24;
+
+/**
+ * WHICH SENTENCES OF `body` EACH SENT PASSAGE NAMES, and the trace to store
+ * (2026-10-20). A passage names a sentence when, folded (`claimNorm`), it is
+ * that sentence or an opening of it at least `CLAIM_PREFIX_MIN_CHARS` long; a
+ * passage of several sentences names each, split as the page is (`pageClaims`:
+ * a list mark, a quote mark or a heading quoted with it is not part of it). One
+ * that names none is counted in
+ * `unmatched`, and its ids stay with the whole page's. A sentence two passages
+ * name rests on both's ids. Only reads the page's words, never changes them.
+ * `body` is the text as stored. Pure.
+ */
+export function traceFor(
+  body: string,
+  input: TraceInput,
+): { trace: StoredTrace; claims: number; cited: number; unmatched: number } {
+  const sentences = pageClaims(body);
+  const keys = sentences.map(claimKey);
+  const norms = sentences.map(claimNorm);
+  const whole = [...new Set(input.cites)];
+  if (input.claims === undefined || input.claims === null) {
+    return { trace: { of: hashText(body), cites: whole, claims: null }, claims: sentences.length, cited: 0, unmatched: 0 };
+  }
+  const behind = new Map<number, Set<string>>();
+  let unmatched = 0;
+  for (const c of input.claims) {
+    const hit: number[] = [];
+    if (typeof c.of === "string") {
+      keys.forEach((k, i) => {
+        if (k === c.of) hit.push(i);
+      });
+    } else if (typeof c.text === "string") {
+      // Read by the page's own rules (review of #550): a passage quoted with
+      // its list mark, its quote mark or its heading names the same sentences.
+      for (const part of pageClaims(c.text).map(claimNorm)) {
+        if (part.length === 0) continue;
+        const free = (i: number): boolean => !hit.includes(i);
+        const exact = norms.findIndex((n, i) => n === part && free(i));
+        const at =
+          exact >= 0 ? exact : part.length >= CLAIM_PREFIX_MIN_CHARS ? norms.findIndex((n, i) => n.startsWith(part) && free(i)) : -1;
+        if (at >= 0) hit.push(at);
+      }
+    }
+    if (hit.length === 0) {
+      unmatched += 1;
+      continue;
+    }
+    for (const i of hit) {
+      const set = behind.get(i) ?? new Set<string>();
+      for (const id of c.cites) set.add(id);
+      behind.set(i, set);
+    }
+  }
+  const claims = [...behind.entries()]
+    .filter(([, set]) => set.size > 0)
+    .sort((a, b) => a[0] - b[0])
+    .map(([i, set]) => ({ of: keys[i] as string, cites: [...set] }));
+  for (const c of claims) for (const id of c.cites) if (!whole.includes(id)) whole.push(id);
+  return { trace: { of: hashText(body), cites: whole, claims }, claims: sentences.length, cited: claims.length, unmatched };
+}
+
+/** The stored trace on a meta when it traces THIS body, as a revise carries it; else null. Pure. */
+export function storedTraceOf(meta: Record<string, unknown>, body: string): StoredTrace | null {
+  const raw = meta[PAGE_META_TRACE];
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  if (rec["of"] !== hashText(body)) return null;
+  const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  const claims = Array.isArray(rec["claims"])
+    ? (rec["claims"] as unknown[])
+        .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null && typeof (c as Record<string, unknown>)["of"] === "string")
+        .map((c) => ({ of: c["of"] as string, cites: ids(c["cites"]) }))
+    : null;
+  return { of: rec["of"], cites: ids(rec["cites"]), claims };
+}
+
+/** The trace stored beside a body, when it traces THAT body, with each claim's words. Pure. */
+export function traceOf(meta: Record<string, unknown>, body: string): PageTrace | null {
+  const stored = storedTraceOf(meta, body);
+  if (stored === null) return null;
+  if (stored.claims === null) return { cites: stored.cites, claims: null };
+  const byKey = new Map(stored.claims.map((c) => [c.of, c.cites]));
+  return { cites: stored.cites, claims: pageClaims(body).map((text) => ({ text, cites: byKey.get(claimKey(text)) ?? [] })) };
 }

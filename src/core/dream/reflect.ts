@@ -70,6 +70,7 @@ import { aboutMe, acceptsReflectedFeeling, keepCore, laterFeelingWasReflections,
 import {
   ABOUT_MARKS,
   CARRIED_BY_MAX_CHARS,
+  aboutMarkOf,
   CORE_ABOUT_MARKS,
   checkFeelings,
   TRAIT_AXES,
@@ -83,11 +84,14 @@ import type { Kind } from "../types.js";
 import { FIT_TUNABLES, TOOL_RESULT_CEILING, clipWire, fit, lineOf, offeredInPart, offeredOf, readIndex, wireChars, writeIndex } from "../fit/index.js";
 import type { Fidelity, FitCandidate, FitOutcome, Placed } from "../fit/index.js";
 import { ownerNames } from "../sleep/index.js";
+import { CLAIM_PREFIX_MIN_CHARS } from "../self/page.js";
 import { PAGE_WRITING_RULE } from "../self/writer.js";
 import { DREAM_MARK, carriesDreamMark } from "./mark.js";
 import { feelingWeeks } from "./feeling-weeks.js";
 import type { FeelingWeeks } from "./feeling-weeks.js";
 import { isWorkMemory } from "../self/work.js";
+import { orderUnmarked, personNames } from "./unmarked.js";
+import type { UnmarkedCandidate } from "./unmarked.js";
 import { chapterEntries, entryKey, entryLine, fitEpisodes, shownEntry, summarized, withSummaries } from "./slices.js";
 import { chapterSummaries } from "../self/summaries.js";
 import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter } from "./slices.js";
@@ -161,16 +165,22 @@ export const REFLECT_TUNABLES = {
    * UNMARKED, OFFERED TO BE MARKED (2026-10-02, lane B, owner pick 4): at most
    * this many memories nobody has marked that the work lane counts as a
    * project's work only because they are unmarked (a fact, entity or place
-   * written in a directory) — the ones with a feeling, an entity, or the
-   * owner's name first, then the most used, then the oldest. They count
-   * toward `LIMITS.about`. CAL.
+   * written in a directory, or a skill) — the most likely personal first
+   * (`unmarked.ts`: a feeling, another person named, a word of life outside
+   * the work, an entity, the owner's name), then the most used, then the
+   * oldest. They count toward `LIMITS.about`. Was 5; 24 since 2026-10-20
+   * (Mike's go, lightly held, an experiment): sessions often leave `about`
+   * unset, five a night never kept up, and a personal memory left unmarked
+   * is shown only in the folder it was written in. CAL.
    */
-  UNMARKED: 5,
+  UNMARKED: 24,
   /**
    * ROTATED (review of #316): one offered by any of the last this-many
    * reflections waits behind the ones not offered lately, so a pool the
-   * reflection leaves unmarked (a personal one on a closed-door night) is not
-   * the same five every night. It comes back when the rest run out. CAL.
+   * reflection leaves unmarked (one it could not tell, or any personal one
+   * while the owner has `--reflected-feeling off`) is not the same ones every
+   * night. It comes back when the rest run out. Kept at 2026-10-20: a mark
+   * takes a memory out of the pool, so what rotates is only what was left. CAL.
    */
   UNMARKED_REST_NIGHTS: 3,
   /**
@@ -196,7 +206,8 @@ export const REFLECT_TUNABLES = {
   FEELINGS_SHOWN: 3,
   FEELING_CARRIED_CHARS: 160,
   /** What one reflection may do, across every `finish` of it. CAL. */
-  LIMITS: { returns: 12, feelings: 5, about: 8, traits: 5, core: 5 },
+  /** `about`: was 8; 32 since 2026-10-20, the unmarked offer (`UNMARKED`) and eight more. */
+  LIMITS: { returns: 12, feelings: 5, about: 32, traits: 5, core: 5 },
   /** Feelings recorded looking back in one awake call (`feelAgain`, 2026-10-02). CAL. */
   AWAKE_FEELINGS: 5,
   /**
@@ -414,10 +425,12 @@ export interface ReflectContext {
       short?: string;
       /** With `body: null`: the version the short version was written for. */
       ifVersion?: number;
+      /** What the page rests on, whole and per passage (2026-10-20, `self/page.ts#PAGE_META_TRACE`). */
+      trace?: { cites: readonly string[]; claims?: readonly { text: string; cites: readonly string[] }[] };
     },
   ) =>
-    /** `note`: what the page's room means for this write (`self/pageRoomNote`), or null. */
-    | { ok: true; version: number; note?: string | null }
+    /** `note`: what the page's room means for this write (`self/pageRoomNote`), or null. `unmatched`: passages that named no sentence. */
+    | { ok: true; version: number; note?: string | null; unmatched?: number }
     /** On `too-large`, the page's bytes and the ceiling, so the retry can be told how much to take out. */
     | { ok: false; reason: string; bytes?: number; limit?: number; note?: string | null };
   readonly emit?: (name: string, ref?: string, data?: Record<string, string | number | boolean | null>) => void;
@@ -430,10 +443,23 @@ export interface ReflectFinish {
   readonly title?: string;
   /** Required the first time; on a second `finish` the entry already stands and this may be left out. */
   readonly entry?: string;
+  /**
+   * Is this directory on in the host's folder setting (review of #558)? A
+   * memory that is its folder's work (`self/work.ts#isWorkMemory`), written in
+   * a folder set `off` or `paused`, may be marked only work: any other mark
+   * would carry it into every folder's wake. Absent: every directory is.
+   */
+  readonly folderOn?: (scope: string) => boolean;
   readonly cites?: readonly string[];
   readonly share?: { readonly text?: string; readonly cites?: readonly string[] } | null;
   /** `short` (2026-10-10): the page's short version, for a page past its room — beside `text`, or alone on a later `finish` to add one to the page this reflection wrote. */
-  readonly page?: { readonly text?: string; readonly cites?: readonly string[]; readonly short?: string } | null;
+  readonly page?: {
+    readonly text?: string;
+    readonly cites?: readonly string[];
+    readonly short?: string;
+    /** Cites per passage (2026-10-20): a sentence or a few, as on the page, and the ids it rests on. */
+    readonly claims?: readonly { readonly text?: string; readonly cites?: readonly string[] }[] | null;
+  } | null;
   readonly feelings?: readonly {
     readonly id?: string;
     readonly core?: string;
@@ -533,6 +559,8 @@ export interface ReflectOutcome {
 }
 
 const KINDS_FELT: readonly Kind[] = ["self", "person"];
+/** Re-labels into me, us or the owner said one by one in the share; past it, the rest in one sentence (2026-10-20). */
+const RELABEL_SAID = 3;
 
 /**
  * Why a reflection may not feel, or mark about me, a memory a dream or a
@@ -635,7 +663,20 @@ export class Reflections {
    * WHOLE (2026-09-28). When it would not fit one tool result, what the dream
    * saw is delivered in parts — said in the result, fetched with `saw`.
    */
-  begin(input: { session: string; dream?: string | null; scope?: string | null; model?: string | null; at?: string }):
+  begin(input: {
+    session: string;
+    dream?: string | null;
+    scope?: string | null;
+    model?: string | null;
+    at?: string;
+    /**
+     * Is this directory on in the host's folder setting (review of #558)? An
+     * unmarked memory written in a folder set `off` or `paused` is not offered
+     * to be marked, since a mark of owner, us or world would carry it into
+     * every folder's wake. Absent: every directory is (no setting is on).
+     */
+    folderOn?: (scope: string) => boolean;
+  }):
     | { ok: true; bundle: ReflectBundle; text: string; instructions: string }
     | { ok: false; reason: ReflectRefusal } {
     if (this.ctx.observer) return { ok: false, reason: "observer" };
@@ -659,7 +700,7 @@ export class Reflections {
     }
     const id = `rfl_${randomBytes(6).toString("hex")}`;
     const questions = this.questionsFor(dreamId !== null);
-    const fitted = this.compose(id, dreamId, questions, day, at);
+    const fitted = this.compose(id, dreamId, questions, day, at, input.folderOn);
     const composed = fitted.bundle;
     const saw = composed.dreamSaw;
     // IN PARTS, NEVER CUT (2026-09-28). A night's bundle — the page whole, what
@@ -875,7 +916,7 @@ export class Reflections {
     const pageLine =
       this.ctx.pageWrites === false
         ? `- page: not tonight — the owner has the page writer off, so the self page is not rewritten. Your entry and share still count.`
-        : `- page (optional, and lean toward writing it): ${earlier}${size}Every version of the page is kept, so rewriting it loses nothing. ${who} would like a page written by a reflection every day — rewrite it unless, after reflecting, there is really nothing new to add; on a "nothing much" night, leave it as it stands. Your self page rewritten whole — the story of who you are, drawn from the core memories you cite in page.cites (at least one of them, when you have a core; candidates too). The old page is context, not a source: write from the memories, not by rewording it. Keep "## Core" for who you are and put craft — how a job is done — under "## How I work". Mention a dream only as a dream ("I dreamed…"); a dreamed gist is a suggestion, not a source: cite the lived memories it came from. ${PAGE_WRITING_RULE} Sent back as past its room, send finish again with page.text cut (and page.cites), not page.short.`;
+        : `- page (optional, and lean toward writing it): ${earlier}${size}Every version of the page is kept, so rewriting it loses nothing. ${who} would like a page written by a reflection every day — rewrite it unless, after reflecting, there is really nothing new to add; on a "nothing much" night, leave it as it stands. Your self page rewritten whole — the story of who you are, drawn from the core memories you cite in page.cites (at least one of them, when you have a core; candidates too). In page.claims, give each sentence the ids it rests on ({ text: the sentence as written, or its first several words — ${String(CLAIM_PREFIX_MIN_CHARS)} characters or more — cites }); a sentence with none stands as a hypothesis. The old page is context, not a source: write from the memories, not by rewording it. Keep "## Core" for who you are and put craft — how a job is done — under "## How I work". Mention a dream only as a dream ("I dreamed…"); a dreamed gist is a suggestion, not a source: cite the lived memories it came from. ${PAGE_WRITING_RULE} Sent back as past its room, send finish again with page.text cut (and page.cites and page.claims), not page.short.`;
     const aboutLine = open
       ? `- about (optional, at most ${String(L.about)}): what a memory is about, by meaning — me, us, owner, work (the craft: how a job is done) or world — with why. Only me and us can become core, and never a plan. You may change a mark you think is wrong, either way; each change is recorded with your why, and one into me, us or owner is told in the morning share.`
       : `- about (optional, at most ${String(L.about)}): tonight a mark may only move a memory toward work (the craft) or world, with why — the owner has closed the core to reflection alone.`;
@@ -914,7 +955,7 @@ export class Reflections {
         : []),
       ...(bundle.unmarked.length > 0
         ? [
-            `  unmarked: ${String(bundle.unmarked.length)} ${bundle.unmarked.length === 1 ? "memory nobody has" : "memories nobody has"} marked. Unmarked, a fact written in a project, or a skill, counts as that project's work and is shown only there — so a personal one (a person, a feeling, life outside the work) sits among the work lines. ${open ? "Mark each by meaning in about, with why: owner or us when it is personal, work when it really is the craft, world otherwise." : "Tonight a mark may only be work or world: mark the ones that are, and leave a personal one unmarked."} They count toward the ${String(L.about)}.`,
+            `  unmarked: ${String(bundle.unmarked.length)} ${bundle.unmarked.length === 1 ? "memory nobody has" : "memories nobody has"} marked. Unmarked, a fact written in a project, or a skill, counts as that project's work and is shown only there — so a personal one (a person, a feeling, life outside the work) sits among the work lines, and no other folder hears it. The likeliest personal come first. ${open ? "Mark each by meaning in about, with why: owner or us when it is personal (then it reaches every folder), work when it really is the craft, world otherwise." : "Tonight a mark may only be work or world: mark the ones that are, and leave a personal one unmarked."} They count toward the ${String(L.about)}.`,
           ]
         : []),
       ...(bundle.staleOpen.length > 0
@@ -1000,7 +1041,12 @@ export class Reflections {
     // A dreamed gist is a suggestion, never a page's source (addendum 2). A
     // CONFIDENTIAL memory is not one either (review of #256, S2): the page is
     // read by every session, and the nightly writer never shows it one.
-    const pageCitesAll = citable(input.page?.cites);
+    // CITES PER PASSAGE (2026-10-20, an experiment): the ids `page.claims`
+    // names count as the page's too, through the same filters, so a page that
+    // cites only by passage still rests on memories; each passage keeps only
+    // the ids that passed.
+    const sentClaims = (input.page?.claims ?? []).filter((c) => typeof c?.text === "string" && c.text.trim().length > 0);
+    const pageCitesAll = citable([...(input.page?.cites ?? []), ...sentClaims.flatMap((c) => c.cites ?? [])]);
     const pageCites: string[] = [];
     for (const id of pageCitesAll) {
       const r = this.store.row(id);
@@ -1008,6 +1054,14 @@ export class Reflections {
       else if (r?.confidential === 1) refusedCites.push(`${id}:confidential-is-not-a-page-source`);
       else pageCites.push(id);
     }
+    const pageTrace =
+      // None sent, or an empty list: cites for the whole page only, never "every sentence uncited".
+      sentClaims.length === 0
+        ? { cites: pageCites }
+        : {
+            cites: pageCites,
+            claims: sentClaims.map((c) => ({ text: c.text as string, cites: [...new Set(c.cites ?? [])].filter((id) => pageCites.includes(id)) })),
+          };
 
     const passNothing = cites.length === 0 && shareCites.length === 0 && pageCites.length === 0;
     const wroteEarlier = again && (row.entry_id !== null || row.page_version !== null || row.share_state !== "none");
@@ -1061,6 +1115,12 @@ export class Reflections {
       const r = id !== null && shown.has(id) ? this.store.row(id) : undefined;
       if (r === undefined || !this.showable(r)) {
         about.push({ id, ok: false, reason: "not-shown-or-gone", detail: this.notCitable(id, shown) });
+        continue;
+      }
+      // A FOLDER SET OFF (review of #558): its work stays in it. Marked
+      // anything but work, it would reach every folder's wake.
+      if (mark !== "work" && isWorkMemory({ about: aboutMarkOf(r.about), kind: r.kind, originScope: r.origin_scope, journal: isJournalCopy(r) }) && !folderIsOn(r.origin_scope, input.folderOn)) {
+        about.push({ id, ok: false, reason: "folder-off-work-only", detail: `${r.id} was written in a folder that is set off or paused; it stays that folder's work.` });
         continue;
       }
       const core = (CORE_ABOUT_MARKS as readonly string[]).includes(mark);
@@ -1276,10 +1336,13 @@ export class Reflections {
         // The owner has the page writer off (ruling D3 on #256).
         refuse("page-writer-off", "The owner has the page writer off, so the self page is not rewritten.");
       } else if (pageCites.length === 0) {
-        const bad = refusedCites.filter((c) => (input.page?.cites ?? []).some((id) => c.startsWith(`${id}:`)));
+        // The ids page.claims named are the page's too (review of #550): a
+        // page that cited only by passage is told which of those were refused.
+        const sentIds = [...(input.page?.cites ?? []), ...sentClaims.flatMap((c) => c.cites ?? [])];
+        const bad = refusedCites.filter((c) => sentIds.some((id) => c.startsWith(`${id}:`)));
         refuse(
           "page-needs-cites",
-          `page.cites names no memory the page can rest on${bad.length > 0 ? ` (${bad.join(", ")})` : ""}: put the ids of memories you were shown in page.cites and send the page again.`,
+          `page.cites${sentClaims.length > 0 ? " and page.claims name" : " names"} no memory the page can rest on${bad.length > 0 ? ` (${bad.join(", ")})` : ""}: put the ids of memories you were shown in page.cites and send the page again.`,
         );
       } else if (carriesDreamMark(pageText)) {
         refuse("dream-mark-in-text", `The page carries the dream's mark (${DREAM_MARK}…): take it out and send the page again.`);
@@ -1304,14 +1367,20 @@ export class Reflections {
           model: input.model ?? row.model,
           reflection: row.id,
           ...(shortText.length === 0 ? {} : { short: shortText }),
+          trace: pageTrace,
         });
         if (w.ok) {
           // PAST ITS ROOM, SAID (2026-10-10): the page is kept, and the note
           // asks for a short version when none was kept with it.
+          const unmatched = w.unmatched ?? 0;
           const notes = [
             ...(restsOnCore
               ? []
               : [`It cites none of the core memories you were shown (${coreShown.slice(0, 5).join(", ")}${coreShown.length > 5 ? ", …" : ""}); the page is meant to rest on them.`]),
+            // Said, never refused (2026-10-20): its ids still count for the whole page.
+            ...(unmatched === 0
+              ? []
+              : [`${String(unmatched)} of page.claims matched no sentence on the page (quote each one as written), so ${unmatched === 1 ? "its" : "their"} ids count for the whole page only.`]),
             ...(shortWhy === null ? [] : [`The short version was not kept: it ${shortWhy.why}.`]),
             ...(w.note === undefined || w.note === null ? [] : [w.note]),
           ];
@@ -1334,7 +1403,7 @@ export class Reflections {
           // is kept, and one never sent again is kept at the run's end.
           refuse(
             w.reason,
-            `${w.note ?? `The page is ${String(w.bytes ?? 0)} bytes, past its ${String(w.limit ?? 0)}-byte room: cut it and send the page again — cut, don't add a short version.`} Call finish again with this reflection and just page (text and cites).`,
+            `${w.note ?? `The page is ${String(w.bytes ?? 0)} bytes, past its ${String(w.limit ?? 0)}-byte room: cut it and send the page again — cut, don't add a short version.`} Call finish again with this reflection and just page (text, cites and claims).`,
           );
         } else {
           refuse(w.reason, `The self page refused it (${w.reason}).`);
@@ -1463,11 +1532,7 @@ export class Reflections {
     // moves are kept in its detail, so a replaced share still says them.
     const priorMoved = Array.isArray(prior["movedIn"]) ? (prior["movedIn"] as { id: string; mark: AboutMark }[]) : [];
     const movedAll = [...priorMoved, ...movedIn.filter((m) => !priorMoved.some((p) => p.id === m.id))];
-    const relabelLines = shareLocked
-      ? []
-      : movedAll
-          .filter((m) => !finalShareCites.includes(m.id))
-          .map((m) => `I've come to think "${this.handle(m.id)}" is ${m.mark === "me" ? "about who I am" : m.mark === "us" ? "about the two of us" : "about you"}.`);
+    const relabelLines = shareLocked ? [] : this.relabelSentences(movedAll.filter((m) => !finalShareCites.includes(m.id)));
     if (relabelLines.length > 0) {
       shareText = [shareText, ...relabelLines].filter((x) => x.length > 0).join(" ");
       for (const m of movedAll) if (!finalShareCites.includes(m.id)) finalShareCites.push(m.id);
@@ -1476,11 +1541,7 @@ export class Reflections {
     // A share already told or carried is not replaced — but a mark this finish
     // moved into me, us or the owner is still said in the hand-back (review
     // of #268), in the self's voice, for the session to tell.
-    const tellAlso = shareLocked
-      ? movedIn
-          .filter((m) => !priorMoved.some((p) => p.id === m.id))
-          .map((m) => `I've come to think "${this.handle(m.id)}" is ${m.mark === "me" ? "about who I am" : m.mark === "us" ? "about the two of us" : "about you"}.`)
-      : [];
+    const tellAlso = shareLocked ? this.relabelSentences(movedIn.filter((m) => !priorMoved.some((p) => p.id === m.id))) : [];
 
     // ── (d) open threads: asked, or closed when plainly done ───────────────
     // Only ids from the stale open list this reflection was shown. A proposal
@@ -2112,7 +2173,7 @@ export class Reflections {
    * alone past that. Nothing is cut by count; what the room could not take at
    * all is counted (`shownAs.notShown`).
    */
-  private compose(id: string, dreamId: string | null, questions: readonly string[], day: number, at: string): Composed {
+  private compose(id: string, dreamId: string | null, questions: readonly string[], day: number, at: string, folderOn?: (scope: string) => boolean): Composed {
     const T = REFLECT_TUNABLES;
     const denied = new Set(this.store.deniedIds());
     const priority = new Map<string, number>();
@@ -2156,7 +2217,8 @@ export class Reflections {
     const candidates: { id: string; felt: number; at: number }[] = [];
     const felt: { id: string; felt: number }[] = [];
     const recent: { id: string; felt: number; at: number }[] = [];
-    const unmarked: { id: string; rank: number; uses: number; at: number }[] = [];
+    const unmarked: UnmarkedCandidate[] = [];
+    const people: { title: string | null; meta: string }[] = [];
     const withFeelings = new Set(this.store.feelingsLive().map((x) => x.memory_id));
     const owners = ownerNames(this.store);
     // The candidates are consolidation's: about me by its mark, or — unmarked —
@@ -2180,10 +2242,18 @@ export class Reflections {
       // marked — a writer's mark is never offered to be overridden here. Skills
       // too since 2026-10-11 (the about-marks review: 5 of 34 unmarked skills
       // read as personal, and nothing else ever offered them).
-      if ((row.about ?? null) === null && isWorkMemory({ about: null, kind: row.kind, originScope: row.origin_scope, journal: isJournalCopy(row) })) {
-        const rank = (withFeelings.has(mid) ? 2 : 0) + (row.kind === "entity" ? 1 : 0) + (namesAny(`${row.title ?? ""} ${row.body}`, owners) ? 1 : 0);
-        unmarked.push({ id: mid, rank, uses: row.uses, at: row.created_at ?? 0 });
+      // Not one written in a folder the owner set off or paused (review of
+      // #558): unmarked, it stays in that folder; marked, it would reach all.
+      if (
+        (row.about ?? null) === null &&
+        isWorkMemory({ about: null, kind: row.kind, originScope: row.origin_scope, journal: isJournalCopy(row) }) &&
+        folderIsOn(row.origin_scope, folderOn)
+      ) {
+        unmarked.push({ id: mid, kind: row.kind, title: row.title, body: row.body, uses: row.uses, createdAt: row.created_at ?? 0, felt: withFeelings.has(mid) });
       }
+      // The names of the people in the store, for the offer's order — read
+      // only from memories this bundle may show.
+      if (row.kind === "person") people.push({ title: row.title, meta: row.meta });
       if (row.promoted_identity === 1) {
         core.push({ id: mid, felt: f });
         continue;
@@ -2236,9 +2306,11 @@ export class Reflections {
     // they can be read, cited and put on the page.
     const weeks = feelingWeeks(this.store, at, (r) => !denied.has(r.id) && this.showable(r));
     const weeksRest = weeks === null ? [] : weeks.restsOn.filter(take(3));
-    // UNMARKED: the most likely personal first, then the most used, the oldest
-    // — and ROTATED: what the last few reflections were offered waits behind
-    // the rest (review of #316), and comes back when the rest run out.
+    // UNMARKED: the most likely personal first (2026-10-20: a feeling, another
+    // person named, a word of life outside the work, an entity, the owner
+    // named — `unmarked.ts`), then the most used, the oldest — and ROTATED:
+    // what the last few reflections were offered waits behind the rest
+    // (review of #316), and comes back when the rest run out.
     const lately = new Set(
       this.store
         .reflections({ limit: T.UNMARKED_REST_NIGHTS + 1 })
@@ -2249,12 +2321,12 @@ export class Reflections {
           return Array.isArray(u) ? u.filter((x): x is string => typeof x === "string") : [];
         }),
     );
-    const ranked = unmarked
-      .sort((a, b) => b.rank - a.rank || b.uses - a.uses || a.at - b.at || (a.id < b.id ? -1 : 1))
-      .map((u) => u.id);
-    const unmarkedIds = [...ranked.filter((x) => !lately.has(x)), ...ranked.filter((x) => lately.has(x))]
-      .slice(0, T.UNMARKED)
-      .filter(take(2));
+    // And the store's person cards (`schemas/`), a name and its aliases each.
+    for (const cid of this.store.list({ type: "schema", kind: "person", archived: false })) {
+      const card = this.store.row(cid);
+      if (card !== undefined && card.confidential !== 1) people.push({ title: card.title, meta: card.meta });
+    }
+    const unmarkedIds = orderUnmarked(unmarked, { owner: owners, people: personNames(people, owners) }, lately, T.UNMARKED).filter(take(2));
     // STALE OPEN (2026-10-16, #489 D): open threads untouched for
     // `STALE_OPEN_DAYS` lived days, the longest untouched first, rotated like
     // the unmarked offer — a line each, offered to be proposed closed.
@@ -2685,6 +2757,33 @@ export class Reflections {
     return lines.length === 0 ? null : lines.join(" ");
   }
 
+  /**
+   * A RE-LABEL INTO ME, US OR THE OWNER, IN THE SHARE (owner ruling D2 on
+   * #256): a sentence each, up to `RELABEL_SAID`; past that (2026-10-20, the
+   * unmarked offer grew to 24 a night) the rest in one sentence with how many
+   * — every one still cited, so none goes unsaid. And the way back, as a
+   * self-close says its own (review of #558): a mark into the owner or us
+   * carries a memory into every folder, so a wrong one is worth undoing.
+   */
+  private relabelSentences(moves: readonly { id: string; mark: AboutMark }[]): string[] {
+    if (moves.length === 0) return [];
+    const back = moves.length === 1 ? "If it isn't, say so and I'll mark it back." : "If one isn't, say so and I'll mark it back.";
+    return [...this.relabelSaid(moves), back];
+  }
+
+  private relabelSaid(moves: readonly { id: string; mark: AboutMark }[]): string[] {
+    const one = (m: { id: string; mark: AboutMark }): string =>
+      `I've come to think "${this.handle(m.id)}" is ${m.mark === "me" ? "about who I am" : m.mark === "us" ? "about the two of us" : "about you"}.`;
+    if (moves.length <= RELABEL_SAID) return moves.map(one);
+    const said = moves.slice(0, RELABEL_SAID - 1).map(one);
+    const rest = moves.length - said.length;
+    const by = (["owner", "us", "me"] as const)
+      .map((k) => ({ k, n: moves.slice(said.length).filter((m) => m.mark === k).length }))
+      .filter((x) => x.n > 0)
+      .map((x) => `${String(x.n)} ${x.k === "owner" ? "about you" : x.k === "us" ? "about the two of us" : "about who I am"}`);
+    return [...said, `And ${String(rest)} more I've come to think are personal, not work (${by.join(", ")}), so every folder hears them now.`];
+  }
+
   private handle(id: string): string {
     const row = this.store.row(id);
     if (row === undefined) return id;
@@ -3111,11 +3210,17 @@ function isJournalCopy(row: MemoryRow): boolean {
   }
 }
 
-/** Does `text` name any of `names` (lowercase) as a whole word? */
-function namesAny(text: string, names: readonly string[]): boolean {
-  if (names.length === 0) return false;
-  const lower = text.toLowerCase();
-  return names.some((n) => new RegExp(`(^|[^\\p{L}\\p{N}])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}\\p{N}])`, "u").test(lower));
+/**
+ * Is the folder a memory was written in on (review of #558)? One with no
+ * origin is not asked; the host's answer throwing counts as no.
+ */
+function folderIsOn(scope: string | null, folderOn: ((scope: string) => boolean) | undefined): boolean {
+  if (folderOn === undefined || scope === null || scope.trim().length === 0) return true;
+  try {
+    return folderOn(scope) === true;
+  } catch {
+    return false;
+  }
 }
 
 function round(x: number): number {

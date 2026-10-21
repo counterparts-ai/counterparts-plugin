@@ -120,6 +120,7 @@ import {
   PAGE_CLEARED_BODY,
   PAGE_META_CLEARED,
   PAGE_META_SHORT,
+  PAGE_META_TRACE,
   PAGE_TITLE,
   SELF_PAGE_REFUSED_EVENT,
   SELF_PAGE_REVISED_EVENT,
@@ -131,9 +132,11 @@ import {
   pageOutline,
   readSelfPage,
   shortOf,
+  storedTraceOf,
   stripRevisedLines,
+  traceFor,
 } from "./page.js";
-import type { SelfPage, SelfPageAuthor } from "./page.js";
+import type { SelfPage, SelfPageAuthor, StoredTrace, TraceInput } from "./page.js";
 import {
   SELF_PAGE_WRITER_EVENT,
   dayMemories,
@@ -698,6 +701,12 @@ export interface PageRevision {
   readonly overRoom: number | null;
   /** What became of the short version sent with it; null when none was sent. */
   readonly short: PageShortOutcome | null;
+  /**
+   * Its claims and how many a sent trace named (2026-10-20): `unmatched`, the
+   * passages that named no sentence. Absent when no trace was sent or nothing
+   * was written.
+   */
+  readonly traced?: { readonly claims: number; readonly cited: number; readonly unmatched: number };
 }
 
 /**
@@ -790,6 +799,17 @@ export interface PageWriteOptions {
    * only; no door passes it.
    */
   readonly keepPastRoom?: boolean;
+  /**
+   * WHAT THE PAGE RESTS ON, per claim (2026-10-20, `page.ts#PAGE_META_TRACE`):
+   * the whole page's ids and passages with theirs, matched against the text
+   * as stored. Absent, the trace already there is kept only for the same text.
+   */
+  readonly trace?: TraceInput;
+}
+
+/** A stored trace sent again, by its sentences' keys (a restore, a held page kept). */
+function inputOf(t: StoredTrace): TraceInput {
+  return { cites: t.cites, claims: t.claims === null ? null : t.claims.map((c) => ({ of: c.of, cites: c.cites })) };
 }
 
 /** The nightly doors the room holds (2026-10-20, `PAGE_HELD_TO_ROOM`). */
@@ -842,6 +862,8 @@ interface HeldDraft {
   readonly reason: string;
   readonly short?: string;
   readonly model?: string;
+  /** What its claims rest on (2026-10-20), as keys and ids. */
+  readonly trace?: StoredTrace;
   /** The refusal row's wall clock, when read off one. */
   readonly heldAt?: number;
 }
@@ -857,6 +879,7 @@ function heldDraftOf(payload: string | null): HeldDraft | null {
   if (p["reason"] !== "past-room" || held === undefined || held === null || typeof held["body"] !== "string") return null;
   const by = p["by"];
   if (by !== "writer" && by !== "reflection") return null;
+  const trace = storedTraceOf({ [PAGE_META_TRACE]: held["trace"] }, held["body"]);
   return {
     by,
     session: typeof p["session"] === "string" ? p["session"] : null,
@@ -868,6 +891,7 @@ function heldDraftOf(payload: string | null): HeldDraft | null {
     reason: typeof held["reason"] === "string" ? held["reason"] : "",
     ...(typeof held["short"] === "string" ? { short: held["short"] } : {}),
     ...(typeof held["model"] === "string" ? { model: held["model"] } : {}),
+    ...(trace === null ? {} : { trace }),
   };
 }
 
@@ -1512,12 +1536,14 @@ export class Self {
     if (id === null) return { ...none, written: false, reason: "empty" };
     let body: string;
     let short: string | null = null;
+    let trace: StoredTrace | null = null;
     try {
       const doc = this.store.readVersion(id, seq);
       body = doc.body;
       // ITS SHORT VERSION COMES BACK WITH IT (2026-10-10), when that version
-      // kept one written with its own text.
+      // kept one written with its own text; and its trace (2026-10-20).
       short = shortOf(doc.meta, doc.body)?.body ?? null;
+      trace = storedTraceOf(doc.meta, doc.body);
     } catch {
       return { ...none, written: false, reason: "no-such-version" };
     }
@@ -1526,6 +1552,9 @@ export class Self {
       by: "owner",
       ...(opts.day === undefined ? {} : { day: opts.day }),
       ...(short === null ? {} : { short }),
+      // A version from before traces existed comes back untraced (`revisePage`
+      // keeps a trace only for the text it traces).
+      ...(trace === null ? {} : { trace: inputOf(trace) }),
     });
   }
 
@@ -1670,6 +1699,7 @@ export class Self {
         keepPastRoom: true,
         ...(held.short === undefined ? {} : { short: held.short }),
         ...(held.model === undefined ? {} : { model: held.model }),
+        ...(held.trace === undefined ? {} : { trace: inputOf(held.trace) }),
       });
       if (written.written && held.by === "writer" && held.session !== null) {
         // THE NIGHT READS AS WRITTEN: its claim closed `failed` when the run
@@ -1920,6 +1950,9 @@ export class Self {
               reason: opts.reason,
               ...(heldShort === null ? {} : { short: heldShort }),
               ...(opts.model === undefined ? {} : { model: opts.model }),
+              // Its trace as keys and ids, never the passages' own words
+              // (2026-10-20), so a page kept at the run's end keeps it.
+              ...(opts.trace === undefined ? {} : { trace: traceFor(storedAs(text), opts.trace).trace }),
             },
           },
         });
@@ -1940,6 +1973,22 @@ export class Self {
     // and so is a short version this write did not bring: one written with
     // the text before is not a short version of this one (`PAGE_META_SHORT`).
     const existing = findPageRow(this.store);
+    // WHAT ITS CLAIMS REST ON (2026-10-20, `PAGE_META_TRACE`), matched against
+    // the text as stored — after the datelines and the gate's redaction — so a
+    // sentence the gate changed reads as uncited rather than wrongly cited.
+    // A write that brought none keeps the trace already there only when it
+    // traces this exact text (a short version added, the same words written
+    // again); otherwise the key is set to null, since `revise` merges meta.
+    const stored = storedAs(text);
+    const traced = opts.trace === undefined ? null : traceFor(stored, opts.trace);
+    let trace: StoredTrace | null = traced?.trace ?? null;
+    if (opts.trace === undefined && existing !== null) {
+      try {
+        trace = storedTraceOf(this.store.readProse(existing).meta, stored);
+      } catch {
+        trace = null;
+      }
+    }
     const meta: Record<string, unknown> = {
       role: SELF_PAGE_ROLE,
       [PAGE_META_BY]: opts.by,
@@ -1947,7 +1996,8 @@ export class Self {
       [PAGE_META_REVISED_ON]: this.store.today(),
       [PAGE_META_REVISED_DAY]: day,
       [PAGE_META_CLEARED]: null,
-      [PAGE_META_SHORT]: sent === null || sent.text === null ? null : { body: sent.text, of: hashText(storedAs(text)), bytes },
+      [PAGE_META_SHORT]: sent === null || sent.text === null ? null : { body: sent.text, of: hashText(stored), bytes },
+      [PAGE_META_TRACE]: trace,
     };
     let id: string;
     let version: number;
@@ -2004,6 +2054,8 @@ export class Self {
         ...(sent === null ? {} : { short: sent.outcome.reason, shortBytes: sent.outcome.bytes }),
         ...(own.stripped === 0 ? {} : { datelines: own.stripped }),
         ...(own.framed === 0 ? {} : { frameLines: own.framed }),
+        // How the trace sent with it landed (2026-10-20): claims, how many it named, and passages that named none.
+        ...(traced === null ? {} : { claims: traced.claims, claimsCited: traced.cited, claimsUnmatched: traced.unmatched }),
       },
     });
     this.emit("self.page.revised", id, {
@@ -2028,6 +2080,7 @@ export class Self {
       current: null,
       overRoom: bytes > room ? room : null,
       short: sent?.outcome ?? null,
+      ...(traced === null ? {} : { traced: { claims: traced.claims, cited: traced.cited, unmatched: traced.unmatched } }),
     };
   }
 
@@ -2238,13 +2291,15 @@ export class Self {
     if (page === null) return { ...none, written: false, reason: "empty" };
     // `revise` archives what was there FIRST, so the page that was cleared is a
     // version on this same row and `--restore <seq>` reaches it — with its
-    // short version, which goes with it (2026-10-10).
+    // short version, which goes with it (2026-10-10), and its trace (review
+    // of #550: the same words written after a clear start untraced).
     const version = this.store.revise(page.id, {
       body: PAGE_CLEARED_BODY,
       meta: {
         [PAGE_META_REASON]: opts.reason,
         [PAGE_META_CLEARED]: { on: this.store.today(), reason: opts.reason },
         [PAGE_META_SHORT]: null,
+        [PAGE_META_TRACE]: null,
       },
       reason: opts.reason,
     });

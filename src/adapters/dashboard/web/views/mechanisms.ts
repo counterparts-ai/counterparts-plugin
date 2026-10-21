@@ -165,6 +165,9 @@ export const LEADS: Readonly<Record<string, readonly LeadCandidate[]>> = {
     lead(["awake"], "came back in conversation", "came back in conversation"),
     lead(["promoted"], "memory became core", "memories became core"),
     lead(["merged", "dreamMerged"], "memory merged", "memories merged"),
+    // A dream's folds (2026-10-20), and a memory that rose a band.
+    lead(["folded"], "fold in a dream", "folds in a dream"),
+    lead(["rose"], "memory rose a band", "memories rose a band"),
     lead(["dream"], "replayed in a dream", "replayed in a dream"),
   ],
   dreaming: [
@@ -177,6 +180,7 @@ export const LEADS: Readonly<Record<string, readonly LeadCandidate[]>> = {
   ],
   interference: [
     lead(["dreamMerged"], "near-copy merged in a dream", "near-copies merged in a dream"),
+    lead(["folded"], "fold in a dream", "folds in a dream"),
     lead(["flagged"], "pair that disagrees flagged", "pairs that disagree flagged"),
     lead(["proposed"], "memory read as the newer state of an older one", "memories read as the newer state of older ones"),
     lead(["faded"], "earlier memory faded under a newer one", "earlier memories faded under newer ones"),

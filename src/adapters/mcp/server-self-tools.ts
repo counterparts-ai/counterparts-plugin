@@ -294,7 +294,7 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
   const reflections = server.counterpart.reflections;
   const refused = (reason: string, detail: string): ToolResult => server["refuse"]("reflect", reason, { phase, detail });
   const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-  const part = (v: unknown): { text?: string; cites?: string[]; short?: string } | null => {
+  const part = (v: unknown): { text?: string; cites?: string[]; short?: string; claims?: { text: string; cites: string[] }[] } | null => {
     if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
     const r = v as Record<string, unknown>;
     return {
@@ -302,6 +302,16 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
       cites: ids(r["cites"]),
       // The page's short version (2026-10-10); the share has none.
       ...(typeof r["short"] === "string" ? { short: r["short"] } : {}),
+      // The page's cites per passage (2026-10-20); the share has none.
+      ...(Array.isArray(r["claims"])
+        ? {
+            claims: (r["claims"] as unknown[]).flatMap((c) => {
+              if (c === null || typeof c !== "object" || Array.isArray(c)) return [];
+              const x = c as Record<string, unknown>;
+              return typeof x["text"] === "string" ? [{ text: x["text"], cites: ids(x["cites"]) }] : [];
+            }),
+          }
+        : {}),
     };
   };
   try {
@@ -324,7 +334,8 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
         const dream = typeof args["dream"] === "string" ? args["dream"] : null;
         // The same at the reflection, when the writer comes before it.
         if (nightOrder().indexOf("writer") < nightOrder().indexOf("reflection")) server.counterpart.closeNightWriter({ session, phase: "the reflection" });
-        const out = reflections.begin({ session, dream, scope: server.scope, ...(model === undefined ? {} : { model }) });
+        const folderOn = server["folderOn"]();
+        const out = reflections.begin({ session, dream, scope: server.scope, ...(model === undefined ? {} : { model }), ...(folderOn === undefined ? {} : { folderOn }) });
         if (!out.ok) {
           return refused(
             out.reason,
@@ -385,9 +396,11 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
           return refused("reflection-and-entry-required", "Pass `reflection` (the id `begin` returned) and your `entry`.");
         }
         const model = readSession(server["registryDir"], session)?.model;
+        const folderOn = server["folderOn"]();
         const out = reflections.finish({
           reflection,
           session,
+          ...(folderOn === undefined ? {} : { folderOn }),
           ...(typeof entry === "string" ? { entry } : {}),
           ...(typeof args["title"] === "string" ? { title: args["title"] } : {}),
           cites: ids(args["cites"]),

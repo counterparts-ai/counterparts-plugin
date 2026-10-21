@@ -285,3 +285,14 @@ h4.st-h{font-family:var(--sans);font-size:13.5px;font-weight:600;color:var(--ink
   .tr-row{grid-template-columns:4.9em minmax(0,1fr) 4.9em;gap:2px 7px}
   .tr-n{grid-column:2;text-align:center;font-size:10.5px;line-height:1}
 }
+
+/* ── the page in layers, and its hypotheses (2026-10-20, an experiment) ── */
+.sp-layers{margin-top:12px}
+.sp-layers .ly-reach,.sp-layers .ly-still{color:var(--dim);font-size:11px;line-height:1.6;margin:4px 0 8px}
+.ly-sec{border-top:1px solid var(--border);padding:6px 0}
+.ly-sec summary{cursor:pointer;font-size:11.5px;line-height:1.6}
+.ly-sec .ly-say{color:var(--dim);font-size:10.5px}
+.ly-layer{font-size:11.5px;line-height:1.65;padding:3px 0 3px 12px;border-left:1px solid var(--border);margin:4px 0;overflow-wrap:anywhere}
+.ly-layer .ly-when{color:var(--faint)}
+.ly-hyp{margin:4px 0 0 16px;font-size:11.5px;line-height:1.65;color:var(--ink)}
+.ly-hyp li{margin:2px 0;overflow-wrap:anywhere}

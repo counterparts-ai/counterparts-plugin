@@ -178,11 +178,13 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
     evidence: ["dream-changes", "contradictions"],
     read: (v) => {
       const merged = part(v, "dreamMerged");
+      const folded = part(v, "folded");
       const flagged = part(v, "flagged");
       const proposed = part(v, "proposed");
       const faded = part(v, "faded");
       const said = [
         ...(merged > 0 ? [`${plural(merged, "near-copy", "near-copies")} merged in a dream`] : []),
+        ...(folded > 0 ? [`${plural(folded, "fold")} in a dream`] : []),
         ...(flagged > 0 ? [`${plural(flagged, "pair")} that disagree flagged`] : []),
         ...(proposed > 0 ? [`${plural(proposed, "memory", "memories")} read as the newer state of an older one`] : []),
         ...(faded > 0 ? [`${plural(faded, "earlier memory", "earlier memories")} faded under a newer one`] : []),
@@ -290,10 +292,12 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
         const returns = part(v, "returns");
         const promoted = part(v, "promoted");
         const merged = part(v, "merged") + part(v, "dreamMerged");
+        const folded = part(v, "folded");
         const rose = part(v, "rose");
         if (returns > 0) parts.push(`${plural(returns, "return")} made memories fade more slowly`);
         if (promoted > 0) parts.push(`${plural(promoted, "memory", "memories")} became core`);
         if (merged > 0) parts.push(`${plural(merged, "near-copy", "near-copies")} merged`);
+        if (folded > 0) parts.push(`${plural(folded, "fold")} in a dream`);
         if (rose > 0) parts.push(`${plural(rose, "memory", "memories")} settled a band higher`);
         return { light: LIGHT.working, says: parts.join("; ") };
       }

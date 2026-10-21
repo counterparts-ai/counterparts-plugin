@@ -98,7 +98,9 @@ export const RULES: readonly Rule[] = [
   { name: 'prospective.plain', mech: 'prospective', word: 'reminded' },
   { name: 'prospective.fire', mech: 'prospective', word: 'reminded' },
   { name: 'band.transition', mech: 'decay', word: 'faded', when: e => detail(e, 'site') === 'decay' && detail(e, 'direction') !== 'up' },
-  { name: 'band.transition', mech: 'consolidation', word: 'rose', when: e => detail(e, 'site') === 'consolidate' },
+  // A rise at whatever site wrote it (only decay does), not the crossing into
+  // identity (counted as `band.promoted`) or a `recurve` (2026-10-20).
+  { name: 'band.transition', mech: 'consolidation', word: 'rose', when: e => detail(e, 'direction') === 'up' && detail(e, 'to') !== 'identity' && detail(e, 'cause') !== 'promoted' && detail(e, 'cause') !== 'recurve' },
   { name: 'memory.pruned', mech: 'decay', word: 'let go' },
   { name: 'sleep.cycle', mech: 'decay', word: 'faded', when: e => num(e, 'faded') > 0 },
   { name: 'band.promoted', mech: 'consolidation', word: 'became core' },
@@ -111,12 +113,16 @@ export const RULES: readonly Rule[] = [
   { name: 'dream.changed', mech: 'episodic-semantic', word: 'dreamed a pattern', when: e => num(e, 'gist') > 0 },
   { name: 'dream.changed', mech: 'interference', word: 'merged in a dream', when: e => num(e, 'merge') > 0 },
   { name: 'dream.changed', mech: 'consolidation', word: 'merged in a dream', when: e => num(e, 'merge') > 0 },
+  // A fold gathers what belongs together, as a merge does (2026-10-20).
+  { name: 'dream.changed', mech: 'interference', word: 'folded in a dream', when: e => num(e, 'fold') > 0 },
+  { name: 'dream.changed', mech: 'consolidation', word: 'folded in a dream', when: e => num(e, 'fold') > 0 },
   { name: 'contradiction.flagged', mech: 'interference', word: 'flagged' },
   // A new memory read as the newer state of an older one (Group 2, the slot detector).
   { name: 'contradiction.proposed', mech: 'interference', word: 'noticed' },
   // DECLARED settles are reconsolidation's; a confirmed slot (a detected door) is
-  // interference's; a dream merge's rows count as the merge (Group 2b, review 10 C6).
-  { name: 'contradiction.settled', mech: 'reconsolidation', word: 'settled', when: e => detail(e, 'source') !== 'slot' && detail(e, 'source') !== 'dream-merge' },
+  // interference's; a dream merge's rows count as the merge (Group 2b, review 10 C6),
+  // a fold's as the fold (2026-10-20).
+  { name: 'contradiction.settled', mech: 'reconsolidation', word: 'settled', when: e => detail(e, 'source') !== 'slot' && detail(e, 'source') !== 'dream-merge' && detail(e, 'source') !== 'fold' },
   { name: 'contradiction.settled', mech: 'interference', word: 'replaced', when: e => detail(e, 'source') === 'slot' },
   { name: 'revision.pressure', mech: 'reconsolidation', word: 'weighed' },
 ];

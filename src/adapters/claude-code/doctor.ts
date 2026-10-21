@@ -134,6 +134,8 @@ import {
 } from "./doctor-upgrades.js";
 import {
   selfPageFindings,
+  selfPageTraceFindings,
+  coreSupportFindings,
   pageWriterFindings,
   dreamingFindings,
   nightRunFindings,
@@ -168,6 +170,8 @@ export {
   dreamingFindings,
   nightRunFindings,
   selfPageFindings,
+  selfPageTraceFindings,
+  coreSupportFindings,
   pageWriterFindings,
   PAGE_WRITER_STALE_DAYS,
 } from "./doctor-self-page.js";
@@ -3358,6 +3362,11 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     // line would grade a default nobody chose.
     ...(unread ? [] : [["snapshot", (): Finding[] => snapshotFindings(input, store)] as const]),
     ["self-page", () => selfPageFindings(store)],
+    // 2026-10-20, two readings of the self (an experiment): the page's claims
+    // and what they rest on, and what stands behind each core element. Never
+    // amber. The second reads every live row and edge: not at session start.
+    ["self-page-trace", () => selfPageTraceFindings(store)],
+    ...(input.budgetMs !== undefined ? [] : [["core-support", (): Finding[] => coreSupportFindings(store)] as const]),
     ["page-writer", () => pageWriterFindings(store, input.config)],
     // C2's one line, `Write-ups` since 2026-09-30. Not in the session-start
     // reading: it is never red, which is all that notice prints, and it reads

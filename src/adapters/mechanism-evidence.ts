@@ -31,6 +31,12 @@ import type { Phase } from "../core/sleep/index.js";
 import type { EventRow, FeelingRow, ReadOnlyStore } from "../core/store/index.js";
 import type { DurableEventName } from "./dashboard/registries.js";
 
+/** A dream's fold, said the same under Consolidation and Interference. */
+const FOLD_SAYS: readonly [string, string] = [
+  "fold in a dream, memories gathered into what they add up to",
+  "folds in a dream, memories gathered into what they add up to",
+];
+
 /** How many backing event seqs a verdict keeps. */
 export const RECENT_IDS = 3;
 /** Ceiling on one name's read inside a window — reported, never silent. */
@@ -212,12 +218,14 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
     // similar memories competing when they are recalled (retrieval-induced
     // forgetting). THE DETECTED DOORS ONLY (2026-10-11, Group 2b; review 10
     // C6): what nobody declared. A declared change is Reconsolidation's, so no
-    // settle counts under both.
+    // settle counts under both. A dream's FOLD (2026-10-20) counts here too, as
+    // a merge does: the parts it gathers stop competing as separate copies.
     id: "interference",
     family: "storage",
     build: "partly",
     proofs: [
       { key: "dreamMerged", event: "dream.changed", sum: "merge", stands: dreamStands, says: ["near-copy merged in a dream", "near-copies merged in a dream"] },
+      { key: "folded", event: "dream.changed", sum: "fold", stands: dreamStands, says: FOLD_SAYS },
       { key: "flagged", event: "contradiction.flagged", says: ["pair that disagrees flagged", "pairs that disagree flagged"] },
       { key: "proposed", event: "contradiction.proposed", says: ["memory read as the newer state of an older one", "memories read as the newer state of older ones"] },
       { key: "faded", event: "contradiction.settled", where: (p) => detectedDoor(p), stands: settleStands, says: ["earlier memory faded under a newer one", "earlier memories faded under newer ones"] },
@@ -287,16 +295,28 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
     // RETURNS — every spaced return makes a memory fade more slowly, credited
     // the moment it happens (the census) — and the core from its two lanes,
     // decided every three lived days (the schedule). A dream's merges are
-    // consolidation too. The cycle row itself is not a proof (it lands every
-    // night).
+    // consolidation too, and so are its FOLDS (2026-10-20: a fold gathers what
+    // belongs together into what it adds up to). The cycle row itself is not a
+    // proof (it lands every night).
+    //
+    // THREE COUNTING GAPS CLOSED (2026-10-20, Mike's "why is Consolidation 0"):
+    //   - folds counted nowhere (`dream.changed` keeps a fold under `fold`, not `gist`);
+    //   - a RISE was read only at site `consolidate`, which nothing writes: every
+    //     crossing is recorded by the decay pass (`sleep/decay.ts`'s header: one
+    //     definition of a crossing), so a rise is any move up, whatever its site
+    //     (`rose`);
+    //   - the exact-copy merge is rare by design (the door turns a repeat in the
+    //     same scope away, and leaves no durable row), so it is worded for what
+    //     reaches it: a copy written in a second place, merged at sleep.
     id: "consolidation",
     family: "transformation",
     build: "built",
     proofs: [
       { key: "promoted", event: "band.promoted", says: ["memory became core", "memories became core"] },
-      { key: "merged", event: "memory.merged", says: ["exact duplicate merged", "exact duplicates merged"] },
+      { key: "merged", event: "memory.merged", says: ["exact copy merged into the one already held", "exact copies merged into the ones already held"] },
       { key: "dreamMerged", event: "dream.changed", sum: "merge", stands: dreamStands, says: ["near-copy merged in a dream", "near-copies merged in a dream"] },
-      { key: "rose", event: "band.transition", where: (p) => p["site"] === "consolidate", says: ["memory rose a band", "memories rose a band"] },
+      { key: "folded", event: "dream.changed", sum: "fold", stands: dreamStands, says: FOLD_SAYS },
+      { key: "rose", event: "band.transition", where: (p) => rose(p), says: ["memory rose a band", "memories rose a band"] },
     ],
     census: {
       key: "returns",
@@ -356,8 +376,10 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
       { key: "pressure", event: "revision.pressure", says: ["correction weighed against an old memory", "corrections weighed against old memories"] },
       // DECLARED settles only (2026-10-11, Group 2b): a write's `updates`, a
       // settle, the core's pressure. A settle from before the door said its
-      // source reads as declared, as nearly all of them were.
-      { key: "settled", event: "contradiction.settled", where: (p) => !detectedDoor(p) && p["source"] !== "dream-merge", stands: settleStands, says: ["contradiction settled", "contradictions settled"] },
+      // source reads as declared, as nearly all of them were. A dream's merge
+      // and fold write settles of their own; those count once, as the merge or
+      // the fold (`dreamSettle`).
+      { key: "settled", event: "contradiction.settled", where: (p) => !detectedDoor(p) && !dreamSettle(p), stands: settleStands, says: ["contradiction settled", "contradictions settled"] },
     ],
   },
   {
@@ -587,6 +609,28 @@ function carriesFeeling(store: ReadOnlyStore, p: Payload): boolean {
  */
 function detectedDoor(p: Payload): boolean {
   return p["source"] === "slot";
+}
+
+/**
+ * A settle a DREAM wrote as part of a merge or a fold (the fold since
+ * 2026-10-20): one per part it holds over. The dream's work is counted once,
+ * as the merge (`dreamMerged`) or the fold (`folded`) under Consolidation and
+ * Interference, and not again under Reconsolidation, where one fold of five
+ * parts would read as five contradictions settled.
+ */
+function dreamSettle(p: Payload): boolean {
+  return p["source"] === "dream-merge" || p["source"] === "fold";
+}
+
+/**
+ * A memory that ROSE a band (2026-10-20): any move up, whatever site wrote it
+ * (only the decay pass writes them). Not the crossing into identity (cause
+ * `promoted`): that is the echo, a lived day later, of the `band.promoted`
+ * row already counted as "became core" (`sleep/decay.ts`). Not a `recurve`:
+ * the build's constants moved it, not anything the memory lived through.
+ */
+function rose(p: Payload): boolean {
+  return p["direction"] === "up" && p["to"] !== "identity" && p["cause"] !== "promoted" && p["cause"] !== "recurve";
 }
 
 function settleStands(store: ReadOnlyStore, row: EventRow): boolean {

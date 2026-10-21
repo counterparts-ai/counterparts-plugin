@@ -119,8 +119,32 @@ type Moment = readonly (readonly [string, number, ...FxRef[]])[]
 const MOMENTS = ART.moments as unknown as Readonly<Record<string, Moment>>
 const SCHEDULE = ART.schedule
 
+/**
+ * The working pose (2026-10-20, an experiment): while Claude works on a turn
+ * he sits alert (`perk`'s face: eyes wide, an ear up) and keeps moving, from
+ * existing frames only: short holds (WORK.holdMs) each ending in a wag of the
+ * whole tail (most often), the tail tip, an ear or a glance. Never a yawn, a
+ * drowsy blink, a lie-down or a nap. Its own moments live here, not in the
+ * art's data module; each frame is one every tier draws.
+ */
+const WORK_MOMENTS: Readonly<Record<string, Moment>> = {
+  workWag: [['tail1', 220], ['tail2', 300], ['tail1', 220], ['tail2', 300], ['tail1', 220]],
+  workGlance: [['lookL', 900], ['perk', 300], ['lookR', 900]],
+}
+
+export const WORK = {
+  /** A hold of the alert face before each moment: shorter than idle's 4–9 s. */
+  holdMs: [1500, 3500],
+  /** The moments he draws from while working: the tail most. */
+  weights: { workWag: 4, tailSmall: 2, ear: 2, workGlance: 1.5 } as Readonly<Record<string, number>>,
+  /** A prompt that never became a turn (no turn.start, no main-loop call) stops being work after this. */
+  askMs: 30000,
+  /** A turn whose end was never heard stops being work after this long with nothing happening and no call running. */
+  quietMs: 10 * 60000,
+} as const
+
 export function momentSteps(name: string): Step[] {
-  return (MOMENTS[name] ?? []).map(([frame, ms, ...fx]) => ({ frame, ms, fx, moment: name }))
+  return (WORK_MOMENTS[name] ?? MOMENTS[name] ?? []).map(([frame, ms, ...fx]) => ({ frame, ms, fx, moment: name }))
 }
 
 /** A frame and its effects, as one key: what is on screen. */
@@ -142,13 +166,31 @@ export function stepKey(s: Pick<Step, 'frame' | 'fx'>): string {
  * first meeting) and `dream` (while a dream runs, until it ends); each gets
  * him up first. A hold is one still frame: no breathing in between (the
  * owner's round 2: calmer).
+ *
+ * While Claude works on a turn (2026-10-20, an experiment) he rests in
+ * `work` instead of sitting idle: the alert face, short holds, the tail going
+ * (WORK). A moment still plays over it and returns to it; a dream still holds
+ * the stage until it ends. The turn ends and he relaxes, behind a blink, and
+ * the idle clock starts there.
  */
 export type Director = {
-  mode: 'idle' | 'lie' | 'nap' | 'dream'
+  mode: 'idle' | 'lie' | 'nap' | 'dream' | 'work'
   queue: Step[]
   cur: Step
   /** When `cur` ends. */
   until: number
+  /** When `cur` itself ends, before steps showing the same thing were joined to it (`until` may be later). */
+  stepEnd: number
+  /**
+   * Claude's turn, apart from what is on screen (a dream or a moment may hold the stage meanwhile):
+   * `asked` a prompt was sent, `open` a main-loop turn began (or a main-loop call ran), `none` it ended.
+   * While it is not `none` he rests in `work`, not `idle`.
+   */
+  turn: 'none' | 'asked' | 'open'
+  /** The turn's last sign of life: the prompt, its start, a model request (`step`), a call beginning or ending. */
+  turnAt: number
+  /** When a turn's end was last heard: from then on only a turn's start (or a prompt) opens one. */
+  endAt: number
   idleSince: number
   napSince: number
   dreamSince: number
@@ -166,9 +208,18 @@ export type Director = {
 
 const STILL: Step = { frame: 'idle', ms: 0, fx: [], moment: 'rest' }
 const STILL_LIE: Step = { frame: 'lie0', ms: 0, fx: [], moment: 'lieRest' }
+const STILL_WORK: Step = { frame: 'perk', ms: 0, fx: [], moment: 'work' }
+/** What the work schedule plans: the hold and the moments it draws from. */
+const WORK_PLANNED = new Set(['work', ...Object.keys(WORK.weights)])
+
+/**
+ * Moments of what really happened, and the get-ups before them: a change between working and resting
+ * lets these play out. The schedule's own (a hold, a blink, the tail) are cut, behind a blink.
+ */
+const REAL = new Set(['came', 'cameLie', 'note', 'hello', 'napOut', 'lieOut', 'bridge'])
 
 export function newDirector(now: number): Director {
-  return { mode: 'idle', queue: [], cur: STILL, until: now, idleSince: now, napSince: 0, dreamSince: 0, fresh: true, busy: 0, busySince: 0, noteAt: -Infinity, saveAt: -Infinity }
+  return { mode: 'idle', queue: [], cur: STILL, until: now, stepEnd: now, turn: 'none', turnAt: -Infinity, endAt: -Infinity, idleSince: now, napSince: 0, dreamSince: 0, fresh: true, busy: 0, busySince: 0, noteAt: -Infinity, saveAt: -Infinity }
 }
 
 /** A tool call that never said it ended stops holding him awake after this long. */
@@ -192,6 +243,31 @@ function idleFrom(d: Director, now: number): number {
  */
 function expireBusy(d: Director, now: number): void {
   if (d.busy > 0 && now - d.busySince >= BUSY_MAX_MS) d.busy = 0
+}
+
+/**
+ * A turn whose end was never heard (a reload as it ended, a prompt that started none) ends by itself:
+ * an ask after WORK.askMs, an open turn after WORK.quietMs with no model request or call meanwhile and
+ * none running. The idle clock starts there, so he sits, then lies down, then naps, as after any end.
+ * Says whether it ended one.
+ */
+function expireWork(d: Director, now: number): boolean {
+  if (d.turn === 'none') return false
+  if (d.busy > 0 && now - d.busySince < BUSY_MAX_MS) return false
+  if (now - d.turnAt < (d.turn === 'asked' ? WORK.askMs : WORK.quietMs)) return false
+  d.turn = 'none'
+  d.idleSince = now
+  return true
+}
+
+/** Where he rests when nothing plays: at work while a turn runs, else sitting idle. */
+function restMode(d: Director): 'work' | 'idle' {
+  return d.turn === 'none' ? 'idle' : 'work'
+}
+
+/** A get-up going to work ends on its blink: the sitting face it would end on is left out, so the alert face follows the blink. */
+function upTo(steps: Step[], to: Director['mode']): Step[] {
+  return to === 'work' && steps.at(-1)?.frame === 'idle' ? steps.slice(0, -1) : steps
 }
 
 /** A dream that never said it ended stops after this long. */
@@ -230,9 +306,9 @@ function holdThen(d: Director, still: Step, moment: string, now: number, deadlin
 function plan(d: Director, now: number, rand: () => number): void {
   if (d.mode === 'dream') {
     if (now - d.dreamSince > DREAM_MAX_MS) {
-      d.mode = 'idle'
+      d.mode = restMode(d)
       d.idleSince = now
-      d.queue.push(...momentSteps('napOut'))
+      d.queue.push(...upTo(momentSteps('napOut'), d.mode))
       return
     }
     d.queue.push(...momentSteps('dream'))
@@ -246,6 +322,19 @@ function plan(d: Director, now: number, rand: () => number): void {
       return
     }
     d.queue.push(...momentSteps('nap'))
+    return
+  }
+  if (d.mode === 'work') {
+    expireWork(d, now)
+    if (d.turn === 'none') {
+      d.mode = 'idle'
+      d.queue.push(...momentSteps('bridge'))
+      return
+    }
+    // From any face but the alert one or a blink (a moment ended on the sitting face, the notepad or hello, or
+    // work began from a still hold), a blink first, never a cut. The work schedule's own moments go on as they are.
+    if (!WORK_PLANNED.has(d.cur.moment) && d.cur.frame !== 'blink' && d.cur.frame !== 'perk') d.queue.push(...momentSteps('bridge'))
+    holdThen(d, STILL_WORK, pick(rand, WORK.weights, 'workWag'), now, Infinity, WORK.holdMs, rand)
     return
   }
   const since = idleFrom(d, now)
@@ -293,6 +382,7 @@ export function advance(d: Director, now: number, rand: () => number = Math.rand
     if (s === undefined) break
     d.cur = s
     d.until = Math.max(d.until, now - 1) + s.ms
+    d.stepEnd = d.until
   }
   // The next change: queued steps that show the same thing join `cur`. What follows is planned ahead
   // from when `cur` ends, so a moment that ends on the frame the next hold shows (`came`'s idle,
@@ -314,8 +404,20 @@ export function advance(d: Director, now: number, rand: () => number = Math.rand
  * subagent's too (2026-10-20). Activity, not a moment: the idle clock starts
  * over and a lie-down or nap on its way is called off, as a prompt does, but
  * nothing plays.
+ *
+ * `turn` and `turnEnd`: the main loop's turn began or ended, for any reason,
+ * whatever its id. A `prompt` (not a slash command) puts him to work at once,
+ * ahead of the turn's start (WORK.askMs bounds one that starts none).
+ * `turnCall`: a main-loop tool call began. It opens a turn only while no
+ * turn's end has been heard in this module's life (a reload mid-turn): once
+ * one has, every new turn's start is heard, so a call arriving after an end
+ * (an Esc during its dispatch) is that turn's straggler, not a new turn.
+ * `step`: a main-loop model request began or ended; a sign of life only, so a
+ * turn that writes for a long while without calling a tool stays at work.
+ * `look`: the person ran a slash command: someone is there, so he gets up
+ * and the idle clock starts over, as for a prompt, but it is not work.
  */
-export type FoxEvent = 'came' | 'note' | 'hello' | 'dream' | 'dreamEnd' | 'prompt' | 'busy' | 'busyEnd'
+export type FoxEvent = 'came' | 'note' | 'hello' | 'dream' | 'dreamEnd' | 'prompt' | 'busy' | 'busyEnd' | 'turn' | 'turnEnd' | 'turnCall' | 'step' | 'look'
 
 /**
  * What gets him up from the pose on screen, so an event's first frame never
@@ -338,11 +440,24 @@ function getUp(d: Director): Step[] {
 export function trigger(d: Director, ev: FoxEvent, now: number): boolean {
   const pose = poseOf(d.cur.frame)
   if (ev === 'busy' || ev === 'busyEnd') expireBusy(d, now)
+  expireWork(d, now)
   if (ev === 'busy') {
     if (d.busy === 0) d.busySince = now
     d.busy += 1
   } else if (ev === 'busyEnd') d.busy = Math.max(0, d.busy - 1)
   else if (ev === 'note') d.saveAt = now
+  // The turn: a prompt asks, a start (or a main-loop call) opens it, any main-loop end closes it, whatever its id.
+  if (ev === 'turn') d.turn = 'open'
+  else if (ev === 'turnCall' && d.turn !== 'open' && (d.turn === 'asked' || d.endAt === -Infinity)) d.turn = 'open'
+  else if (ev === 'prompt' && d.turn === 'none') d.turn = 'asked'
+  else if (ev === 'turnEnd') {
+    d.turn = 'none'
+    d.endAt = now
+  }
+  const life = ev === 'busy' || ev === 'busyEnd' || ev === 'turnCall' || ev === 'step'
+  if (ev === 'turn' || ev === 'prompt' || (life && d.turn !== 'none')) d.turnAt = now
+  // A model request is a sign of life only: nothing on screen changes for it.
+  if (ev === 'step') return false
   if (ev === 'dream') {
     if (d.mode === 'dream') return false
     d.queue = pose === 'asleep' ? [] : momentSteps(pose === 'lie' ? 'lieNapIn' : 'napIn')
@@ -353,9 +468,9 @@ export function trigger(d: Director, ev: FoxEvent, now: number): boolean {
   }
   if (ev === 'dreamEnd') {
     if (d.mode !== 'dream') return false
-    d.mode = 'idle'
+    d.mode = restMode(d)
     d.idleSince = now
-    d.queue = momentSteps('napOut')
+    d.queue = upTo(momentSteps('napOut'), d.mode)
     d.until = now
     return true
   }
@@ -364,12 +479,28 @@ export function trigger(d: Director, ev: FoxEvent, now: number): boolean {
   d.idleSince = now
   // A save while the last one's notepad still runs: it is the same burst, written once.
   if (ev === 'note' && now - d.noteAt < NOTE_SPAN_MS) return false
-  if (ev === 'prompt' || ev === 'busy' || ev === 'busyEnd') {
-    // Awake (sitting, or a get-up or a moment already playing), it stands: only the clock starts over.
+  if (ev === 'prompt' || ev === 'busy' || ev === 'busyEnd' || ev === 'turn' || ev === 'turnEnd' || ev === 'turnCall' || ev === 'look') {
+    // Awake and where he should be (sitting, or at work), it stands: only the clock starts over.
+    const to = restMode(d)
+    if (d.mode === to) return false
+    const from = d.mode
+    d.mode = to
     // A lie-down or nap, or one on its way, is called off.
-    if (d.mode === 'idle') return false
-    d.mode = 'idle'
-    d.queue = pose === 'sit' ? [] : getUp(d)
+    if (from === 'lie' || from === 'nap') {
+      d.queue = pose === 'sit' ? [] : upTo(getUp(d), to)
+      d.until = now
+      return true
+    }
+    // Between resting and working: a moment of what really happened (a save, a get-up) plays out first;
+    // the schedule's own is cut, behind a blink where the face is not the sitting one.
+    const real = d.queue.filter(s => REAL.has(s.moment))
+    if (REAL.has(d.cur.moment)) {
+      d.queue = real
+      if (d.until <= d.stepEnd) return false
+      d.until = Math.max(now, d.stepEnd)
+      return true
+    }
+    d.queue = real.length > 0 ? real : getUp(d)
     d.until = now
     return true
   }
@@ -377,7 +508,7 @@ export function trigger(d: Director, ev: FoxEvent, now: number): boolean {
   // Lying, something coming to mind perks him up where he lies, then he sits up (round 8's lab).
   const moment = ev === 'came' && pose === 'lie' ? [...momentSteps('cameLie'), ...momentSteps('lieOut')] : [...getUp(d), ...momentSteps(ev)]
   d.queue = [...moment, ...(ev === 'note' ? momentSteps('note') : [])]
-  d.mode = 'idle'
+  d.mode = restMode(d)
   d.until = now
   return true
 }

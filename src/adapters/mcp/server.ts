@@ -1170,6 +1170,28 @@ export class McpServer {
     return lookupScope(readScopes(this.scopesFile).registry, scope);
   }
 
+  /**
+   * WHICH FOLDERS ARE ON, FOR THE REFLECTION'S MARKS (review of #558): those
+   * the folder setting has on (or unset, which is on), as
+   * `lifecycle.ts#chapterExports` decides what crosses. A folder's work,
+   * written in one set off or paused, is neither offered to be marked nor
+   * marked anything but work — marked owner, us or world it would reach every
+   * folder's wake. No setting file: every one. A setting that will not read:
+   * none. Read once per call.
+   */
+  private folderOn(): ((scope: string) => boolean) | undefined {
+    const file = this.scopesFile;
+    if (file === null) return undefined;
+    let read: ReturnType<typeof readScopes>;
+    try {
+      read = readScopes(file);
+    } catch {
+      return () => false;
+    }
+    if (read.error !== null) return () => false;
+    return (scope) => stanceOfMode(lookupScope(read.registry, scope).mode) === "on";
+  }
+
   /** The named refusal every tool but `scope` gets in a directory set `off`. */
   private refuseScopeOff(tool: string, verdict: ScopeVerdict): ToolResult {
     this.emit("mcp.scope.off", undefined, { tool, matched: verdict.matched, mode: verdict.mode });

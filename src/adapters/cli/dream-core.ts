@@ -12,6 +12,7 @@ import type { Counterpart } from "../../core/counterpart.js";
 import { dreamSkippedOf, nightPartsWords, nightRunWords } from "../../core/dream/index.js";
 import type { DreamingSetting, NightRun } from "../../core/dream/index.js";
 import { acceptsReflectedFeeling, reconsiderWords } from "../../core/sleep/index.js";
+import { coreSupport } from "../../core/self/measures.js";
 import type { DreamChangeRow, ReflectionRow, Store } from "../../core/store/index.js";
 
 /** How a memory id reads in a list: its first line, or why it is not shown.
@@ -245,10 +246,21 @@ export function coreListLines(counterpart: Counterpart): string[] {
       ? "The core is empty: nothing has become part of who I am yet."
       : `The core — ${String(core.length)} ${core.length === 1 ? "memory" : "memories"} that do not fade`,
   ];
+  // WHAT STANDS BEHIND EACH (2026-10-20, a reading; `self/measures.ts`): its
+  // returns, derivations and links as three columns, and the days and
+  // contexts they span. Nothing promotes or demotes on it.
+  const support = new Map(core.length === 0 ? [] : coreSupport(counterpart.store).elements.map((e) => [e.id, e]));
   for (const m of core) {
     const how = m.lane === null ? "(before lanes, or by revision)" : m.lane === "restored" ? `restored after it was retired${m.day === null ? "" : `, lived day ${String(m.day)}`}` : `${m.lane} lane${m.day === null ? "" : `, lived day ${String(m.day)}`}`;
     const said = m.confidential ? "[confidential]" : (m.body ?? "(unreadable)");
     out.push(`  ${m.id}  ${m.kind.padEnd(6)} ${how} — ${said}`);
+    const s = support.get(m.id);
+    if (s !== undefined) {
+      out.push(
+        `      returns ${String(s.returns)} · derivations ${String(s.derivations)} · links ${String(s.links)} · ` +
+          `${String(s.days)} lived ${s.days === 1 ? "day" : "days"} · ${String(s.contexts)} ${s.contexts === 1 ? "context" : "contexts"}`,
+      );
+    }
   }
   out.push(
     "",

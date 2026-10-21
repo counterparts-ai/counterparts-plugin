@@ -23,6 +23,8 @@ import {
   readPageTooLargeDetail,
 } from "../../../../core/self/index.js";
 import type { PageVersion, PageWriterRun, PageWriterStatus } from "../../../../core/self/index.js";
+import { pageTrace } from "../../../../core/self/measures.js";
+import type { PageTraceReading } from "../../../../core/self/measures.js";
 import { TUNABLES as SLEEP, coreContextFor, isJournal, reconsiderWords } from "../../../../core/sleep/index.js";
 import type { Band, Kind } from "../../../../core/types.js";
 import { NEVER, NONE } from "../../layout.js";
@@ -115,6 +117,12 @@ export interface MindView {
     readonly headed: boolean;
     /** Every `#`-headed section, in order — any heading, not only Core and Lately (2026-09-28). */
     readonly sections: readonly { readonly heading: string; readonly body: string }[];
+    /**
+     * WHAT ITS CLAIMS REST ON (2026-10-20, an experiment; `self/measures.ts`):
+     * the doctor's reading, with the claims no memory stands behind
+     * (`hypotheses`, null when cites were not kept per claim).
+     */
+    readonly trace: PageTraceReading;
   } | null;
   /** The honest absence line when no page has been written. */
   readonly pageAbsent: string | null;
@@ -430,6 +438,7 @@ export function mindView(src: DashboardSource): MindView {
             // EVERY SECTION, in the page's order (2026-09-28): "Us" and "How
             // I work" are sections too, not only the Core/Lately convention.
             sections: sections.sections.map((x) => ({ heading: x.heading, body: x.body })),
+            trace: pageTrace(src.store, page),
           },
     pageAbsent: page === null ? (everLived ? NONE : NEVER) : null,
     // NOT guarded on the live page: a CLEARED page has no live row and still has

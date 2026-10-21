@@ -47,8 +47,8 @@
 import { Buffer } from "node:buffer";
 import { randomBytes } from "node:crypto";
 
-import { NIGHT_WRITE_UP_EVENT } from "../../core/counterpart.js";
-import type { Counterpart, CounterpartEvent } from "../../core/counterpart.js";
+import { NIGHT_WRITE_UP_EVENT, seatAsk } from "../../core/counterpart.js";
+import type { Counterpart, CounterpartEvent, Seat } from "../../core/counterpart.js";
 import { calendarDate } from "../../core/self/index.js";
 import { TUNABLES } from "../config.js";
 import type { AdapterConfig } from "../config.js";
@@ -72,7 +72,6 @@ import {
 } from "../sessions.js";
 import type { WriteUpProgress } from "../sessions.js";
 import type { HeldSession } from "../../core/remember/index.js";
-import type { ChildPlan, ChildResult } from "./child.js";
 
 /** The one tool the catch-up child may call, as the host names it. */
 export const CATCH_UP_TOOLS = ["mcp__counterparts__session_end"] as const;
@@ -537,10 +536,9 @@ export interface CatchUpInput {
   /** Where the runners' records are filed: the launching session's directory,
    *  or the store's own for the command. */
   readonly scope: string;
-  /** Decides one child (`night-run.ts#planNightChild`, with this phase's tools,
-   *  turns and watchdog). */
-  readonly plan: (input: { prompt: string; runner: string }) => ChildPlan & { readonly ok: boolean; readonly reason: string };
-  readonly start: (plan: ChildPlan) => Promise<ChildResult>;
+  /** Who answers each batch's ask (`core/seat.ts`, 2026-10-20): Claude Code's
+   *  own (`night-run.ts#claudeCodeSeat`) for the night and the command. */
+  readonly seat: Seat;
   readonly now: () => number;
   /** The run's sanity ceiling, parts: the night's `NIGHT_WRITE_UP_PARTS`,
    *  the command's `CATCH_UP_COMMAND_PARTS`; absent, the night's. */
@@ -556,19 +554,20 @@ export interface CatchUpInput {
 
 /** One child, started and waited on: what became of it. */
 async function runChild(input: CatchUpInput, plan: CatchUpPlan, prompt: string): Promise<{ state: CatchUpReport["state"]; code: number | null }> {
-  const child = input.plan({ prompt, runner: plan.runner });
-  if (!child.ok) return { state: "could-not-start", code: null };
+  // THE ASK (2026-10-20): the batch's prompt, filed under its runner, with
+  // the write-up's own turns and watchdog.
+  const ask = seatAsk("catch-up", {
+    prompt,
+    run: input.run,
+    session: plan.runner,
+    scope: input.scope,
+    limits: { turns: TUNABLES.NIGHT_WRITE_UP_MAX_TURNS, ms: TUNABLES.NIGHT_WRITE_UP_MS },
+  });
   try {
-    const result = await input.start(child);
-    const state =
-      result.spawnCode !== undefined || (result.code === null && !result.timedOut && result.error !== null)
-        ? "could-not-start"
-        : result.timedOut
-          ? "timed-out"
-          : result.code === 0
-            ? "done"
-            : "failed";
-    return { state, code: result.code };
+    const answer = await input.seat.answer(ask);
+    if (answer.refused !== null) return { state: "could-not-start", code: null };
+    const state = !answer.started ? "could-not-start" : answer.timedOut ? "timed-out" : answer.code === 0 ? "done" : "failed";
+    return { state, code: answer.code };
   } catch {
     return { state: "could-not-start", code: null };
   }

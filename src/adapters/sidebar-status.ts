@@ -276,9 +276,10 @@ export interface SidebarStatus {
  * dashboard page's, and most of a row's bytes.
  */
 export const DETAIL_KEYS: ReadonlySet<string> = new Set([
-  "accepted", "actor", "actorId", "applied", "challengerId", "credited", "deposited", "direction", "faded", "felt",
-  "footnoteCount", "footnotes", "gist", "holds", "how", "id", "ids", "linksReached", "memoryId", "merge",
-  "moodMatched", "over", "replayLinks", "session", "site", "source", "surfaced", "surfacedCount", "targetId", "turn",
+  "accepted", "actor", "actorId", "applied", "cause", "challengerId", "credited", "deposited", "direction", "faded",
+  "felt", "fold", "footnoteCount", "footnotes", "gist", "holds", "how", "id", "ids", "linksReached", "memoryId",
+  "merge", "moodMatched", "nominate-core", "over", "replayLinks", "session", "site", "source", "surfaced", "surfacedCount", "targetId",
+  "to", "turn",
 ]);
 
 /** A row as the sidebar reads it: the narrated row less what only the dashboard's page draws. */

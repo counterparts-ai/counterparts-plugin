@@ -1225,6 +1225,9 @@ export const register: Register = on => {
     try {
       // Any call (any tool, a subagent's too) is the session working: the fox stays up while it runs.
       await foxEvent($, 'busy').catch(() => undefined)
+      // A main-loop call means a turn is running, whether or not its start was heard here (a reload mid-turn);
+      // the fox takes it so only until a turn's end was heard (`turnCall` in fox.ts).
+      if (e.agentId === undefined) await foxEvent($, 'turnCall').catch(() => undefined)
       // The fox dreams while this session's dream runs.
       if (ours?.tool === 'dream') await foxEvent($, 'dream').catch(() => undefined)
       let ran: Awaited<ReturnType<typeof next>>
@@ -1253,10 +1256,39 @@ export const register: Register = on => {
     }
   }).catch(($, e, next) => next(e))
 
-  // A prompt the person sent: the fox looks up.
+  // A prompt the person sent: the fox looks up, and goes to work. A slash command (`e.command`) only gets him
+  // up (someone is there): one that runs locally starts no turn, and one that asks the model reaches work by
+  // its turn's start.
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin.kind
-    if (kind === 'composer' || kind === 'bridge') await foxEvent($, 'prompt')
+    if (kind === 'composer' || kind === 'bridge') await foxEvent($, e.command === undefined ? 'prompt' : 'look')
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Claude's turn, the main loop's only (a subagent's runs inside an Agent call, which keeps him busy anyway;
+  // and the hooks a spawn is nested in never hear its start): while it runs the fox is at work.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    await foxEvent($, 'turn').catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Each model request of the main loop's turn, as it begins and ends: a sign of life, so a turn that writes
+  // a long while without calling a tool stays at work. Passed through whole; nothing on screen changes for it.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId !== undefined) return yield* next(e)
+    await foxEvent($, 'step').catch(() => undefined)
+    const r = yield* next(e)
+    await foxEvent($, 'step').catch(() => undefined)
+    return r
+  }).catch(async function* ($, e, next) {
+    return yield* next(e)
+  })
+
+  // Its end, for any reason (an answer, an interrupt, a refusal, an error), whether or not its start was heard here.
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    await foxEvent($, 'turnEnd').catch(() => undefined)
     return next(e)
   }).catch(($, e, next) => next(e))
 
