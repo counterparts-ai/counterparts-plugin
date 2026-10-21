@@ -610,16 +610,6 @@ export const MECHANISMS: readonly Mechanism[] = [
         "the same gap as spreading activation: folded into the turn's totals with no breakdown.",
     },
   },
-  {
-    id: "confidentiality",
-    label: "something confidential is held back rather than surfaced",
-    module: "recall/gate.ts",
-    evidence: {
-      kind: "none",
-      reason:
-        "the gate reports itself clear inside the deposit and turn records and is never broken out, so a withholding that happened and one that never had to are the same absence.",
-    },
-  },
 
   // ── what the night does ──────────────────────────────────────────────────
   {
@@ -1952,12 +1942,8 @@ const REFUSAL_READERS: Record<string, (p: Record<string, unknown>) => [string, n
    * `dim-cap:*` IS a refusal: those memories were reachable by effort and the
    * cap is what stopped them.
    *
-   * `confidential-withheld` is deliberately NOT read, though the row keeps it.
-   * It is the one verdict this package holds silent to the asker (§9.1 G5), and
-   * every reader of this table renders to a screen — a console, a dashboard
-   * panel — which is a third audience that gets screenshotted and screen-shared.
-   * The row is for the owner reading their own store; a rendered line is not the
-   * same thing, and the difference is the whole of the confidentiality rule.
+   * `confidential-withheld`, which a row from before 2026-10-21 may still
+   * carry, is not read: only `dim-cap:*` is. That gate is retired.
    */
   "mcp.recall": (p) =>
     countsIn(p, "blockedBy").filter(([reason]) => reason.startsWith("dim-cap:")),

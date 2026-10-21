@@ -26,7 +26,7 @@ export function mount() {
 function line(l) {
   const cls = "td-line td-" + l.kind;
   if (l.to.memory !== undefined) {
-    const words = l.confidential ? '<span class="withheld">a private memory</span>' : esc(headline(l.text));
+    const words = esc(headline(l.text));
     return '<li class="' + cls + '"><button type="button" class="td-link" data-id="' + esc(l.to.memory) + '">' + words + "</button></li>";
   }
   return '<li class="' + cls + '"><a class="td-link" href="#' + esc(l.to.hash) + '">' + esc(l.text) + (l.kind === "more" ? " →" : "") + "</a></li>";

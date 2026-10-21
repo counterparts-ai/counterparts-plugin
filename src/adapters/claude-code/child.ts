@@ -61,8 +61,9 @@ export interface ChildPlan {
   /** The child's working directory; absent, this process's. */
   readonly cwd?: string;
   /** Keep what the child writes to STDOUT (2026-10-12): the nightly run reads
-   *  its own child's `stream-json` output rather than looking for the host's
-   *  transcript under `~/.claude/projects`. Absent, STDOUT is ignored. */
+   *  what the host cut from its own child's `stream-json` output, the only
+   *  record of the child there is (it runs with `--no-session-persistence`).
+   *  Absent, STDOUT is ignored. */
   readonly captureOutput?: boolean;
 }
 

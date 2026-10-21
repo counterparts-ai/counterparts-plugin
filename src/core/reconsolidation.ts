@@ -1291,7 +1291,7 @@ export function detectSlot(store: Store, input: { id: string; exclude?: readonly
       const c = store.row(id);
       if (c === undefined || c.type !== "memory" || c.archived === 1 || c.superseded_by !== null || rowTombstoned(c)) continue;
       if (c.source !== "authored" || c.kind !== row.kind || (c.about ?? null) !== (row.about ?? null) || slotExempt(c)) continue;
-      if (c.confidential !== row.confidential || c.event_date !== null) continue;
+      if (c.event_date !== null) continue;
       if (c.created_at === null || c.created_at >= row.created_at || row.birth_day - c.birth_day > T.SLOT_WINDOW_DAYS) continue;
       if (c.protected === 1 || c.band === "identity" || c.promoted_identity === 1) continue;
       try {
@@ -1611,12 +1611,12 @@ function excerptOf(body: string, chars: number): string {
  * candidate is kept when it clears either bar: word overlap
  * (`NEIGHBOUR_LEXICAL`) or meaning (`NEIGHBOUR_COSINE`). Only what could
  * surface for this writer: live, un-superseded memory rows with words — not a
- * journal chapter, a handoff, a schema row, the memory it `updates`, or a
- * confidential one outside the owner's session. No model call; bounded.
+ * journal chapter, a handoff, a schema row, or the memory it `updates`. No
+ * model call; bounded.
  */
 export function writeNeighbours(
   store: Store,
-  input: { id: string; exclude?: readonly string[]; owner: boolean; limit?: number; session?: string | null },
+  input: { id: string; exclude?: readonly string[]; limit?: number; session?: string | null },
 ): Neighbour[] {
   const T = CONTRADICTION_TUNABLES;
   const row = store.row(input.id);
@@ -1665,7 +1665,6 @@ export function writeNeighbours(
     seen.add(id);
     const c = store.row(id);
     if (c === undefined || c.type !== "memory" || c.archived === 1 || c.superseded_by !== null || rowTombstoned(c)) continue;
-    if (c.confidential === 1 && !input.owner) continue;
     try {
       if (isHandoff(store.readProse(id))) continue;
     } catch {
@@ -1685,7 +1684,7 @@ export function writeNeighbours(
   // so it can be close — and on 10-11 its bare title was read as the rule.
   // It is listed marked with the memory that holds now; left out when that
   // one is already in view (the write itself, what it updates, a sibling, a
-  // neighbour listed above) or is not this writer's to see.
+  // neighbour listed above) or is gone.
   const limit = input.limit ?? T.NEIGHBOURS;
   const out: Neighbour[] = [];
   for (const s of scored) {
@@ -1694,7 +1693,7 @@ export function writeNeighbours(
     if (head !== null) {
       if (skip.has(head) || out.some((n) => n.id === head)) continue;
       const h = store.row(head);
-      if (h === undefined || (h.confidential === 1 && !input.owner)) continue;
+      if (h === undefined) continue;
     }
     out.push({
       id: s.id,
@@ -1864,7 +1863,7 @@ export interface HeldUpdate {
   /** The memory named in `updates`, left as it was. */
   readonly over: string;
   readonly title: string | null;
-  /** Its text, cut at `HELD_TEXT_CHARS`; null when this session may not read it (confidential, not the owner's). */
+  /** Its text, cut at `HELD_TEXT_CHARS`. Null is no longer produced (2026-10-21); the type goes with the column's. */
   readonly text: string | null;
   /** The settle the writer declared. */
   readonly how: SettleHow;
@@ -1875,8 +1874,7 @@ export interface HeldUpdate {
 }
 
 /** A held memory's title and text, shaped for the writer (`HeldUpdate`). */
-export function heldView(row: Pick<MemoryRow, "title" | "body" | "confidential">, owner: boolean): { title: string | null; text: string | null } {
-  if (row.confidential === 1 && !owner) return { title: null, text: null };
+export function heldView(row: Pick<MemoryRow, "title" | "body">): { title: string | null; text: string | null } {
   const title = row.title === null || row.title.trim().length === 0 ? lineOf({ body: row.body }) || null : row.title;
   return { title, text: excerptOf(row.body, CONTRADICTION_TUNABLES.HELD_TEXT_CHARS) };
 }

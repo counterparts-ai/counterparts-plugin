@@ -46,10 +46,10 @@
  *      tool returns a result that SAYS it stood down, plus telemetry. A silent
  *      no-op would be indistinguishable from a broken server, which is the
  *      exact failure §2.4 records.
- *   3. **Owner-scoped confidentiality** (§5 G6). The host is the only thing
- *      that knows whose session this is; it says so at construction, and the
- *      value travels into `Recall`'s own owner logic rather than being
- *      re-derived from anything the model can influence.
+ *   3. **No yours/guest split** (removed 2026-10-21, Mike: "for 1, i agree,
+ *      lets remove it"). Every session the server serves — a Claude Code
+ *      session, a Desktop chat, the night run — is answered the same way;
+ *      only the observer stance is different, and it is read-only.
  *
  * Telemetry is content-by-reference throughout: ids, counts, tiers, reasons.
  * No body text, no question text, no note text ever reaches an event.
@@ -171,8 +171,6 @@ import { writeUpDoor } from "./write-up.js";
 import type { ToolName } from "./tools.js";
 import { scriptArgs } from "../runtime.js";
 import {
-  OWNER_ENV_NAME,
-  OWNER_FALSE_NOTE,
   SERVER_NAME,
   SERVER_VERSION,
   DESKTOP_INSTRUCTIONS,
@@ -239,7 +237,6 @@ export {
   desktopBindNote,
   NO_DESKTOP_SESSION,
   desktopWriteUpAsk,
-  OWNER_FALSE_NOTE,
   dreamHow,
   RECALL_MODE_WORDS,
 } from "./server-words.js";
@@ -271,11 +268,7 @@ export class McpServer {
    *  `scope` as that session's directory for the call (`callAs`), never this. */
   private placeScope: string;
   scopeSource: ScopeSource;
-  /** Did the host say this is the owner's session? Read through `owner`. */
-  private readonly ownerClaimed: boolean;
-  private readonly ownerFrom: "env" | "config" | "default" | "off";
-  private readonly codeTabOwner: boolean;
-  /** The store's own observer bit (observer-mode G7): set at open, never lifted. */
+  /** The store's own observer bit (observer-mode G3, read-only at the store seam): set at open, never lifted. */
   private readonly storeObserver: boolean;
   /**
    * THE LAUNCH DIRECTORY'S `observer` ENTRY, when the launch could not tell
@@ -382,9 +375,6 @@ export class McpServer {
     }
     this.storeObserver = opts.counterpart.observer;
     this.launchObserver = opts.launchObserver === true;
-    this.ownerClaimed = opts.owner === true;
-    this.ownerFrom = opts.ownerFrom ?? (opts.owner === true ? "env" : "default");
-    this.codeTabOwner = opts.codeTabOwner === true;
     this.embedderGiven = opts.embedder ?? null;
     this.onEvent = opts.onEvent;
     this.afterCall = opts.afterCall;
@@ -454,7 +444,7 @@ export class McpServer {
   }
 
   /**
-   * ONE PREDICATE (observer-mode G7): the store's bit, always. Beside it, for
+   * ONE PREDICATE (observer-mode G1): the store's bit, always. Beside it, for
    * Claude Desktop, what `scopes.json` says about `claude-desktop:` NOW — read
    * per call, as `off` and `paused` are, so the `scope` tool's `observer` takes
    * effect at once (review of #294, finding 2); for every other client, the
@@ -464,27 +454,6 @@ export class McpServer {
     if (this.storeObserver) return true;
     if (this.desktop) return this.callObserver ?? stanceOfMode(this.scopeVerdict().mode) === "observer";
     return this.launchObserver;
-  }
-
-  /** An observer is a non-owner regardless of what the host claimed
-   *  (observer-mode G7): an instrument reading somebody's store is not them. */
-  get owner(): boolean {
-    return (this.ownerClaimed || (this.callAs !== null && this.codeTabOwner)) && !this.observer;
-  }
-
-  /** What `status` says decided the stance (2026-10-02), in words. */
-  private ownerStance(): Record<string, unknown> {
-    const from =
-      this.callAs !== null && this.codeTabOwner && !this.ownerClaimed
-        ? "a Claude Code session from Desktop's Code tab, which the installed configuration (owner: true) makes the owner's"
-        : this.ownerFrom === "config"
-          ? "the installed configuration (owner: true): this is your own Claude Code session"
-          : this.ownerFrom === "env"
-            ? `--owner or ${OWNER_ENV_NAME}, set on this launch`
-            : this.ownerFrom === "off"
-              ? `${OWNER_ENV_NAME} on this launch says not the owner's (0, off or false, or a value it could not read): the opt-out`
-              : "nothing made this launch the owner's";
-    return { owner: this.owner, ownerFrom: from, ...(this.owner ? {} : { ownerMeans: OWNER_FALSE_NOTE }) };
   }
 
   /** An instrument opens no sockets, whatever the host handed it (scar E7). */
@@ -559,7 +528,6 @@ export class McpServer {
         this.emit("mcp.initialize", undefined, {
           protocolVersion: version,
           observer: this.observer,
-          owner: this.owner,
           boundSession: this.session !== null,
           ...(this.desktop ? { host: this.host } : {}),
         });
@@ -1698,9 +1666,6 @@ export class McpServer {
       // What it is about sets an unclaimed memory's default floor (2026-10-10).
       about: about.mark,
       ...(model === undefined ? {} : { model }),
-      // This call's stance, which a Code-tab call on Desktop's server can hold
-      // when the store opened as a guest (2026-10-02).
-      owner: this.owner,
     });
     const neighbours = this.neighboursOf(deposit, [], CONTRADICTION_TUNABLES.NEIGHBOURS, session);
     this.markSeen([...neighbours.map((n) => n.id), ...(deposit.slot === undefined ? [] : [deposit.slot.over])]);
@@ -1795,9 +1760,6 @@ export class McpServer {
         shown,
         feelings: items,
         ...(model === undefined ? {} : { model }),
-        // This call's stance (#317 × #318): a Code-tab call on Desktop's
-        // server may feel again what its recall showed it.
-        owner: this.owner,
       });
       if (!done.ok) return { recorded: 0, reason: done.reason };
       const recorded = done.feelings.filter((f) => f.ok && f.reason === "recorded-later").length;
@@ -1850,7 +1812,6 @@ export class McpServer {
         mark: typeof arg["about"] === "string" ? arg["about"] : "",
         by: "self",
         why: typeof arg["why"] === "string" ? arg["why"] : null,
-        owner: this.owner,
         // A night run's child: held to the owner's `--reflected-feeling` switch,
         // as the reflection is. Either mark says so — the child's name, which
         // the night's MCP configuration sets on this server, or the run's id,
@@ -1867,8 +1828,8 @@ export class McpServer {
   /**
    * One `core` decision through the core (2026-10-11, Group 3 part A): keep a
    * core memory (`Counterpart.keepCore`) or retire it (`demoteCore`), by
-   * `self`, with the why. Any core memory: the owner's and my door alike, and
-   * a confidential one only in the owner's session. Never throws.
+   * `self`, with the why. Any core memory: the owner's and my door alike.
+   * Never throws.
    */
   private coreDecisionOutcome(arg: Record<string, unknown>): Record<string, unknown> {
     const id = typeof arg["id"] === "string" ? arg["id"].trim() : "";
@@ -1878,7 +1839,7 @@ export class McpServer {
       if (id.length === 0) return { ok: false, reason: "core-malformed", detail: 'core needs the memory\'s id: {id, decision, why}.' };
       if (decision !== "keep" && decision !== "retire") return { ok: false, reason: "core-malformed", detail: 'decision is "keep" or "retire".' };
       const row = this.counterpart.store.row(id);
-      if (row === undefined || (row.confidential === 1 && !this.owner)) return { ok: false, reason: "unknown-id", detail: `No memory ${id} in this store.` };
+      if (row === undefined) return { ok: false, reason: "unknown-id", detail: `No memory ${id} in this store.` };
       const out = decision === "keep" ? this.counterpart.keepCore(id, { why, actor: "self" }) : this.counterpart.demoteCore(id, { reason: why, actor: "self" });
       const detail: Record<string, string> = {
         "reason-required": "Say why: the decision is kept with its reason.",
@@ -2023,7 +1984,7 @@ export class McpServer {
     // A held one (2026-10-09) is already shown whole, beside its own ask, and
     // a slot the detector proposed (2026-10-11) beside its own.
     const exclude = [deposit.revision?.targetId, deposit.mint?.updates, deposit.held?.over, deposit.slot?.over, ...siblings].filter((x): x is string => typeof x === "string");
-    return this.counterpart.writeNeighbours(deposit.memoryId, { exclude, owner: this.owner, session }).slice(0, room);
+    return this.counterpart.writeNeighbours(deposit.memoryId, { exclude, session }).slice(0, room);
   }
 
   /**
@@ -2082,18 +2043,16 @@ export class McpServer {
     const anchors = [deposit.memoryId, deposit.reminder?.from, deposit.mint?.updates].filter((x): x is string => typeof x === "string");
     const out: { id: string; title: string | null; eventDate: string; skipped?: true }[] = [];
     const seen = new Set<string>(exclude);
-    // The chain's own memories this write could not close (protected, or not
-    // this session's to close) come first, marked; a confidential one's title
-    // only for the owner (review of #493).
+    // The chain's own memories this write could not close (protected) come
+    // first, marked (review of #493).
     for (const id of deposit.reminder?.chainSkipped ?? []) {
       seen.add(id);
       const row = this.counterpart.store.row(id);
       if (row === undefined || row.event_date === null) continue;
-      const hidden = row.confidential === 1 && !this.owner;
-      out.push({ id, title: hidden ? null : row.title ?? lineOf({ body: row.body }), eventDate: row.event_date, skipped: true });
+      out.push({ id, title: row.title ?? lineOf({ body: row.body }), eventDate: row.event_date, skipped: true });
     }
     for (const anchor of [...new Set(anchors)]) {
-      const near = this.counterpart.writeNeighbours(anchor, { exclude, owner: this.owner, session, limit: CONTRADICTION_TUNABLES.NEIGHBOURS_PER_CALL });
+      const near = this.counterpart.writeNeighbours(anchor, { exclude, session, limit: CONTRADICTION_TUNABLES.NEIGHBOURS_PER_CALL });
       for (const n of near) {
         if (seen.has(n.id) || out.filter((x) => x.skipped !== true).length >= STILL_DATED_SHOWN) continue;
         seen.add(n.id);
@@ -2116,7 +2075,7 @@ export class McpServer {
     const s = deposit.slot;
     if (s === undefined) return {};
     const row = this.counterpart.store.row(s.over);
-    const title = row === undefined || (row.confidential === 1 && !this.owner) ? null : (row.title ?? lineOf({ body: row.body }));
+    const title = row === undefined ? null : (row.title ?? lineOf({ body: row.body }));
     return { slot: { pair: s.pair, over: s.over, ...(title === null ? {} : { title }), rule: s.rule }, slotHint: SLOT_HINT };
   }
 
@@ -2198,7 +2157,7 @@ export class McpServer {
         ...(typeof question === "string" ? { question } : {}),
         ...(askedIds.length > 0 ? { ids: askedIds } : {}),
       },
-      { sessionId: this.session ?? key, owner: this.owner },
+      { sessionId: this.session ?? key },
     );
     const resolved = this.noteHandleResolution(handle, result);
     // THE MEASUREMENT (2026-09-28): did this lookup fetch what a mechanism's
@@ -2222,7 +2181,6 @@ export class McpServer {
       returned: result.memories.length,
       considered: result.considered,
       storeSize: result.storeSize,
-      owner: this.owner,
       // Scar §2.4: a budget gets an event when it is APPROACHED, not only when
       // it blows. The three overflowed calls of 2026-09-04 emitted nothing.
       chars: payload["chars"] as number,
@@ -2255,8 +2213,7 @@ export class McpServer {
       result.reason === "no-argument" ||
       result.reason === "both-arguments" ||
       result.reason === "handle-unknown" ||
-      result.reason === "ids-too-many" ||
-      result.reason === "handle-confidential-withheld";
+      result.reason === "ids-too-many";
     return this.result(payload, bad);
   }
 
@@ -2268,23 +2225,11 @@ export class McpServer {
    * points at, from the same reader (`Counterpart#lastExchange`). Read at the
    * call and never stored: no memory, no credit, no seen set, no durable row
    * — a ring event only. Never another directory's: the buffer it reads is
-   * this one's. Never reached under observer (recall stands down, G5); and
-   * the words go only to the owner's session (review of #392): a span is the
-   * raw slice, which no confidential mark has reached yet (G6).
+   * this one's. Never reached under observer (recall stands down, G5). Any
+   * session in the folder reads it (owner-only until 2026-10-21, when the
+   * yours/guest split was removed).
    */
   private lastExchangeTool(): ToolResult {
-    if (!this.owner) {
-      this.emit("mcp.recall.lastexchange", undefined, { found: false, owner: false });
-      return this.result(
-        {
-          path: "handle",
-          reason: "owner-only",
-          handle: LAST_EXCHANGE_HANDLE,
-          detail: "The last exchange is read only in the owner's own session.",
-        },
-        false,
-      );
-    }
     const reader = this.session ?? this.hostSession();
     const ex = this.counterpart.lastExchange({
       scope: this.scope,
@@ -2341,7 +2286,6 @@ export class McpServer {
     const ctx = {
       counterpart: this.counterpart,
       sessionId: this.session ?? key,
-      owner: this.owner,
       ...(this.scope === undefined ? {} : { scope: this.scope }),
       vector: embedded.vector,
       semantic: embedded.semantic,
@@ -2419,7 +2363,6 @@ export class McpServer {
       semantic: row.semantic,
       returned: ids.length,
       considered: row.considered,
-      owner: this.owner,
       chars: answer.length,
       truncated: false,
       droppedForBudget: 0,
@@ -2466,12 +2409,8 @@ export class McpServer {
    * known (2026-10-11, `MCP_RECALL_EVENT`'s note) — never the ids it was asked
    * for and did not give.
    *
-   * `blockedBy` DOES carry `confidential-withheld`, which the wire deliberately
-   * does not (§9.1 G5). The two audiences are different: the caller may be any
-   * session, and the row is the owner's own store, where the memory itself is
-   * already sitting. Without it the confidentiality gate stays exactly as
-   * unreadable as the inventory found it — a withholding that happened and one
-   * that never had to, the same absence.
+   * A row written before 2026-10-21 may carry `confidential-withheld` in
+   * `blockedBy`; that gate is retired and no new row carries it.
    *
    * A question's row (2026-10-03) carries its `mode`, how many matched, how
    * many were shown and how many listed faded, and the page — still counts.
@@ -2519,7 +2458,6 @@ export class McpServer {
         ...(row.counts === undefined ? {} : { counts: row.counts }),
         considered: row.considered,
         storeSize: row.storeSize,
-        owner: this.owner,
         chars: payload["chars"] ?? 0,
         truncated: payload["truncated"] === true,
         droppedForBudget: 0,
@@ -2558,14 +2496,13 @@ export class McpServer {
    * `null` — a shadow that translates nothing and, being the newest answer,
    * overrides an earlier resolution of the same handle IN THE SAME PROJECT.
    * That is not tidiness, it is §5 G6: the log is keyed by the handle, because
-   * RESOLUTION is deterministic, but a REFUSAL is not. The owner's own session
-   * resolves a confidential title; a stranger's session asking the same title
-   * is told nothing. `handle-unknown` and `handle-ambiguous` shadow for the same
-   * reason — a title since renamed away, or gone ambiguous, must not go on
-   * crediting the memory it used to name.
+   * RESOLUTION is deterministic, but a REFUSAL is not. `handle-unknown` and
+   * `handle-ambiguous` shadow — a title since renamed away, or gone ambiguous,
+   * must not go on crediting the memory it used to name. (A confidential
+   * refusal shadowed too until that gate was retired, 2026-10-21.)
    *
-   * **THE SHADOW IS NOT THE CONFIDENTIALITY BOUNDARY, and the first draft of
-   * this method said it was.** A shadow only exists where an answer was given.
+   * **THE SHADOW IS NOT THE WHOLE GUARD, and the first draft of this method
+   * said it was.** A shadow only exists where an answer was given.
    * Three askings get no answer and leave no shadow — a call that never reached
    * `expandHandle`, a `{ handle, question }` the dispatcher refuses as
    * `both-arguments` before this path exists, and a refusal whose write failed
@@ -2674,14 +2611,6 @@ export class McpServer {
       ...(result.perId === undefined ? {} : { perId: result.perId.map((p) => ({ ...p })) }),
       ...(result.reason === "ids-too-many"
         ? { refused: `At most ${RECALL_MAX_IDS} ids per call. Effort is not enumeration.` }
-        : {}),
-      ...(result.reason === "handle-confidential-withheld"
-        ? {
-            withheld:
-              result.nightAsked !== undefined
-                ? `That ${result.nightAsked} rests on a memory marked confidential, and this is not the owner's own session. It exists; it is not being shown.`
-                : "That memory is marked confidential and this is not the owner's own session. It exists; it is not being shown.",
-          }
         : {}),
       ...(result.reason === "handle-unknown" && result.nightAsked !== undefined
         ? { notFound: `No ${result.nightAsked} by that id in this memory. The console's read-only \`counterparts night\` lists the recent ones.` }
@@ -3023,7 +2952,7 @@ export class McpServer {
         livedDay: store.livedDay(),
         lastActiveDate: store.getMeta("lastActiveDate") ?? null,
       },
-      stance: { observer: this.observer, ...this.ownerStance() },
+      stance: { observer: this.observer },
     };
   }
 

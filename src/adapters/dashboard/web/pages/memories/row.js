@@ -88,7 +88,7 @@ export function withoutRowDate(title, text, date) {
 }
 
 /**
- * `r`: { id, title, text, confidential, kind, date, dateFrom, core, protected,
+ * `r`: { id, title, text, kind, date, dateFrom, core, protected,
  * journal, feelings, archived, hold, versions, schemaRole }. With no `id` the
  * row opens nothing (a session's moments in an Ask by meaning); with no
  * `kind` it carries no kind tag (an answer that does not say). `opts.under`
@@ -98,9 +98,9 @@ export function withoutRowDate(title, text, date) {
  */
 export function memRow(r, opts = {}) {
   // The date on the right is not said again in the words beside it.
-  const own = r.journal || r.confidential ? { title: r.title, text: r.text } : withoutRowDate(r.title, r.text, r.date);
-  const words = r.confidential ? '<span class="withheld">' + esc(r.text) + "</span>" : marked(own.text, opts.mark);
-  const title = r.journal && !r.confidential ? journalTitle(r.date) : own.title;
+  const own = r.journal ? { title: r.title, text: r.text } : withoutRowDate(r.title, r.text, r.date);
+  const words = marked(own.text, opts.mark);
+  const title = r.journal ? journalTitle(r.date) : own.title;
   const main = title
     ? '<div class="mtitle">' + marked(title, opts.mark) + "</div>" + (own.text ? '<div class="mtext">' + words + "</div>" : "")
     : '<div class="mtext solo">' + words + "</div>";

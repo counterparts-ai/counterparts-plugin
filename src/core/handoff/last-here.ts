@@ -79,12 +79,6 @@ export interface ChapterHere {
   readonly writtenDay: number | null;
   /** The directory it was born in, when the row recorded one (2026-09-30 on). */
   readonly scope: string | null;
-  /**
-   * The episode, or any live memory minted from it, is confidential (review of
-   * #311). The walk reports it and its callers decide: the wake names such a
-   * chapter only to the owner, and never in another directory.
-   */
-  readonly confidential?: boolean;
   /** A live copy of it is marked about me, us or the owner (`CORE_ABOUT_MARKS`),
    *  read in the same grouped query (`Store#copiesOf`). */
   readonly aboutMe?: boolean;
@@ -161,8 +155,7 @@ export function chaptersBySession(store: Store, opts: { fromDay?: number } = {})
         createdAt,
         writtenDay: day ?? (Number.isFinite(row.birth_day) ? row.birth_day : null),
         scope: row.origin_scope === null || row.origin_scope.length === 0 ? null : row.origin_scope,
-        // A store that will not say reads as confidential, and about nothing.
-        confidential: row.confidential === 1 || copies === null || (copies.get(id) ?? []).some((c) => c.confidential),
+        // A store that will not say reads as about nothing.
         aboutMe: (copies?.get(id) ?? []).some((c) => c.about !== null && (CORE_ABOUT_MARKS as readonly string[]).includes(c.about)),
       });
     } catch {
@@ -384,9 +377,7 @@ export function chaptersOn(store: Store, date: string, opts: { fromDay?: number 
     return out;
   }
   const zone = store.zone();
-  // CONFIDENTIAL CHAPTERS ARE NOT LISTED (review of #311): the line is
-  // composed once and read by every session, the owner's or not, so a title a
-  // non-owner may not see is left out for all. One grouped read for the copies.
+  // One grouped read for the copies.
   let copies: ReturnType<Store["copiesOf"]> | null;
   try {
     copies = store.copiesOf(ids);
@@ -398,7 +389,6 @@ export function chaptersOn(store: Store, date: string, opts: { fromDay?: number 
     try {
       const row = store.row(id);
       if (row === undefined || row.superseded_by !== null || row.body.length === 0) continue;
-      if (row.confidential === 1 || copies === null || (copies.get(id) ?? []).some((c) => c.confidential)) continue;
       let dated = 0;
       let that = 0;
       for (const m of row.body.matchAll(DATED_HEADING)) {
@@ -418,7 +408,7 @@ export function chaptersOn(store: Store, date: string, opts: { fromDay?: number 
         chapters: that,
         createdAt: row.created_at ?? 0,
         scope: row.origin_scope === null || row.origin_scope.length === 0 ? null : row.origin_scope,
-        aboutMe: (copies.get(id) ?? []).some((c) => c.about !== null && (CORE_ABOUT_MARKS as readonly string[]).includes(c.about)),
+        aboutMe: (copies?.get(id) ?? []).some((c) => c.about !== null && (CORE_ABOUT_MARKS as readonly string[]).includes(c.about)),
       });
     } catch {
       continue;
@@ -694,9 +684,9 @@ export function elsewhereNamedIn(text: string): Set<string> {
  *
  * Times and counts, a chapter's title only when the caller's gate let it
  * through — the "About me, from another directory" line's: the scope setting,
- * the confidential mark, and a copy marked about me, us or the owner — and
- * since 2026-10-20 (Mike's go, an experiment) one or two memory titles a
- * directory, by the same gate's folder rule and the confidential mark
+ * and a copy marked about me, us or the owner — and since 2026-10-20 (Mike's
+ * go, an experiment) one or two memory titles a directory, by the same gate's
+ * folder rule
  * (`TodayElsewhere.titles`, chosen by the caller). Never a word of a span or
  * a handoff: those stay where they were made. Returns the line and its
  * shorter forms — fewer titles, fewer chapters, fewer directories, the rest

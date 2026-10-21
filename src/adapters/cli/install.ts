@@ -358,7 +358,6 @@ export interface ConfigInput {
 export function configObject(input: ConfigInput): Record<string, unknown> {
   const out: Record<string, unknown> = {
     dataDir: input.layout.store,
-    owner: true,
     // WHAT THE FILE BEING REPLACED SAID, first, so a flag below still wins —
     // though `carryForward` has already dropped every key this line supplied,
     // so the two can never disagree. `dataDir` is set ABOVE it and is never

@@ -489,10 +489,10 @@ export interface BoundaryRequest extends BriefingRequest {
    * shows everything the store holds (`identity.ts#rankLanes`). It exists for a
    * composition that will LEAVE THE MACHINE: `Counterpart.sweepFallback` wakes
    * the crash-fallback interpreter with the self before it reads a transcript,
-   * and that prompt is an egress surface, so confidential and protected rows are
-   * omitted there (constitution 6; the same stand-aside `schemas/` makes for the
-   * interpreter's cards, §14.1 G2). The predicate lives with the CALLER because
-   * the confidentiality class is `recall/`'s to read, not this module's.
+   * and that prompt is an egress surface, so protected rows are omitted there
+   * (the same stand-aside `schemas/` makes for the interpreter's cards, §14.1
+   * G2). The predicate lives with the CALLER, which knows where the
+   * composition goes.
    *
    * Filtering here rather than after ranking is deliberate: an omitted row must
    * not occupy a lane slot or a byte of the budget it will never render into.
@@ -1262,8 +1262,8 @@ export class Self {
     //
     // AND BY `omit` (2026-09-17 review). A composition that passes `omit` is by
     // definition not owner-facing, and the identity lane it sees is the
-    // POST-OMIT one: a store whose identity band is entirely protected or
-    // confidential would otherwise unlock this line and tell a model call — one
+    // POST-OMIT one: a store whose identity band is entirely protected would
+    // otherwise unlock this line and tell a model call — one
     // being asked to write in the first person AS this self — that no identity
     // has formed here. It would also render the core's NAME, which `omit` never
     // saw: the core is a `type: "schema"` row and `scanActive` lists
@@ -2011,8 +2011,8 @@ export class Self {
         learnedOn: this.store.today(),
         ...(opts.model === undefined ? {} : { model: opts.model }),
         // PROTECTED AT BIRTH — the one flag that keeps the floor prune off it
-        // (`physics#pruneVerdict` blocks on it by name). It is not a
-        // confidentiality class and it buys no exemption anywhere else.
+        // (`physics#pruneVerdict` blocks on it by name). It buys no exemption
+        // anywhere else.
         physics: { protected: true },
       });
       version = 0;
@@ -2111,10 +2111,10 @@ export class Self {
    * WHAT THE WRITER IS HANDED: the page as it stands, and the day just gone,
    * bounded by `PAGE_WRITER_MEMORY_BYTES` and ordered by salience.
    *
-   * `omit` is the CALLER's, exactly as `build`'s is and for the same reason —
-   * the confidentiality class is `recall/`'s to read and not this module's. A
-   * composition that will leave the machine passes one; what it hides is
-   * counted onto the run's row rather than disappearing.
+   * `omit` is the CALLER's, exactly as `build`'s is and for the same reason:
+   * the caller knows where the composition goes. None is passed by default
+   * (2026-10-21); what one hides is counted onto the run's row rather than
+   * disappearing.
    *
    * Pure: it reads and composes. Nothing here writes.
    */
@@ -2124,7 +2124,7 @@ export class Self {
     day?: number;
     budgetBytes?: number;
     max?: number;
-    omit?: (m: { id: string; confidential: boolean; protectedRow: boolean }) => boolean;
+    omit?: (m: { id: string; protectedRow: boolean }) => boolean;
     /** The day's journal, composed by the caller (2026-10-15, `dream/slices.ts#dayJournal`). */
     journal?: WriterJournal;
   }): WriterInput {

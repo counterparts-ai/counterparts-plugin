@@ -40,9 +40,7 @@
  * copy are one result (the chapter); a near-duplicate of a result already
  * kept is left out (`NEAR_DUPLICATE`, token overlap; line overlap when one
  * holds a list or a table, `alike`); the self page and the
- * handoffs are never results; a chapter is labeled journal; a confidential
- * memory is left out of a non-owner's list, silently (counted on the durable
- * row only).
+ * handoffs are never results; a chapter is labeled journal.
  *
  * FOLDING. Each result is the CURRENT version of a fact. Earlier versions are
  * folded under it: in-place revisions (`versions` rows whose words differ)
@@ -247,8 +245,6 @@ export interface FactsSource {
 export interface FactsContext {
   readonly counterpart: FactsSource;
   readonly sessionId: string;
-  /** The owner's own session? Confidentiality turns on this and nothing else. */
-  readonly owner: boolean;
   /** The asking session's directory, for "the last session"; none at the console. */
   readonly scope?: string;
   /** The question embedded in line; null when it could not be. */
@@ -592,7 +588,6 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
   const visible = (id: string): RecallRow | undefined => {
     const r = rows.get(id);
     if (r === undefined || neverAResult(r)) return undefined;
-    if (!ctx.owner && r.confidential === 1) return undefined;
     return r;
   };
 
@@ -758,11 +753,6 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
   for (const [id, c] of [...pool]) {
     const r = rows.get(id);
     if (r === undefined || neverAResult(r)) {
-      pool.delete(id);
-      continue;
-    }
-    if (!ctx.owner && r.confidential === 1) {
-      blocked("confidential-withheld");
       pool.delete(id);
       continue;
     }
@@ -937,15 +927,10 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
 
   /**
    * May this asker be told this id exists? A pair line names its other side
-   * (`disagrees with mem_…`, `now mem_…`): a confidential or removed memory is
-   * not named to a non-owner, as a list never shows it (review of #323).
+   * (`disagrees with mem_…`, `now mem_…`): a removed memory is not named, as
+   * a list never shows it (review of #323).
    */
-  const canName = (id: string): boolean => {
-    if (denied.has(id)) return false;
-    if (ctx.owner) return true;
-    const r = rows.get(id) ?? safe(() => store.row(id), undefined);
-    return r !== undefined && r.confidential !== 1;
-  };
+  const canName = (id: string): boolean => !denied.has(id);
   const memories = shown.map((c) =>
     factItem(ctx, c, rows.get(c.id) as RecallRow, read(c.id) as { title: string | null; body: string }, pairs, w.tokens, today, zone, window, canName, fadedIds.has(c.id)),
   );

@@ -17,10 +17,9 @@
  *   (c) the loud tier requires a **minimum fraction of activation from cues**, so
  *       recency alone can never carry a memory there no matter how sacred it is.
  *
- * Two boundary gates sit in front of all three, and salience cannot touch them
- * either: **confidentiality** (sensitive material returns only in the owner's own
- * session, and an observer is a non-owner — observer-mode.md G7) and **session
- * dedup** (this session already saw it).
+ * One boundary gate sits in front of all three, and salience cannot touch it
+ * either: **session dedup** (this session already saw it). The confidentiality
+ * gate that sat beside it was retired 2026-10-21 (recall CONTRACT §5 G9).
  *
  * `protected` grants NO surfacing privilege. A protected memory is one revision
  * may not overwrite; that is a write-side property and it buys nothing here.
@@ -43,8 +42,6 @@ export type Verdict =
   | "surfaced"
   /** Admitted, quiet tier: "quietly available". */
   | "footnoted"
-  /** Boundary: sensitive material, non-owner session. */
-  | "confidential-withheld"
   /** Boundary: this session already saw it. */
   | "dedup-suppressed"
   /** This session WROTE it (since its last compaction), so it is already in
@@ -140,7 +137,6 @@ export interface GateInput {
   readonly candidates: readonly Candidate[];
   readonly state: GateState;
   readonly storeSize: number;
-  readonly owner: boolean;
   /** The turn stated a feeling (any subject) — the affect flag's turn gate. */
   readonly affectStated: boolean;
   readonly turn: number;
@@ -411,12 +407,6 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   let charged = false;
 
   for (const c of input.candidates) {
-    // Boundary gate 1 — confidentiality. Silent in a list (§9.1 G5); the
-    // decision record still counts it, so withholding is measurable.
-    if (c.confidential && !input.owner) {
-      record(c, "confidential-withheld");
-      continue;
-    }
     // Hard gate (a) — uncued is dark. Salience is never evaluated below here
     // for such a candidate, which is the guarantee, not an optimization.
     // ONE LANE IS NAMED (2026-09-28, association build 2): a QUIET POINTER —
@@ -538,11 +528,8 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   // "hold back the earlier one"): an earlier one a head stands in for is held
   // back whether or not the head then shows — the newer state is what counts,
   // and a head that failed (habituated, say) means this footnote was not
-  // useful. Not when the head is a confidential one withheld from a guest:
-  // the earlier one then shows, labelled, as before.
-  const stoodFor = new Set(
-    input.candidates.flatMap((c) => (c.standsFor !== undefined && !(c.confidential && !input.owner) ? [c.standsFor] : [])),
-  );
+  // useful.
+  const stoodFor = new Set(input.candidates.flatMap((c) => (c.standsFor !== undefined ? [c.standsFor] : [])));
   const kept: { c: Candidate; loud: boolean }[] = [];
   // A head this session WROTE (the echo set, part C) is in its context too:
   // the earlier version stays inhibited rather than shown in its place.

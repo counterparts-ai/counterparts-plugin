@@ -441,9 +441,8 @@ export interface Lanes {
  *              rule guards the interpreter's schema slices — the falsification
  *              path — not the owner-facing wake (NOTES.md #2). A composition
  *              that is NOT owner-facing says so with `BoundaryRequest.omit`, and
- *              the sweep's wake copy passes exactly that predicate: protected and
- *              confidential rows never reach an interpreter's prompt, by either
- *              door.
+ *              the sweep's wake copy passes exactly that predicate: protected
+ *              rows never reach an interpreter's prompt, by either door.
  *   craft    — skill-kind, not already in identity, above the warm floor. The
  *              procedural self is rendered as CONTENT, never a pointer (§1).
  *              Empty under `workAtDelivery` (below): composed per directory.

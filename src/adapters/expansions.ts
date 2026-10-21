@@ -65,7 +65,7 @@
  * because the resolutions go with the refusals; a file that can be READ but not
  * APPENDED to is the dangerous shape, and it is one of the three in
  * `readHandleResolutions`'s list. That is why the scope filter, and not the
- * shadow, is the confidentiality boundary here: across projects a lost refusal
+ * shadow, is the boundary here: across projects a lost refusal
  * cannot reach another project's boundary at all. Within ONE project directory
  * it still can, and that residual is recorded rather than papered over.
  *
@@ -121,14 +121,14 @@ export interface HandleResolution {
    * handle was asked and answered with nothing, and the newest answer wins.
    *
    * The shadow is not bookkeeping. The log is keyed by handle, not by session,
-   * because the resolution is deterministic — but a refusal is not: the owner's
-   * own session resolves a confidential title and a stranger's session is told
-   * nothing, and without a shadow the stranger's boundary would translate the
-   * same handle through the owner's entry and credit a memory it was never
-   * shown. Same shape for a title that has since gone ambiguous, or been renamed
-   * away.
+   * because the resolution is deterministic — but a refusal is not: a title
+   * that has since gone ambiguous, or been renamed away, is told nothing, and
+   * without a shadow the later asking's boundary would translate the same
+   * handle through the earlier entry and credit a memory it was never shown.
+   * (Until 2026-10-21 a confidential title refused to a stranger was the first
+   * case named here.)
    *
-   * It is NOT the confidentiality boundary, though the first draft said so: a
+   * It is NOT the whole boundary, though the first draft said so: a
    * shadow only exists where an answer was given, and three askings get none.
    * `readHandleResolutions`'s scope filter is what covers those.
    */
@@ -249,7 +249,7 @@ export function handleKey(handle: string, salt: string): string {
  * EVERY handle-path outcome is recorded, not only the expansions. A refusal
  * that left no trace would let an earlier session's resolution translate a
  * later session's identical handle, and the later session may have been refused
- * for a reason the earlier one was not — confidentiality above all. Writing the
+ * for a reason the earlier one was not (a title gone ambiguous). Writing the
  * refusal as a shadow is what keeps the log's key (the handle) honest about the
  * thing it is standing in for (what THIS asking reached).
  */
@@ -309,13 +309,14 @@ export function recordHandleResolution(
  *     before the resolver ran) — nothing is refused, so nothing is recorded;
  *   - the call was `recall { handle, question }`, which the dispatcher refuses
  *     as `both-arguments` on path `none`, before the handle path exists;
- *   - the call WAS refused `handle-confidential-withheld`, and the shadow could
- *     not be written (a read-only log, a full disk) — `recordHandleResolution`
- *     returns false, because it may not throw at a tool.
+ *   - the call WAS refused (`handle-ambiguous`; `handle-confidential-withheld`
+ *     until 2026-10-21), and the shadow could not be written (a read-only log,
+ *     a full disk) — `recordHandleResolution` returns false, because it may not
+ *     throw at a tool.
  *
  * In each of those the transcript still carries the title, so the boundary still
- * translates it — through the only line in the log, which may be the owner's
- * resolution of a CONFIDENTIAL memory. The shadow cannot cover a case in which
+ * translates it — through the only line in the log, which may be another
+ * asking's resolution. The shadow cannot cover a case in which
  * nothing was written.
  *
  * The scope is the discriminator that covers all three at once, and it is the

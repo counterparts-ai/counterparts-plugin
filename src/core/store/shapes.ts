@@ -166,10 +166,6 @@ export interface StoredMemory {
   supersededBy: string | null;
   revision: number;
   contentHash: string;
-  /** The confidentiality class, read off the ROW's column (written from
-   *  `confidentialByMeta` at every write). Carried on the read so a caller gates
-   *  on a boolean rather than on JSON it had to re-interpret. */
-  confidential: boolean;
   /** v7 moments, UTC ms (docs/time.md). Null on a row written before v7. */
   createdAt: number | null;
   updatedAt: number | null;
@@ -235,7 +231,6 @@ export interface RecallRow {
   readonly origin_session: string | null;
   readonly origin_scope: string | null;
   readonly origin_ref: string | null;
-  readonly confidential: number;
   /** `meta` for a schema or an episode row (a role, a session); null for a memory. */
   readonly meta: string | null;
 }

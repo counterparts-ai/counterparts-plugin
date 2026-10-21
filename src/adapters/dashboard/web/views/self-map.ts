@@ -29,7 +29,6 @@ export const MAP_MAX = 60;
 export interface MapNode {
   readonly id: string;
   readonly text: string;
-  readonly confidential: boolean;
   /** How firmly it is held today, 0..1 — the number the memories tab brightens on. */
   readonly strength: number;
   /** In the core (the identity band). */
@@ -63,7 +62,7 @@ export interface SelfMap {
  */
 export function selfMap(
   src: DashboardSource,
-  core: readonly { id: string; text: string; confidential: boolean; strength: number }[],
+  core: readonly { id: string; text: string; strength: number }[],
   candidates: readonly CoreCandidate[],
 ): SelfMap {
   const store = src.store;
@@ -73,7 +72,7 @@ export function selfMap(
   for (const c of core) {
     if (seen.has(c.id) || nodes.length >= MAP_MAX) continue;
     seen.add(c.id);
-    nodes.push({ id: c.id, text: c.text, confidential: c.confidential, strength: round(c.strength), core: true, oneReturnAway: false, ready: false, closeness: 2 });
+    nodes.push({ id: c.id, text: c.text, strength: round(c.strength), core: true, oneReturnAway: false, ready: false, closeness: 2 });
   }
   for (const c of candidates) {
     if (seen.has(c.id) || nodes.length >= MAP_MAX) continue;
@@ -88,7 +87,6 @@ export function selfMap(
     nodes.push({
       id: c.id,
       text: r.text ?? r.label,
-      confidential: r.confidential,
       strength: round(s),
       core: false,
       oneReturnAway: c.oneReturnAway,

@@ -762,7 +762,7 @@ const FLAG_HELP: Record<string, string> = {
   markdown:
     "export the readable markdown tree instead of the database file: memories, the journal, the self page, and a file per dream and per reflection (its README says what is where)",
   "include-confidential":
-    "include confidential memories in the markdown tree, and the dreams and reflections that rest on one (they are omitted, and counted, by default)",
+    "ignored: nothing is held back as confidential any more (accepted for one release, then removed; still markdown only)",
   // NOT `--versions`: `self-page` takes both `--versions` and `--version`, and
   // the help-page totality test reads flags as substrings — an `export
   // --versions` puts the string `--version` on export's page, where it names a

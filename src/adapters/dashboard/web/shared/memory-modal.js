@@ -34,12 +34,12 @@ export async function openMemory(id) {
 /** The card's markup — pure, from the `/api/memory` payload. */
 export function memoryCard(d) {
   const k = kindOf(d.kind);
-  const title = d.title ? esc(d.title) : d.confidential ? said(d.text, true) : esc(headline(d.shownText || d.text));
+  const title = d.title ? esc(d.title) : esc(headline(d.shownText || d.text));
   return '<div class="mc' + (d.archived ? " mc-arch" : "") + '">' +
     '<h3 class="mc-title">' + kindMark(d.kind, false) + "<span>" + title + "</span></h3>" +
     '<div class="mc-kind">' + esc(k.label) + (d.askedFor ? " · you asked for " + esc(d.askedFor) + ", which forwards here" : "") + "</div>" +
     (d.archived ? '<div class="mc-archived">Put away — ' + esc(d.archivedWords || d.archived) + ". Kept, not deleted.</div>" : "") +
-    "<div class='body'>" + (d.confidential ? '<span class="withheld">' + esc(d.text) + "</span>" : esc(d.shownText || d.text)) + "</div>" +
+    "<div class='body'>" + esc(d.shownText || d.text) + "</div>" +
     (d.journal ? '<p class="mc-note">My journal, kept as written. Nothing in it fades.</p>' : "") +
     part("How well I remember", curvePart(d)) +
     part("Why it mattered", fingerprint(d)) +
@@ -184,7 +184,7 @@ function standing(d) {
 
 function feelingsPart(d) {
   // Emotion part A (#244): feeling now holds a memory higher and slows its fading.
-  const held = d.intensity > 0 && !d.confidential
+  const held = d.intensity > 0
     ? '<p class="mc-dim">Feeling holds it higher and slows its fading (intensity ' + n2(d.intensity) + ").</p>"
     : "";
   if (!d.feelings || d.feelings.length === 0) return held;
@@ -196,17 +196,17 @@ function feelingsPart(d) {
 
 // ── linked memories ────────────────────────────────────────────────────────
 
-function ref(id, text, confidential, role) {
+function ref(id, text, role) {
   return '<div class="ref" role="button" tabindex="0" onclick="openMemory(\'' + esc(id) + '\')" ' +
     "onkeydown=\"if(event.key==='Enter')openMemory('" + esc(id) + "')\">" +
-    (role ? '<span class="role">' + role + "</span>" : "") + said(text, confidential) + "</div>";
+    (role ? '<span class="role">' + role + "</span>" : "") + said(text) + "</div>";
 }
 
 function linked(d) {
   const around = d.points.filter((p) => p.role === "hangs on" || p.role === "grounded in")
-    .map((p) => ref(p.id, p.text, false, esc(p.role)));
+    .map((p) => ref(p.id, p.text, esc(p.role)));
   const wired = d.edges.slice().sort((a, b) => b.weight - a.weight).map((e) =>
-    ref(e.id, e.text, e.confidential, '<span class="mc-wbar" title="wired together: ' + n2(e.weight) + '"><span style="width:' +
+    ref(e.id, e.text, '<span class="mc-wbar" title="wired together: ' + n2(e.weight) + '"><span style="width:' +
       Math.round(Math.max(0, Math.min(1, e.weight)) * 100) + '%"></span></span>'));
   const all = around.concat(wired);
   return all.length ? '<div class="mc-refs">' + all.join("") + "</div>" : "";
@@ -222,7 +222,7 @@ function versions(d) {
     const head = '<span class="mc-vrel">' + esc(s.label) + "</span>" +
       (when ? '<span class="mc-dim"> · ' + esc(when) + "</span>" : "") +
       (s.reason ? '<span class="mc-dim"> · ' + esc(s.reason) + "</span>" : "");
-    const body = s.refs.map((r) => ref(r.id, r.text, r.confidential, "")).join("");
+    const body = s.refs.map((r) => ref(r.id, r.text, "")).join("");
     return '<li class="mc-v mc-v-' + s.rel + (s.dream ? " mc-v-dream" : "") + '"><i class="mc-vdot"></i><div>' + head + body + "</div></li>";
   });
   const nowAt = d.timeline.some((s) => s.rel === "became") ? "" :

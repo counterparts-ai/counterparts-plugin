@@ -1122,12 +1122,6 @@ export interface HandoffsOptions {
   }) => void;
   readonly now?: () => number;
   /**
-   * Whether a confidential memory may be named in the "since" line — the
-   * owner's own session, as a confidential chapter is "last here" to the
-   * owner only (2026-10-09).
-   */
-  readonly owner?: boolean;
-  /**
    * The memories a later one settled over (`self/index.ts#settledOver`), which
    * no wake line shows; asked only when there is something to name. Passed in
    * by the root, because `handoff/` depends on `store/` and nothing else.
@@ -1160,7 +1154,6 @@ export class Handoffs {
   private readonly observer: boolean;
   private readonly onEvent: HandoffsOptions["onEvent"];
   private readonly nowFn: () => number;
-  private readonly owner: boolean;
   private readonly settled: (() => ReadonlySet<string>) | undefined;
   private readonly listed: (() => ReadonlySet<string>) | undefined;
 
@@ -1170,7 +1163,6 @@ export class Handoffs {
     this.observer = opts.observer === true;
     this.onEvent = opts.onEvent;
     this.nowFn = opts.now ?? Date.now;
-    this.owner = opts.owner === true;
     this.settled = opts.settled;
     this.listed = opts.listed;
   }
@@ -1519,7 +1511,7 @@ export class Handoffs {
    * `SINCE_SAME_ANSWER_MS` of the handoff, which is the same answer. Left
    * out: what a later memory settled over, what the published wake already
    * lists under "Still open:" (`HandoffsOptions.listed`), a journal chapter's
-   * copy, and a confidential memory unless the owner's (`HandoffsOptions.owner`). The
+   * copy. The
    * columns are read first (`Store#planCandidates`), then the prose of what
    * comes back. Never throws: a store that will not answer names nothing.
    */
@@ -1533,7 +1525,6 @@ export class Handoffs {
         after,
         statuses: PLAN_STATUSES,
         limit: SINCE_READ,
-        confidential: this.owner,
       });
       if (ids.length === 0) return none;
       const ask = (f: (() => ReadonlySet<string>) | undefined): ReadonlySet<string> => {

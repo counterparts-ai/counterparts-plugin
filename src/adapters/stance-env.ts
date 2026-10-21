@@ -1,6 +1,7 @@
 /**
- * `COUNTERPARTS_OBSERVER` and `COUNTERPARTS_OWNER`, read the way the guard next
- * door is read — and failing in the direction each of them is *for*.
+ * `COUNTERPARTS_OBSERVER`, read the way the guard next door is read — and
+ * failing in the direction it is *for*. (`COUNTERPARTS_OWNER` was read here
+ * too until the yours/guest split was removed, 2026-10-21; nothing reads it now.)
  *
  * THE DEFECT (LAUNCH-STATUS G39). Two adapters matched these variables by exact
  * string: `cli/commands.ts` and `mcp/bin/serve.ts#launchOptions` both accepted
@@ -19,7 +20,7 @@
  * retyped: two lists that must agree and are written twice have already begun
  * to disagree.
  *
- * THE TWO FAIL DIRECTIONS ARE OPPOSITE, AND BOTH ARE "LESS POWER".
+ * THE FAIL DIRECTION IS "LESS POWER".
  *
  *   - **Observer: junk ⇒ observer.** `docs/observer-mode.md` G5, "fail toward
  *     standing down: a config-load failure resolves to observer", mechanized in
@@ -34,14 +35,8 @@
  *     nothing and the host reports "MCP server failed". Withholding the writes
  *     is the smaller, more recoverable failure, and it is the one the module's
  *     own doctrine already names.
- *   - **Owner: junk ⇒ not owner.** Same principle, opposite boolean, because
- *     the boolean's polarity is opposite: `owner` GRANTS reach and `observer`
- *     WITHHOLDS it, so least privilege is `false` for one and `true` for the
- *     other. It is the same helper either way — only the collapse of the
- *     malformed case differs, one line apart, which is why they are read here
- *     together rather than one of them being left behind.
  *
- * Junk is never silent in either direction: the reading carries the text, and
+ * Junk is never silent: the reading carries the text, and
  * the caller prints one line (`unreadableStanceLine`) on the surface it has —
  * stderr for the MCP server, `io.err` for the console. A stance that changed
  * because a shell had a typo in it must be legible in the transcript, or the
@@ -50,7 +45,6 @@
 import { EXPLICIT_DIR_ARMING_VALUES, EXPLICIT_DIR_DISARMING_VALUES } from "../core/store/index.js";
 
 export const OBSERVER_ENV = "COUNTERPARTS_OBSERVER";
-export const OWNER_ENV = "COUNTERPARTS_OWNER";
 
 /** What a boolean environment variable says, read without judgement. */
 export type EnvSwitch =
@@ -104,23 +98,6 @@ export function observerFromEnv(
     default:
       return { on: false, malformed: null };
   }
-}
-
-/**
- * OWNER. A flag beats the environment; junk is NOT owner — least privilege
- * again, and for this variable least privilege is the other boolean.
- */
-export function ownerFromEnv(
-  env: Record<string, string | undefined>,
-  flag = false,
-  name: string = OWNER_ENV,
-): StanceReading {
-  const reading = readEnvSwitch(env, name);
-  if (flag) return { on: true, malformed: reading.state === "malformed" ? reading.value : null };
-  return {
-    on: reading.state === "on",
-    malformed: reading.state === "malformed" ? reading.value : null,
-  };
 }
 
 /**

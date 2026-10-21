@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { gateSweepChunk } from "./bridge.js";
 import { mintProposal } from "./mint.js";
 import type { MintResult } from "./mint.js";
-import { isConfidential } from "./recall/index.js";
 import {
   sweep,
   sweepAll,
@@ -312,11 +311,10 @@ export async function sweepSlices(cp: Counterpart): Promise<{ slices: EncodeSche
  * turn or change a byte of what the next live session wakes to. A sweep that
  * republished the wake would be the instrument mutating what it measures.
  *
- * **NOTHING CONFIDENTIAL LEAVES** (constitution 6). This composition ends up
- * in a prompt on a socket, so it is not the owner-facing wake: confidential
- * rows (`recall/activate.ts#isConfidential`) and PROTECTED rows are omitted
- * before any lane sees them — protected because `schemas/` already stands them
- * out of the interpreter's cards (§14.1 G2, "permanent ink never enters the
+ * **NO PERMANENT INK.** This composition ends up in a prompt on a socket, so
+ * it is not the owner-facing wake: PROTECTED rows are omitted before any lane
+ * sees them, because `schemas/` already stands them out of the interpreter's
+ * cards (§14.1 G2, "permanent ink never enters the
  * falsification path"), and the wake copy is the same falsification path by a
  * second door. The stand-aside is counted, never silent. `redactSecrets` runs
  * over the result too: the same egress rule the chunk vectors and the card
@@ -325,7 +323,7 @@ export async function sweepSlices(cp: Counterpart): Promise<{ slices: EncodeSche
  * **NOT THE LIVE SESSION'S WAKE, BYTE FOR BYTE** (2026-09-17 review). Same
  * composer, different bundle, and the differences are all deliberate: no
  * `horizon`, so the prospective lane a live wake carries is simply absent; no
- * protected or confidential MEMORY; and the compose budget is the reported one
+ * protected MEMORY; and the compose budget is the reported one
  * whole, where a live wake first subtracts `PREFACE_RESERVE_BYTES` for a
  * preface this composition has no use for.
  *
@@ -333,7 +331,7 @@ export async function sweepSlices(cp: Counterpart): Promise<{ slices: EncodeSche
  * (2026-09-18, S1; corrected here after the adversarial review found this
  * comment claiming otherwise). The page is born `protected`, and the predicate
  * below filters on exactly that — but the flag is the floor prune's vocabulary
- * (`self/page.ts`) rather than a confidentiality class, and this composition is
+ * (`self/page.ts`), and this composition is
  * the owner's own decision of 2026-09-17 (spec §15 item 3): the background
  * writer is woken AS the self, with as much of the self as is reasonable,
  * before it reads a transcript, so what it writes is not a stranger's
@@ -343,8 +341,7 @@ export async function sweepSlices(cp: Counterpart): Promise<{ slices: EncodeSche
  * uses. `self/`'s `PAGE_ON_EGRESS` is the switch, default true; turned off,
  * this composition gets no page and its "Who I am" falls back to the identity
  * list the predicate left standing, which is what it carried before S1.
- * Nothing marks a page confidential today: it is one page, and the switch is
- * the decision.
+ * It is one page, and the switch is the decision.
  *
  * **THE CAP IS A COMPOSE BUDGET, not a slice.** It is handed to the composer,
  * so `self/`'s declared trim order does the cutting and the bundle's own
@@ -368,7 +365,7 @@ export function sweepWake(cp: Counterpart, override?: number): SweepWake {
       budgetBytes: cap,
       day: cp.store.livedDay(),
       omit: (s) => {
-        const hide = isConfidential(s.doc) || s.physics.protected;
+        const hide = s.physics.protected;
         if (hide) omitted += 1;
         return hide;
       },

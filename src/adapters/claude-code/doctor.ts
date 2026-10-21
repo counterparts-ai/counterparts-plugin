@@ -131,6 +131,7 @@ import {
   upgradeV9Findings,
   upgradeV10Findings,
   upgradeV11Findings,
+  confidentialRetiredFindings,
 } from "./doctor-upgrades.js";
 import {
   selfPageFindings,
@@ -165,6 +166,7 @@ export {
   upgradeV9Findings,
   upgradeV10Findings,
   upgradeV11Findings,
+  confidentialRetiredFindings,
 } from "./doctor-upgrades.js";
 export {
   dreamingFindings,
@@ -543,8 +545,8 @@ function configFindings(input: DoctorInput): Finding[] {
 
   // THE STANCE IS CALLED `Mode` NOW, and it is said in the words a person can
   // act on rather than in the configuration's (finding #20: "owner: this host
-  // encodes" was named as the line nobody could read). The key and the `data`
-  // are untouched, so every reader of the JSON sees what it always saw.
+  // encodes" was named as the line nobody could read). Since 2026-10-21 there
+  // is no yours/guest split to report: the line says observer or not.
   if (input.config.observer === true) {
     out.push(
       finding("stance", "amber", "Mode", "observer — reads memory, writes nothing", "Remove \"observer\" from the config to remember again.", {
@@ -552,22 +554,7 @@ function configFindings(input: DoctorInput): Finding[] {
       }),
     );
   } else {
-    // WHOSE SESSIONS ARE THE OWNER'S, said plainly (2026-10-02): with the
-    // install's `owner: true`, the hooks, the worker and — since that day —
-    // the memory server Claude Code starts (`mcp/bin/serve.ts#ownerStance`).
-    const owner = input.config.owner === true;
-    out.push(
-      finding(
-        "stance",
-        "green",
-        "Mode",
-        owner
-          ? "remembering; your Claude Code sessions are the owner's (confidential memories are said in them, and an open question can be closed from any directory); a Claude Desktop chat is not; COUNTERPARTS_OWNER=0 on the memory server's launch turns it off for the memory server, and the hooks follow this configuration"
-          : "remembering; no session is the owner's (the configuration has no \"owner\": true), so confidential memories stay out of the tools' answers",
-        "",
-        { observer: false, owner },
-      ),
-    );
+    out.push(finding("stance", "green", "Mode", "remembering", "", { observer: false }));
   }
   return out;
 }
@@ -3397,6 +3384,8 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     // v10 (2026-09-29): what the upgrade carried, and the week's contradictions.
     ["upgrade-v10", () => upgradeV10Findings(store)],
     ["upgrade-v11", () => upgradeV11Findings(store)],
+    // 2026-10-21: memories that carried the retired confidential mark, counted once. Silent at 0.
+    ["confidential-retired", () => confidentialRetiredFindings(store)],
     // v12 (2026-10-03): the writer's three fields, and the subject links. Two aggregates.
     ["write-fields", () => writeFieldFindings(store)],
     // 2026-10-10: the old-claims era — on or off, and how many it reads at today's default (lower, higher).

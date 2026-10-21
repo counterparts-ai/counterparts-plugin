@@ -172,7 +172,7 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
     run.reason === "no-claude"
       ? "The headless run starts claude -p: put the claude command on the PATH the hooks see, or set dreaming to ask (counterparts dream --setting ask)."
       : run.reason === "quick-exit"
-        ? "Run claude -p once by hand in a terminal to see why it stops (a login, an update prompt). Meanwhile the session asks instead."
+        ? "Run claude -p once by hand in a terminal to see why it stops (a login, an update prompt, or a claude too old for the night's flags — update it). Meanwhile the session asks instead."
         : run.reason === "nothing-ran"
           ? "The headless run needs the counterparts MCP server registered for claude at user scope (claude mcp list shows it); the server's own mcp.session rows say whether it refused the session."
           : "A later session starts it again, or asks when it cannot. counterparts dream --setting ask stops the headless runs.";

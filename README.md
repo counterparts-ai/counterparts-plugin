@@ -177,7 +177,7 @@ dashboard or with `counterparts delete conversation-text`, `delete backups` or
 Counterparts writes `~/.counterparts/sidebar.json`, readable only by you (mode 0600): the
 day and the count, today's counts per mechanism, the last dream, the recent activity log
 and the memories it names, each with its title, kind, date and the first 800 characters of
-its text (a confidential memory's text is withheld, as everywhere). Never conversation
+its text. Never conversation
 text. It is rewritten as memory changes; removing a memory removes it from there too,
 `start-fresh` rewrites it for the new store, and once the plugin is gone the next
 Counterparts process deletes it. An npm-only install never writes it.

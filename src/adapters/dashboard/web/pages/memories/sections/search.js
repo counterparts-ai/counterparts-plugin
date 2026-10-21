@@ -326,7 +326,7 @@ export function factRow(m, words) {
     journal: m.journal,
     date: m.journal ? m.learned : m.occurredOn || m.learned,
     dateFrom: m.journal ? null : m.occurredOn ? "happened" : "learned",
-    confidential: false, core: false, feelings: [], archived: null,
+    core: false, feelings: [], archived: null,
   }, { mark: words, under: factLines(m) });
 }
 

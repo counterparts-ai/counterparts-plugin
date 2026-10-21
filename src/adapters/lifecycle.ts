@@ -791,9 +791,7 @@ export class Lifecycle implements HostLifecycle {
       }
       const live = (id: string): boolean => {
         const r = store.row(id);
-        // Not one marked confidential since (review of #419): this line rides
-        // into wakes that are not the owner's own, such as a Desktop chat.
-        return r !== undefined && r.archived === 0 && r.superseded_by === null && r.confidential === 0;
+        return r !== undefined && r.archived === 0 && r.superseded_by === null;
       };
       const aha = ahaDue(store, input.sessionId, live);
       if (aha === null) return null;
@@ -1444,8 +1442,8 @@ export class Lifecycle implements HostLifecycle {
     // whose answer resolved them, so the translation is filtered to THIS
     // PROJECT's resolutions — the same `sameScope` comparison the MCP server
     // already trusts to bind a session. Without it the log hands this boundary
-    // the last answer anyone anywhere got, including the owner's resolution of a
-    // confidential memory this session was refused (or never asked for at all).
+    // the last answer anyone anywhere got, including a resolution this session
+    // was refused (a title gone ambiguous) or never asked for at all.
     // A handle nobody resolved in this scope still counts `unresolvedHandles`.
     //
     // The SECOND filter is this session's own start, out of the same registry

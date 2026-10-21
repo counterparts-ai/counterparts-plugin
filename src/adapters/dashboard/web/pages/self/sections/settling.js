@@ -86,7 +86,7 @@ function history(h) {
   const LANE = { fast: "strongly felt, and came back", slow: "kept coming back over weeks" };
   const row = (r, tail) =>
     '<button type="button" class="st-row click" onclick="openMemory(\'' + esc(r.id) + '\')">' +
-      '<span class="st-text">' + said(headline(r.text), r.confidential) + "</span>" +
+      '<span class="st-text">' + said(headline(r.text)) + "</span>" +
       '<span class="st-hist-tail">' + esc(tail) + "</span></button>";
   const out = [];
   if (h.promoted.length > 0) {
@@ -113,7 +113,7 @@ function list(s, key) {
     // Still core; nothing leaves without a decision — mine, or yours.
     return s.reconsidering.map((r) =>
       '<button type="button" class="st-row click" onclick="openMemory(\'' + esc(r.id) + '\')">' +
-        '<span class="st-text">' + said(headline(r.text), r.confidential) + "</span>" +
+        '<span class="st-text">' + said(headline(r.text)) + "</span>" +
         '<span class="st-hist-tail">' + esc("since day " + r.day + " · " + r.why) + "</span></button>").join("") +
       '<p class="foot st-note">Still in the core. Nothing leaves it without a decision: keep one with <code>counterparts core --reaffirm &lt;id&gt; --reason "…"</code>, or send it back with <code>--demote</code>. I can decide too, awake or when I reflect.</p>';
   }
@@ -142,7 +142,7 @@ function list(s, key) {
 
 function row(r) {
   return '<button type="button" class="st-row click" onclick="openMemory(\'' + r.id + '\')">' +
-    '<span class="st-text">' + said(r.text, r.confidential) + "</span></button>";
+    '<span class="st-text">' + said(r.text) + "</span></button>";
 }
 
 /** The rule in words, for the map's `?`: the two lanes, the check, and what is counted apart. */

@@ -88,19 +88,12 @@ function refusalsOf(t: Told): Record<string, number> | null {
 }
 
 /**
- * Verdicts that are NEVER NAMED ON A SCREEN, however true the row is.
- *
- * `confidential-withheld` is the one verdict this package holds silent to
- * whoever asked (§9.1 G5), because announcing a gap leaks that something is
- * behind it. The durable row keeps the count — it is the owner's own store, and
- * without it the confidentiality gate is as unreadable as the 2026-09-17
- * inventory found it — but a narrated page is a third audience the row is not:
- * it gets screenshotted, screen-shared and demoed. "1 more was kept out
- * (confidential-withheld)" is that gap announced in plain English on a page.
- *
- * The count still reaches the sentence; only the WORD is withheld.
+ * Verdicts that are NEVER NAMED ON A SCREEN, however true the row is. Empty
+ * since 2026-10-21: `confidential-withheld` was the one, and that gate is
+ * retired. A row from before then still carrying it is read like any other
+ * verdict; the folding below stays, so the list can be filled again.
  */
-const UNNAMEABLE_VERDICTS: readonly string[] = ["confidential-withheld"];
+const UNNAMEABLE_VERDICTS: readonly string[] = [];
 
 /** `blockedBy` (E2), worst first, ties broken by name so a line is stable, and
  *  the silent verdicts folded into an unnamed total. */
@@ -127,7 +120,7 @@ function s(t: Told, key: string): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
-/** The event's own subject, quoted. Resolved now; withheld if confidential. */
+/** The event's own subject, quoted. Resolved now. */
 function subject(t: Told, id?: string | null): string {
   const target = id ?? t.row.ref;
   // 84, not 60. This string is the brain page's ticker — the one sentence the
@@ -532,7 +525,7 @@ export const NARRATORS = {
     const held =
       omitted === 0
         ? ""
-        : ` ${omitted} confidential or permanent ${omitted === 1 ? "line" : "lines"} stayed behind, as ${omitted === 1 ? "it" : "they"} always will.`;
+        : ` ${omitted} permanent ${omitted === 1 ? "line" : "lines"} stayed behind, as ${omitted === 1 ? "it" : "they"} always will.`;
     if (t.p["included"] !== true) {
       if (reason === "not-reached") {
         return calm(
@@ -1093,6 +1086,8 @@ export const NARRATORS = {
     return calm("Which model my stored vectors belong to was checked and recorded.");
   },
   "store.export": (t) => {
+    // Only a row from before 2026-10-21 carries `omittedConfidential`; it is
+    // still said, since it is true of that copy. New rows have none.
     const omitted = n(t, "omittedConfidential") ?? 0;
     return notable(
       `You took a copy of me out of here — ${s(t, "kind") ?? "an export"}, ` +

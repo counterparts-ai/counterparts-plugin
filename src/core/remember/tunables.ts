@@ -81,7 +81,7 @@ export const TUNABLES = {
    * reported for a live session's wake, so the fallback composes against the
    * number a live session composes against and there is one to calibrate rather
    * than two. (Not the same BUNDLE: the sweep's carries no prospective lane and
-   * nothing protected or confidential, and a live wake subtracts its preface
+   * nothing protected, and a live wake subtracts its preface
    * reserve from this figure first.) A host that reported no ceiling composed no wake for its
    * live sessions either, and gets none here — no invented default (scar §2.18).
    *

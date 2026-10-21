@@ -55,9 +55,6 @@ export interface FeelingAskInput {
   readonly asker: FeelingWhose;
   /** The owner's names, lower-case (`sleep/consolidate.ts#ownerNames`). */
   readonly ownerNames?: readonly string[];
-  /** The owner's own session — filled in by `Recall.build` from its own stance,
-   *  so a confidential stamp takes no nomination slot a non-owner can't see. */
-  readonly owner?: boolean;
 }
 
 /** Words that make a question about feeling on their own, with no feeling named. */

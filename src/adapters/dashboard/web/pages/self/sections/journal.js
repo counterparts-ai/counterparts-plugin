@@ -74,7 +74,7 @@ export function paint(d) {
         (c.model ? '<span class="chip model" title="the model that wrote it">' + esc(c.model) + "</span>" : "") +
       "</button>" +
       (open
-        ? '<div class="jc-body">' + (c.text === null ? '<p class="foot">This chapter is withheld here, as it is everywhere.</p>' : renderMarkdown(c.text)) +
+        ? '<div class="jc-body">' + (c.text === null ? '<p class="foot">This chapter could not be read.</p>' : renderMarkdown(c.text)) +
             '<button type="button" class="act-btn jc-open" onclick="openMemory(\'' + c.id + '\')">open the whole entry</button></div>'
         : "") +
     "</div>";

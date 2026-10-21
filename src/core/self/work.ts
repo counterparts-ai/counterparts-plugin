@@ -142,7 +142,7 @@ export function excerptOf(text: string, n: number): string {
  * `Store#workCandidates`: filtered and capped in SQL, newest first, before any
  * prose is read) that are work (`isWorkMemory`), and not: in the
  * identity band, unresolved (a thread, shown store-wide), dated (a reminder,
- * the horizon's), confidential, or in `skip`. Ordered by the lived day it was
+ * the horizon's), or in `skip`. Ordered by the lived day it was
  * last touched — born or used, the later — newest first, then by strength,
  * then by id. No warm floor: a lesson written yesterday is worth a line here
  * however lightly it is held yet.
@@ -173,7 +173,7 @@ export function workHere(
       if (seen.has(id) || opts.skip?.has(id) === true) continue;
       seen.add(id);
       const row = store.row(id);
-      if (row === undefined || row.band === "identity" || row.event_date !== null || row.confidential === 1) continue;
+      if (row === undefined || row.band === "identity" || row.event_date !== null) continue;
       let doc: ProseDoc;
       let physics: MemoryPhysics;
       try {

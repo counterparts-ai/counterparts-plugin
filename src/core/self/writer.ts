@@ -174,7 +174,7 @@ export interface PageWriterRun {
   readonly bytesAfter: number;
   /** How many of the day's memories the writer was handed. */
   readonly considered: number;
-  /** Confidential rows held back from an egress composition. */
+  /** Rows a caller's `omit` held back (none by default since 2026-10-21). */
   readonly omitted: number;
   /**
    * THE NIGHTLY RUN'S CLAIM (2026-09-28): the session whose background run
@@ -658,8 +658,6 @@ export interface WriterJournal {
   readonly total: number;
   /** Entries the room did not take. */
   readonly notShown: number;
-  /** Sessions held back as confidential. */
-  readonly omitted: number;
   /** Characters the journal took. */
   readonly chars: number;
 }
@@ -673,7 +671,7 @@ export interface WriterInput {
   readonly journal?: WriterJournal;
   /** Memories from that date this budget could not carry. */
   readonly dropped: number;
-  /** Confidential rows held back before the budget was spent. */
+  /** Rows a caller's `omit` held back before the budget was spent (none by default). */
   readonly omitted: number;
   readonly bytes: number;
 }
@@ -694,10 +692,10 @@ export interface WriterInput {
  * stopping dropped whole days and then let the block call them empty
  * (MAJOR-1).
  *
- * **Confidential rows follow the fallback wake's rule.** `omit` is the caller's
- * predicate, exactly as `Self#build` takes one, because the confidentiality
- * class is `recall/`'s to read and not this module's. What is held back is
- * COUNTED, so a page written from half a day says so on its row.
+ * `omit` is the caller's predicate, exactly as `Self#build` takes one; none
+ * is passed by default.
+ * What it holds back is COUNTED, so a page written from half a day says so on
+ * its row.
  */
 export function dayMemories(
   store: Store,
@@ -706,7 +704,7 @@ export function dayMemories(
     day: number;
     budgetBytes: number;
     max: number;
-    omit?: (m: { id: string; confidential: boolean; protectedRow: boolean }) => boolean;
+    omit?: (m: { id: string; protectedRow: boolean }) => boolean;
   },
 ): { memories: WriterMemory[]; dropped: number; omitted: number; bytes: number } {
   const picked: (WriterMemory & { order: number })[] = [];
@@ -730,17 +728,14 @@ export function dayMemories(
     // with its summary as its line (2026-10-15), and would be shown twice.
     if (row.source === "episode" && row.origin_ref !== null && row.origin_ref.length > 0) continue;
     let statement: string;
-    let confidential: boolean;
     try {
-      const read = store.read(id);
-      statement = read.doc.body;
-      confidential = read.confidential;
+      statement = store.read(id).doc.body;
     } catch {
       // A memory whose prose will not read is skipped, never a throw — the same
       // direction `identity.ts#scanActive` takes for the same reason (§5 G7).
       continue;
     }
-    if (opts.omit?.({ id, confidential, protectedRow: row.protected === 1 }) === true) {
+    if (opts.omit?.({ id, protectedRow: row.protected === 1 }) === true) {
       omitted += 1;
       continue;
     }
@@ -960,7 +955,7 @@ export function writerInstruction(
   const journaled = journal !== undefined && journal.entries.length > 0;
   if (input.memories.length === 0 && journaled) {
     lines.push(
-      `Besides the journal below, nothing was written down on ${input.about}${input.dropped > 0 ? ` that fit this block (${String(input.dropped)} did not)` : ""}${input.omitted > 0 ? ` that can be shown here (${String(input.omitted)} held back as confidential)` : ""}.`,
+      `Besides the journal below, nothing was written down on ${input.about}${input.dropped > 0 ? ` that fit this block (${String(input.dropped)} did not)` : ""}${input.omitted > 0 ? ` that can be shown here (${String(input.omitted)} held back)` : ""}.`,
     );
   } else if (input.memories.length === 0) {
     // "THE DAY WAS EMPTY" AND "I COULD NOT READ THE DAY" ARE DIFFERENT THINGS,
@@ -972,13 +967,13 @@ export function writerInstruction(
       input.dropped > 0
         ? `${String(input.dropped)} thing${input.dropped === 1 ? " was" : "s were"} written down on ${input.about} and none of them fit the room this block has. Read this as "I could not see the day", never as "the day was empty": call \`${opts.tool}\` with no arguments to read your page, and leave it alone unless you already know something that belongs on it.`
         : input.omitted > 0
-          ? `Nothing from ${input.about} can be shown here (${String(input.omitted)} held back as confidential).`
+          ? `Nothing from ${input.about} can be shown here (${String(input.omitted)} held back).`
           : `Nothing was written down on ${input.about}.`,
     );
   } else {
     const tail =
       (input.dropped > 0 ? `, ${String(input.dropped)} more did not fit` : "") +
-      (input.omitted > 0 ? `, ${String(input.omitted)} held back as confidential` : "");
+      (input.omitted > 0 ? `, ${String(input.omitted)} held back` : "");
     lines.push(
       `What was written down on ${input.about} (${String(input.memories.length)}${tail}), most salient first:`,
       // THE FRAMING SITS WITH THE UNTRUSTED MATERIAL, not only at the top of the
@@ -991,7 +986,7 @@ export function writerInstruction(
     );
     for (const m of input.memories) lines.push(`- ${m.statement}`);
   }
-  if (journal !== undefined && (journaled || journal.omitted > 0)) lines.push("", ...journalLines(input.about, journal));
+  if (journal !== undefined && journaled) lines.push("", ...journalLines(input.about, journal));
   lines.push(PAGE_WRITER_CLOSE);
   return lines.join("\n");
 }
@@ -1011,9 +1006,7 @@ export function journalBlockChars(about: string, journal: Omit<WriterJournal, "c
 }
 
 function journalLines(about: string, journal: WriterJournal): string[] {
-  const tail =
-    (journal.notShown > 0 ? `, ${String(journal.notShown)} more did not fit` : "") +
-    (journal.omitted > 0 ? `, ${String(journal.omitted)} session${journal.omitted === 1 ? "" : "s"} held back as confidential` : "");
+  const tail = journal.notShown > 0 ? `, ${String(journal.notShown)} more did not fit` : "";
   if (journal.entries.length === 0) return [`The journal on ${about}: nothing that can be shown here${tail}.`];
   const out = [
     `The journal on ${about} (${String(journal.entries.length)} of ${String(journal.total)} chapter${journal.total === 1 ? "" : "s"}${tail}) — a chapter in full where there was room, otherwise its summary:`,

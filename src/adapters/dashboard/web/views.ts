@@ -9,10 +9,8 @@
  *      was stored beside an id. Every id becomes words at the moment the request
  *      is served, through `reveal()` — so a removed memory reads as removed in a
  *      panel built from a three-day-old event (scar §2.20).
- *   2. **Confidential rows are withheld the way every other surface withholds
- *      them** (`reveal.ts`). The row stays visible — id, band, strength, its dot
- *      in the constellation — and only the sentence is gone. A memory the owner
- *      cannot see the existence of would be the worse failure.
+ *   2. **Nothing is withheld as confidential** (since 2026-10-21; until then
+ *      `reveal.ts` withheld a confidential row's sentence here as everywhere).
  *   3. **Absence has two words.** `(none yet)` — asked, and the answer is zero.
  *      `(never run)` — never asked. Every panel says which; none is blank
  *      (scar §2.4, `NOTES.md`).

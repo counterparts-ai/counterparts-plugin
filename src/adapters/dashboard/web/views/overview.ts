@@ -80,7 +80,7 @@ export function ownerName(src: DashboardSource): string | null {
 function homeMap(src: DashboardSource, identity: readonly { id: string; strength: number }[]): SelfMap {
   const core = identity.map((el) => {
     const r = reveal(src.store, el.id, 120);
-    return { id: el.id, text: r.text ?? r.label, confidential: r.confidential, strength: el.strength };
+    return { id: el.id, text: r.text ?? r.label, strength: el.strength };
   });
   return selfMap(src, core, coreCandidates(src, src.self.page()?.id ?? null).raw);
 }
@@ -108,9 +108,9 @@ export interface OverviewView {
    * the fact that varies — and where the store never recorded one, the row says
    * nothing there rather than inventing a day or repeating the tautology.
    */
-  readonly identity: { id: string; text: string; kind: Kind; band: Band; strength: number; promotedDay: number | null; bornDay: number; lastUsedDay: number; confidential: boolean }[];
+  readonly identity: { id: string; text: string; kind: Kind; band: Band; strength: number; promotedDay: number | null; bornDay: number; lastUsedDay: number }[];
   readonly identityAbsent: string | null;
-  readonly guarded: { id: string; text: string; kind: Kind; bornDay: number; lastUsedDay: number; confidential: boolean }[];
+  readonly guarded: { id: string; text: string; kind: Kind; bornDay: number; lastUsedDay: number }[];
   readonly guardedAbsent: string | null;
   readonly contested: ContestedRow[];
   readonly contestedAbsent: string | null;
@@ -244,7 +244,6 @@ export function overviewView(src: DashboardSource, feedLimit = FEED_LIMIT): Over
         strength: el.strength,
         promotedDay: promotedDays.get(el.id) ?? null,
         ...livedDays(src, el.id),
-        confidential: r.confidential,
       };
     }),
     identityAbsent: e.identity.length === 0 ? (everLived ? NONE : NEVER) : null,
@@ -255,7 +254,6 @@ export function overviewView(src: DashboardSource, feedLimit = FEED_LIMIT): Over
         text: r.text ?? r.label,
         kind: el.kind,
         ...livedDays(src, el.id),
-        confidential: r.confidential,
       };
     }),
     guardedAbsent: e.protected.length === 0 ? (everLived ? NONE : NEVER) : null,

@@ -13,14 +13,9 @@
  * night credits nothing; opening one of the memory ids it names is an
  * ordinary open, credited as any other.
  *
- * THE CONFIDENTIALITY BOUNDARY is the one the export and the morning share
- * already draw (`cli/export.ts#restsOnConfidential`, `dream/reflect.ts`'s
- * `touchesConfidential`): a night that was shown, changed, cited or became a
- * confidential memory is withheld WHOLE from a session that is not the owner's,
- * and the withholding is stated (`handle-confidential-withheld`), as for a
- * memory asked for by id. And in any session, a summary carries no memory's
- * body but a short gist's, and never a confidential one's: the ids are there
- * to open, and an open crosses recall's own boundary.
+ * In any session, a summary carries no memory's body but a short gist's: the
+ * ids are there to open, and an open crosses recall's own boundary. (The
+ * confidentiality boundary that also stood here was retired 2026-10-21.)
  *
  * Pure reads over the store; never writes, never throws past its caller.
  */
@@ -72,8 +67,8 @@ export interface DreamSummary {
   readonly undone?: number;
   /** The memory ids each kind of change touched, capped per kind. */
   readonly touched: Readonly<Record<string, IdsCapped>>;
-  /** Its gists: the text when short and not confidential, else the id alone. */
-  readonly gists: readonly { id: string; text?: string; chars?: number; confidential?: true }[];
+  /** Its gists: the text when short, else the id alone. */
+  readonly gists: readonly { id: string; text?: string; chars?: number }[];
   /** Gists past `NIGHT_IDS_PER_KIND`, counted rather than listed (a night of hundreds stays small). */
   readonly gistsMore?: number;
   /** The reflections after it, newest first. */
@@ -92,8 +87,6 @@ export interface ReflectionSummary {
   readonly dream: string | null;
   readonly entry: string | null;
   readonly entryChars?: number;
-  /** Set when the memory the entry became is confidential now: `entry` is then null, the owner's session included. */
-  readonly entryConfidential?: true;
   /** The memory its entry became. */
   readonly entryId: string | null;
   readonly share: string | null;
@@ -110,7 +103,7 @@ export type NightSummary = DreamSummary | ReflectionSummary;
 
 export type NightRead =
   | { readonly ok: true; readonly night: NightSummary }
-  | { readonly ok: false; readonly reason: "handle-unknown" | "handle-confidential-withheld" };
+  | { readonly ok: false; readonly reason: "handle-unknown" };
 
 function ids(json: string): string[] {
   try {
@@ -143,22 +136,6 @@ function cut(text: string, max: number): { text: string; chars?: number } {
   return text.length <= max ? { text } : { text: `${text.slice(0, max - 1)}…`, chars: text.length };
 }
 
-/** Does any of these memories, as it is NOW, carry the confidential mark? A removed one does not. */
-function restsOnConfidential(store: Store, list: readonly (string | null)[]): boolean {
-  for (const id of list) {
-    if (id === null) continue;
-    let row;
-    try {
-      row = store.row(id);
-    } catch {
-      continue;
-    }
-    if (row === undefined || rowTombstoned(row)) continue;
-    if (row.confidential === 1) return true;
-  }
-  return false;
-}
-
 /** The memory ids one change names: its two refs, and a merge's originals. */
 function changeIds(c: DreamChangeRow): string[] {
   const out: string[] = [];
@@ -166,11 +143,6 @@ function changeIds(c: DreamChangeRow): string[] {
   if (c.ref2 !== null) out.push(c.ref2);
   if (c.action === "merge") out.push(...stringList(detailOf(c.detail)["from"]));
   return out;
-}
-
-/** What one change rests on, for the boundary: its ids, and a gist's or a fold's sources. */
-function changeRests(c: DreamChangeRow): string[] {
-  return c.action === "gist" ? [...changeIds(c), ...stringList(detailOf(c.detail)["sources"])] : changeIds(c);
 }
 
 /** The key `dreams.counts` files a change under: a fold is its own kind. */
@@ -188,7 +160,7 @@ function dreamSummary(counterpart: Counterpart, dream: DreamRow, changes: readon
   }
   const touched: Record<string, IdsCapped> = {};
   for (const [k, list] of byKind) touched[k] = capped(list);
-  const gists: { id: string; text?: string; chars?: number; confidential?: true }[] = [];
+  const gists: { id: string; text?: string; chars?: number }[] = [];
   let gistsMore = 0;
   for (const c of standing) {
     if ((c.action !== "gist" && c.action !== "fold") || c.ref === null) continue;
@@ -198,10 +170,6 @@ function dreamSummary(counterpart: Counterpart, dream: DreamRow, changes: readon
     }
     const row = store.row(c.ref);
     if (row === undefined || rowTombstoned(row)) continue;
-    if (restsOnConfidential(store, [c.ref])) {
-      gists.push({ id: c.ref, confidential: true });
-      continue;
-    }
     const body = row.body.trim();
     gists.push(body.length <= NIGHT_GIST_CHARS ? { id: c.ref, text: body } : { id: c.ref, chars: body.length });
   }
@@ -228,10 +196,7 @@ function reflectionSummary(store: Store, r: ReflectionRow): ReflectionSummary {
   const d = detailOf(r.detail);
   const list = stringList;
   const title = typeof d["title"] === "string" ? d["title"] : null;
-  // The entry IS a memory's body (`entry_id`): marked confidential since, it is
-  // not quoted here in any session, as a confidential gist is not.
-  const entryConfidential = r.entry_id !== null && restsOnConfidential(store, [r.entry_id]);
-  const entry = r.entry === null || entryConfidential ? null : cut(r.entry, NIGHT_ENTRY_CHARS);
+  const entry = r.entry === null ? null : cut(r.entry, NIGHT_ENTRY_CHARS);
   return {
     kind: "reflection",
     id: r.id,
@@ -242,7 +207,6 @@ function reflectionSummary(store: Store, r: ReflectionRow): ReflectionSummary {
     dream: r.dream_id,
     entry: entry === null ? null : entry.text,
     ...(entry?.chars === undefined ? {} : { entryChars: entry.chars }),
-    ...(entryConfidential ? { entryConfidential: true as const } : {}),
     entryId: r.entry_id,
     share: r.share,
     shareState: r.share_state,
@@ -253,27 +217,19 @@ function reflectionSummary(store: Store, r: ReflectionRow): ReflectionSummary {
   };
 }
 
-/**
- * ONE NIGHT, by its id: a summary, or why not. `owner` is the asker's — the
- * same flag that decides a memory's confidentiality on recall's id path.
- */
-export function readNight(counterpart: Counterpart, id: string, opts: { readonly owner: boolean }): NightRead {
+/** ONE NIGHT, by its id: a summary, or why not. */
+export function readNight(counterpart: Counterpart, id: string): NightRead {
   const kind = nightKindOf(id);
   const store = counterpart.store;
   try {
     if (kind === "dream") {
       const shown = counterpart.dreams.show(id.trim());
       if (shown === null) return { ok: false, reason: "handle-unknown" };
-      const rests = [...ids(shown.dream.shown), ...shown.changes.flatMap(changeRests)];
-      if (!opts.owner && restsOnConfidential(store, rests)) return { ok: false, reason: "handle-confidential-withheld" };
       return { ok: true, night: dreamSummary(counterpart, shown.dream, shown.changes) };
     }
     if (kind === "reflection") {
       const r = counterpart.reflections.show(id.trim());
       if (r === null) return { ok: false, reason: "handle-unknown" };
-      const d = detailOf(r.detail);
-      const rests = [...ids(r.shown), ...ids(r.cites), ...ids(r.share_cites), r.entry_id, ...stringList(d["closeProposed"]), ...stringList(d["closed"])];
-      if (!opts.owner && restsOnConfidential(store, rests)) return { ok: false, reason: "handle-confidential-withheld" };
       return { ok: true, night: reflectionSummary(store, r) };
     }
   } catch {

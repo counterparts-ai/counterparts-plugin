@@ -15,7 +15,7 @@ import { NEVER, NONE } from "../../layout.js";
 import { BANDS, KINDS } from "../../registries.js";
 import type { DashboardSource } from "../../source.js";
 import { displayName } from "../ask-voice.js";
-import { WITHHELD, revealHere } from "../reveal.js";
+import { revealHere } from "../reveal.js";
 import { archiveWords } from "./archive-words.js";
 import { letGoDay } from "./mechanism-panel.js";
 import { feelingsShown, firstSentence, isChapterMemory, repeatsOf, shownOf } from "./memory-words.js";
@@ -311,11 +311,10 @@ export type ListState = "live" | "archived" | "all";
 
 export interface ListRow {
   readonly id: string;
-  /** The title, when the memory carries one (withheld when confidential). */
+  /** The title, when the memory carries one. */
   readonly title: string | null;
-  /** The first line of the memory's own words — or its named absence, or the withholding. */
+  /** The first line of the memory's own words, or its named absence. */
   readonly line: string;
-  readonly confidential: boolean;
   readonly kind: Kind;
   readonly band: Band;
   readonly strength: number;
@@ -347,7 +346,7 @@ export interface ListRow {
   readonly hold: Hold | null;
   /** A live row whose date still repeats: how often, as a person says it
    *  (`every May 14`, `repeatsOf`) — kept for its next occurrence, so never
-   *  "fading" (2026-10-09). Null otherwise, and on a withheld row. */
+   *  "fading" (2026-10-09). Null otherwise, and on an absent row. */
   readonly repeats: string | null;
   /** Put-away rows only: how many put-away versions of the same memory this
    *  one row stands for (itself included) — 1 for most. See `versionKey`. */
@@ -608,7 +607,6 @@ export function memoryListView(
     let line: string;
     let text: string;
     if (!here.present) line = text = here.label;
-    else if (here.confidential) line = text = WITHHELD;
     else {
       const t = row?.title ?? null;
       title = t !== null && t.trim().length > 0 ? t.trim() : null;
@@ -619,16 +617,15 @@ export function memoryListView(
       chapter: r.journal,
       learnedOn: r.learnedOn,
       chapterDay: row?.happened_on ?? null,
-      confidential: here.confidential || !here.present,
-      withheld: text,
+      absent: !here.present,
+      absentLabel: text,
     });
     // A journal chapter reads as its first real sentence under "Journal · <day>".
-    const words = r.journal && !here.confidential && here.present ? firstSentence(shown.text) : shown.text;
+    const words = r.journal && here.present ? firstSentence(shown.text) : shown.text;
     return {
       id: r.id,
       title,
       line,
-      confidential: here.confidential,
       kind: r.kind,
       band: r.band,
       strength: r.strength,
@@ -647,9 +644,9 @@ export function memoryListView(
       feelings: feelingsShown(store, r.id),
       createdAt: r.createdAt,
       hold: r.hold,
-      // A withheld row shows no date of its own in the list, so not how often
+      // An absent row shows no date of its own in the list, so not how often
       // its date comes round either; it is still never "fading".
-      repeats: here.confidential || !here.present ? null : r.repeats,
+      repeats: !here.present ? null : r.repeats,
       versions: r.versions,
     };
   });

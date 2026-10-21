@@ -66,7 +66,6 @@ export {
   DESKTOP_INSTRUCTIONS,
   McpServer,
   NO_DESKTOP_SESSION,
-  OWNER_FALSE_NOTE,
   SEEN_SESSIONS,
   SERVER_NAME,
   SERVER_VERSION,
@@ -94,8 +93,6 @@ import { McpServer } from "./server.js";
 import type { McpServerOptions } from "./server.js";
 
 export interface OpenServerOptions extends Omit<McpServerOptions, "counterpart"> {
-  /** `CounterpartOptions.bundlesAsOwner`: tests only — no host sets it (review of #318). */
-  bundlesAsOwner?: boolean;
   /** Where the memory lives. Defaults to the store's own resolution. */
   dir?: string;
   observer?: boolean;
@@ -146,15 +143,12 @@ export function openServer(opts: OpenServerOptions = {}): McpServer {
     ...(opts.timeZone === undefined ? {} : { timeZone: opts.timeZone }),
     ...(opts.pageWriterMode === undefined ? {} : { pageWriterMode: opts.pageWriterMode }),
     ...(opts.observer === undefined ? {} : { observer: opts.observer }),
-    ...(opts.owner === undefined ? {} : { owner: opts.owner }),
-    ...(opts.bundlesAsOwner === undefined ? {} : { bundlesAsOwner: opts.bundlesAsOwner }),
     ...(opts.onCounterpartEvent === undefined ? {} : { onEvent: opts.onCounterpartEvent }),
   });
   return new McpServer({
     counterpart,
     ...(opts.session === undefined ? {} : { session: opts.session }),
     ...(opts.scope === undefined ? {} : { scope: opts.scope }),
-    ...(opts.owner === undefined ? {} : { owner: opts.owner }),
     // The embedder is the ENTRY POINT's to open: this file composes, it does
     // not read a configuration (server.ts's header).
     ...(opts.embedder === undefined ? {} : { embedder: opts.embedder }),
@@ -172,8 +166,6 @@ export function openServer(opts: OpenServerOptions = {}): McpServer {
     ...(opts.manifestVersion === undefined ? {} : { manifestVersion: opts.manifestVersion }),
     ...(opts.env === undefined ? {} : { env: opts.env }),
     ...(opts.launchObserver === undefined ? {} : { launchObserver: opts.launchObserver }),
-    ...(opts.ownerFrom === undefined ? {} : { ownerFrom: opts.ownerFrom }),
-    ...(opts.codeTabOwner === undefined ? {} : { codeTabOwner: opts.codeTabOwner }),
     ...(opts.onEvent === undefined ? {} : { onEvent: opts.onEvent }),
     ...(opts.afterCall === undefined ? {} : { afterCall: opts.afterCall }),
     ...(opts.now === undefined ? {} : { now: opts.now }),

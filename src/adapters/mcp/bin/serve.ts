@@ -70,14 +70,7 @@ import { PLUGIN_ROOT_ENV, ensureFirstRun, installRoute, mcpGate, pluginOrigin, r
 import { DATA_DIR_ENV, describeGuardRefusal } from "../../../core/store/index.js";
 import { BINARY, scriptArgs } from "../../runtime.js";
 import type { Binary } from "../../runtime.js";
-import {
-  OBSERVER_ENV,
-  OWNER_ENV,
-  observerFromEnv,
-  ownerFromEnv,
-  readEnvSwitch,
-  unreadableStanceLine,
-} from "../../stance-env.js";
+import { OBSERVER_ENV, observerFromEnv, unreadableStanceLine } from "../../stance-env.js";
 
 /**
  * The same file `bin/hook.ts` and `bin/runner.ts` read by default. One
@@ -98,11 +91,9 @@ export const ENV = {
   session: "COUNTERPARTS_SESSION",
   scope: "COUNTERPARTS_SCOPE",
   dir: "COUNTERPARTS_DATA_DIR",
-  // The two stance names come from `adapters/stance-env.ts`, not from a second
-  // pair of string literals here. That module's whole argument is that two
-  // strings which must agree and are written twice have already begun to
-  // disagree — it would be a poor place to start a third copy (G39).
-  owner: OWNER_ENV,
+  // The stance name comes from `adapters/stance-env.ts`, not from a second
+  // string literal here (G39). (`COUNTERPARTS_OWNER` stood beside it until the
+  // yours/guest split was removed, 2026-10-21; nothing reads it now.)
   observer: OBSERVER_ENV,
 } as const;
 
@@ -110,14 +101,6 @@ export interface LaunchOptions {
   session?: string;
   scope?: string;
   dir?: string;
-  owner: boolean;
-  /**
-   * Did anything SAY the owner bit (2026-10-02)? `flag` or `env` — `--owner`,
-   * or `COUNTERPARTS_OWNER` set to any value, junk included (junk is not
-   * owner, and is not upgraded by a default) — or `unset`, which is when the
-   * installed configuration's `owner: true` decides (`main`).
-   */
-  ownerSaid: "flag" | "env" | "unset";
   observer: boolean;
   /**
    * One line per stance variable this launch could not read, ready for stderr.
@@ -141,6 +124,9 @@ export function launchOptions(
       session: { type: "string" },
       scope: { type: "string" },
       dir: { type: "string" },
+      // `--owner` is still parsed, and ignored, so an old registration that
+      // passes it launches as before (the yours/guest split was removed
+      // 2026-10-21; the flag goes in the release after).
       owner: { type: "boolean" },
       observer: { type: "boolean" },
       // Declared so `strict: false` does not read `--config <path>` as a boolean
@@ -151,30 +137,16 @@ export function launchOptions(
     },
     strict: false,
   });
-  // THE TWO STANCE VARIABLES ARE READ THE WAY THE GUARD NEXT DOOR IS READ
-  // (G39). This used to be one `flag()` closure matching `"1"` and `"true"`
-  // exactly, so `=on`, `=True` and `= 1 ` — the set
-  // `COUNTERPARTS_REQUIRE_EXPLICIT_DIR` documents — all fell silently to
-  // "ordinary session". `adapters/stance-env.ts` carries the shared reading and
-  // the argument for each fail direction: observer collapses junk to OBSERVER
-  // (`docs/observer-mode.md` G5, fail toward standing down), owner collapses it
-  // to NOT owner. Same helper, opposite boolean, because least privilege is the
-  // opposite boolean for a bit that grants reach and a bit that withholds it.
+  // THE STANCE VARIABLE IS READ THE WAY THE GUARD NEXT DOOR IS READ (G39):
+  // `adapters/stance-env.ts` carries the shared reading, and junk collapses to
+  // OBSERVER (`docs/observer-mode.md` G5, fail toward standing down).
   const observer = observerFromEnv(env, values["observer"] === true, ENV.observer);
-  const owner = ownerFromEnv(env, values["owner"] === true, ENV.owner);
   const unreadable: string[] = [];
   if (observer.malformed !== null) {
     unreadable.push(
       unreadableStanceLine(ENV.observer, observer.malformed, "standing down to observer stance"),
     );
   }
-  if (owner.malformed !== null) {
-    unreadable.push(
-      unreadableStanceLine(ENV.owner, owner.malformed, "this launch is NOT owner-stanced"),
-    );
-  }
-  const ownerSaid: LaunchOptions["ownerSaid"] =
-    values["owner"] === true ? "flag" : readEnvSwitch(env, ENV.owner).state === "absent" ? "unset" : "env";
   const session = (values["session"] as string | undefined) ?? env[ENV.session];
   const scope = (values["scope"] as string | undefined) ?? env[ENV.scope];
   const dir = (values["dir"] as string | undefined) ?? env[ENV.dir];
@@ -182,39 +154,9 @@ export function launchOptions(
     ...(session === undefined || session.length === 0 ? {} : { session }),
     ...(scope === undefined || scope.length === 0 ? {} : { scope }),
     ...(dir === undefined || dir.length === 0 ? {} : { dir }),
-    owner: owner.on,
-    ownerSaid,
     observer: observer.on,
     unreadable,
   };
-}
-
-/**
- * THE OWNER'S OWN SESSIONS ARE THE OWNER (owner ruling 2026-10-02). Until now
- * the server read only `COUNTERPARTS_OWNER`, which no install sets, so every
- * Claude Code session's server was a guest while its hooks — reading the
- * configuration's `owner: true` — were the owner: a thread opened in another
- * directory could not be closed from the tool, and confidential memories
- * were left out of its answers.
- *
- * With nothing said on this launch, the configuration decides: `owner: true`
- * there (every install writes it) makes a server Claude Code started the
- * owner's, and a Code-tab call that Desktop's server serves as a Claude Code
- * session (`codeTabOwner`). A Desktop chat stays a guest. The order is
- * flag, then environment, then configuration (`stance-env.ts#ownerFromEnv`):
- * `--owner` wins outright; else `COUNTERPARTS_OWNER` when set — `1`, or `0`,
- * the opt-out (`off`), or junk, which is not owner and is not upgraded; else
- * the configuration. An observer configuration is never the owner's. Pure.
- */
-export function ownerStance(
-  launch: { owner: boolean; ownerSaid: LaunchOptions["ownerSaid"] },
-  config: { owner?: boolean; observer?: boolean },
-  startedByClaudeCode: boolean,
-): { owner: boolean; ownerFrom: "env" | "config" | "default" | "off"; codeTabOwner: boolean } {
-  if (launch.ownerSaid !== "unset") return { owner: launch.owner, ownerFrom: launch.owner ? "env" : "off", codeTabOwner: false };
-  const byConfig = config.owner === true && config.observer !== true;
-  const owner = byConfig && startedByClaudeCode;
-  return { owner, ownerFrom: owner ? "config" : "default", codeTabOwner: byConfig };
 }
 
 /**
@@ -454,15 +396,12 @@ async function main(): Promise<void> {
   // never touches any of it. Handed in so the server library imports no
   // other adapter: the configuration this process read, the worker's command,
   // and the doctor's notice, which lives in `claude-code/`.
-  // THE OWNER'S OWN SESSIONS ARE THE OWNER (owner ruling 2026-10-02): `ownerStance`.
-  const { ownerSaid, ...launch } = opts;
-  const ownerSays = ownerStance({ owner: launch.owner, ownerSaid }, config, startedByClaudeCode);
+  const launch = opts;
   // THE SIDEBAR'S STATUS FILE (2026-10-14, `adapters/sidebar-status.ts`):
   // armed below once the store is open; a tool call only schedules a write.
   let sidebar: SidebarStatusWriter | null = null;
   const server = openServer({
     ...launch,
-    ...ownerSays,
     onEvent: toLog,
     afterCall: () => sidebar?.schedule(SIDEBAR_AFTER_CALL_MS),
     onCounterpartEvent: toLog,

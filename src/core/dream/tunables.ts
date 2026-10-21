@@ -231,14 +231,3 @@ export const DREAM_TUNABLES = {
 export type DreamAction = keyof typeof DREAM_TUNABLES.LIMITS;
 export const DREAM_ACTIONS = Object.keys(DREAM_TUNABLES.LIMITS) as DreamAction[];
 
-/**
- * WHAT A DREAM'S BUNDLE IS READ AS: a guest, always (review of #318, a
- * coordinator default that keeps the behaviour from before it — the owner may
- * revisit). A dream's journal and a nomination's `why` carry no
- * confidentiality mark and are read later by other bundles and the
- * dashboard, so a confidential memory may not reach them. Until #318 every
- * server that built a bundle was a guest; since then a Claude Code server can
- * be the owner's, and the bundle stays as it was. `ctx.owner` still decides
- * the GATE (what counts as new for the ask), which is the session's own.
- */
-export const BUNDLE_OWNER = false;

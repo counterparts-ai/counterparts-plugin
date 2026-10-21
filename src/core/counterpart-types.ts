@@ -67,7 +67,7 @@ export interface SweepWake {
   readonly elements: number;
   /** Elements the cap's trim order dropped — the cap having bitten. */
   readonly trimmed: number;
-  /** Rows stood aside as confidential or protected, before any lane saw them. */
+  /** Rows stood aside as protected, before any lane saw them. */
   readonly omitted: number;
   readonly code: string | null;
 }
@@ -296,8 +296,6 @@ export interface CounterpartOptions extends Stance {
    * learns the ceiling from its host's configuration at session start.
    */
   budgetBytes?: number;
-  /** Is this the owner's own session? Defaults FALSE in `recall/` (§15 G7). */
-  owner?: boolean;
   embed?: Embedder;
   /**
    * The LIVE half of the same embedder: text in, vector out, and it may reach a
@@ -350,14 +348,6 @@ export interface CounterpartOptions extends Stance {
    * stamp and no comparison — today's behaviour.
    */
   build?: string | null;
-  /**
-   * READ A DREAM'S AND A REFLECTION'S BUNDLES AS THE OWNER (review of #318).
-   * No host sets it: a bundle is a guest's on every server
-   * (`dream/tunables.ts#BUNDLE_OWNER`). The store-level tests of what an
-   * owner-read bundle must keep — a merge of a confidential memory is
-   * confidential, a page rests on nothing confidential — set it. Absent: false.
-   */
-  bundlesAsOwner?: boolean;
   /**
    * `self/`'s knobs over its defaults (`self/tunables.ts`). Absent: the
    * defaults. Added 2026-10-01 so the craft lane's switch
@@ -510,14 +500,6 @@ export interface DepositContext {
   /** The model writing it, from host state (`MintOptions.model`); absent = NULL. */
   model?: string;
   /**
-   * THE CALLER'S STANCE FOR THIS DEPOSIT, when it is not the process's
-   * (2026-10-02): a Claude Code session from Desktop's Code tab is served by
-   * Desktop's server, whose store opened as a guest, and it is still the
-   * owner's own session. Read only by the thread close (`closeThread`).
-   * Absent: the process's own `owner`.
-   */
-  owner?: boolean;
-  /**
    * Memories the same call wrote before this one (a dump's earlier entries):
    * the writer's own words of the same moment, never read as an earlier state
    * of this one by the slot detector (review of #420; the neighbours' rule,
@@ -639,11 +621,12 @@ export interface DepositResult {
 
 /**
  * Why a deposit did not close the open thread it names (review of #313): the
- * revision step's own refusals for a protected or archived row, and the two
- * a session that is not the owner's meets — a confidential row, or a row
- * written in another directory.
+ * revision step's own refusals for a protected or archived row. (Until
+ * 2026-10-21 also `confidential` and `other-directory`; nothing produces
+ * them since. An old `counterpart.thread.refused` event row may still carry
+ * one.)
  */
-export type ThreadRefusal = "protected-refuses-revision" | "target-archived" | "confidential" | "other-directory";
+export type ThreadRefusal = "protected-refuses-revision" | "target-archived";
 
 /** A revision's reminder: carried over, replaced, or dropped — and moved. */
 export interface DepositReminder {
@@ -673,8 +656,7 @@ export interface DepositReminder {
   readonly alsoClosed?: readonly string[];
   /**
    * Memories of that chain still holding a date that this write could not
-   * close (`closeThread`'s guards: protected, or confidential / another
-   * directory's for a session that is not the owner's). Listed in the reply.
+   * close (`closeThread`'s guard: a protected memory). Listed in the reply.
    */
   readonly chainSkipped?: readonly string[];
 }

@@ -611,19 +611,13 @@ function inspectForRemoval(
 /**
  * `mem_xxx  fact — what it is about  (2026-09-22)`, and nothing wider.
  *
- * TWO MARKERS, both of them saying what a bare kind would not:
- *
- *   - **`[journal]`** — the owner's ruling of 2026-09-04 (LAUNCH-STATUS §I14),
- *     in the same place and the same word `recall` prints it: a chapter is
- *     recallable and is never presented as a memory. The lexical index holds
- *     episode rows, so without it a day's account comes up looking like a fact
- *     under a question that says "delete this memory for good".
- *   - **`[confidential]`** — review m1. `export` omits confidential memories by
- *     default *even for the owner* and makes him pass `--include-confidential`;
- *     this list may not be the one owner-facing surface that prints one of them
- *     unmarked. With the marker on, `summaryOf` also stops falling back to the
- *     body for it: a confidential memory's first line is exactly the string
- *     that door exists to keep off a screen nobody asked to see it on.
+ * ONE MARKER, saying what a bare kind would not: **`[journal]`** — the
+ * owner's ruling of 2026-09-04 (LAUNCH-STATUS §I14), in the same place and the
+ * same word `recall` prints it: a chapter is recallable and is never presented
+ * as a memory. The lexical index holds episode rows, so without it a day's
+ * account comes up looking like a fact under a question that says "delete this
+ * memory for good". (A `[confidential]` marker stood beside it until that mark
+ * was retired, 2026-10-21.)
  */
 function candidateLine(row: {
   id: string;
@@ -631,10 +625,9 @@ function candidateLine(row: {
   kind: string;
   title: string | null;
   body: string;
-  confidential: number;
   learned_on: string;
 }): string {
-  const marks = `${row.type === "episode" ? "[journal] " : ""}${row.confidential === 1 ? "[confidential] " : ""}`;
+  const marks = row.type === "episode" ? "[journal] " : "";
   return `${row.id}  ${marks}${row.kind} — ${summaryOf(row)}  (${row.learned_on})`;
 }
 
@@ -643,15 +636,9 @@ function candidateLine(row: {
  * line and cut to fit, because a candidate list whose rows wrap is a list whose
  * numbers stop lining up. The cut is at a width, not at a word: this is a label
  * for choosing by, and the memory itself is one `counterparts ask --id` away.
- *
- * **A CONFIDENTIAL memory never falls back to its body** (review m1): it is
- * `(untitled)` and the marker beside it says which kind of untitled. The line
- * is then kind, date and two markers — enough to choose by, since the person
- * searched the words that found it, and none of the words themselves.
  */
-function summaryOf(row: { title: string | null; body: string; confidential: number }): string {
+function summaryOf(row: { title: string | null; body: string }): string {
   const titled = row.title !== null && row.title.trim().length > 0;
-  if (!titled && row.confidential === 1) return "(untitled)";
   const raw = titled ? row.title ?? "" : (row.body.split("\n").find((line) => line.trim().length > 0) ?? "");
   const one = raw.replace(/\s+/g, " ").trim();
   if (one.length === 0) return "(no words)";

@@ -78,7 +78,7 @@ import type { MindItem } from "./mind.js";
 import { chapterEntries, entryKey, entryLine, fitEpisodes, shownEntry, summarized, withSummaries } from "./slices.js";
 import { chapterSummaries } from "../self/summaries.js";
 import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter, ShownEntry } from "./slices.js";
-import { BUNDLE_OWNER, DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
+import { DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 import type { DreamAction } from "./tunables.js";
 import {
   FOLD_SOURCE,
@@ -290,11 +290,6 @@ export interface DreamLinkReport {
 export interface DreamContext {
   readonly store: Store;
   readonly observer: boolean;
-  /** The owner's own session: confidential memories may be shown (recall's gate 1). */
-  readonly owner: boolean;
-  /** Read the BUNDLES as the owner too (`BUNDLE_OWNER`, review of #318). No host sets it; the
-   *  store-level tests of what an owner-read bundle must keep do. Absent: a guest. */
-  readonly bundleOwner?: boolean;
   /** The credential battery (`bridge.episodeGate`), for every word a dream writes. */
   readonly gate: (text: string, sessionId: string) => { ok: true; text: string } | { ok: false; reason: string };
   readonly page: () => string | null;
@@ -645,7 +640,7 @@ export function nightRunWords(run: Pick<NightRun, "state" | "reason" | "detail" 
     case "spawn-failed":
       return `claude could not be started${run.detail === null ? "" : ` (${run.detail})`}`;
     case "quick-exit":
-      return `claude stopped straight away${code} — is it logged in?`;
+      return `claude stopped straight away${code} — is it logged in? Or a claude too old for the night's flags — update it.`;
     case "nothing-ran":
       return "claude ran but used none of the dream tools (the counterparts MCP server was not there, or refused the session)";
     case "unfinished":
@@ -812,10 +807,6 @@ export class Dreams {
     this.ctx = ctx;
   }
 
-  /** Whose a bundle is read as: a guest (`BUNDLE_OWNER`), unless a test asked otherwise. */
-  private get bundleOwner(): boolean {
-    return this.ctx.bundleOwner ?? BUNDLE_OWNER;
-  }
 
   private get store(): Store {
     return this.ctx.store;
@@ -1100,7 +1091,7 @@ export class Dreams {
    * everything else says yes.
    */
   status(at: string = this.ctx.today()): DreamStatus {
-    return this.gate(at, this.ctx.observer, this.ctx.owner, DREAM_TUNABLES.MIN_NEW);
+    return this.gate(at, this.ctx.observer, DREAM_TUNABLES.MIN_NEW);
   }
 
   /**
@@ -1108,7 +1099,7 @@ export class Dreams {
    * (`previewAsk`, which asked it as a live session for the dashboard's
    * Tonight box, was removed 2026-10-09 with no caller left: NOTES.)
    */
-  private gate(at: string, observer: boolean, owner: boolean, enough?: number): DreamStatus {
+  private gate(at: string, observer: boolean, enough?: number): DreamStatus {
     const setting = this.setting();
     const last = this.lastDream();
     const day = this.store.livedDay();
@@ -1153,7 +1144,7 @@ export class Dreams {
     // THE PER-PROMPT PATH COUNTS ONLY AS FAR AS IT NEEDS (review of build B):
     // `status` stops at `MIN_NEW` (and says the count is a floor); the line
     // counts the whole queue.
-    const q = this.queue({ owner, ask: true, skip: (d) => this.passedOver(d, at), ...(enough === undefined ? {} : { enough }) });
+    const q = this.queue({ ask: true, skip: (d) => this.passedOver(d, at), ...(enough === undefined ? {} : { enough }) });
     const newSince = q.ids.length;
     // A RUN LEFT BEHIND is due whatever the count: its dream is half-done, and
     // the reflection after it never ran.
@@ -1293,7 +1284,7 @@ export class Dreams {
     const gated = this.status(input.at);
     if (!gated.due) return null;
     // The line says how many: the whole queue, counted once, here.
-    const s = gated.newSinceAtLeast === true ? { ...gated, newSince: this.queue({ owner: this.ctx.owner, skip: (d) => this.passedOver(d, input.at) }).ids.length } : gated;
+    const s = gated.newSinceAtLeast === true ? { ...gated, newSince: this.queue({ skip: (d) => this.passedOver(d, input.at) }).ids.length } : gated;
     // AUTO IS HEADLESS (2026-09-29) — unless today's headless run could not
     // start, when the line falls back to asking, with the reason.
     const fell = s.setting === "auto" ? this.fellBack(input.at) : null;
@@ -1647,7 +1638,7 @@ export class Dreams {
     // The dream before this one (an undone dream does not count), and the
     // queue as every dream that stands leaves it.
     const prior = this.lastDream();
-    const q = this.queue({ owner: this.bundleOwner, since: prior });
+    const q = this.queue({ since: prior });
     if (q.ids.length === 0) return { ok: false, reason: "nothing-new" };
     const id = `drm_${randomBytes(6).toString("hex")}`;
     const composed = this.compose(id, q, prior, day, at);
@@ -1738,7 +1729,7 @@ export class Dreams {
     const prior = this.store.dreams({ limit: 20 }).find((d) => d.state !== "undone" && d.id !== dream.id) ?? null;
     // Its queue: what no OTHER standing dream was shown — so what this dream
     // was shown before it closed is shown to it again.
-    const q = this.queue({ owner: this.bundleOwner, skip: (d) => d.id === dream.id, since: prior });
+    const q = this.queue({ skip: (d) => d.id === dream.id, since: prior });
     const made = this.counts(dream.id);
     const composed = this.compose(dream.id, q, prior, day, at);
     const said = Object.entries(made)
@@ -2021,10 +2012,7 @@ export class Dreams {
             consolidated: best.p.legacy === true && best.p.consolidated,
           },
           ...(best.r.source !== null ? { source: best.r.source as never } : {}),
-          // CONFIDENTIALITY TRAVELS with the words: the column is recomputed
-          // from `meta` at `put`, so a merge that dropped the marker would
-          // hand a confidential memory's words to every session.
-          meta: { dream: dream.id, mergedFrom: ids, ...confidentialityOf(rs), ...era },
+          meta: { dream: dream.id, mergedFrom: ids, ...era },
           origin: { ...(dream.session === null ? {} : { session: dream.session }), ...(dream.scope === null ? {} : { scope: dream.scope }), ref: `dream:${dream.id}` },
           ...(dream.model === null ? {} : { model: dream.model }),
           ...(about === null ? {} : { about: about.about, ...(about.aboutBy === null ? {} : { aboutBy: about.aboutBy }) }),
@@ -2056,12 +2044,10 @@ export class Dreams {
           }
           // TRAIT NUDGES TRAVEL THE SAME WAY (v9): each keeps who recorded it,
           // with what model and WHEN — a nudge is a moment's, recorded once, so
-          // a merge does not make it new. Read with its words even when the
-          // original is confidential: the merged memory inherits the marker
-          // (above), and every read withholds them from there.
+          // a merge does not make it new.
           // A row today's vocabulary would refuse is left on the original (it
           // stays there, superseded) rather than failing the merge half-way.
-          const traits = this.store.traitsFor(r.id, { includeConfidential: true }).filter((t) => {
+          const traits = this.store.traitsFor(r.id).filter((t) => {
             try {
               checkTraits([{ axis: t.axis, toward: t.toward, strength: t.strength, carriedBy: t.carried_by }]);
               return true;
@@ -2203,8 +2189,7 @@ export class Dreams {
               },
           physics: { birthDay: day, lastUsedDay: day },
           source: "dreamed",
-          // A pattern drawn from a confidential memory is as confidential as it.
-          meta: { dream: dream.id, dreamed: true, ...(isFold ? { fold: true } : {}), sources, ...confidentialityOf(sourceRows as MemoryRow[]) },
+          meta: { dream: dream.id, dreamed: true, ...(isFold ? { fold: true } : {}), sources },
           origin: { ...(dream.session === null ? {} : { session: dream.session }), ...(dream.scope === null ? {} : { scope: dream.scope }), ref: `dream:${dream.id}` },
           ...(dream.model === null ? {} : { model: dream.model }),
           ...(about === null ? {} : { about: about.about, ...(about.aboutBy === null ? {} : { aboutBy: about.aboutBy }) }),
@@ -2431,7 +2416,7 @@ export class Dreams {
     try {
       // What waited from before the dream began — not what was made during the night.
       const began = this.store.dream(id)?.started_at;
-      waiting = this.queue({ owner: this.bundleOwner, ...(began === undefined ? {} : { madeBy: began }) }).ids.length;
+      waiting = this.queue({ ...(began === undefined ? {} : { madeBy: began }) }).ids.length;
     } catch {
       waiting = 0;
     }
@@ -2684,19 +2669,13 @@ export class Dreams {
    * RECALL'S GATES, for a dream: what could surface in this session anyway. A
    * live, unarchived, un-superseded MEMORY (not a schema row: the page, a
    * handoff, a belief or an entity card is not a dream's to touch), not
-   * protected (the owner's permanence guards it from any interpreter), and not
-   * confidential unless this is the owner's own session.
+   * protected (the owner's permanence guards it from any interpreter), and
+   * not emptied.
    */
   showable(row: MemoryRow): boolean {
-    return this.showableAs(row, this.bundleOwner);
-  }
-
-  /** `showable`, for a session whose owner stance is `owner` (the gate's). */
-  private showableAs(row: MemoryRow, owner: boolean): boolean {
     if (row.archived === 1 || row.superseded_by !== null) return false;
     if (row.type !== "memory") return false;
     if (row.protected === 1) return false;
-    if (row.confidential === 1 && !owner) return false;
     if (row.body === "") return false;
     return true;
   }
@@ -2710,8 +2689,7 @@ export class Dreams {
    * fold's parts are carried back in (`DREAM_CARRIED_EVENT`). `skip` passes
    * over a dream (the one being resumed; one the next `begin` will resume or
    * close). One read of the column gates (`store.newMemoryIds`, newest first),
-   * then the deny-list and confidentiality (`owner`: the stance the caller
-   * reads in). The caller ranks.
+   * then the deny-list. The caller ranks.
    *
    * The whole store is read, with no positional cut: what is dreamed is
    * skipped by id before any row is read, so the work is the undreamed rows —
@@ -2721,7 +2699,6 @@ export class Dreams {
    * dream (`faded`).
    */
   private queue(opts: {
-    owner: boolean;
     skip?: (d: DreamShownRow) => boolean;
     enough?: number;
     madeBy?: number;
@@ -2746,7 +2723,7 @@ export class Dreams {
     for (const id of read) {
       if (dreamed.has(id) || denied.has(id)) continue;
       const row = this.store.row(id);
-      if (row === undefined || !this.showableAs(row, opts.owner)) continue;
+      if (row === undefined || !this.showable(row)) continue;
       // NOT THE JOURNAL'S OWN MEMORIES (2026-10-15): a chapter's summary (or
       // a frozen full copy) reaches the dream as its chapter's line in the
       // journal section (`chaptersSince`); queued as a new memory too, the
@@ -2889,7 +2866,6 @@ export class Dreams {
       today: at,
       day,
       showable: (row) => !denied.has(row.id) && this.showable(row),
-      owner: this.bundleOwner,
       slots: true,
     });
     const mindAll = mindRead.items;
@@ -3152,7 +3128,6 @@ export class Dreams {
     for (const eid of this.store.list({ type: "episode", archived: false })) {
       const row = this.store.row(eid);
       if (row === undefined) continue;
-      if (row.confidential === 1 && !this.bundleOwner) continue;
       const at = row.updated_at ?? row.created_at ?? 0;
       // `>=`: an episode written in the same millisecond the last dream began is read again (its index says how far).
       const since = last === null ? row.birth_day >= day - T.FIRST_DREAM_DAYS : at >= last.started_at;
@@ -3363,7 +3338,7 @@ export class Dreams {
       const row = this.store.row(eid);
       const ch = chapters.get(eid) ?? { id: eid, title: row?.title ?? null, entries: [] };
       chapters.set(eid, ch);
-      const raw = row === undefined || (row.confidential === 1 && !this.bundleOwner) ? undefined : chapterEntries(row.body)[Number(at)];
+      const raw = row === undefined ? undefined : chapterEntries(row.body)[Number(at)];
       if (raw === undefined) {
         ch.entries.push({ chapter: null, day: null, fidelity: "line", text: gone, chars: 0 });
         continue;
@@ -3563,28 +3538,6 @@ function edgePrior(v: unknown): { weight: number; day: number } | null {
   if (v === null || typeof v !== "object") return null;
   const r = v as Record<string, unknown>;
   return typeof r["weight"] === "number" && typeof r["day"] === "number" ? { weight: r["weight"], day: r["day"] } : null;
-}
-
-/**
- * The confidentiality marker a dream's new memory must carry when any memory
- * it was made from is confidential: `confidential: true`, plus the first
- * named class (`confidentiality`) found. Empty when none is.
- */
-function confidentialityOf(rows: readonly MemoryRow[]): Record<string, unknown> {
-  let out: Record<string, unknown> = {};
-  for (const r of rows) {
-    if (r.confidential !== 1) continue;
-    let klass: unknown;
-    try {
-      const meta = JSON.parse(r.meta) as Record<string, unknown>;
-      klass = meta["confidentiality"];
-    } catch {
-      klass = undefined;
-    }
-    if (out["confidential"] === undefined) out = { confidential: true };
-    if (typeof klass === "string" && klass.length > 0 && out["confidentiality"] === undefined) out["confidentiality"] = klass;
-  }
-  return out;
 }
 
 function cut(text: string | null, max: number): string | null {

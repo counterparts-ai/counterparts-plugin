@@ -20,8 +20,8 @@
  * pulse, today's counts per mechanism, the newest dreams, the newest rows of
  * the activity log (and of the few names the sidebar reads deeper), each
  * mechanism's panel, and the memories those rows name — title, kind, the date
- * it was learned, and the first {@link TEXT_CAP} characters of its text (none
- * for a confidential one). Capped throughout; measured on the demo store it is
+ * it was learned, and the first {@link TEXT_CAP} characters of its text.
+ * Capped throughout; measured on the demo store it is
  * well under 256 KiB.
  *
  * **When.** Never on a hook's path. The detached worker writes it after every
@@ -372,7 +372,6 @@ function statusOf(src: DashboardSource, now: number, build: string | null, dashb
         memories[id] = null;
         continue;
       }
-      // A confidential body is the dashboard's own withheld sentence (`views/memory.ts`), never its words.
       const text = d.text.trim();
       memories[id] = {
         title: d.title,

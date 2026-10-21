@@ -364,8 +364,6 @@ export interface AdapterConfig {
    * owner's configuration still carries from an older install is not a fault.
    */
   readonly retired?: readonly string[];
-  /** Is this the owner's own session? Withholding is the safe direction. */
-  readonly owner?: boolean;
   /**
    * THE PERSON'S ZONE, an IANA name (`"America/Denver"`), when it should not
    * follow the computer — a server set to UTC (docs/time.md rule 2). Absent,
@@ -424,7 +422,6 @@ export function loadConfig(raw: unknown): LoadedConfig {
     dreaming?: { model?: string; timeoutMs?: number; maxTurns?: number; ignored?: string[] };
     retention?: { afterWriteUpDays?: number; maxDays?: number; ignored?: string[] };
     retired?: string[];
-    owner?: boolean;
     timeZone?: string;
     timeZoneUnknown?: string;
     observer?: boolean;
@@ -481,9 +478,12 @@ export function loadConfig(raw: unknown): LoadedConfig {
   const watchdog = num("watchdogMs");
   if (watchdog !== undefined) out.watchdogMs = watchdog;
 
+  // THE YOURS/GUEST SPLIT, removed 2026-10-21 (Mike: "for 1, i agree, lets
+  // remove it"). Every install wrote `owner: true`; it is read, ignored and
+  // named for one release, then the note goes too. Any value, junk included:
+  // it decides nothing now, so it can stand nothing down.
   if (rec["owner"] !== undefined) {
-    if (typeof rec["owner"] !== "boolean") unreadable = true;
-    else out.owner = rec["owner"];
+    retired.push(`"owner" is no longer used — every session is answered the same way now; it was ignored`);
   }
   if (rec["observer"] !== undefined) {
     if (typeof rec["observer"] !== "boolean") unreadable = true;

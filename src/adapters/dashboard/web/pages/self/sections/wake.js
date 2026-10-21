@@ -41,7 +41,7 @@ export function memoryItem(m) {
   const name = m.title || headline(m.text);
   if (!m.id) return '<li class="wk-line-i" title="' + esc(m.text) + '">' + esc(name) + "</li>";
   return '<li><button type="button" class="wk-mem" onclick="openMemory(\'' + esc(m.id) + '\')" title="' +
-    esc(m.confidential ? "withheld" : m.text) + '">' + said(name, m.confidential) + "</button></li>";
+    esc(m.text) + '">' + said(name) + "</button></li>";
 }
 
 export function paint(d) {

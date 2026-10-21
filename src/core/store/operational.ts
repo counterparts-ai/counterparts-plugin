@@ -293,9 +293,8 @@ export const DDL: readonly string[] = [
      -- "unrecognized fields survive parse -> serialize untouched" (G6, v1's named
      -- incident) is satisfied for free by storing the text as given.
      meta              TEXT NOT NULL DEFAULT '{}',
-     -- The one key promoted OUT of that JSON, because it is a GATE: a gate that
-     -- must parse JSON on every read is a gate that will one day fail open
-     -- (confidentialByMeta, the one truth table, computes it at every write).
+     -- Retired 2026-10-21: written 0, read by no gate. Planned (lightly held)
+     -- to be dropped in the next batched store-format change.
      confidential      INTEGER NOT NULL DEFAULT 0,
      created_at        INTEGER,
      updated_at        INTEGER,
@@ -773,9 +772,6 @@ export interface MemoryRow extends Row {
   body: string;
   /** `ProseDoc.meta` as verbatim JSON (G6). Parsed once, at the read seam. */
   meta: string;
-  /** `confidentialByMeta(meta)` at the last write. A column, never re-derived
-   *  per call site: the confidentiality class is a gate (CONTRACT §5 G13). */
-  confidential: number;
   /** v7 moments (UTC ms). NULL on a row written before v7. */
   created_at: number | null;
   updated_at: number | null;
@@ -2351,6 +2347,16 @@ export function reachExempt(row: Pick<MemoryRow, "type" | "source" | "origin_ref
  */
 export const CLAIMS_ERA_CUTOFF_KEY = "claims.era.cutoff";
 export const CLAIMS_ERA_RECORDED_KEY = "claims.era.recorded";
+/**
+ * THE CONFIDENTIAL MARK'S RETIREMENT (2026-10-21), counted once: how many live
+ * rows carried `confidential = 1` at the first writable open by a build that
+ * no longer withholds them — `{count, ids (at most 50), at (UTC ms), day}`.
+ * Nothing is archived or changed; doctor names the count when it is above 0.
+ * Written once, keyed on this row's absence, as the claims era is.
+ */
+export const CONFIDENTIAL_RETIRED_KEY = "confidential.retired";
+/** How many ids the retirement record keeps. */
+export const CONFIDENTIAL_RETIRED_IDS = 50;
 /** `mint.ts#CLAIMED_DEFAULT_META_KEY`, spelled here (store imports no core module); a test holds them equal. */
 export const CLAIMED_DEFAULT_SPELLED = "claimedDefault";
 /**

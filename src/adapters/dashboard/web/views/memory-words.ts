@@ -100,18 +100,20 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /**
  * What a row shows: its words on one line (markdown headings dropped), the date
  * lifted off their front, and the date beside them — the written one, else a
- * chapter's own, else the day it was recorded. A confidential row lifts nothing
- * from its words: it shows `withheld` and the recorded day.
+ * chapter's own, else the day it was recorded. An ABSENT row (removed, or
+ * otherwise not there) lifts nothing from its words: it shows `absentLabel`
+ * and the recorded day. (The option was `confidential` / `withheld` until
+ * 2026-10-21, when it also folded in confidential rows.)
  */
 export function shownOf(
   body: string,
   /** `chapterDay`: a chapter SUMMARY's own date (its `happened_on`, 2026-10-15) —
    *  its words carry no heading to read one from. */
-  opts: { chapter: boolean; learnedOn: string; confidential: boolean; withheld?: string; width?: number; chapterDay?: string | null },
+  opts: { chapter: boolean; learnedOn: string; absent: boolean; absentLabel?: string; width?: number; chapterDay?: string | null },
 ): Shown {
   const recorded = DAY.test(opts.learnedOn) ? opts.learnedOn : null;
   const fallback = { date: recorded, dateFrom: recorded === null ? null : ("recorded" as const) };
-  if (opts.confidential) return { text: opts.withheld ?? "", ...fallback };
+  if (opts.absent) return { text: opts.absentLabel ?? "", ...fallback };
   let words = body;
   let fromChapter: string | null = null;
   if (opts.chapter) {

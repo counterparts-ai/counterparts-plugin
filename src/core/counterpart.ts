@@ -404,9 +404,6 @@ export class Counterpart {
 
   /** Undefined when no embedder was wired, and under observer. See below. */
   private readonly vectors: VectorSource | undefined;
-  /** The owner's own session? Recall's rule, kept for the plain lane: a
-   *  confidential memory is said only to its owner (recall §9.1 G5). */
-  private readonly owner: boolean;
   /** The host's `pageWriter.mode` (`session` when absent): who runs the nightly writer. */
   private readonly pageWriterModeOpt: PageWriterMode;
   /** The package version this process runs, when the adapter said (`CounterpartOptions.build`). */
@@ -461,7 +458,6 @@ export class Counterpart {
     // belongs in `Store.open` too, and this is not a substitute for that.
     if (opts.dir !== undefined) assertSafeDataDir(opts.dir);
     this.observer = isObserver(opts);
-    this.owner = opts.owner === true && !this.observer;
     this.pageWriterModeOpt = opts.pageWriterMode ?? "session";
     this.build = typeof opts.build === "string" && opts.build.length > 0 ? opts.build : null;
     this.onEvent = opts.onEvent;
@@ -571,7 +567,6 @@ export class Counterpart {
     });
     this.recall = new Recall({
       store: this.store,
-      owner: opts.owner === true,
       ...(this.reportedBudget === null ? {} : { budgetBytes: this.reportedBudget }),
       onEvent: (e) => this.relay("recall", e),
       now: this.nowFn,
@@ -591,9 +586,8 @@ export class Counterpart {
       observer: this.observer,
       onEvent: (e) => this.relay("handoff", e),
       now: this.nowFn,
-      // The "since" line beside the pointer (2026-10-09): a confidential
-      // memory named to the owner only, and nothing a later one settled over.
-      owner: this.owner,
+      // The "since" line beside the pointer (2026-10-09): nothing a later one
+      // settled over.
       settled: () => settledOver(this.store),
       // …and nothing the published wake already lists under "Still open:"
       // (review of #332): one place for an open question.
@@ -618,8 +612,6 @@ export class Counterpart {
     this.dreams = new Dreams({
       store: this.store,
       observer: this.observer,
-      owner: this.owner,
-      ...(opts.bundlesAsOwner === true ? { bundleOwner: this.owner } : {}),
       gate: (text) => {
         const redacted = redactSecrets(text);
         return redacted.replace(/\[REDACTED[^\]]*\]/g, "").trim().length === 0
@@ -650,8 +642,6 @@ export class Counterpart {
     this.reflections = new Reflections({
       store: this.store,
       observer: this.observer,
-      owner: this.owner,
-      ...(opts.bundlesAsOwner === true ? { bundleOwner: this.owner } : {}),
       gate: (text) => {
         const redacted = redactSecrets(text);
         return redacted.replace(/\[REDACTED[^\]]*\]/g, "").trim().length === 0
@@ -924,12 +914,11 @@ export class Counterpart {
    *     other sessions still open in it, by id and work titles, in a clause
    *     of their own ("Here, also open:", `hereSessions`);
    *   - a chapter's title only on the "About me, from another directory"
-   *     line's gate: not confidential, and a copy marked about me, us or the
-   *     owner — never one the line already names;
-   *   - memories as counts (confidential ones to the owner only), and since
-   *     2026-10-20 (Mike's go, an experiment) one or two of today's by title
-   *     a directory (`elsewhereTitles`): never a confidential one, one marked
-   *     about me, us or the owner, this session's own, or one this wake
+   *     line's gate: a copy marked about me, us or the owner — never one the
+   *     line already names;
+   *   - memories as counts, and since 2026-10-20 (Mike's go, an experiment)
+   *     one or two of today's by title a directory (`elsewhereTitles`): never
+   *     one marked about me, us or the owner, this session's own, or one this wake
    *     lists under "Still open"; never a word of a span or a handoff's body.
    *
    * Empty when there is nothing to say; never throws.
@@ -960,7 +949,7 @@ export class Counterpart {
         d.lastAt = d.lastAt === null ? s.lastAt : Math.max(d.lastAt, s.lastAt);
         d.live = d.live || s.live;
       }
-      for (const { scope, count } of this.store.memoryCountsByScopeSince(since, { confidential: this.owner })) {
+      for (const { scope, count } of this.store.memoryCountsByScopeSince(since)) {
         if (named(scope)) dirOf(scope).memories = count;
       }
       // What "Still open" may list in this wake is that lane's to name (the
@@ -999,14 +988,12 @@ export class Counterpart {
    *     chapters be named elsewhere (`exportsFrom`); this session's own
    *     directory and the nightly run's (the store's own) never are.
    *   - `crosses`: a chapter's title only on the "About me, from another
-   *     directory" line's gate — not confidential, a copy marked about me, us
-   *     or the owner, not the reader's own, from a directory `named` lets
-   *     through.
-   * Memories cross as counts (confidential ones to the owner only), and since
-   * 2026-10-20 one or two by title a directory (`elsewhereTitles`): a
-   * directory `named` lets through, not this session's own, and not a row the
-   * store's read leaves out — confidential (whoever reads), marked about me,
-   * us or the owner, identity, a chapter's copy, the nightly run's. The
+   *     directory" line's gate — a copy marked about me, us or the owner, not
+   *     the reader's own, from a directory `named` lets through.
+   * Memories cross as counts, and since 2026-10-20 one or two by title a
+   * directory (`elsewhereTitles`): a directory `named` lets through, not this
+   * session's own, and not a row the store's read leaves out — marked about
+   * me, us or the owner, identity, a chapter's copy, the nightly run's. The
    * callers read no word of a span and no handoff.
    */
   private elsewhereGate(here?: WakeHere): {
@@ -1038,7 +1025,7 @@ export class Counterpart {
       return open;
     };
     const crosses = (c: ChapterHere): boolean => {
-      if (c.scope === null || c.confidential === true || c.aboutMe !== true) return false;
+      if (c.scope === null || c.aboutMe !== true) return false;
       if (reader !== null && c.session === reader) return false;
       return named(c.scope);
     };
@@ -1183,7 +1170,7 @@ export class Counterpart {
         if (startedSince) d.startedAt = Math.max(d.startedAt ?? 0, s.startedAt);
         if (endedSince) d.endedAt = Math.max(d.endedAt ?? 0, ended);
       }
-      for (const { scope, count } of this.store.memoryCountsByScopeSince(since, { confidential: this.owner })) {
+      for (const { scope, count } of this.store.memoryCountsByScopeSince(since)) {
         if (named(scope)) dirOf(scope).memories = count;
       }
       for (const [scope, titles] of this.elsewhereTitles(gate, since, until)) {
@@ -1375,7 +1362,7 @@ export class Counterpart {
     // Only for a "Last here" line proper: the about-me line alone names no
     // chapter here, and its drop is not this row's (review of #311, NIT).
     const named = lastHere.some((b) => b.startsWith("Last here:"));
-    const lastHereId = !named ? null : (allHere.find((c) => (reader === null || c.chapter.session !== reader) && (this.owner || c.chapter.confidential !== true))?.chapter.id ?? null);
+    const lastHereId = !named ? null : (allHere.find((c) => reader === null || c.chapter.session !== reader)?.chapter.id ?? null);
     const newest = ladder[0];
     const budget = this.reportedBudget;
     // THIS DIRECTORY'S WORK (2026-10-01, lane 8): the craft lane, composed
@@ -1437,11 +1424,11 @@ export class Counterpart {
     });
   }
 
-  /** The wake's "Last said here" line for `here`, or null. Never throws. Only
-   *  in the owner's session (review of #392): a span is the raw slice, which no
-   *  confidential mark has reached yet, so a non-owner wake gets no quote. */
+  /** The wake's "Last said here" line for `here`, or null. Never throws. Any
+   *  session in the folder gets it — except under observer, whose wake must
+   *  not point at a handle that stands down (review of #392). */
   private lastExchangeLine(here: WakeHere): string | null {
-    if (!this.owner) return null;
+    if (this.observer) return null;
     try {
       const ex = this.lastExchange(here);
       return ex === null ? null : lastExchangeLine(ex, { zone: this.store.zone(), now: this.nowFn() });
@@ -1627,13 +1614,12 @@ export class Counterpart {
     exportsFrom?: (scope: string) => boolean,
   ): ChapterHere | null {
     // Only from a directory the host says may be read elsewhere (its scope
-    // setting is on), and never a confidential chapter (review of #311). With
-    // no way to ask, nothing crosses.
+    // setting is on). With no way to ask, nothing crosses.
     if (exportsFrom === undefined) return null;
     let best: ChapterHere | null = null;
     for (const c of chapters.values()) {
       if (here.has(c.id) || (reader !== null && c.session === reader)) continue;
-      if (c.confidential === true || c.scope === null || c.aboutMe !== true) continue;
+      if (c.scope === null || c.aboutMe !== true) continue;
       if (best !== null && best.writtenAt >= c.writtenAt) continue;
       let open = false;
       try {
@@ -1754,8 +1740,7 @@ export class Counterpart {
    * `here`? Its own directory's, yes; another's only on the "About me, from
    * another directory" gate (`selfChapterElsewhere`): about me, us or the
    * owner, and that directory's scope setting on. No directory recorded, or
-   * no way to ask, and it is not. Confidential chapters never reach here
-   * (`chaptersOn` leaves them out). Never throws.
+   * no way to ask, and it is not. Never throws.
    */
   private nameableHere(scope: string | null, aboutMe: boolean, here: WakeHere | undefined): boolean {
     if (scope === null) return false;
@@ -1777,9 +1762,7 @@ export class Counterpart {
     // One walk per delivery (2026-10-10): the "Today, elsewhere" line and
     // the handoff pointer read the same chapters.
     if (this.delivering && this.deliveryWalk?.day === day) return this.deliveryWalk.chapters;
-    const all = chaptersBySession(this.store, { fromDay: Math.max(0, day - LAST_HERE_LIFE_DAYS + 1) });
-    // A confidential chapter is named to the owner only (review of #311).
-    const out = this.owner ? all : new Map([...all].filter(([, c]) => c.confidential !== true));
+    const out = chaptersBySession(this.store, { fromDay: Math.max(0, day - LAST_HERE_LIFE_DAYS + 1) });
     if (this.delivering) this.deliveryWalk = { day, chapters: out };
     return out;
   }
@@ -2365,11 +2348,7 @@ export class Counterpart {
       for (const due of this.prospective.plainDue({ at: input.at })) {
         let what = "";
         try {
-          const read = this.store.read(due.memoryId);
-          // Confidential is said only in the owner's own session — recall's
-          // boundary gate 1, which a line outside recall must keep by hand.
-          if (read.confidential && !this.owner) continue;
-          const doc = read.doc;
+          const doc = this.store.readProse(due.memoryId);
           const title = doc.title?.trim() ?? "";
           const line = doc.body.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
           what = (title.length > 0 ? title : line).replace(/\s+/g, " ").trim();
@@ -3683,11 +3662,10 @@ export class Counterpart {
    * The nearest few live memories of one just written (`reconsolidation.ts
    * #writeNeighbours`), for the write's result — minus the memory it updates.
    */
-  writeNeighbours(id: string, opts: { exclude?: readonly string[]; owner: boolean; session?: string | null; limit?: number }): Neighbour[] {
+  writeNeighbours(id: string, opts: { exclude?: readonly string[]; session?: string | null; limit?: number }): Neighbour[] {
     try {
       return writeNeighbours(this.store, {
         id,
-        owner: opts.owner,
         ...(opts.limit === undefined ? {} : { limit: opts.limit }),
         ...(opts.exclude === undefined ? {} : { exclude: opts.exclude }),
         ...(opts.session === undefined ? {} : { session: opts.session }),
@@ -3707,7 +3685,6 @@ export class Counterpart {
       scope: ctx.scope,
       ...(ctx.ownSpanHash === undefined ? {} : { ownSpanHash: ctx.ownSpanHash }),
       ...(ctx.model === undefined ? {} : { model: ctx.model }),
-      ...(ctx.owner === undefined ? {} : { owner: ctx.owner }),
       ...(ctx.facts === undefined ? {} : { facts: ctx.facts }),
       ...(ctx.about === undefined ? {} : { about: ctx.about }),
     });
@@ -3877,7 +3854,7 @@ export class Counterpart {
    * A read.
    */
   coreList(): {
-    core: { id: string; kind: string; lane: string | null; day: number | null; body: string | null; confidential: boolean }[];
+    core: { id: string; kind: string; lane: string | null; day: number | null; body: string | null }[];
     nominated: { id: string; day: number; reason: string | null; dream: string | null }[];
     demoted: { id: string; day: number; reason: string | null }[];
     /** Core memories being reconsidered (2026-10-11): still core, waiting on a decision. `reason` is the category. */
@@ -3891,7 +3868,7 @@ export class Counterpart {
       let body: string | null = null;
       try {
         const doc = this.store.readProse(id);
-        body = row.confidential === 1 && !this.owner ? null : (doc.title ?? doc.body).split("\n")[0] ?? "";
+        body = (doc.title ?? doc.body).split("\n")[0] ?? "";
       } catch {
         body = null;
       }
@@ -3901,7 +3878,6 @@ export class Counterpart {
         lane: promoted?.lane ?? null,
         day: promoted?.day ?? null,
         body,
-        confidential: row.confidential === 1,
       });
     }
     const nominated = this.store
@@ -3957,8 +3933,7 @@ export class Counterpart {
    * and the why. An archived memory may be marked (the mark counts if it
    * comes back); an earlier version forwards to the current one. By `self`,
    * a dream's or a reflection's words move only toward work or world, as the
-   * reflection's do, and a confidential memory outside the owner's session is
-   * not found. Refusals come back as reasons, never thrown.
+   * reflection's do. Refusals come back as reasons, never thrown.
    *
    * `night` (2026-10-11): the call comes from a night run's child (a dream or
    * a reflection whose user allowed `remember`). The owner's `--reflected-feeling
@@ -3968,7 +3943,7 @@ export class Counterpart {
    * held to the same rule: only work or world. An AWAKE session's re-mark is
    * not the reflection's, and the switch does not reach it.
    */
-  markAbout(input: { id: string; mark: string; by: "owner" | "self"; why?: string | null; owner?: boolean; night?: boolean }): MarkAboutOutcome {
+  markAbout(input: { id: string; mark: string; by: "owner" | "self"; why?: string | null; night?: boolean }): MarkAboutOutcome {
     if (this.observer) return { ok: false, reason: "observer", detail: "This is an observer; it reads and changes nothing." };
     const mark = input.mark.trim();
     if (!(ABOUT_MARKS as readonly string[]).includes(mark)) {
@@ -3987,7 +3962,6 @@ export class Counterpart {
     if (row.type !== "memory") return { ok: false, reason: "not-a-memory", detail: `${asked} is a ${row.type}, not a memory; only a memory is marked.` };
     const core = (CORE_ABOUT_MARKS as readonly string[]).includes(mark);
     if (input.by === "self") {
-      if (row.confidential === 1 && input.owner !== true) return missing;
       if (core && (row.source === "dreamed" || row.source === "reflection")) {
         return {
           ok: false,
@@ -4096,18 +4070,16 @@ export class Counterpart {
    * WHAT THE NIGHTLY WRITER IS HANDED — the page as it stands and the day just
    * gone, bounded and ordered by salience.
    *
-   * **CONFIDENTIAL ROWS DO NOT GO**, in either mode, and what was held back is
-   * counted onto the run's row. It is the same rule the crash fallback's wake
-   * follows (`sweepWake`) for the same reason: this material is put in front of
-   * a model call, and a row the owner marked confidential is not material for
-   * one. PROTECTED rows are not held back here, and that is the one deliberate
-   * difference: `sweepWake` hides them because its reader is about to propose
-   * new memories from a transcript and must not restate permanent ink as
+   * Nothing is held back by default. PROTECTED rows are not held back here, and
+   * that is the one deliberate difference from the crash fallback's wake:
+   * `sweepWake` hides them because its reader is about to propose new
+   * memories from a transcript and must not restate permanent ink as
    * discovery, while this reader's whole job is to write about the self. The
    * page itself is governed by `PAGE_ON_EGRESS` where it goes out at all; in
    * session mode it is already in the session's own wake.
    *
-   * Pass `omit` to widen the filter; the default is confidential-only.
+   * Pass `omit` to hold rows back; what it holds back is counted onto the
+   * run's row.
    */
   pageWriterInput(opts: {
     about: string;
@@ -4116,9 +4088,8 @@ export class Counterpart {
     budgetBytes?: number;
     /** Most memories carried (the tunable's when absent). */
     max?: number;
-    omit?: (m: { id: string; confidential: boolean; protectedRow: boolean }) => boolean;
+    omit?: (m: { id: string; protectedRow: boolean }) => boolean;
   }): WriterInput {
-    const omit = opts.omit ?? ((m): boolean => m.confidential);
     const budget = opts.budgetBytes ?? this.self.tunables.PAGE_WRITER_MEMORY_BYTES;
     // THE DAY'S JOURNAL (2026-10-15), in a room of its own taken out of the
     // same budget: the chapters across sessions, a line each (its summary
@@ -4128,20 +4099,16 @@ export class Counterpart {
       about: opts.about,
       day: opts.day ?? this.store.livedDay(),
       room: Math.min(WRITER_JOURNAL_CHARS, Math.floor(budget * WRITER_JOURNAL_SHARE)),
-      // The same stance the memories get: a confidential session only where
-      // the caller's filter would let a confidential memory through.
-      confidential: !omit({ id: "", confidential: true, protectedRow: false }),
     });
     return this.self.pageWriterInput({
       ...opts,
       budgetBytes: Math.max(0, budget - (journal?.chars ?? 0)),
-      omit,
       ...(journal === null ? {} : { journal }),
     });
   }
 
   /** The day's journal for the page writer (`dream/slices.ts#dayJournal`), or null when there is none or it will not read. Pure. */
-  private writerJournal(input: { about: string; day: number; room: number; confidential: boolean }): WriterJournal | null {
+  private writerJournal(input: { about: string; day: number; room: number }): WriterJournal | null {
     try {
       const day = dayJournal(this.store, {
         about: input.about,
@@ -4150,14 +4117,13 @@ export class Counterpart {
         day: input.day,
         lineBytes: DREAM_TUNABLES.LINE_BYTES,
         entryChars: DREAM_TUNABLES.ENTRY_CHARS,
-        confidential: input.confidential,
       });
-      if (day.entries === 0 && day.omitted === 0) return null;
+      if (day.entries === 0) return null;
       const entries = day.chapters.flatMap((c) =>
         c.entries.map((e) => ({ episode: c.id, title: c.title, chapter: e.chapter, fidelity: e.fidelity, text: e.text, chars: e.chars })),
       );
       // What the block spends on them, measured as it renders (framing included).
-      const journal = { entries, total: day.entries, notShown: day.notShown, omitted: day.omitted };
+      const journal = { entries, total: day.entries, notShown: day.notShown };
       return { ...journal, chars: journalBlockChars(input.about, journal) };
     } catch {
       return null;
@@ -4694,9 +4660,8 @@ export class Counterpart {
   private closeThread(
     p: Proposal,
     successor: string,
-    owner: boolean,
   ): { from: string; closed: boolean; refused?: ThreadRefusal } | null {
-    return depositPart.closeThread(this, p, successor, owner);
+    return depositPart.closeThread(this, p, successor);
   }
 
   private carryReminder(p: Proposal, sentStatus?: MemoryStatus | null): ReminderCarryPlan {

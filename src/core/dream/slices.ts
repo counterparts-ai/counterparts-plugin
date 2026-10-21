@@ -303,8 +303,6 @@ export interface DayJournal {
   readonly entries: number;
   /** Entries the room did not take. */
   readonly notShown: number;
-  /** Sessions held back as confidential. */
-  readonly omitted: number;
   /** Characters of the room used. */
   readonly used: number;
 }
@@ -317,8 +315,7 @@ export interface DayJournal {
  * dream and the reflection get them (`fitEpisodes`): a line for every one —
  * its summary when the session wrote one — and the most important whole, in
  * `room`. An episode last written before the day holds none of it and is not
- * read. Confidential sessions are held back and counted unless the caller
- * may see them. Never throws.
+ * read. Never throws.
  */
 export function dayJournal(
   store: ReadOnlyStore,
@@ -329,11 +326,10 @@ export function dayJournal(
     day: number;
     lineBytes: number;
     entryChars: number;
-    confidential: boolean;
     zone?: string;
   },
 ): DayJournal {
-  const empty: DayJournal = { chapters: [], entries: 0, notShown: 0, omitted: 0, used: 0 };
+  const empty: DayJournal = { chapters: [], entries: 0, notShown: 0, used: 0 };
   const said = readableDate(opts.about);
   if (said === "" || opts.room <= 0) return empty;
   let ids: string[];
@@ -344,10 +340,8 @@ export function dayJournal(
   } catch {
     return empty;
   }
-  let copies: ReturnType<ReadOnlyStore["copiesOf"]> | null = null;
   const episodes: EpisodeInView[] = [];
   let entries = 0;
-  let omitted = 0;
   for (const id of ids) {
     try {
       const row = store.row(id);
@@ -357,21 +351,13 @@ export function dayJournal(
       const all = chapterEntries(row.body);
       const fresh = all.filter((e) => e.date === said);
       if (fresh.length === 0) continue;
-      if (!opts.confidential) {
-        // A store that will not say reads as confidential (`last-here.ts`'s rule).
-        copies ??= store.copiesOf(ids);
-        if (row.confidential === 1 || (copies.get(id) ?? []).some((c) => c.confidential)) {
-          omitted += 1;
-          continue;
-        }
-      }
       entries += fresh.length;
       episodes.push({ row: { id, title: row.title }, at, fresh, earlier: all.length - fresh.length });
     } catch {
       continue;
     }
   }
-  if (episodes.length === 0) return { ...empty, omitted };
+  if (episodes.length === 0) return empty;
   const fitted = fitEpisodes(summarized(store, episodes), {
     room: opts.room,
     owner: opts.owner,
@@ -379,7 +365,7 @@ export function dayJournal(
     lineBytes: opts.lineBytes,
     entryChars: opts.entryChars,
   });
-  return { chapters: fitted.chapters, entries, notShown: fitted.notShown, omitted, used: fitted.used };
+  return { chapters: fitted.chapters, entries, notShown: fitted.notShown, used: fitted.used };
 }
 
 let wheelWords: Set<string> | null = null;

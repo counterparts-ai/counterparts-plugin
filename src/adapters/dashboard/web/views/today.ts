@@ -36,8 +36,6 @@ export interface TodayLine {
   readonly kind: "written" | "core" | "dream" | "let-go" | "more";
   /** The words, ready to show. For "written" and "core", the memory's own words. */
   readonly text: string;
-  /** True when the memory's words are withheld: the line says so and shows none. */
-  readonly confidential: boolean;
   readonly to: TodayLink;
 }
 
@@ -74,12 +72,11 @@ function writtenOn(src: DashboardSource, from: number): Map<number, { id: string
 }
 
 /** The words for a memory on a line: its title where it has one (as the
- *  memories list and its card lead with), else its own words; nothing when withheld. */
-function words(src: DashboardSource, id: string): { text: string; confidential: boolean } {
+ *  memories list and its card lead with), else its own words. */
+function words(src: DashboardSource, id: string): { text: string } {
   const r = reveal(src.store, id, 90);
-  if (r.confidential) return { text: "", confidential: true };
   const title = r.headId === null ? null : (src.store.row(r.headId)?.title ?? "").trim();
-  return { text: title || wordEnd(r.text ?? r.label), confidential: false };
+  return { text: title || wordEnd(r.text ?? r.label) };
 }
 
 /** A clipped text ends at a whole word ("…the cheapest…", never "…whethe…"). */
@@ -106,8 +103,7 @@ export function todayView(src: DashboardSource): TodayView {
       out.push({
         line: {
           kind: "core",
-          text: w.confidential ? "A private memory became part of who I am" : `“${w.text}” became part of who I am`,
-          confidential: w.confidential,
+          text: `“${w.text}” became part of who I am`,
           to: { hash: "self/settling" },
         },
         at: e.at,
@@ -117,7 +113,7 @@ export function todayView(src: DashboardSource): TodayView {
     if (dream !== undefined) {
       const title = (dream.title ?? "").trim();
       out.push({
-        line: { kind: "dream", text: title ? `Dreamed: ${title}` : "Dreamed", confidential: false, to: { hash: "self/dreams" } },
+        line: { kind: "dream", text: title ? `Dreamed: ${title}` : "Dreamed", to: { hash: "self/dreams" } },
         at: dream.finished_at ?? dream.started_at,
       });
     }
@@ -129,10 +125,9 @@ export function todayView(src: DashboardSource): TodayView {
           kind: "let-go",
           text: gone.length > 1
             ? `Let go of ${gone.length} memories that had faded`
-            : w !== null && !w.confidential && w.text
+            : w !== null && w.text
               ? `Let go of “${w.text}” — it had faded`
               : "Let go of a memory that had faded",
-          confidential: false,
           to: { hash: "memories?state=archived" },
         },
         at: gone[0]!.at,
@@ -163,12 +158,12 @@ export function todayView(src: DashboardSource): TodayView {
   const room = Math.max(0, TODAY_LINES - specials.length - (newestFirst.length > TODAY_LINES - specials.length ? 1 : 0));
   const shown: Dated[] = newestFirst.slice(0, room).map((m) => {
     const w = words(src, m.id);
-    return { line: { kind: "written", text: w.text, confidential: w.confidential, to: { memory: m.id } }, at: m.at };
+    return { line: { kind: "written", text: w.text, to: { memory: m.id } }, at: m.at };
   });
   const lines = [...specials, ...shown].sort((a, b) => b.at - a.at).map((d) => d.line);
   const rest = newestFirst.length - shown.length;
   if (rest > 0) {
-    lines.push({ kind: "more", text: `and ${rest} more`, confidential: false, to: { hash: "memories?state=live" } });
+    lines.push({ kind: "more", text: `and ${rest} more`, to: { hash: "memories?state=live" } });
   }
 
   return {

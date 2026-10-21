@@ -67,29 +67,29 @@ export function feelingCounts(
   return [...tally.values()].sort((a, b) => b.count - a.count || (a.whose + a.key < b.whose + b.key ? -1 : 1));
 }
 
-export function traitsFor(store: Store, memoryId: string, opts: { includeConfidential?: boolean } = {}): TraitRead[] {
+export function traitsFor(store: Store, memoryId: string): TraitRead[] {
   if (!store["hasTable"]("traits")) return [];
-  const rows = store["ops"].all<TraitRow & { confidential: number }>(
-    `SELECT t.*, m.confidential AS confidential FROM traits t JOIN memories m ON m.id = t.memory_id
+  const rows = store["ops"].all<TraitRow>(
+    `SELECT t.* FROM traits t JOIN memories m ON m.id = t.memory_id
         WHERE t.memory_id = ? ORDER BY t.created_at, t.rowid`,
     memoryId,
   );
-  return store["traitReads"](rows, opts.includeConfidential === true);
+  return store["traitReads"](rows);
 }
 
-export function traitsOn(store: Store, ids: readonly string[], opts: { includeConfidential?: boolean } = {}): Map<string, TraitRead[]> {
+export function traitsOn(store: Store, ids: readonly string[]): Map<string, TraitRead[]> {
   const out = new Map<string, TraitRead[]>();
   if (ids.length === 0 || !store["hasTable"]("traits")) return out;
   const unique = [...new Set(ids)];
   for (let at = 0; at < unique.length; at += 500) {
     const part = unique.slice(at, at + 500);
-    const rows = store["ops"].all<TraitRow & { confidential: number }>(
-      `SELECT t.*, m.confidential AS confidential FROM traits t JOIN memories m ON m.id = t.memory_id
+    const rows = store["ops"].all<TraitRow>(
+      `SELECT t.* FROM traits t JOIN memories m ON m.id = t.memory_id
           WHERE t.memory_id IN (${part.map(() => "?").join(",")})
           ORDER BY t.created_at, t.rowid`,
       ...part,
     );
-    for (const r of store["traitReads"](rows, opts.includeConfidential === true)) {
+    for (const r of store["traitReads"](rows)) {
       const list = out.get(r.memory_id) ?? [];
       list.push(r);
       out.set(r.memory_id, list);
@@ -98,16 +98,16 @@ export function traitsOn(store: Store, ids: readonly string[], opts: { includeCo
   return out;
 }
 
-export function traitsAll(store: Store, opts: { includeConfidential?: boolean; live?: boolean; sinceMs?: number } = {}): TraitRead[] {
+export function traitsAll(store: Store, opts: { live?: boolean; sinceMs?: number } = {}): TraitRead[] {
   if (!store["hasTable"]("traits")) return [];
   const live = opts.live !== false;
-  const rows = store["ops"].all<TraitRow & { confidential: number }>(
-    `SELECT t.*, m.confidential AS confidential FROM traits t JOIN memories m ON m.id = t.memory_id
+  const rows = store["ops"].all<TraitRow>(
+    `SELECT t.* FROM traits t JOIN memories m ON m.id = t.memory_id
         WHERE t.created_at >= ?${live ? ` AND m.archived = 0 AND m.superseded_by IS NULL${store["notMergedAway"]("m")}` : ""}
         ORDER BY t.created_at, t.rowid`,
     opts.sinceMs ?? Number.MIN_SAFE_INTEGER,
   );
-  return store["traitReads"](rows, opts.includeConfidential === true);
+  return store["traitReads"](rows);
 }
 
 export function traitCensus(store: Store, opts: { sinceMs?: number } = {}): { memories: number; nudges: number } {

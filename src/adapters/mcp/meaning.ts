@@ -56,9 +56,7 @@
  *
  * **What it never does.** It writes nothing (no physics, no memory, no host
  * state): a search credits nothing. Opening a moment by id, or quoting one
- * the caller was shown (`MeaningResult.shown`), is what credits. Confidential
- * material is left out of a non-owner's answer SILENTLY — not counted, not
- * hinted at (§9.1 G5's list rule). Corrected (archived), superseded and
+ * the caller was shown (`MeaningResult.shown`), is what credits. Corrected (archived), superseded and
  * removed memories are not moments. Ambient recall is untouched.
  *
  * **Reads, bounded.** Indexed reads only: `memoriesNaming`, `feelingsOn`,
@@ -122,8 +120,6 @@ const TITLE_CHARS = 90;
 export interface MeaningContext {
   readonly counterpart: Counterpart;
   readonly sessionId: string;
-  /** The owner's own session? Confidential material is left out otherwise, silently. */
-  readonly owner: boolean;
   /** The question's embedding, or null / absent: the meaning channel is then off, and a no-card answer says so. */
   readonly vector?: readonly number[] | null;
   /** Why there is no vector, when there is none. Defaults to `embedder-off`. */
@@ -381,7 +377,6 @@ interface Entry {
 export function meaningRecall(ctx: MeaningContext, question: string, opts: { page?: number; roomChars?: number } = {}): MeaningResult {
   const c = ctx.counterpart;
   const store = c.store;
-  const owner = ctx.owner;
   const day = ctx.day ?? safe(() => store.livedDay(), 0);
   const zone = safe(() => store.zone(), undefined);
   const today = safe(() => store.today(), localDate(Date.now(), zone));
@@ -396,7 +391,7 @@ export function meaningRecall(ctx: MeaningContext, question: string, opts: { pag
   const page = Number.isInteger(opts.page) && (opts.page as number) >= 1 ? (opts.page as number) : 1;
   const denied = new Set(safe(() => store.deniedIds(), [] as string[]));
   const rows = new Map<string, MemoryRow | null>();
-  /** A memory row the asker may see, or null: live, not superseded, not removed, not confidential to a non-owner. */
+  /** A memory row the asker may see, or null: live, not superseded, not removed. */
   const usable = (id: string): MemoryRow | null => {
     if (rows.has(id)) return rows.get(id) ?? null;
     let out: MemoryRow | null = null;
@@ -407,8 +402,7 @@ export function meaningRecall(ctx: MeaningContext, question: string, opts: { pag
         row.type === "memory" &&
         row.archived === 0 &&
         row.superseded_by === null &&
-        !denied.has(id) &&
-        (owner || row.confidential !== 1)
+        !denied.has(id)
       ) {
         out = row;
       }
@@ -425,7 +419,7 @@ export function meaningRecall(ctx: MeaningContext, question: string, opts: { pag
   const stored = new Set(tokensOf.flatMap((x) => [...x]));
   const minLen = c.recall.tunables.MIN_CUE_LENGTH;
   const ask = safe(
-    () => readFeelingAsk(question, { asker, ownerNames: ownerNamesLower(c), owner }, stored, minLen),
+    () => readFeelingAsk(question, { asker, ownerNames: ownerNamesLower(c) }, stored, minLen),
     null,
   );
   const feelingAsked = ask !== null && ask.ranked;
@@ -656,7 +650,7 @@ export function meaningRecall(ctx: MeaningContext, question: string, opts: { pag
   }
 
   // ── 3. the arc: place each moment under its chapter ────────────────────────
-  const episodes = episodeIndex(c, owner, denied);
+  const episodes = episodeIndex(c, denied);
   const bySession = new Map<string, EpisodeInfo[]>();
   for (const e of episodes) {
     if (e.session === null) continue;
@@ -1326,18 +1320,15 @@ export function renderMeaning(r: MeaningResult): string {
 
 // ── small readers ────────────────────────────────────────────────────────────
 
-/** Every live, readable episode: its session, title and chapters. Confidential ones are left out for a non-owner. */
-function episodeIndex(c: Counterpart, owner: boolean, denied: ReadonlySet<string>): EpisodeInfo[] {
+/** Every live, readable episode: its session, title and chapters. */
+function episodeIndex(c: Counterpart, denied: ReadonlySet<string>): EpisodeInfo[] {
   const store = c.store;
   const ids = safe(() => store.list({ type: "episode", archived: false }), [] as string[]).filter((id) => !denied.has(id));
-  const copies = owner ? null : safe(() => store.copiesOf(ids), null);
   const out: EpisodeInfo[] = [];
   for (const id of ids) {
     try {
       const row = store.row(id);
       if (row === undefined || row.superseded_by !== null || row.body.length === 0) continue;
-      // A store that will not say is read as confidential (`chaptersBySession`'s rule).
-      if (!owner && (row.confidential === 1 || copies === null || (copies.get(id) ?? []).some((x) => x.confidential))) continue;
       let session = row.origin_session;
       if (session === null || session.length === 0) {
         const s = parseMeta(row.meta)["sessionId"];

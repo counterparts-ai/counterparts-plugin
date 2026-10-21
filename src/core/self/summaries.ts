@@ -15,7 +15,7 @@
  * was decided, the names, numbers and words someone would search for. It has
  * the copy's shape (`source = 'episode'`, `origin_ref` = the chapter's id,
  * `meta.episodeId`) plus `meta.chapter`, so recall's fold, use credit, the
- * wake's confidential and `about` flags and every other reader of that shape
+ * wake's `about` flag and every other reader of that shape
  * keep working; `meta.chapterSummary` says how it was written. The chapter
  * keeps every word.
  *

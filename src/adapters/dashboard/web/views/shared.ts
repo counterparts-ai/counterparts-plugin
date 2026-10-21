@@ -23,7 +23,6 @@ export const LOG_CEILING = 20_000;
 export interface MemoryLine {
   readonly id: string;
   readonly text: string;
-  readonly confidential: boolean;
   readonly kind: Kind;
   readonly band: Band;
   /** The band column as recorded — a birth fossil, kept beside the live one. */
@@ -79,7 +78,6 @@ export function census(src: DashboardSource, opts: CensusOptions = {}): MemoryLi
       out.push({
         id,
         text: g.text,
-        confidential: g.confidential,
         kind: row.kind,
         band: live,
         recordedBand: row.band,
@@ -102,7 +100,6 @@ export function census(src: DashboardSource, opts: CensusOptions = {}): MemoryLi
       out.push({
         id,
         text: reveal(store, id, 96).label,
-        confidential: false,
         kind: row.kind,
         band: row.band,
         recordedBand: row.band,

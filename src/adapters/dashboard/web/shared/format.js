@@ -5,9 +5,8 @@ export const n2 = (x) => (typeof x === "number" && isFinite(x) ? x.toFixed(2) : 
 export const n3 = (x) => (typeof x === "number" && isFinite(x) ? x.toFixed(3) : "—");
 export const pct = (x) => Math.max(0, Math.min(100, (x || 0) * 100));
 
-/** A withheld sentence is rendered as a withholding, not as empty space. */
-export function said(text, confidential) {
-  if (confidential) return '<span class="withheld">' + esc(text) + "</span>";
+/** A memory's words, escaped for the page. */
+export function said(text) {
   return esc(text);
 }
 /**

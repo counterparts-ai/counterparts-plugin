@@ -182,7 +182,6 @@ export function openAdapter(
       ? {}
       : { budgetBytes: config.injectionBudgetBytes }),
     ...(config.observer === undefined ? {} : { observer: config.observer }),
-    ...(config.owner === undefined ? {} : { owner: config.owner }),
     ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
     // Owner ruling D3 on #256: `pageWriter.mode: off` stops the reflection's page write too.
     ...(config.pageWriter?.mode === undefined ? {} : { pageWriterMode: config.pageWriter.mode }),

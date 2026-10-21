@@ -21,7 +21,6 @@ export function memoryWords(source: { readonly store: Store }, id: string | null
   if (id === null) return "(removed by the owner)";
   const row = source.store.row(id);
   if (row === undefined) return "(no such memory)";
-  if (row.confidential === 1) return "[confidential]";
   if (row.body === "") return "(removed by the owner)";
   const line = ((row.title ?? "").trim() || (row.body.split("\n").find((l) => l.trim().length > 0) ?? "")).replace(/\s+/g, " ").trim();
   const said = line.length > max ? `${line.slice(0, max - 1)}…` : line;
@@ -184,11 +183,7 @@ export function reflectionShowLines(counterpart: Counterpart, id: string): strin
     "",
     r.entry === null ? "Entry: (not written)" : "Entry:",
   ];
-  // The entry is the body of the memory it became: marked confidential since,
-  // it prints as that row does (review of #538 — `night` is run by sessions).
-  const entryHidden = r.entry_id !== null && counterpart.store.row(r.entry_id)?.confidential === 1;
-  if (r.entry !== null && entryHidden) out.push("  [confidential]");
-  else if (r.entry !== null) for (const line of r.entry.split("\n")) out.push(`  ${line}`);
+  if (r.entry !== null) for (const line of r.entry.split("\n")) out.push(`  ${line}`);
   if (r.entry_id !== null) out.push(`  (kept as memory ${r.entry_id})`);
   const cites = parseIdList(r.cites);
   if (cites.length > 0) {
@@ -252,7 +247,7 @@ export function coreListLines(counterpart: Counterpart): string[] {
   const support = new Map(core.length === 0 ? [] : coreSupport(counterpart.store).elements.map((e) => [e.id, e]));
   for (const m of core) {
     const how = m.lane === null ? "(before lanes, or by revision)" : m.lane === "restored" ? `restored after it was retired${m.day === null ? "" : `, lived day ${String(m.day)}`}` : `${m.lane} lane${m.day === null ? "" : `, lived day ${String(m.day)}`}`;
-    const said = m.confidential ? "[confidential]" : (m.body ?? "(unreadable)");
+    const said = m.body ?? "(unreadable)";
     out.push(`  ${m.id}  ${m.kind.padEnd(6)} ${how} — ${said}`);
     const s = support.get(m.id);
     if (s !== undefined) {

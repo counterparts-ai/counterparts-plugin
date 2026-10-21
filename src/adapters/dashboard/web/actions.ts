@@ -473,6 +473,9 @@ function argvFor(name: ActionName, body: Body, ctx: ActionContext): Built {
       const booleans: [string, string][] = [
         ["plaintext", "--plaintext"],
         ["markdown", "--markdown"],
+        // Ignored since 2026-10-21 and kept one release: the console accepts
+        // it and says so on stderr, which reaches this action's `err`. The
+        // page itself never sends it.
         ["includeConfidential", "--include-confidential"],
         ["withVersions", "--with-versions"],
         ["intoNonEmpty", "--into-non-empty"],

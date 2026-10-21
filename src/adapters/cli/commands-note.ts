@@ -318,7 +318,6 @@ export async function recallCommand(
           {
             counterpart,
             sessionId: "console",
-            owner: true,
             vector: embedded.vector,
             semantic: embedded.semantic,
             asker: parsed.flags["voiced"] === true ? "self" : "owner",
@@ -330,7 +329,7 @@ export async function recallCommand(
         return EXIT.ok;
       }
       const facts = factsRecall(
-        { counterpart, sessionId: "console", owner: true, vector: embedded.vector, semantic: embedded.semantic },
+        { counterpart, sessionId: "console", vector: embedded.vector, semantic: embedded.semantic },
         question,
         page,
       );
@@ -357,7 +356,7 @@ export async function recallCommand(
       );
       return EXIT.ok;
     }
-    const result = deliberateRecall(counterpart, { handle: idFlag }, { sessionId: "console", owner: true });
+    const result = deliberateRecall(counterpart, { handle: idFlag }, { sessionId: "console" });
     if (parsed.flags["json"] === true) {
       io.out(JSON.stringify(result, null, 2));
       return EXIT.ok;
@@ -567,6 +566,12 @@ export function exportCommand(
   }
   try {
     const markdown = flags["markdown"] === true;
+    // IGNORED FOR ONE RELEASE (2026-10-21): nothing is held back as
+    // confidential any more. The flag is still accepted, so scripts keep
+    // working, and said once; it goes in the release after.
+    if (flags["include-confidential"] === true) {
+      io.err("--include-confidential: nothing is held back any more; the flag does nothing and will be removed.");
+    }
     const report = exportStore(store, {
       target: out,
       ...(typeof flags["passphrase"] === "string" ? { passphrase: flags["passphrase"] } : {}),
@@ -591,7 +596,8 @@ export function exportCommand(
       "Not included: spans/ — the raw captured conversation, deleted 3 days after a session is written up and ended, and never kept more than 14 days.",
     );
     // THE DURABLE ROW. Counts and flags only: which kind, how many rows went,
-    // how many confidential ones were left out, whether it was sealed. NOT the
+    // whether it was sealed. (Until 2026-10-21 it also carried how many
+    // confidential ones were left out; readers stay tolerant of old rows.) NOT the
     // target — where the owner sent his memories is more than the row needs to
     // prove the door works (§5 G10), and the terminal has already said it.
     if (!observer) {
@@ -606,15 +612,12 @@ export function exportCommand(
             files: report.files,
             bytes: report.bytes,
             rows: report.rows,
-            omittedConfidential: report.omittedConfidential,
             versions: flags["with-versions"] === true,
             notRendered: report.notRendered.length,
             // The nights, counted apart from `rows` (2026-10-09): the
             // dashboard reads `rows` as memories.
             dreams: report.dreams,
             reflections: report.reflections,
-            omittedDreams: report.omittedDreams,
-            omittedReflections: report.omittedReflections,
           },
         });
       } catch {

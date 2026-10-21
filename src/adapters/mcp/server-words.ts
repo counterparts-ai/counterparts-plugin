@@ -19,7 +19,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.29";
+export const SERVER_VERSION = "0.3.30";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -141,13 +141,6 @@ export const RATE_ASK_CLAUSE = "`rated` 0–3 each footnote shown since you last
 export function desktopWriteUpAsk(session: string): string {
   return `Counterparts: this chat has gone on a while since it was last written up. At a natural pause, hand back what caught your attention, one idea each, with session_end (session: ${session}; memories: [] only if nothing held your attention; \`updates\` anything dated or open now done; ${RATE_ASK_CLAUSE}), and add a chapter with the chapter tool (session: ${session}) if the chat was about something. ${PRONOUN_RULE}`;
 }
-
-/** What `status` says `owner: false` means — the confused Desktop chats' question (2026-09-30). */
-export const OWNER_FALSE_NOTE =
-  "owner: false — confidential memories are left out of this server's answers, and an open question written in another directory cannot be closed from here. It is the ordinary setting for a Claude Desktop chat; your Claude Code sessions run as the owner unless COUNTERPARTS_OWNER=0. Nothing is wrong.";
-
-/** The owner variable's name, for `status` (the entry point reads it, `stance-env.ts`). */
-export const OWNER_ENV_NAME = "COUNTERPARTS_OWNER";
 
 /** The kind enum, for a refusal that names it (session_end). Derived from
  *  `Kind` so that adding a kind without listing it here fails `tsc`. */

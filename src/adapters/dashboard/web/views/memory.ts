@@ -11,7 +11,7 @@ import { feelingsLine } from "../../../feelings-line.js";
 import { coreContextFor, curveSinceDay, isJournal } from "../../../../core/sleep/index.js";
 import type { Band, Kind } from "../../../../core/types.js";
 import type { DashboardSource } from "../../source.js";
-import { WITHHELD, gistOfDoc, reveal, revealHere } from "../reveal.js";
+import { reveal, revealHere } from "../reveal.js";
 import { archiveWords } from "./archive-words.js";
 import { fadeCurve, putAwayDay } from "./mechanism-panel.js";
 import { chapterDate, feelingsShown, isChapterMemory, liftDate, repeatsOf, stripChapterLead } from "./memory-words.js";
@@ -32,7 +32,6 @@ export interface TimelineStep {
   /** The other memory, when there is one (click to open it). */
   readonly id: string | null;
   readonly text: string;
-  readonly confidential: boolean;
   /** The lived day it happened, when the store knows it. */
   readonly day: number | null;
   /** For `revised`: the version's number. */
@@ -132,7 +131,6 @@ export interface MemoryDetail {
   readonly journal: boolean;
   readonly title: string;
   readonly text: string;
-  readonly confidential: boolean;
   /**
    * Which record this is — the revision it is on, and the hash of the text
    * above.
@@ -142,7 +140,6 @@ export interface MemoryDetail {
    * memory is its id, and what identifies THIS reading of it is the revision and
    * the hash. The id the copy button hands over is `id`.
    *
-   * `contentHash` is blank when the body is withheld — see below.
    */
   readonly revision: number;
   readonly contentHash: string;
@@ -165,15 +162,13 @@ export interface MemoryDetail {
   readonly bar: number | null;
   readonly archived: string | null;
   readonly removal: { stage: string; actor: string; reason: string | null; at: number }[];
-  readonly edges: { id: string; text: string; weight: number; confidential: boolean }[];
+  readonly edges: { id: string; text: string; weight: number }[];
   readonly points: { role: string; id: string; text: string }[];
   readonly versions: { seq: number; reason: string; day: number; became: string }[];
   readonly prospective: { date: string; state: string; fires: number; precision: string }[];
   /**
    * The feelings recorded on it, as one line — `you: worried 0.6 (now 0.3) ·
    * me: tender 0.4` (`adapters/feelings-line.ts`) — or "" when it has none.
-   * Withheld with the body on a confidential memory: a feeling word about a
-   * sensitive thing says something about the thing.
    */
   readonly feelingsLine: string;
   /** The emotional intensity physics reads (physics §5.10): 0 when unfelt. */
@@ -247,7 +242,6 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
     journal: false,
     title: "",
     text: "",
-    confidential: false,
     revision: 0,
     contentHash: "",
     kind: "fact" as Kind,
@@ -320,7 +314,6 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
   } catch {
     return empty;
   }
-  const g = gistOfDoc(doc, 120);
   const chapter = row !== undefined && isChapterMemory(row);
   const journal = row === undefined ? false : isJournal(row);
   // The core's road, asked of the engine the way sleep asks it
@@ -378,16 +371,11 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
     journal,
     title: doc.title ?? "",
     // The BODY is the memory, and this is the owner's own window onto their own
-    // store (constitution line 6). A confidential body is the one exception, and
-    // it is withheld here exactly as it is withheld in recall.
-    text: g.confidential ? WITHHELD : doc.body.trim(),
-    confidential: g.confidential,
+    // store (constitution line 6). (Until 2026-10-21 a confidential body was
+    // withheld here; that mark is retired, and the field stays false.)
+    text: doc.body.trim(),
     revision: row?.revision ?? 0,
-    // A hash of a withheld body is a derivative of withheld text, on the one
-    // surface whose job is withholding it. It is a confirmation oracle for an
-    // exactly-guessed secret rather than a way to recover one, but this is the
-    // wrong place to be interesting. The modal renders `""` as `—`.
-    contentHash: g.confidential ? "" : (row?.content_hash ?? ""),
+    contentHash: row?.content_hash ?? "",
     kind: physics.kind,
     band: band(physics, day),
     recordedBand: `${row?.band ?? "—"} (set day ${row?.band_day ?? "—"})`,
@@ -416,7 +404,7 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
     removal: store.removalRecord(headId).map((x) => ({ stage: x.stage, actor: x.actor, reason: x.reason, at: x.at })),
     edges: store.edgesFrom(headId).map((edge) => {
       const rr = reveal(store, edge.dst, 72);
-      return { id: edge.dst, text: rr.text ?? rr.label, weight: edge.weight, confidential: rr.confidential };
+      return { id: edge.dst, text: rr.text ?? rr.label, weight: edge.weight };
     }),
     points,
     versions: store.versions(headId).map((v) => ({
@@ -431,7 +419,7 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
       fires: p.fires,
       precision: p.precision,
     })),
-    feelingsLine: g.confidential ? "" : feelingsLine(store.feelingsFor(headId), day - physics.birthDay),
+    feelingsLine: feelingsLine(store.feelingsFor(headId), day - physics.birthDay),
     intensity: emotionalIntensity(physics),
     absence: null,
     chapter,
@@ -440,14 +428,14 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
     curveNote,
     useDays: useDaysOf(src, headId),
     promotion: coreRoad(verdict),
-    feelings: feelingsWithCarry(src, headId, g.confidential),
+    feelings: feelingsWithCarry(src, headId),
     model: row?.model ?? null,
     eventDate: row?.event_date ?? null,
     createdAt: row?.created_at ?? null,
     ...writtenWhen(row?.created_at ?? null, doc.learnedOn, store.zone()),
     archivedWords: row?.archived === 1 ? archiveWords(row.archived_reason ?? null, row.superseded_by !== null) : null,
     timeline: timelineOf(src, headId, doc.meta["updates"]),
-    ...cardWords(doc.body.trim(), chapter, g.confidential, row?.happened_on ?? null),
+    ...cardWords(doc.body.trim(), chapter, row?.happened_on ?? null),
     about: row?.about ?? null,
     aboutBy: row?.about === null || row?.about === undefined ? null : row.about_by ?? null,
   };
@@ -490,8 +478,8 @@ function useDaysOf(src: DashboardSource, id: string): number[] {
   return [...days].sort((a, b) => a - b);
 }
 
-/** Its feelings, with what carried each one — withheld with the words on a confidential memory. */
-function feelingsWithCarry(src: DashboardSource, id: string, confidential: boolean): MemoryDetail["feelings"] {
+/** Its feelings, with what carried each one. */
+function feelingsWithCarry(src: DashboardSource, id: string): MemoryDetail["feelings"] {
   const words = feelingsShown(src.store, id);
   let rows: { carried_by: string }[] = [];
   try {
@@ -499,7 +487,7 @@ function feelingsWithCarry(src: DashboardSource, id: string, confidential: boole
   } catch {
     rows = [];
   }
-  return words.map((f, i) => ({ ...f, carriedBy: confidential ? "" : (rows[i]?.carried_by ?? "") }));
+  return words.map((f, i) => ({ ...f, carriedBy: rows[i]?.carried_by ?? "" }));
 }
 
 /**
@@ -511,9 +499,9 @@ function feelingsWithCarry(src: DashboardSource, id: string, confidential: boole
 function timelineOf(src: DashboardSource, id: string, updates: unknown): TimelineStep[] {
   const store = src.store;
   const steps: TimelineStep[] = [];
-  const words = (other: string): { text: string; confidential: boolean } => {
+  const words = (other: string): { text: string } => {
     const rr = revealHere(store, other, 90);
-    return { text: rr.text ?? rr.label, confidential: rr.confidential };
+    return { text: rr.text ?? rr.label };
   };
   for (const other of store.list({ archived: true })) {
     if (other === id) continue;
@@ -528,7 +516,7 @@ function timelineOf(src: DashboardSource, id: string, updates: unknown): Timelin
   let became: TimelineStep | null = null;
   for (const v of store.versions(id)) {
     if (v.successor_id === null) {
-      steps.push({ rel: "revised", id: null, text: "its words were rewritten in place", confidential: false, day: v.version_day, seq: v.seq, ...why(v.reason) });
+      steps.push({ rel: "revised", id: null, text: "its words were rewritten in place", day: v.version_day, seq: v.seq, ...why(v.reason) });
     } else {
       became = { rel: "became", id: v.successor_id, ...words(v.successor_id), day: v.version_day, seq: v.seq, ...why(v.reason) };
     }
@@ -556,8 +544,7 @@ function barFor(src: DashboardSource, id: string): number | null {
 }
 
 /** The card's words with a written date lifted off the front — display only. */
-function cardWords(body: string, chapter: boolean, confidential: boolean, chapterDay: string | null = null): { shownText: string; writtenDate: string | null } {
-  if (confidential) return { shownText: WITHHELD, writtenDate: null };
+function cardWords(body: string, chapter: boolean, chapterDay: string | null = null): { shownText: string; writtenDate: string | null } {
   if (chapter) {
     const lead = readChapterLead(body);
     const bare = stripChapterLead(lead.rest.trim());

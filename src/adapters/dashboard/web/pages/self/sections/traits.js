@@ -94,8 +94,8 @@ function row(a) {
 function list(a) {
   const rows = a.rows.map((r) =>
     '<button type="button" class="st-row click tr-item" onclick="openMemory(\'' + esc(r.id) + '\')">' +
-      '<span class="st-text">' + said(headline(r.text), r.confidential) +
-        '<span class="tr-why">' + (r.withheld ? '<span class="withheld">withheld</span>' : esc(r.carriedBy)) + "</span></span>" +
+      '<span class="st-text">' + said(headline(r.text)) +
+        '<span class="tr-why">' + esc(r.carriedBy) + "</span></span>" +
       '<span class="tr-toward k-' + (r.toward === a.poles[1] ? "r" : "l") + '">' + esc(r.toward) + "</span></button>").join("");
   const more = a.more > 0 ? '<p class="foot tr-more">and ' + a.more + " more</p>" : "";
   return '<div class="st-list tr-list">' + rows + more + "</div>";

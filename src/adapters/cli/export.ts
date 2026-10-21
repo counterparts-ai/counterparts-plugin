@@ -41,7 +41,6 @@ import { join, relative } from "node:path";
 
 import {
   DATABASE_FILE,
-  confidentialByMeta,
   paths,
   renderMarkdown,
   rowTombstoned,
@@ -79,7 +78,10 @@ export interface ExportOptions {
   plaintext?: boolean;
   /** `--markdown`: the readable tree instead of the database file. */
   markdown?: boolean;
-  /** `--include-confidential`: ruling 4's opt-in. Markdown only. */
+  /**
+   * @deprecated Ignored since 2026-10-21: nothing is held back as confidential
+   * any more. Accepted for one release so scripts keep working; then removed.
+   */
   includeConfidential?: boolean;
   /** `--with-versions` on the console: every archived wording as its own file.
    *  Markdown only. */
@@ -103,8 +105,8 @@ export interface ExportReport {
   /** Live memory-bearing rows written. Zero for a database export, which
    *  carries them all without counting them. */
   readonly rows: number;
-  /** Rows left out because they are confidential and nobody said otherwise
-   *  (ruling 4, 2026-09-18). ALWAYS reported, including at zero. */
+  /** @deprecated Always 0 since 2026-10-21 (nothing is left out as
+   *  confidential); kept for one release with `--include-confidential`. */
   readonly omittedConfidential: number;
   /** Ids whose markdown could not be rendered — named, never silently absent. */
   readonly notRendered: readonly string[];
@@ -112,9 +114,9 @@ export interface ExportReport {
    *  export, which carries both tables whole). Never counted in `rows`. */
   readonly dreams: number;
   readonly reflections: number;
-  /** …and left out because they rest on a confidential memory, counted apart
-   *  from `omittedConfidential` (which is memories). */
+  /** @deprecated Always 0 since 2026-10-21; kept for one release. */
   readonly omittedDreams: number;
+  /** @deprecated Always 0 since 2026-10-21; kept for one release. */
   readonly omittedReflections: number;
 }
 
@@ -146,29 +148,17 @@ function collect(store: Store, tmpDb: string): Bundle {
 /** What a markdown walk found, beside the files it produced. */
 interface MarkdownCensus {
   readonly rows: number;
-  readonly omittedConfidential: number;
   readonly notRendered: string[];
   readonly journal: number;
   readonly versions: number;
-  /** True when the store HOLDS a self page, whether or not it was exported. */
+  /** True when the store HOLDS a self page. */
   readonly page: boolean;
-  /** …and true when it was left out for being confidential. The manifest must
-   *  not print "this store has no written self page" over a store that has
-   *  one (review f6f7 MINOR-1). */
-  readonly pageOmitted: boolean;
-  /** Earlier wordings left out as confidential — counted APART from rows,
-   *  because they are a different unit and mixing them made both wrong
-   *  (MINOR-2). */
-  readonly omittedVersions: number;
   /** Live rows that are ARCHIVED — faded, superseded or merged. Exported, and
    *  counted so the manifest can say so. */
   readonly archived: number;
-  /** Dreams and reflections written, and left out as resting on a
-   *  confidential memory — a third unit, said apart from both above. */
+  /** Dreams and reflections written — a unit said apart from rows. */
   readonly dreams: number;
   readonly reflections: number;
-  readonly omittedDreams: number;
-  readonly omittedReflections: number;
 }
 
 /**
@@ -195,16 +185,14 @@ interface MarkdownCensus {
  * and a directory listing is the one part of an export that gets read over
  * somebody's shoulder.
  *
- * Confidential rows are OMITTED unless asked for, and **counted either way** —
- * in the terminal report and in the manifest at the top of the tree. A removed
- * (tombstoned) row is never exported at all; it has no words left to export and
- * its id is on the deny-list.
+ * Every live row is in it (the confidential omission was retired 2026-10-21).
+ * A removed (tombstoned) row is never exported at all; it has no words left to
+ * export and its id is on the deny-list.
  *
  * **ARCHIVED rows ARE exported**, and the manifest says how many. A memory that
  * faded, was superseded or was merged is still the owner's own words, and an
  * export that quietly dropped them would be a copy he could not tell was
- * partial — the failure mode the confidential count exists to prevent, one class
- * over. They are NOT marked file by file: the frontmatter is
+ * partial. They are NOT marked file by file: the frontmatter is
  * `renderMarkdown`'s, which carries the payload the row holds and not its
  * physics, and that renderer is shared with the journal copy. A count in the
  * manifest is the honest version of what this export knows.
@@ -219,33 +207,23 @@ function collectMarkdown(store: Store, opts: ExportOptions): { bundle: Bundle; c
   const bundle: Bundle = new Map();
   const census: MarkdownCensus = {
     rows: 0,
-    omittedConfidential: 0,
     notRendered: [],
     journal: 0,
     versions: 0,
     page: false,
-    pageOmitted: false,
-    omittedVersions: 0,
     archived: 0,
     dreams: 0,
     reflections: 0,
-    omittedDreams: 0,
-    omittedReflections: 0,
   };
   const counts = census as {
     rows: number;
-    omittedConfidential: number;
     notRendered: string[];
     journal: number;
     versions: number;
     page: boolean;
-    pageOmitted: boolean;
-    omittedVersions: number;
     archived: number;
     dreams: number;
     reflections: number;
-    omittedDreams: number;
-    omittedReflections: number;
   };
   const denied = new Set(store.deniedIds());
 
@@ -267,17 +245,7 @@ function collectMarkdown(store: Store, opts: ExportOptions): { bundle: Bundle; c
     if (denied.has(id)) continue;
     const row = store.row(id);
     if (row === undefined || rowTombstoned(row)) continue;
-    // WHETHER THE STORE HAS A PAGE is asked BEFORE the confidentiality gate: it
-    // is a fact about the store, not about this export, and answering it after
-    // the `continue` made the manifest assert there was no page over a store
-    // that had a confidential one (MINOR-1).
-    const isPage = row.type === "schema" && isSelfPageRow(store, id);
-    if (isPage) counts.page = true;
-    if (row.confidential === 1 && opts.includeConfidential !== true) {
-      counts.omittedConfidential += 1;
-      if (isPage) counts.pageOmitted = true;
-      continue;
-    }
+    if (row.type === "schema" && isSelfPageRow(store, id)) counts.page = true;
     let doc: ProseDoc;
     try {
       doc = store.readProse(id);
@@ -290,8 +258,7 @@ function collectMarkdown(store: Store, opts: ExportOptions): { bundle: Bundle; c
     // THE MEMORY'S FEELINGS TRAVEL WITH IT (schema v7, review N7): a short
     // section after the body, one line each, so the readable copy says what the
     // database does. The database export carries the table whole.
-    // Its trait nudges too (v9), the same way. The row is here, so it was
-    // either not confidential or the owner asked for confidential ones.
+    // Its trait nudges too (v9), the same way.
     const text = rendered + feelingsSection(store, id) + traitsSection(store, id);
     put(pathFor(store, row, doc), text);
     counts.rows += 1;
@@ -305,16 +272,6 @@ function collectMarkdown(store: Store, opts: ExportOptions): { bundle: Bundle; c
         prior = store.readVersion(id, version.seq);
       } catch {
         counts.notRendered.push(`${id}@${String(version.seq)}`);
-        continue;
-      }
-      // A version of a confidential row is confidential; the `versions` table
-      // has no column of its own, so the LIVE row's class governs (the loop
-      // above has already skipped the whole row) and the version's own meta is
-      // asked too, through `confidentialByMeta` — the ONE truth table, never a
-      // second reading of the class in the egress door. A gate re-implemented
-      // at a call site is a gate that will one day fail open (store/index.ts).
-      if (opts.includeConfidential !== true && confidentialByMeta(prior.meta)) {
-        counts.omittedVersions += 1;
         continue;
       }
       const priorText = render(`${id}@${String(version.seq)}`, prior);
@@ -334,26 +291,20 @@ function collectMarkdown(store: Store, opts: ExportOptions): { bundle: Bundle; c
   // that dream was left out, and a dream's file says the same of each
   // reflection after it.
   const fates = new Map<string, NightFate>();
-  const fate = (dir: "dreams" | "reflections", id: string, date: string | null, rests: readonly (string | null)[]): NightFate => {
+  const fate = (dir: "dreams" | "reflections", id: string, date: string | null): NightFate => {
     const path = nightPath(dir, id, date);
-    if (path === null) return { left: "unrenderable" };
-    if (opts.includeConfidential !== true && restsOnConfidential(store, rests)) return { left: "confidential" };
-    return { path };
+    return path === null ? { left: "unrenderable" } : { path };
   };
   const reflections = store.reflections({ limit: Math.max(1, store.reflectionCount()) });
   const dreams = store.dreams({ limit: Math.max(1, store.dreamCount()) });
   for (const r of reflections) {
-    fates.set(r.id, fate("reflections", r.id, r.date, [...parseIdList(r.shown), ...parseIdList(r.cites), ...parseIdList(r.share_cites), r.entry_id]));
+    fates.set(r.id, fate("reflections", r.id, r.date));
   }
-  for (const dream of dreams) {
-    const changes = store.dreamChanges(dream.id);
-    fates.set(dream.id, fate("dreams", dream.id, dream.date, [...parseIdList(dream.shown), ...changes.flatMap((c) => [c.ref, c.ref2])]));
-  }
+  for (const dream of dreams) fates.set(dream.id, fate("dreams", dream.id, dream.date));
   for (const r of reflections) {
     const f = fates.get(r.id);
     if (f === undefined || "left" in f) {
-      if (f?.left === "confidential") counts.omittedReflections += 1;
-      else counts.notRendered.push(r.id);
+      counts.notRendered.push(r.id);
       continue;
     }
     put(f.path, reflectionMarkdown(store, r, r.dream_id === null ? undefined : fates.get(r.dream_id)));
@@ -362,8 +313,7 @@ function collectMarkdown(store: Store, opts: ExportOptions): { bundle: Bundle; c
   for (const dream of dreams) {
     const f = fates.get(dream.id);
     if (f === undefined || "left" in f) {
-      if (f?.left === "confidential") counts.omittedDreams += 1;
-      else counts.notRendered.push(dream.id);
+      counts.notRendered.push(dream.id);
       continue;
     }
     const after = store.reflections({ dreamId: dream.id }).map((r) => ({ id: r.id, fate: fates.get(r.id) }));
@@ -371,7 +321,7 @@ function collectMarkdown(store: Store, opts: ExportOptions): { bundle: Bundle; c
     counts.dreams += 1;
   }
 
-  put("README.md", markdownReadme(census, opts));
+  put("README.md", markdownReadme(census));
   return { bundle, census };
 }
 
@@ -401,7 +351,7 @@ function feelingsSection(store: Store, id: string): string {
 function traitsSection(store: Store, id: string): string {
   let rows;
   try {
-    rows = store.traitsFor(id, { includeConfidential: true });
+    rows = store.traitsFor(id);
   } catch {
     return "";
   }
@@ -436,37 +386,13 @@ function nightPath(dir: "dreams" | "reflections", id: string, date: string | nul
 }
 
 /** What became of one night in this export: its file, or why it has none. */
-type NightFate = { readonly path: string } | { readonly left: "confidential" | "unrenderable" };
+type NightFate = { readonly path: string } | { readonly left: "unrenderable" };
 
 /** How one night file names another: ` — \`path\``, or why that one is not in this copy. */
 function nightWhere(f: NightFate | undefined): string {
   if (f === undefined) return " (not in this copy)";
   if ("path" in f) return ` — \`${f.path}\``;
-  return f.left === "confidential"
-    ? " (left out of this copy: it rests on a confidential memory)"
-    : " (not in this copy: its file could not be written; the README names it)";
-}
-
-/**
- * DOES A DREAM OR A REFLECTION REST ON A CONFIDENTIAL MEMORY — was it shown
- * one, did it change one, does it cite one, is its entry one? Asked of the
- * memories as they are NOW. A night's words carry no confidentiality mark of
- * their own, and since #318 a dream's bundle is read as a guest
- * (`dream/tunables.ts#BUNDLE_OWNER`), so a night is not shown a confidential
- * memory in the first place; this catches the one left — a memory marked
- * confidential after the night that was shown it. Such a night is left out
- * unless `--include-confidential`, and counted, like a confidential memory.
- * A REMOVED memory does not count: the removal has already redacted every
- * night that was shown it (`store/owner-op-seam.ts#redactDreamJournals`).
- */
-function restsOnConfidential(store: Store, ids: readonly (string | null)[]): boolean {
-  for (const id of ids) {
-    if (id === null) continue;
-    const row = store.row(id);
-    if (row === undefined || rowTombstoned(row)) continue;
-    if (row.confidential === 1) return true;
-  }
-  return false;
+  return " (not in this copy: its file could not be written; the README names it)";
 }
 
 /** The front matter both kinds of night share: the memory files' fence and
@@ -545,7 +471,7 @@ function reflectionMarkdown(store: Store, r: ReflectionRow, dreamFate: NightFate
     ]),
   ];
   // Its dream's file only when that dream is in this copy too (review of
-  // #331): a dream left out as resting on a confidential memory is said so.
+  // #331): a dream whose file could not be written is said so.
   if (r.dream_id !== null && dreamFate !== undefined) out.push(`After dream ${r.dream_id}${nightWhere(dreamFate)}.\n\n`);
   const questions = parseIdList(r.questions);
   out.push("## Asked\n\n");
@@ -691,12 +617,14 @@ export function exportStore(store: Store, opts: ExportOptions): ExportReport {
     );
   }
   if (kind === "database" && (opts.includeConfidential === true || opts.versions === true)) {
-    // NOT A HALF-KEPT PROMISE. `--include-confidential` and `--versions` decide
-    // what goes into the readable tree; a database export carries every row
-    // there is, so honouring either flag there would be a lie in one direction
-    // and honouring neither, silently, a lie in the other.
+    // NOT A HALF-KEPT PROMISE. `--versions` decides what goes into the readable
+    // tree; a database export carries every row there is, so honouring it there
+    // would be a lie in one direction and ignoring it, silently, a lie in the
+    // other. `--include-confidential` (ignored since 2026-10-21, kept for one
+    // release) is refused here by name as it always was, so a script that
+    // passed it the wrong way round still hears so.
     return refused(
-      "--include-confidential and --with-versions are about the readable tree: pass --markdown with them, or drop them (a database export carries every row, confidential ones and every archived wording included).",
+      "--include-confidential and --with-versions are about the readable tree: pass --markdown with them, or drop them (a database export carries every row and every archived wording).",
     );
   }
 
@@ -770,13 +698,13 @@ export function exportStore(store: Store, opts: ExportOptions): ExportReport {
   for (const buf of bundle.values()) bytes += buf.length;
   const counted = {
     rows: census?.rows ?? 0,
-    omittedConfidential: census?.omittedConfidential ?? 0,
-    omittedVersions: census?.omittedVersions ?? 0,
+    // Always 0 since 2026-10-21; the fields stay one release (`ExportReport`).
+    omittedConfidential: 0,
     notRendered: census?.notRendered ?? [],
     dreams: census?.dreams ?? 0,
     reflections: census?.reflections ?? 0,
-    omittedDreams: census?.omittedDreams ?? 0,
-    omittedReflections: census?.omittedReflections ?? 0,
+    omittedDreams: 0,
+    omittedReflections: 0,
   };
 
   if (!encrypting) {
@@ -801,9 +729,8 @@ export function exportStore(store: Store, opts: ExportOptions): ExportReport {
       mkdirSync(join(out, ".."), { recursive: true });
       writeFileSync(out, buf);
     }
-    // The markdown tree writes its OWN manifest, as one of its files, so the
-    // count and the omission are inside the artefact as well as on the
-    // terminal (ruling 4: "and says how many it omitted").
+    // The markdown tree writes its OWN manifest, as one of its files, so what
+    // it holds is said inside the artefact as well as on the terminal.
     if (kind === "database") {
       writeFileSync(join(target, "README.md"), plaintextReadme(bundle.size, bytes), "utf8");
     }
@@ -818,7 +745,6 @@ export function exportStore(store: Store, opts: ExportOptions): ExportReport {
         (kind === "markdown"
           ? "Unencrypted, at the owner's explicit request. Every file is plain markdown."
           : "Unencrypted, at the owner's explicit request. The database is readable by any SQLite.") +
-        confidentialNote(counted, opts) +
         notRenderedNote(counted.notRendered) +
         replacedNote(collisions) +
         sweptNote(sweptScratch),
@@ -838,70 +764,10 @@ export function exportStore(store: Store, opts: ExportOptions): ExportReport {
     bytes,
     reason:
       `Encrypted with ${CIPHER} under a key derived from your passphrase. Lose the passphrase and this archive is gone.` +
-      confidentialNote(counted, opts) +
       notRenderedNote(counted.notRendered) +
       sweptNote(sweptScratch),
     ...counted,
   };
-}
-
-/**
- * What the report says about confidential rows — ALWAYS, including at zero.
- *
- * Ruling 4 says the export "says how many it omitted", and a line that appears
- * only when something was left out is one whose absence means two different
- * things: nothing was confidential, or nobody checked.
- *
- * Dreams and reflections that rest on a confidential memory are a sentence of
- * their own, said only when there are some: they are not rows, and folding
- * them into the row count would make "1 confidential row" mean two things.
- */
-function confidentialNote(
-  counted: {
-    readonly omittedConfidential: number;
-    readonly omittedVersions: number;
-    readonly omittedDreams: number;
-    readonly omittedReflections: number;
-  },
-  opts: ExportOptions,
-): string {
-  if (opts.markdown !== true) return "";
-  if (opts.includeConfidential === true) {
-    return " Confidential rows are INCLUDED, because --include-confidential was passed.";
-  }
-  const omitted = counted.omittedConfidential;
-  const omittedVersions = counted.omittedVersions;
-  const nights = nightsWords(counted.omittedDreams, counted.omittedReflections);
-  if (omitted === 0 && omittedVersions === 0 && nights === null) {
-    return " No confidential rows were left out (there were none).";
-  }
-  let said = "";
-  if (omitted > 0 || omittedVersions > 0) {
-    const versions =
-      omittedVersions === 0
-        ? ""
-        : ` and ${String(omittedVersions)} confidential earlier wording${omittedVersions === 1 ? "" : "s"}`;
-    const one = omitted === 1 && versions === "";
-    said +=
-      ` ${String(omitted)} confidential row${omitted === 1 ? "" : "s"}${versions}` +
-      `${one ? " was" : " were"} left out;` +
-      ` pass --include-confidential to take ${one ? "it" : "them"} too.`;
-  }
-  if (nights !== null) {
-    said +=
-      ` ${nights.words} that rest${nights.one ? "s" : ""} on a confidential memory ${nights.one ? "was" : "were"} left out` +
-      (omitted > 0 || omittedVersions > 0 ? " too." : `; pass --include-confidential to take ${nights.one ? "it" : "them"} too.`);
-  }
-  return said;
-}
-
-/** "1 dream", "2 dreams and 1 reflection", or null when both are zero. */
-function nightsWords(dreams: number, reflections: number): { words: string; one: boolean } | null {
-  const parts: string[] = [];
-  if (dreams > 0) parts.push(`${String(dreams)} dream${dreams === 1 ? "" : "s"}`);
-  if (reflections > 0) parts.push(`${String(reflections)} reflection${reflections === 1 ? "" : "s"}`);
-  if (parts.length === 0) return null;
-  return { words: parts.join(" and "), one: dreams + reflections === 1 };
 }
 
 /** WHICH files this export replaced, when the owner said to. The flag whose
@@ -993,41 +859,13 @@ function plaintextReadme(files: number, bytes: number): string {
 }
 
 /**
- * THE MANIFEST, and it is a file INSIDE the tree.
- *
- * Ruling 4 asks the export to say how many confidential rows it omitted. The
- * terminal says it, and the terminal scrolls away; six months later the only
- * thing left is the directory, and a directory that does not say what is
- * missing from it reads as complete. So the count lives here too — and at zero,
- * for the same reason.
+ * THE MANIFEST, and it is a file INSIDE the tree. The terminal scrolls away;
+ * six months later the only thing left is the directory, and a directory that
+ * does not say what is missing from it reads as complete. (Until 2026-10-21 it
+ * also counted the confidential memories it omitted; nothing is omitted as
+ * confidential any more.)
  */
-function markdownReadme(census: MarkdownCensus, opts: ExportOptions): string {
-  // TWO UNITS, SAID APART. A row and an earlier wording of a row are different
-  // things, and one counter for both reported 3 for an open memory with three
-  // confidential wordings and 1 for a confidential memory with three — four
-  // things omitted either way (review f6f7 MINOR-2). The version count is only
-  // meaningful when versions were being exported at all.
-  const omitted =
-    opts.includeConfidential === true
-      ? "- Confidential memories are **included**: `--include-confidential` was passed."
-      : census.omittedConfidential === 0 && census.omittedVersions === 0
-        ? "- Confidential memories omitted: **0** (there were none)."
-        : `- Confidential memories omitted: **${String(census.omittedConfidential)}**` +
-          (opts.versions === true
-            ? `, and **${String(census.omittedVersions)}** confidential earlier wording${census.omittedVersions === 1 ? "" : "s"} of memories that are otherwise here.`
-            : ". (Earlier wordings were not being exported; `--with-versions` writes them, confidential ones excepted.)") +
-          " They are still in your store; re-run with `--include-confidential` to take them too.";
-  // A THIRD UNIT, said apart again: a night is neither a row nor a wording.
-  // Only when confidential ones were being left out at all.
-  const nightsOmitted =
-    opts.includeConfidential === true
-      ? []
-      : [
-          `- Dreams and reflections that rest on a confidential memory (were shown one, changed one or cite one): ` +
-            `**${String(census.omittedDreams)}** dream${census.omittedDreams === 1 ? "" : "s"}, ` +
-            `**${String(census.omittedReflections)}** reflection${census.omittedReflections === 1 ? "" : "s"}.` +
-            (census.omittedDreams + census.omittedReflections > 0 ? " `--include-confidential` takes them too." : ""),
-        ];
+function markdownReadme(census: MarkdownCensus): string {
   return [
     "# Counterparts export (markdown)",
     "",
@@ -1048,11 +886,9 @@ function markdownReadme(census: MarkdownCensus, opts: ExportOptions): string {
       : `  ${String(census.archived)} of them ${census.archived === 1 ? "is" : "are"} ARCHIVED — faded, superseded or merged.` +
         " They are still your words, so they are here; the files do not mark which," +
         " and `counterparts status` is where that is readable.",
-    census.pageOmitted
-      ? "- `self-page.md` — **omitted as confidential**. This store HAS a written self page; it was left out of this copy. `--include-confidential` takes it."
-      : census.page
-        ? "- `self-page.md` — the written self page, as it stands."
-        : "- `self-page.md` — absent: this store has no written self page.",
+    census.page
+      ? "- `self-page.md` — the written self page, as it stands."
+      : "- `self-page.md` — absent: this store has no written self page.",
     "- `schemas/<id>.md` — the structured rows that are not the page (the identity core, beliefs).",
     `- \`journal/<year>/<date>-<id>.md\` — the first-person episode journal, as is: ` +
       `${String(census.journal)} episode${census.journal === 1 ? "" : "s"}.`,
@@ -1072,8 +908,6 @@ function markdownReadme(census: MarkdownCensus, opts: ExportOptions): string {
     "",
     "## What is NOT here",
     "",
-    omitted,
-    ...nightsOmitted,
     "- Removed memories. A removal is permanent; a tombstoned row has no words left to export.",
     census.notRendered.length === 0
       ? "- Nothing else. Every live row, dream and reflection this export could reach is in it."

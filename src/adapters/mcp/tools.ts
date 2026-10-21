@@ -782,7 +782,7 @@ const RECALL: ToolSpec = {
     },
     {
       claim:
-        `Pass ids to read those memories whole. It takes up to ${RECALL_MAX_IDS}, each resolved as an exact address with the same confidentiality boundary; a long body comes in parts, and ids past the result's room wait, named. Ids and a handle take no mode.`,
+        `Pass ids to read those memories whole. It takes up to ${RECALL_MAX_IDS}, each resolved as an exact address; a long body comes in parts, and ids past the result's room wait, named. Ids and a handle take no mode.`,
       mechanizedBy: "src/adapters/mcp/deliberate.ts#expandIds (RECALL_MAX_IDS, expandHandle per id) + src/adapters/mcp/deliberate.ts#boundById (RECALL_BODY_CHARS parts, RECALL_ID_RESULT_CHARS)",
     },
     {
@@ -846,11 +846,6 @@ const RECALL: ToolSpec = {
       claim:
         "An answer is bounded and never ships every body at full length: a short fact comes whole, a long one as an excerpt, and the whole answer stays under the result's room. An answer the host truncates is not a smaller answer, it is no answer.",
       mechanizedBy: "src/adapters/mcp/facts.ts#renderFacts (RECALL_EXCERPT_CHARS, RECALL_RESULT_CHARS)",
-    },
-    {
-      claim:
-        "Confidential material is returned only in the owner's own session: a direct lookup says it is withholding, a list simply does not contain it.",
-      mechanizedBy: "src/adapters/mcp/facts.ts#factsRecall (confidential column) + src/adapters/mcp/deliberate.ts#expandHandle (isConfidential)",
     },
     {
       claim:
@@ -1518,7 +1513,7 @@ const DREAM: ToolSpec = {
     },
     {
       claim:
-        "The bundle is what could surface in this session anyway — recall's gates: no archived, superseded, protected or schema row, and nothing confidential outside the owner's own session — and a dream can change only memories its bundle showed it.",
+        "The bundle is what could surface in this session anyway — recall's gates: no archived, superseded, protected or schema row — and a dream can change only memories its bundle showed it.",
       mechanizedBy: "src/core/dream/index.ts#Dreams.showable + #Dreams.apply (shown ids)",
     },
     {
@@ -1686,7 +1681,7 @@ const REFLECT: ToolSpec = {
     },
     {
       claim:
-        "It may close or propose closing only open threads it was shown as stale: one it closes itself carries its why, is never protected or confidential (any folder, since 2026-10-20), is said in the morning share, and `reopen` puts it back (after which it may only be asked about); `close` closes only ids a reflection proposed, after the owner's yes, with the same checks.",
+        "It may close or propose closing only open threads it was shown as stale: one it closes itself carries its why, is never protected (any folder, since 2026-10-20), is said in the morning share, and `reopen` puts it back (after which it may only be asked about); `close` closes only ids a reflection proposed, after the owner's yes, with the same checks.",
       mechanizedBy: "src/core/dream/reflect.ts#Reflections.finish (closeNow, close) + #Reflections.close + #Reflections.reopen",
     },
     {

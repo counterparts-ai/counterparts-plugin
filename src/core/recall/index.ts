@@ -82,7 +82,7 @@ export * from "./standing.js";
 export * from "./recency-ask.js";
 export * from "./time-ask.js";
 export * from "./tunables.js";
-export { activate, isConfidential, isHandoff, isSelfPage, gatedSal, primeOf, recordedIdentity, salienceRank } from "./activate.js";
+export { activate, isHandoff, isSelfPage, gatedSal, primeOf, recordedIdentity, salienceRank } from "./activate.js";
 export type { CandidatePrime, FeelingLane, PrimeStats, SpreadFn, SpreadStats } from "./activate.js";
 export type { Candidate, ActivationResult } from "./activate.js";
 import type { ActivationResult } from "./activate.js";
@@ -103,11 +103,6 @@ export interface RecallOptions {
   budgetBytes?: number;
   /** Latency budget for the build pass, ms. */
   budgetMs?: number;
-  /**
-   * Is this the owner's own session? Defaults to FALSE: withholding is the safe
-   * direction, and an observer is a non-owner regardless (observer-mode.md G7).
-   */
-  owner?: boolean;
   onEvent?: (e: RecallEvent) => void;
   /** Injectable clock, so the latency budget is testable without sleeping. */
   now?: () => number;
@@ -150,8 +145,6 @@ export interface Turn {
   spread?: SpreadFn;
   /** Lived day. Defaults to the store's clock (scar E8 — lived, not calendar). */
   day?: number;
-  /** Per-turn override of the session's owner stance. */
-  owner?: boolean;
   budgetBytes?: number;
   /**
    * Per-turn override of the LATENCY budget. It exists for one caller: the
@@ -237,7 +230,6 @@ export interface RecallDecision {
   readonly turn: number;
   readonly day: number;
   readonly observer: boolean;
-  readonly owner: boolean;
   readonly reason: DecisionReason;
   readonly aborted: boolean;
   readonly storeSize: number;
@@ -367,7 +359,6 @@ export class Recall {
   /** One predicate, one definition: the store's. Never re-derived here. */
   readonly observer: boolean;
 
-  private readonly defaultOwner: boolean;
   private readonly budgetBytes: number;
   private readonly budgetMs: number;
   private readonly onEvent: ((e: RecallEvent) => void) | undefined;
@@ -379,7 +370,6 @@ export class Recall {
     this.store = opts.store;
     this.tunables = withTunables(opts.tunables ?? {});
     this.observer = opts.store.observer;
-    this.defaultOwner = opts.owner === true && !this.observer;
     this.budgetBytes = opts.budgetBytes ?? this.tunables.BUDGET_BYTES;
     this.budgetMs = opts.budgetMs ?? this.tunables.BUDGET_MS;
     this.onEvent = opts.onEvent;
@@ -396,7 +386,6 @@ export class Recall {
   build(turn: Turn): BuildOutput {
     const started = this.now();
     const day = turn.day ?? this.store.livedDay();
-    const owner = (turn.owner ?? this.defaultOwner) && !this.observer;
     const budgetBytes = turn.budgetBytes ?? this.budgetBytes;
     const budgetMs = turn.budgetMs ?? this.budgetMs;
 
@@ -453,7 +442,6 @@ export class Recall {
         turn: turnNo,
         day,
         observer: this.observer,
-        owner,
         reason,
         aborted: reason === "latency-abort",
         storeSize: 0,
@@ -540,7 +528,7 @@ export class Recall {
         mood,
         maxCandidates,
         storeSize,
-        ...(turn.feeling === undefined ? {} : { feeling: { ...turn.feeling, owner } }),
+        ...(turn.feeling === undefined ? {} : { feeling: turn.feeling }),
         ...(plan === null ? {} : { prime: plan.activation }),
       },
       this.tunables,
@@ -576,7 +564,6 @@ export class Recall {
         candidates,
         state,
         storeSize: act.storeSize,
-        owner,
         affectStated: affect.stated,
         turn: turnNo,
         ...(turn.echo === undefined || turn.echo.size === 0 ? {} : { echo: turn.echo }),
@@ -664,7 +651,6 @@ export class Recall {
       turn: turnNo,
       day,
       observer: this.observer,
-      owner,
       reason,
       aborted: false,
       storeSize: act.storeSize,
@@ -1071,8 +1057,7 @@ function upgradeOf(prior: { tier: UseTier; day: number } | undefined, today: num
  * weakly than the earlier one, 2026-10-19), the head is brought
  * in to stand for it — the earlier's numbers (what came to mind), the head's
  * words, and its standing label naming the earlier one (`(earlier: [id])`) —
- * left out of the turn's background. Not a confidential head for a guest:
- * the gate withholds it, and the earlier one then shows, labelled. Bounded:
+ * left out of the turn's background. Bounded:
  * one `headOf` per candidate (a few indexed reads); never throws.
  */
 export function headsWin(store: Store, candidates: readonly Candidate[], day: number): Candidate[] {
@@ -1140,7 +1125,6 @@ export function headsWin(store: Store, candidates: readonly Candidate[], day: nu
         doc: store.readProse(head),
         physics,
         strength: strength(physics, day),
-        confidential: row.confidential === 1,
         standsFor: c.id,
         ...(direct !== undefined && direct.pastCut !== true && direct.cue - (direct.stamp ?? 0) + direct.semantic > 0
           ? // The words' reach only: a head start priming gave the direct

@@ -45,25 +45,6 @@ export interface McpServerOptions {
    * `origin_scope` for the whole run because it was the only default.
    */
   scope?: string;
-  /** Is this the owner's own session? Withholding is the safe direction. */
-  owner?: boolean;
-  /**
-   * WHAT DECIDED `owner` (2026-10-02), for `status` to say plainly: `env` —
-   * `COUNTERPARTS_OWNER` or `--owner`; `config` — nothing said, so the installed
-   * configuration's `owner: true` made a Claude Code launch the owner's;
-   * `off` — `COUNTERPARTS_OWNER` said no (`0`, or a value it could not
-   * read); `default` — nothing said and nothing made it so. Absent: `env`
-   * when `owner` is true, else `default`.
-   */
-  ownerFrom?: "env" | "config" | "default" | "off";
-  /**
-   * DESKTOP'S CODE TAB IS THE OWNER'S TOO (owner ruling 2026-10-02). Desktop's
-   * server opens as a guest for its chats; a call it serves as a Claude Code
-   * session (`callAs`) is that session, so with this set the call is the
-   * owner's — its reads and its thread close. Set by the entry point from the
-   * configuration's `owner: true` when `COUNTERPARTS_OWNER` said nothing.
-   */
-  codeTabOwner?: boolean;
   /**
    * The embedder, for ONE purpose: embedding a deliberate question in line.
    *

@@ -95,7 +95,7 @@ import type { UnmarkedCandidate } from "./unmarked.js";
 import { chapterEntries, entryKey, entryLine, fitEpisodes, shownEntry, summarized, withSummaries } from "./slices.js";
 import { chapterSummaries } from "../self/summaries.js";
 import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter } from "./slices.js";
-import { BUNDLE_OWNER, DREAM_TUNABLES } from "./tunables.js";
+import { DREAM_TUNABLES } from "./tunables.js";
 import { mindRanked, noteMindShown } from "./mind.js";
 import type { MindItem } from "./mind.js";
 import { settle as settleContradiction } from "../reconsolidation.js";
@@ -383,11 +383,6 @@ export type ReflectRefusal =
 export interface ReflectContext {
   readonly store: Store;
   readonly observer: boolean;
-  /** The owner's own session: confidential memories may be shown. */
-  readonly owner: boolean;
-  /** Read the BUNDLES as the owner too (`BUNDLE_OWNER`, review of #318). No host sets it; the
-   *  store-level tests of what an owner-read bundle must keep do. Absent: a guest. */
-  readonly bundleOwner?: boolean;
   /** The credential scan every word passes (the same one a dream's words do). */
   readonly gate: (text: string, sessionId: string) => { ok: true; text: string } | { ok: false; reason: string };
   readonly page: () => string | null;
@@ -487,7 +482,7 @@ export interface ReflectFinish {
    * `shows` (the memory that does). Closed here, and said in the share.
    */
   readonly closeNow?: readonly { readonly id?: string; readonly why?: string; readonly shows?: string }[];
-  /** The session's directory, for `closeThread`'s checks on a self-close (a session not the owner's closes only its own directory's). */
+  /** The session's directory. (It once fed a folder check on closing; that went with the yours/guest split, 2026-10-21.) */
   readonly scope?: string | null;
 }
 
@@ -574,26 +569,6 @@ function notLivedReason(row: MemoryRow, act: "feel" | "mark" | "trait"): string 
   return null;
 }
 
-/**
- * The first six-word run `text` shares with one of `bodies` — case and
- * punctuation aside — and the index of that body; null when none.
- */
-function sharedRun(text: string, bodies: readonly string[]): { run: string; index: number } | null {
-  const words = (t: string): string[] => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 0);
-  const page = words(text);
-  if (page.length < 6 || bodies.length === 0) return null;
-  const runs = new Set<string>();
-  for (let i = 0; i + 6 <= page.length; i += 1) runs.add(page.slice(i, i + 6).join(" "));
-  for (const [index, body] of bodies.entries()) {
-    const g = words(body);
-    for (let i = 0; i + 6 <= g.length; i += 1) {
-      const run = g.slice(i, i + 6).join(" ");
-      if (runs.has(run)) return { run, index };
-    }
-  }
-  return null;
-}
-
 /** A store error's code and, for a FEELING_ or TRAIT_INVALID, its reason and what is allowed. */
 function refusalOf(err: unknown): string {
   if (isStoreError(err, "FEELING_INVALID") || isStoreError(err, "TRAIT_INVALID")) {
@@ -610,11 +585,6 @@ export class Reflections {
 
   constructor(ctx: ReflectContext) {
     this.ctx = ctx;
-  }
-
-  /** Whose a bundle is read as: a guest (`BUNDLE_OWNER`), unless a test asked otherwise. */
-  private get bundleOwner(): boolean {
-    return this.ctx.bundleOwner ?? BUNDLE_OWNER;
   }
 
   private get store(): Store {
@@ -872,7 +842,7 @@ export class Reflections {
     }
     const chapters = ids.c.map((cid): ShownChapter => {
       const r = this.store.row(cid);
-      if (r === undefined || (r.confidential === 1 && !this.bundleOwner)) return { id: cid, title: null, entries: [{ chapter: null, day: null, fidelity: "line", text: gone, chars: 0 }], earlier: 0 };
+      if (r === undefined) return { id: cid, title: null, entries: [{ chapter: null, day: null, fidelity: "line", text: gone, chars: 0 }], earlier: 0 };
       // The line `begin` fitted: the chapter's summary when it has one.
       const all = withSummaries(chapterEntries(r.body), chapterSummaries(this.store, [cid]).get(cid), index?.ref === row.id ? index.at : 0);
       const entries = [];
@@ -1038,9 +1008,7 @@ export class Reflections {
     };
     const cites = citable(input.cites);
     const shareCites = citable(input.share?.cites);
-    // A dreamed gist is a suggestion, never a page's source (addendum 2). A
-    // CONFIDENTIAL memory is not one either (review of #256, S2): the page is
-    // read by every session, and the nightly writer never shows it one.
+    // A dreamed gist is a suggestion, never a page's source (addendum 2).
     // CITES PER PASSAGE (2026-10-20, an experiment): the ids `page.claims`
     // names count as the page's too, through the same filters, so a page that
     // cites only by passage still rests on memories; each passage keeps only
@@ -1051,7 +1019,6 @@ export class Reflections {
     for (const id of pageCitesAll) {
       const r = this.store.row(id);
       if (r?.source === "dreamed") refusedCites.push(`${id}:dreamed-is-not-a-source`);
-      else if (r?.confidential === 1) refusedCites.push(`${id}:confidential-is-not-a-page-source`);
       else pageCites.push(id);
     }
     const pageTrace =
@@ -1230,7 +1197,7 @@ export class Reflections {
       const axis = String(t.axis ?? "");
       const toward = String(t.toward ?? "");
       const same = this.store
-        .traitsFor(r.id, { includeConfidential: true })
+        .traitsFor(r.id)
         .find((x) => recordedTraits.has(x.id) && x.axis === axis && x.toward === toward);
       if (same !== undefined) {
         traits.push({ id, ok: true, reason: "already-recorded", note: `This reflection already recorded that nudge on ${r.id} (${same.id}); nothing new was written.` });
@@ -1294,11 +1261,6 @@ export class Reflections {
     let entryId: string | null = again ? row.entry_id : null;
     let entryReason = again ? (row.entry_id !== null ? "stands" : "on-the-record") : "on-the-record";
     if (entryId === null && cites.length > 0) {
-      // As confidential as anything the night cites — the share's and the
-      // page's citations too (review of #256, S2): the entry is one text.
-      const sourceRows = [...new Set([...parseIds(row.cites), ...cites, ...shareCites, ...pageCitesAll])]
-        .map((id) => this.store.row(id))
-        .filter((r): r is MemoryRow => r !== undefined);
       entryId = this.store.put({
         type: "memory",
         kind: "self",
@@ -1307,7 +1269,7 @@ export class Reflections {
         salience: { novelty: null, relevance: 0.5, emotional: 0.3, predictive: 0.5 },
         physics: { birthDay: day, lastUsedDay: day },
         source: "reflection",
-        meta: { reflection: row.id, ...(row.dream_id === null ? {} : { dream: row.dream_id }), cites, ...confidentialityOf(sourceRows) },
+        meta: { reflection: row.id, ...(row.dream_id === null ? {} : { dream: row.dream_id }), cites },
         origin: { ...(row.session === null ? {} : { session: row.session }), ...(row.scope === null ? {} : { scope: row.scope }), ref: `reflection:${row.id}` },
         ...(input.model ? { model: input.model } : row.model !== null ? { model: row.model } : {}),
       });
@@ -1331,7 +1293,6 @@ export class Reflections {
       // does not is WRITTEN, with a note (it was refused `page-rests-on-the-core`).
       const coreShown = [...shown].filter((id) => this.store.row(id)?.promoted_identity === 1);
       const restsOnCore = coreShown.length === 0 || pageCites.some((id) => coreShown.includes(id));
-      const confidential = this.quotesConfidential(pageText, shown);
       if (this.ctx.pageWrites === false) {
         // The owner has the page writer off (ruling D3 on #256).
         refuse("page-writer-off", "The owner has the page writer off, so the self page is not rewritten.");
@@ -1346,20 +1307,13 @@ export class Reflections {
         );
       } else if (carriesDreamMark(pageText)) {
         refuse("dream-mark-in-text", `The page carries the dream's mark (${DREAM_MARK}…): take it out and send the page again.`);
-      } else if (confidential !== null) {
-        // The words of a confidential memory it was shown in the owner's
-        // session do not go on a page every session reads (review of #256, S2).
-        refuse(
-          "confidential-words-on-the-page",
-          `The page repeats "${confidential.run}" from confidential memory ${confidential.id}, and the page is read in every session: say it another way and send the page again.`,
-        );
       } else {
         // THE SHORT VERSION CROSSES THESE GATES TOO (review of #363): it is
         // injected into every wake exactly like the page. One that fails them
         // is not sent, and never costs the page — the note says why, and the
         // page's own note asks for another.
         const shortSent = (input.page?.short ?? "").trim();
-        const shortWhy = shortSent.length === 0 ? null : this.shortRefusal(shortSent, shown);
+        const shortWhy = shortSent.length === 0 ? null : this.shortRefusal(shortSent);
         const shortText = shortWhy === null ? shortSent : "";
         const w = this.ctx.writePage(pageText, {
           reason: `reflection ${row.id}${row.dream_id === null ? "" : ` after dream ${row.dream_id}`}`,
@@ -1413,7 +1367,7 @@ export class Reflections {
       // A SHORT VERSION ALONE (2026-10-10), on a later `finish`: added to the
       // page this reflection wrote, as the note on that write asked — tied to
       // its version, so a page somebody rewrote since is not given it.
-      const shortWhy = this.shortRefusal((input.page?.short ?? "").trim(), shown);
+      const shortWhy = this.shortRefusal((input.page?.short ?? "").trim());
       if (earlierPage === null) {
         page = {
           written: false,
@@ -1608,21 +1562,16 @@ export class Reflections {
         closeRefused.push({ id: cid, reason: "no-longer-open" });
         continue;
       }
-      // ANY FOLDER, NEVER CONFIDENTIAL (Mike, 2026-10-20 09:38: "i think its
-      // ok for nightly run to close threads from other folders" — a lightly
-      // held exception to the 10-02 night stance, for this door alone; a
-      // write-up still closes no thread opened elsewhere). A thread it was
-      // shown as stale may be closed whatever folder wrote it, so the
-      // directory check is not made here. ASKED INSTEAD: one the owner
-      // reopened, and a confidential one, from any session, are asked about,
-      // as a proposal; the owner's yes, from a session that may, closes it.
+      // ANY FOLDER (Mike, 2026-10-20 09:38: "i think its ok for nightly run
+      // to close threads from other folders"; since 2026-10-21 every door
+      // may, the yours/guest split removed). ASKED INSTEAD: one the owner
+      // reopened, from any session, is asked about, as a proposal; the
+      // owner's yes closes it.
       const guard =
         typeof open.meta[THREAD_REOPENED_BY_META_KEY] === "string"
           ? "reopened-by-owner"
-          : open.row.confidential === 1
-            ? "confidential"
-            : threadGuard(open.row, this.ctx.owner, input.scope, { anyDirectory: true });
-      if (guard === "reopened-by-owner" || guard === "confidential") {
+          : threadGuard(open.row);
+      if (guard === "reopened-by-owner") {
         proposed.push(cid);
         askedInstead += 1;
         closeNotes.push(`${cid}: asked instead of closed (${guard}).`);
@@ -1950,10 +1899,9 @@ export class Reflections {
    * the owner, asked in the share, agreed some open threads are done. Closes
    * only ids this reflection proposed, with the write a deposit that answers a
    * thread makes (`counterpart-deposit.ts#closeThread`: the flag set false,
-   * reason `thread-closed`) and its checks — the owner's protection, an
-   * archived row, and, from a session that is not the owner's, nothing
-   * confidential and nothing written in another directory. Any day, told or
-   * not; an id already closed is said so, not refused.
+   * reason `thread-closed`) and its checks — the owner's protection and an
+   * archived row, from any folder. Any day, told or not; an id already
+   * closed is said so, not refused.
    */
   close(input: { reflection: string; session: string; ids: readonly string[]; scope?: string | null }):
     | { ok: true; closed: string[]; already: string[]; refused: { id: string; reason: string }[] }
@@ -1990,7 +1938,7 @@ export class Reflections {
         already.push(id);
         continue;
       }
-      const why = threadGuard(r, this.ctx.owner, input.scope);
+      const why = threadGuard(r);
       if (why !== null) {
         refused.push({ id, reason: why });
         continue;
@@ -2065,9 +2013,8 @@ export class Reflections {
         already.push(id);
         continue;
       }
-      // The way back reaches as far as the self-close did (Mike, 2026-10-20):
-      // any folder; a confidential one stays refused from a session not the owner's.
-      const why = threadGuard(r, this.ctx.owner, input.scope, { anyDirectory: true });
+      // The way back reaches as far as the self-close did: any folder.
+      const why = threadGuard(r);
       if (why !== null) {
         refused.push({ id, reason: why });
         continue;
@@ -2101,9 +2048,6 @@ export class Reflections {
     // five reflections is still found.
     const row = this.store.reflectionsWithShare("offered", 1)[0];
     if (row === undefined || row.share === null || row.session === input.session) return null;
-    // Not into a session that is not the owner's when it rests on something
-    // confidential (review of #256, S2).
-    if (!this.ctx.owner && this.touchesConfidential(row)) return null;
     return row;
   }
 
@@ -2117,7 +2061,6 @@ export class Reflections {
     if (this.ctx.observer) return null;
     const row = this.store.reflection(input.reflection);
     if (row === undefined || row.share_state !== "offered" || row.share === null) return null;
-    if (!this.ctx.owner && this.touchesConfidential(row)) return null;
     // A CLAIM, not a read then a write (review of #256, S5): two prompts
     // racing both read "offered"; only the one whose write still finds it
     // offered carries it.
@@ -2284,7 +2227,6 @@ export class Reflections {
       today: at,
       day,
       showable: (row) => !denied.has(row.id) && this.showable(row),
-      owner: this.bundleOwner,
     });
     const onMind = mindRead.items.filter((item) => item.ids.every(take(3)));
 
@@ -2324,7 +2266,7 @@ export class Reflections {
     // And the store's person cards (`schemas/`), a name and its aliases each.
     for (const cid of this.store.list({ type: "schema", kind: "person", archived: false })) {
       const card = this.store.row(cid);
-      if (card !== undefined && card.confidential !== 1) people.push({ title: card.title, meta: card.meta });
+      if (card !== undefined) people.push({ title: card.title, meta: card.meta });
     }
     const unmarkedIds = orderUnmarked(unmarked, { owner: owners, people: personNames(people, owners) }, lately, T.UNMARKED).filter(take(2));
     // STALE OPEN (2026-10-16, #489 D): open threads untouched for
@@ -2362,7 +2304,6 @@ export class Reflections {
     const earlier = this.store
       .reflections({ limit: T.EARLIER + 4 })
       .filter((r) => r.state === "reflected" && r.entry !== null && r.id !== id)
-      .filter((r) => this.bundleOwner || !this.touchesConfidential(r))
       .slice(0, T.EARLIER)
       .map((r) => ({ date: r.date, entry: clipWire(r.entry ?? "", T.EARLIER_CHARS) }));
     const spent =
@@ -2471,8 +2412,8 @@ export class Reflections {
 
   /**
    * One memory the dream saw, as a line — or null when it is not the
-   * reflection's to see now (gone, denied, confidential outside the owner's
-   * session, the page or a handoff, or a reflection's own entry).
+   * reflection's to see now (gone, denied, the page or a handoff, or a
+   * reflection's own entry).
    */
   private sawLine(id: string, denied: ReadonlySet<string>): { id: string; text: string } | null {
     if (denied.has(id)) return null;
@@ -2494,50 +2435,15 @@ export class Reflections {
 
   /**
    * WHY A SHORT VERSION MAY NOT GO WITH THE PAGE, or null (review of #363):
-   * the page's own reflection gates — the dream's mark, a confidential
-   * memory's words — since a short version is read by every session the page
-   * would have been. `why` reads after "The short version" or "it".
+   * the page's own reflection gate — the dream's mark — since a short
+   * version is read by every session the page would have been. `why` reads
+   * after "The short version" or "it".
    */
-  private shortRefusal(text: string, shown: ReadonlySet<string>): { reason: string; why: string } | null {
+  private shortRefusal(text: string): { reason: string; why: string } | null {
     if (carriesDreamMark(text)) {
       return { reason: "dream-mark-in-text", why: `carries the dream's mark (${DREAM_MARK}…) — take it out` };
     }
-    const confidential = this.quotesConfidential(text, shown);
-    if (confidential !== null) {
-      return {
-        reason: "confidential-words-on-the-page",
-        why: `repeats "${confidential.run}" from confidential memory ${confidential.id}, and it is read in every session — say it another way`,
-      };
-    }
     return null;
-  }
-
-  /**
-   * Does `text` carry a six-word run of a CONFIDENTIAL memory it was shown?
-   * The run and the memory, so the refusal can name them; null when not.
-   */
-  private quotesConfidential(text: string, shown: ReadonlySet<string>): { id: string; run: string } | null {
-    const ids: string[] = [];
-    const bodies: string[] = [];
-    for (const id of shown) {
-      const r = this.store.row(id);
-      if (r !== undefined && r.confidential === 1 && r.body !== "") {
-        ids.push(id);
-        bodies.push(`${r.title ?? ""}\n${r.body}`);
-      }
-    }
-    const hit = sharedRun(text, bodies);
-    return hit === null ? null : { id: ids[hit.index] as string, run: hit.run };
-  }
-
-  /**
-   * Does a reflection rest on something confidential — its entry's memory,
-   * or anything it or its share cites? Then it is not handed to a session
-   * that is not the owner's (review of #256, S2).
-   */
-  private touchesConfidential(r: ReflectionRow): boolean {
-    const ids = [...parseIds(r.cites), ...parseIds(r.share_cites), ...(r.entry_id === null ? [] : [r.entry_id])];
-    return ids.some((id) => this.store.row(id)?.confidential === 1);
   }
 
   /**
@@ -2589,7 +2495,6 @@ export class Reflections {
     for (const id of this.store.list({ type: "episode", archived: false })) {
       const row = this.store.row(id);
       if (row === undefined) continue;
-      if (row.confidential === 1 && !this.bundleOwner) continue;
       // Begun in the last few lived days, or written to in the last few
       // calendar days (a chapter grows while its session runs).
       const at = row.updated_at ?? row.created_at ?? 0;
@@ -2641,17 +2546,12 @@ export class Reflections {
 
   /**
    * Recall's gates, as a reflection reads them: live, a memory, not
-   * protected, not confidential outside the owner's session. `owner` is the
-   * READER's stance: a bundle is always read as a guest (`BUNDLE_OWNER`,
-   * review of #318); a feeling recorded awake passes the call's own (#317 ×
-   * #318: a Code-tab call on Desktop's server is the owner's, and may feel
-   * again what its recall showed it).
+   * protected, not emptied.
    */
-  showable(row: MemoryRow, owner: boolean = this.bundleOwner): boolean {
+  showable(row: MemoryRow): boolean {
     if (row.archived === 1 || row.superseded_by !== null) return false;
     if (row.type !== "memory") return false;
     if (row.protected === 1) return false;
-    if (row.confidential === 1 && !owner) return false;
     if (row.body === "") return false;
     return true;
   }
@@ -2821,13 +2721,11 @@ export class Reflections {
       readonly gate?: (r: MemoryRow) => { reason: string; detail: string } | null;
       /** The owner's feeling may be recorded later too (awake only); the reflection's are its own. */
       readonly whose?: "self" | "owner";
-      /** The caller's stance (awake): what its recall could show. Absent: a guest's, as the bundle's. */
-      readonly owner?: boolean;
     },
   ): PartResult {
     const id = typeof f.id === "string" ? f.id : null;
     const r = id !== null && o.shown.has(id) ? this.store.row(id) : undefined;
-    if (r === undefined || !this.showable(r, o.owner ?? this.bundleOwner)) {
+    if (r === undefined || !this.showable(r)) {
       const detail =
         o.source === "awake" && id !== null && !o.shown.has(id)
           ? `${id} was not shown in this session; read it first (the recall tool, ids: ["${id}"]), then record how it feels now.`
@@ -2911,8 +2809,6 @@ export class Reflections {
     readonly shown: ReadonlySet<string>;
     readonly feelings: readonly LaterFeelingInput[];
     readonly model?: string | null;
-    /** The call's own stance (#317 × #318). Absent: this process's. */
-    readonly owner?: boolean;
   }): { ok: true; feelings: PartResult[] } | { ok: false; reason: "observer" } {
     if (this.ctx.observer) return { ok: false, reason: "observer" };
     const date = this.ctx.today();
@@ -2931,7 +2827,6 @@ export class Reflections {
           model: input.model ?? null,
           mine,
           whose,
-          owner: input.owner ?? this.ctx.owner,
           gate: (r) =>
             this.store.feelingsFor(r.id).some((x) => x.source === "awake" && x.recorded_later === date)
               ? { reason: "once-a-day", detail: `${r.id} already has a feeling recorded looking back, awake, today; one a calendar day per memory.` }
@@ -3057,22 +2952,6 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
-function confidentialityOf(rows: readonly MemoryRow[]): Record<string, unknown> {
-  let out: Record<string, unknown> = {};
-  for (const r of rows) {
-    if (r.confidential !== 1) continue;
-    let klass: unknown;
-    try {
-      klass = (JSON.parse(r.meta) as Record<string, unknown>)["confidentiality"];
-    } catch {
-      klass = undefined;
-    }
-    if (out["confidential"] === undefined) out = { confidential: true };
-    if (typeof klass === "string" && klass.length > 0 && out["confidentiality"] === undefined) out["confidentiality"] = klass;
-  }
-  return out;
-}
-
 function cut(text: string | null, max: number): string | null {
   if (text === null) return null;
   return text.length <= max ? text : `${text.slice(0, max)}…`;
@@ -3147,17 +3026,13 @@ function selfClosedOf(v: unknown): SelfClose[] {
 
 /**
  * `closeThread`'s checks (`counterpart-deposit.ts`), for a thread closed or
- * reopened from here: the owner's protection, an archived row, and — from a
- * session that is not the owner's — nothing confidential and nothing written
- * in another directory. Null when it may be written. `anyDirectory`: the
- * reflection's own self-close and its `reopen` (Mike, 2026-10-20), which reach
- * a thread from any folder it was shown as stale; `close` keeps the check.
+ * reopened from here: the owner's protection and an archived row. Null when
+ * it may be written. From any folder (the other-directory refusal went with
+ * the yours/guest split, 2026-10-21).
  */
-function threadGuard(r: MemoryRow, owner: boolean, scope: string | null | undefined, opts: { anyDirectory?: boolean } = {}): string | null {
+function threadGuard(r: MemoryRow): string | null {
   if (r.protected === 1) return "protected-refuses-revision";
   if (r.archived === 1) return "target-archived";
-  if (!owner && r.confidential === 1) return "confidential";
-  if (!owner && opts.anyDirectory !== true && (r.origin_scope ?? "") !== (scope ?? "")) return "other-directory";
   return null;
 }
 

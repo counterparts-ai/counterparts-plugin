@@ -66,13 +66,13 @@ const REL = {
  * merged in on one day share a row ("2 near-copies merged in a dream"), so
  * two identical titles read as cleanup rather than as mystery history.
  *
- * Each row: { rel, label, day, reason (words, or null), refs: [{ id, text, confidential }] }.
+ * Each row: { rel, label, day, reason (words, or null), refs: [{ id, text }] }.
  */
 export function versionRows(timeline) {
   const rows = [];
   const dreamGroups = new Map();
   for (const s of timeline || []) {
-    const ref = s.id ? { id: s.id, text: s.text, confidential: !!s.confidential } : null;
+    const ref = s.id ? { id: s.id, text: s.text } : null;
     if (s.rel === "replaced" && s.dream) {
       const key = String(s.day);
       let row = dreamGroups.get(key);

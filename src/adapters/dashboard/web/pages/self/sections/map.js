@@ -338,7 +338,7 @@ export function placeLabels(map, L, w, h) {
   for (let d = 38; d <= 360; d += 9) DISTS.push(d);
   for (const n of labelOrder(map)) {
     const p = L.pos.get(n.id);
-    const text = n.confidential ? "withheld" : shortTitle(n.text);
+    const text = shortTitle(n.text);
     // Its two forms: one line, or two short ones (a phone has only the second).
     const two = wrapTitle(text, 15);
     const forms = (w < NARROW ? [two] : two.length > 1 ? [[text], two] : [[text]]).map((lines) => ({
@@ -466,7 +466,7 @@ export function markup(map, w, opts = {}) {
       '<text class="sm-label' + (n.core ? " core" : "") + '" x="' + f1(lab.x - p.x) + '" y="' + f1(lab.y - p.y) + '" text-anchor="' + lab.anchor + '">' +
         (lab.lines.length === 1 ? esc(lab.text) : lab.lines.map((t, i) =>
           '<tspan x="' + f1(lab.x - p.x) + '"' + (i === 0 ? "" : ' dy="' + LINE_H + '"') + ">" + esc(t) + "</tspan>").join("")) + "</text>";
-    const label = (n.confidential ? "withheld" : headline(n.text)) + " — " + nodeWords(n);
+    const label = headline(n.text) + " — " + nodeWords(n);
     return '<g class="sm-node ' + (n.core ? "core" : near ? "near" : "plain") + (lab ? " named" : "") + '" data-id="' + esc(n.id) +
       '" transform="translate(' + f1(p.x) + " " + f1(p.y) + ')" tabindex="0" role="button" aria-label="' + esc(label) + '">' +
       '<circle class="sm-hit" r="12"/>' + ring +
@@ -549,7 +549,7 @@ function draw(box) {
   };
   svg.querySelectorAll(".sm-node").forEach((g) => {
     const n = byId.get(g.dataset.id);
-    const words = '<b>' + (n.confidential ? '<span class="withheld">withheld</span>' : esc(headline(n.text))) + "</b>" +
+    const words = '<b>' + esc(headline(n.text)) + "</b>" +
       '<div class="dimline">' + esc(nodeWords(n)) + "</div>";
     const dot = g.querySelector(".sm-dot");
     const tipAtDot = (extra) => {

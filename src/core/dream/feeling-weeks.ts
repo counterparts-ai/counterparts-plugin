@@ -14,8 +14,8 @@
  * lived memory, as written at the time or recorded later (a reflection's, an
  * awake feeling-now) — each dated by when it was recorded, in the person's
  * zone. Not a dream's feeling-now (a dream is not lived), and not a feeling on
- * what a dream or a reflection wrote. Counts carry no words, so a confidential
- * memory's feelings count; only what `citable` allows is named in `restsOn`.
+ * what a dream or a reflection wrote. Counts carry no words; only what
+ * `citable` allows is named in `restsOn`.
  *
  * A few hundred characters in the bundle. No dashboard page: this is the
  * reflection's to read, not another place to show the same thing.

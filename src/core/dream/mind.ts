@@ -117,8 +117,6 @@ interface MindInput {
   readonly day: number;
   /** Recall's gates for this session: could this row surface here? */
   readonly showable: (row: MemoryRow) => boolean;
-  /** The owner's own session: a confidential handoff may be shown. */
-  readonly owner: boolean;
   /** The dream's bundle: the slot proposals to confirm, beside the ranked items (2026-10-11). */
   readonly slots?: boolean;
 }
@@ -209,7 +207,7 @@ export function mindRanked(store: Store, input: MindInput): { items: MindItem[];
       const left = daysLeft(h.writtenDay, input.day, HANDOFF_LIFE_DAYS);
       if (left <= 0) continue;
       const row = store.row(h.id);
-      if (row === undefined || (row.confidential === 1 && !input.owner)) continue;
+      if (row === undefined) continue;
       const first = lineOf({ body: row.body }, T.TEXT_CHARS);
       if (first.length === 0) continue;
       push({ kind: "open-loop", text: first, ids: [] }, 1 + Math.min(left, HANDOFF_LIFE_DAYS) / HANDOFF_LIFE_DAYS);

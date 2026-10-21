@@ -29,7 +29,7 @@ import { wireChars } from "../../core/fit/index.js";
 import { handoffAuthorship, sessionWords } from "../../core/handoff/index.js";
 import { belowReach, strength } from "../../core/physics/index.js";
 import type { MemoryPhysics } from "../../core/types.js";
-import { isConfidential, isSelfPage, standingOf } from "../../core/recall/index.js";
+import { isSelfPage, standingOf } from "../../core/recall/index.js";
 import { parseChapterAddress, resolveChapter } from "../../core/self/chapter-address.js";
 import { nightKindOf, readNight } from "./nights.js";
 import type { NightSummary } from "./nights.js";
@@ -260,7 +260,6 @@ export type DeliberateReason =
   | "expanded"
   | "handle-unknown"
   | "handle-ambiguous"
-  | "handle-confidential-withheld"
   | "no-argument"
   | "both-arguments"
   | "ids-too-many"
@@ -319,8 +318,6 @@ export interface DeliberateInput {
 
 export interface DeliberateOptions {
   readonly sessionId: string;
-  /** The owner's own session? Confidentiality turns on this and nothing else. */
-  readonly owner: boolean;
 }
 
 /**
@@ -429,11 +426,11 @@ export function expandHandle(
 
   // A NIGHT, `drm_…` or `rfl_…` (2026-10-20): the wake names last night's
   // dream and the share its reflection by id, and the id now opens. Exact,
-  // like every address; the confidentiality boundary is stated (`nights.ts`).
+  // like every address (`nights.ts`).
   const night = nightKindOf(handle);
   if (night !== null) {
-    const got = readNight(counterpart, handle, { owner: opts.owner });
-    if (!got.ok) return { ...base, reason: got.reason, memories: [], considered: got.reason === "handle-unknown" ? 0 : 1, nightAsked: night };
+    const got = readNight(counterpart, handle);
+    if (!got.ok) return { ...base, reason: got.reason, memories: [], considered: 0, nightAsked: night };
     return { ...base, reason: "expanded", memories: [], considered: 1, nights: [got.night] };
   }
 
@@ -499,9 +496,6 @@ export function expandHandle(
   if (isSelfPage(read.doc)) {
     return { ...base, reason: "handle-unknown", memories: [], considered: 0 };
   }
-  if (!opts.owner && isConfidential(read.doc)) {
-    return { ...base, reason: "handle-confidential-withheld", memories: [], considered: 1 };
-  }
   return {
     ...base,
     reason: "expanded",
@@ -526,7 +520,7 @@ export function expandHandle(
  * ONE CHAPTER, by its address `epi_…#N`. The memory it returns carries the
  * EPISODE's id (what credit, the seen set and the handle log key on), the
  * chapter's own words, `address`, and the ids of the moments its session
- * wrote during it. The episode's confidentiality applies, stated.
+ * wrote during it.
  */
 function expandChapter(
   counterpart: Counterpart,
@@ -544,18 +538,7 @@ function expandChapter(
   } catch {
     return { ...base, reason: "handle-unknown", memories: [], considered: 0 };
   }
-  if (!opts.owner && isConfidential(read.doc)) {
-    return { ...base, reason: "handle-confidential-withheld", memories: [], considered: 1 };
-  }
-  const shown = !opts.owner
-    ? c.moments.filter((id) => {
-        try {
-          return !isConfidential(store.read(id).doc);
-        } catch {
-          return false;
-        }
-      })
-    : c.moments;
+  const shown = c.moments;
   return {
     ...base,
     reason: "expanded",
@@ -712,8 +695,8 @@ function standingField(store: Counterpart["store"], id: string, byId: boolean): 
  * THE ID PATH — "those three, in full", after a list.
  *
  * It is `expandHandle` in a loop and deliberately nothing more: each id crosses
- * the same exact-address resolution and the same confidentiality boundary, so
- * withholding is still STATED per id (§9.1 G5) and no id fuzzes into a search.
+ * the same exact-address resolution, so each id's outcome is STATED per id
+ * and no id fuzzes into a search.
  * Writing a second resolver here to save a loop is how the expansion path
  * quietly becomes the search path.
  *

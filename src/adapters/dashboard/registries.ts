@@ -358,7 +358,7 @@ export const DURABLE_EVENTS = {
   // that every body is a column.
   "journal.copy.written": "a chapter's markdown copy was written beside the store, so the diary is readable in any editor (which episode, which file, how big)",
   "journal.copy.failed": "a chapter's markdown copy could not be written (which episode, and the reason code) — the chapter itself is safe in the database",
-  "store.export": "you exported the store by hand (which kind of export, how many rows went, how many confidential ones were left out)",
+  "store.export": "you exported the store by hand (which kind of export, how many rows went)",
   // Raw-transcript retention (2026-09-23, B3). One row per date; `STARTED` goes
   // in when the pass takes its latch and `LATCH_HELD` when a later worker finds
   // the latch taken with no row, so a pass that died is never a silence.

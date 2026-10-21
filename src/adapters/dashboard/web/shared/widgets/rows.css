@@ -4,4 +4,3 @@
 .rows .r.click:hover{background:var(--hover)}
 .rows .meta{color:var(--faint);font-size:10px;margin-top:4px;display:flex;gap:10px;flex-wrap:wrap}
 .rows .meta .k{color:var(--dim)}
-.withheld{color:var(--amber);font-style:italic}

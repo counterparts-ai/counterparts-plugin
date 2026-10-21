@@ -74,7 +74,6 @@ export function resolvedIdOf(result: DeliberateResult): string | null | undefine
       return result.memories.length === 1 ? (result.memories[0]?.id ?? null) : undefined;
     case "handle-unknown":
     case "handle-ambiguous":
-    case "handle-confidential-withheld":
       return null;
     default:
       return undefined;

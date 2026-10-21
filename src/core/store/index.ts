@@ -67,6 +67,8 @@ import type { Stance } from "../observer.js";
 import {
   CLAIMS_ERA_CUTOFF_KEY,
   CLAIMS_ERA_RECORDED_KEY,
+  CONFIDENTIAL_RETIRED_IDS,
+  CONFIDENTIAL_RETIRED_KEY,
   DEFAULT_RETENTION_DAYS,
   RECURRING_META,
   SCHEMA_VERSION,
@@ -149,7 +151,6 @@ import {
   occurredOnOf,
   saidByOf,
   statusOf,
-  confidentialByMeta,
   carryAboutMark,
   carryWriteFacts,
   ABOUT_MARKS,
@@ -209,7 +210,6 @@ export {
   saidByOf,
   statusOf,
   occurredOnOf,
-  confidentialByMeta,
   ABOUT_MARKS,
   CORE_ABOUT_MARKS,
   IDENTITY_ABOUT_MARKS,
@@ -325,6 +325,7 @@ export {
   V13_UPGRADE_KEY,
   CLAIMS_ERA_CUTOFF_KEY,
   CLAIMS_ERA_RECORDED_KEY,
+  CONFIDENTIAL_RETIRED_KEY,
   CLAIMED_DEFAULT_SPELLED,
   ERA_WRITTEN_AT_META,
   backfillRecordedDays,
@@ -826,6 +827,32 @@ export class Store {
         if (!isLocked(err)) throw err;
       }
     }
+    // THE CONFIDENTIAL MARK'S RETIREMENT (2026-10-21, `CONFIDENTIAL_RETIRED_KEY`),
+    // counted ONCE at the first writable open by this build, as the claims era
+    // above is recorded: read first, written only when absent, asked again
+    // under the write lock. The one read of the retired column outside the
+    // removal scrub. A lost lock costs the record for this open, never the open.
+    if (!this.observer) {
+      try {
+        if (this.ops.get("SELECT 1 FROM meta WHERE key = ?", CONFIDENTIAL_RETIRED_KEY) === undefined) {
+          this.ops.transaction(() => {
+            if (this.ops.get("SELECT 1 FROM meta WHERE key = ?", CONFIDENTIAL_RETIRED_KEY) !== undefined) return;
+            const live = "confidential = 1 AND archived = 0 AND superseded_by IS NULL";
+            const count = this.ops.get<{ n: number }>(`SELECT COUNT(*) AS n FROM memories WHERE ${live}`)?.n ?? 0;
+            const ids =
+              count === 0
+                ? []
+                : this.ops
+                    .all<{ id: string }>(`SELECT id FROM memories WHERE ${live} ORDER BY id LIMIT ?`, CONFIDENTIAL_RETIRED_IDS)
+                    .map((r) => r.id);
+            const record = { count, ids, at: this.nowFn(), day: this.today() };
+            this.ops.run("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)", CONFIDENTIAL_RETIRED_KEY, JSON.stringify(record));
+          });
+        }
+      } catch (err) {
+        if (!isLocked(err)) throw err;
+      }
+    }
     // The owner-op capability. Handed to the seam module, never to a caller:
     // holding a Store gives you no way to destroy anything, and `ownerMutate`
     // routes the chase through the same stance check every write crosses.
@@ -1294,7 +1321,7 @@ export class Store {
       this.ops.run(
         `UPDATE memories
             SET content_hash = ?, revision = ?, title = ?, body = ?, meta = ?,
-                confidential = ?, learned_on = ?, happened_on = ?,
+                confidential = 0, learned_on = ?, happened_on = ?,
                 event_date = ?, model = ?, updated_at = ?,
                 occurred_on = ?, said_by = ?, status = ?
           WHERE id = ?`,
@@ -1303,10 +1330,6 @@ export class Store {
         next.title ?? null,
         next.body,
         serializeMeta(next.meta, id),
-        // RECOMPUTED, never carried: a revision that patches `meta` can turn
-        // the confidentiality gate on or off, and a column that went stale
-        // against its own truth table is a gate that fails open silently.
-        confidentialByMeta(next.meta) ? 1 : 0,
         next.learnedOn,
         next.happenedOn ?? null,
         next.eventDate ?? null,
@@ -1361,13 +1384,11 @@ export class Store {
       const nextHash = hashText(next.body);
       this.ops.run(
         `UPDATE memories
-            SET content_hash = ?, body = ?, meta = ?, confidential = ?, model = ?, updated_at = ?
+            SET content_hash = ?, body = ?, meta = ?, confidential = 0, model = ?, updated_at = ?
           WHERE id = ?`,
         nextHash,
         next.body,
         serializeMeta(next.meta, id),
-        // Recomputed, as `revise` does: meta can carry the confidentiality gate.
-        confidentialByMeta(next.meta) ? 1 : 0,
         patch.model !== undefined ? modelOrNull(patch.model) : null,
         this.nowFn(),
         id,
@@ -2860,8 +2881,8 @@ export class Store {
    * dream (`created_at`; a pre-v7 row with no moment falls back to its lived
    * birth day), else since a lived day. Newest first. Only the columns decide:
    * `type` memory, not archived, not superseded, not protected, not a dream's
-   * own words. The caller applies the rest of recall's gates (the deny-list,
-   * confidentiality) to what comes back. Without a `limit`, every row: the
+   * own words. The caller applies the rest of recall's gates (the deny-list)
+   * to what comes back. Without a `limit`, every row: the
    * dream's queue reads the whole store (2026-10-11, Group 3 part C).
    */
   newMemoryIds(filter: { sinceAt: number | null; sinceDay: number; limit?: number; beforeDay?: number }): string[] {
@@ -4157,13 +4178,13 @@ export class Store {
   /**
    * THE LIVE MEMORIES MINTED FROM THESE ROWS (`origin_ref`), grouped by the
    * row they came from, each with what a wake's line needs to decide on it:
-   * confidentiality and the `about` mark (2026-10-01, review of #311).
+   * the `about` mark (2026-10-01, review of #311).
    * `origin_ref` has no index, so a per-row `list({ originRef })` was a scan
    * per episode — 300 episodes on a 15k-row store cost the wake seconds. This
    * is ONE scan for the whole set, in chunks the SQL parameter limit allows.
    * No schema change. Never returns a removed row's words; ids and flags only.
    */
-  copiesOf(refs: readonly string[]): Map<string, { id: string; confidential: boolean; about: string | null }[]> {
+  copiesOf(refs: readonly string[]): Map<string, { id: string; about: string | null }[]> {
     return memoryReads.copiesOf(this, refs);
   }
 
@@ -4171,7 +4192,7 @@ export class Store {
    * THE WAKE'S WORK CANDIDATES IN ONE DIRECTORY (2026-10-01, lane 8; review of
    * #313): live memories written in `scope` that the row's own columns allow
    * to be work — marked `work`, or unmarked and a skill, fact, entity or place
-   * — and not identity, dated, confidential or emptied; newest touched first
+   * — and not identity, dated or emptied; newest touched first
    * (born or used, the later), then id, at most `limit`. The columns only:
    * the caller reads the prose of what comes back, never of the whole store
    * (a session start read every row's text, 370 ms at 3,000 rows).
@@ -4186,8 +4207,8 @@ export class Store {
    * itself (`source = 'authored'`: a note, a `session_end` entry) under one of
    * `scopes`, born after `after` (epoch ms), whose v12 `status` is one of
    * `statuses` or whose meta may say `unresolved` — a loose text match the
-   * caller confirms on the prose. Not archived, superseded or emptied, and
-   * not confidential unless `confidential`. Newest first, then id, at most
+   * caller confirms on the prose. Not archived, superseded or emptied.
+   * Newest first, then id, at most
    * `limit`. The columns only, as `workCandidates`. A store without the v12
    * column throws; the caller wraps it.
    */
@@ -4197,7 +4218,6 @@ export class Store {
     readonly after: number;
     readonly statuses: readonly MemoryStatus[];
     readonly limit: number;
-    readonly confidential?: boolean;
   },
   ): string[] {
     return memoryReads.planCandidates(this, input);
@@ -4334,14 +4354,8 @@ export class Store {
 
   // ── traits (folded into v9): READ-ONLY, for the dashboard ────────────────
   //
-  // THE CONFIDENTIALITY RULE, in one place: a nudge on a confidential memory
-  // comes back with its axis, pole and strength — numbers, the way the
-  // dashboard shows a confidential memory's physics — and its `carried_by`
-  // (words about the moment) EMPTY and `withheld: true`, unless the caller
-  // asks `includeConfidential`. It follows the memory's column as it stands
-  // now, so a memory made confidential later is withheld from then on, and a
-  // merge that inherits the marker withholds the nudges it carried over.
-  // The store computes no balance: that arithmetic is the dashboard's.
+  // Every nudge comes back whole, `carried_by` included. The store computes no
+  // balance: that arithmetic is the dashboard's.
 
   /**
    * Is `name` a table in box 2? A development store stamped v9 before a table
@@ -4536,41 +4550,37 @@ export class Store {
 
   private readonly tablesSeen = new Set<string>();
 
-  private traitReads(rows: (TraitRow & { confidential: number })[], includeConfidential: boolean): TraitRead[] {
+  private traitReads(rows: TraitRow[]): TraitRead[] {
     return rows.map((r) => {
-      const confidential = r.confidential === 1;
-      const withheld = confidential && !includeConfidential;
       return {
         id: r.id,
         memory_id: r.memory_id,
         axis: r.axis,
         toward: r.toward,
         strength: r.strength,
-        carried_by: withheld ? "" : r.carried_by,
+        carried_by: r.carried_by,
         source: r.source,
         model: r.model,
         created_at: r.created_at,
         updated_at: r.updated_at,
-        confidential,
-        withheld,
       };
     });
   }
 
   /**
    * A memory's trait nudges, oldest first (then in the order written). A
-   * removed memory has none. Works under observer. Confidentiality: above.
+   * removed memory has none. Works under observer.
    */
-  traitsFor(memoryId: string, opts?: { includeConfidential?: boolean }): TraitRead[] {
-    return markReads.traitsFor(this, memoryId, opts);
+  traitsFor(memoryId: string): TraitRead[] {
+    return markReads.traitsFor(this, memoryId);
   }
 
   /**
    * The nudges on several memories in ONE query, keyed by memory id; ids with
-   * none are simply absent. Works under observer. Confidentiality: above.
+   * none are simply absent. Works under observer.
    */
-  traitsOn(ids: readonly string[], opts?: { includeConfidential?: boolean }): Map<string, TraitRead[]> {
-    return markReads.traitsOn(this, ids, opts);
+  traitsOn(ids: readonly string[]): Map<string, TraitRead[]> {
+    return markReads.traitsOn(this, ids);
   }
 
   /**
@@ -4580,9 +4590,9 @@ export class Store {
    * a merged original's nudges were carried onto the merged memory, and
    * counting both would count the moment twice. `live: false` reads them all.
    * `sinceMs` (the store's clock, UTC ms) narrows to nudges recorded since.
-   * Oldest first. Works under observer. Confidentiality: above.
+   * Oldest first. Works under observer.
    */
-  traitsAll(opts?: { includeConfidential?: boolean; live?: boolean; sinceMs?: number }): TraitRead[] {
+  traitsAll(opts?: { live?: boolean; sinceMs?: number }): TraitRead[] {
     return markReads.traitsAll(this, opts);
   }
 
@@ -4661,12 +4671,12 @@ export class Store {
   /**
    * WHAT EACH DIRECTORY WROTE SINCE A MOMENT, as COUNTS (2026-10-10, the
    * wake's "Today, elsewhere" line): live memories by `origin_scope`, born at
-   * or after `at` (epoch ms), not the nightly run's (`NIGHTLY_SQL`), and not
-   * confidential unless `confidential`. Numbers only — no id, no title, no
+   * or after `at` (epoch ms), not the nightly run's (`NIGHTLY_SQL`).
+   * Numbers only — no id, no title, no
    * word of any memory leaves this read. Largest first, then the scope.
    */
-  memoryCountsByScopeSince(at: number, opts?: { confidential?: boolean }): { scope: string; count: number }[] {
-    return memoryReads.memoryCountsByScopeSince(this, at, opts);
+  memoryCountsByScopeSince(at: number): { scope: string; count: number }[] {
+    return memoryReads.memoryCountsByScopeSince(this, at);
   }
 
   /**
@@ -4680,7 +4690,7 @@ export class Store {
    * entity or place, as `workCandidates`) tier 1 — then newest; nothing
    * else (no chit-chat: the caller confirms tier 1 on `self/work.ts#isWorkMemory`,
    * hence `about` and `kind` beside it). Never a dated row (a reminder:
-   * "Coming up" names it, as `workCandidates` leaves it out), a confidential row (whoever asks), an identity-band row,
+   * "Coming up" names it, as `workCandidates` leaves it out), an identity-band row,
    * one marked about me, us or the owner (`CORE_ABOUT_MARKS`: those are not
    * work, and cross only as the about-me chapter line's), a chapter's copy,
    * the nightly run's, an open thread (`unresolved`: "Still open"'s, never a
@@ -5097,7 +5107,10 @@ export class Store {
       doc.title ?? null,
       doc.body,
       metaJson,
-      confidentialByMeta(meta) ? 1 : 0,
+      // The retired confidentiality column (2026-10-21): written 0, read by
+      // no gate; dropping it in the next batched store-format change is
+      // planned, lightly held.
+      0,
       at,
       at,
       modelOrNull(input.model),

@@ -355,7 +355,6 @@ export async function runOnce(input: {
     ...(config.injectionBudgetBytes === undefined
       ? {}
       : { budgetBytes: config.injectionBudgetBytes }),
-    ...(config.owner === undefined ? {} : { owner: config.owner }),
     ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
     // The build stamps the wake it publishes, and a wake another build
     // published is re-rendered at step 3a (`version`, 2026-10-02).

@@ -87,29 +87,18 @@ export interface TraitRow extends Row {
   updated_at: number;
 }
 
-/**
- * A nudge as a READER gets it (`Store#traitsFor` / `traitsOn` / `traitsAll`):
- * the row, plus whether its memory is confidential. A confidential memory's
- * nudge keeps its axis, pole and strength — numbers, the way its physics is
- * shown — but its `carried_by` (words about the moment) comes back empty and
- * `withheld: true`, unless the caller asked `includeConfidential`.
- */
+/** A nudge as a READER gets it (`Store#traitsFor` / `traitsOn` / `traitsAll`): the row, whole. */
 export interface TraitRead {
   id: string;
   memory_id: string;
   axis: string;
   toward: string;
   strength: number;
-  /** Empty when `withheld`. */
   carried_by: string;
   source: string | null;
   model: string | null;
   created_at: number;
   updated_at: number;
-  /** The memory's confidentiality, as its column stands now. */
-  confidential: boolean;
-  /** True when `carried_by` was blanked because the memory is confidential. */
-  withheld: boolean;
 }
 
 export interface CheckedTrait {
