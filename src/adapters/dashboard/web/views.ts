@@ -60,5 +60,7 @@ export type { TraitAxisView, TraitNudgeRow, TraitsView, WeighedNudge } from "./v
 export type { CoreHistory, CoreHistoryRow, DreamChangeView, DreamView, DreamsView } from "./views/dreams.js";
 export type { MechanismLight, MechanismsView } from "./views/mechanisms.js";
 export { mechanismPanel } from "./views/mechanism-panel.js";
+export { subjectView, subjectsView, tagView } from "./views/subjects.js";
+export type { BeliefLine, CloudWord, SubjectPage, SubjectsView, TagView } from "./views/subjects.js";
 export type { MechanismPanelView, Picture } from "./views/mechanism-panel.js";
 export { num } from "../layout.js";

@@ -163,6 +163,19 @@ export const SWEEP_WAKE_EVENT = "sweep.wake";
 export const SLEEP_CYCLE_EVENT = "sleep.cycle";
 
 /**
+ * A CYCLE THAT STOOD ASIDE (2026-10-21, `sleep/lease.ts`): another cycle held
+ * the store's lease, so this boundary ran its flush and no phase (`reason:
+ * held-elsewhere`) — or its lease was taken over part-way and the fence stopped
+ * it (`reason: lease-lost`, with `lostAt` and `phasesDone`). Its own row,
+ * not a `sleep.cycle` with another reason: that row means a cycle ran, and the
+ * readers of it (doctor, the dashboard's health line) read anything but `ran`
+ * as a night that did not happen. Unlatched, so the stand-asides are countable;
+ * the holder's pid, how long it had held and how long it had left. Ids and
+ * numbers, never text.
+ */
+export const SLEEP_CYCLE_HELD_EVENT = "sleep.cycle.held";
+
+/**
  * THE WAKE RENDER'S OWN RECORD — one row per briefing render at a boundary.
  *
  * The other half of U9: `self.briefing.trim` fires once per trimmed element and
@@ -893,6 +906,11 @@ export const RECALL_DECISION_FIELDS = [
   // turn would have shown — the echo skip's count. Added to the hashed set the
   // way `moodMatchedIds` was (2026-10-14); `tools/parallel`'s hash moves with it.
   "echoSkipped",
+  // Projects (2026-10-21, lane G): another project's work the turn would have
+  // shown, with `RECALL_BY_PROJECT` on; 0 while it is off.
+  "projectSkipped",
+  // Mike's "slightly higher bar" (2026-10-21): what only the cross-project lift kept back.
+  "crossProjectLifted",
   // Context priming (2026-10-19, an experiment): what primed, and what it
   // changed of what was shown — counts; the ids are `primed` on the tier rows.
   "primed",
@@ -1021,6 +1039,9 @@ export function recallDecisionRecord(
     // THE ECHO SKIP (2026-10-19, part C): what this session wrote and the turn
     // would have shown, turned away because it is already in context.
     echoSkipped: d.echoSkipped,
+    // PROJECTS (2026-10-21): another project's work turned away; 0 while off.
+    projectSkipped: d.projectSkipped,
+    crossProjectLifted: d.crossProjectLifted,
     // CONTEXT PRIMING (2026-10-19, an experiment): null on a turn it did not run.
     primed: d.primed,
   } satisfies Record<SurfaceSetField, unknown>;

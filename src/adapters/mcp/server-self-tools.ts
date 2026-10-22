@@ -1,8 +1,9 @@
 /** `McpServer`'s `dream`, `reflect` and `self_page` tools, and the page writer's binding (bodies moved out of `server.ts`, 2026-10-11; the class keeps a delegate for each). */
-import { NIGHT_CHILD_ENV } from "../spawn.js";
+import { NIGHT_CHILD_ENV, NIGHT_RUN_ENV } from "../spawn.js";
 import { readSession } from "../sessions.js";
+import { joinStillStands } from "../../core/dream/project-ask.js";
 import { RECALL_MAX_IDS } from "./deliberate.js";
-import { DREAMING_SETTINGS, NIGHT_RUN_FINISHES, nightNext, nightOrder } from "../../core/dream/index.js";
+import { DREAMING_SETTINGS, NIGHT_RUN_FINISHES, applyTagsAnswer, askTags, nightNext, nightOrder, renderTagsBundle } from "../../core/dream/index.js";
 import type { DreamingSetting, NightPart } from "../../core/dream/index.js";
 import {
   NIGHT_WRITER_TOOL,
@@ -35,6 +36,13 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
   // The headless night's dream child stops before the reflection
   // (2026-10-11): the reflection runs after it, in a child of its own.
   const dreamChild = (server["env"][NIGHT_CHILD_ENV] ?? "").trim() === "dream";
+  // THE TAGGING CHILD, BOTH WAYS (review of #576): its `tags` phase is
+  // served only to it, and it is served only that phase — it reads memory
+  // text it did not write, and must not reach the dream's setting, launch or
+  // begin. Any other session asking for `tags` is refused.
+  const tagsChild = (server["env"][NIGHT_CHILD_ENV] ?? "").trim() === "tags";
+  if (tagsChild && phase !== "tags") return refused("tags-child", "This is the nightly run's tagging child: only phase \"tags\" is served here.");
+  if (!tagsChild && phase === "tags") return refused("night-run-only", "The tags phase is the nightly run's tagging child's alone.");
   const nextAfter = (part: NightPart, dream: string | null): string | null => {
     const next = nightNext(part);
     if (dreamChild && next === "reflection") return null;
@@ -273,8 +281,45 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
           false,
         );
       }
+      case "tags": {
+        // THE NIGHT'S TAGGING (2026-10-21, wave 2 lane B; `core/dream/tags.ts`):
+        // without answers, what to tag, merge and sort; with them, written as
+        // the night's (`via: night`), each item refused by name when it
+        // cannot be taken. The run's id names the night in every record.
+        const run = (server["env"][NIGHT_RUN_ENV] ?? "").trim() || `session:${session}:${at}`;
+        const answered = args["tagged"] !== undefined || args["merges"] !== undefined || args["kinds"] !== undefined;
+        if (!answered) {
+          const b = askTags(server.counterpart.store, run);
+          server["emit"]("mcp.dream", undefined, { phase: "tags", on: b.on, memories: b.memories.length, untagged: b.untagged, pairs: b.pairs.length, cards: b.cards.length });
+          return server["result"](
+            {
+              phase,
+              read: renderTagsBundle(b),
+              how: b.on
+                ? `Answer in one call: the dream tool with phase "tags", session: ${session}, and \`tagged\`, \`merges\` and \`kinds\` as the lines ask. Leave out what you cannot judge.`
+                : "Nothing to do tonight.",
+            },
+            false,
+          );
+        }
+        const out = applyTagsAnswer(server.counterpart.store, { tagged: args["tagged"], merges: args["merges"], kinds: args["kinds"] }, { run });
+        server["emit"]("mcp.dream", undefined, { phase: "tags", memories: out.memories, tags: out.tags, merged: out.merged, notSame: out.notSame, kinds: out.kinds, refused: out.refused.length });
+        return server["result"](
+          {
+            phase,
+            tagged: out.memories,
+            tags: out.tags,
+            merged: out.merged,
+            keptApart: out.notSame,
+            kinds: out.kinds,
+            ...(out.refused.length === 0 ? {} : { refused: out.refused.slice(0, 20) }),
+            said: out.on ? "Recorded. That is all tonight." : "Tagging is switched off tonight; nothing was written.",
+          },
+          !out.on,
+        );
+      }
       default:
-        return refused("phase-unknown", "phase is one of launch, begin, part, propose, journal, writer, decline, setting.");
+        return refused("phase-unknown", "phase is one of launch, begin, part, propose, journal, writer, decline, setting, tags.");
     }
   } catch (err) {
     return refused("threw", String((err as Error).message ?? err));
@@ -412,6 +457,8 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
           traits: Array.isArray(args["traits"]) ? (args["traits"] as never) : [],
           close: ids(args["close"]),
           closeNow: Array.isArray(args["closeNow"]) ? (args["closeNow"] as never) : [],
+          // Beliefs (lane C, 2026-10-21): checked item by item in the core.
+          ...(args["beliefs"] !== null && typeof args["beliefs"] === "object" && !Array.isArray(args["beliefs"]) ? { beliefs: args["beliefs"] as never } : {}),
           scope: server.scope,
           model: model ?? null,
         });
@@ -440,6 +487,7 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
             feelings: o.feelings,
             about: o.about,
             ...(o.traits.length > 0 ? { traits: o.traits } : {}),
+            ...(o.beliefs.births.length + o.beliefs.filings.length + o.beliefs.retire.length > 0 ? { beliefs: o.beliefs } : {}),
             ...(o.refusedCites.length > 0 ? { refusedCites: o.refusedCites } : {}),
             ...(o.close.proposed.length > 0 || o.close.closed.length > 0 || o.close.refused.length > 0 ? { close: o.close } : {}),
             // WHAT WAS NOT WRITTEN, and that it can be sent again (2026-09-28).
@@ -513,8 +561,31 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
         server["emit"]("mcp.reflect", reflection ?? undefined, { phase: "reopen", reopened: out.reopened.length, refused: out.refused.length });
         return server["result"]({ phase, ...(reflection === null ? {} : { reflection }), reopened: out.reopened, ...(out.already.length > 0 ? { alreadyOpen: out.already } : {}), ...(out.refused.length > 0 ? { refused: out.refused } : {}) }, out.reopened.length === 0 && out.already.length === 0);
       }
+      case "join": {
+        // A YES TO THE SHARE'S PROJECT QUESTION (2026-10-21, wave 2 lane G):
+        // the two folders it named become one project, joined by the night.
+        // Only the owner's yes, in an awake session, after he heard the
+        // question (review of #580): never the nightly run, never a share not
+        // yet told, never a proposal that no longer stands.
+        if ((server["env"][NIGHT_CHILD_ENV] ?? "").trim().length > 0 || (server["env"][NIGHT_RUN_ENV] ?? "").trim().length > 0) return refused("night-run", "This is the nightly run: only the owner's yes joins two folders.");
+        const reflection = args["reflection"];
+        if (typeof reflection !== "string") return refused("reflection-required", "Pass `reflection`: the id the share named.");
+        const asked = reflections.joinProposal(reflection);
+        if (asked === null) return refused("nothing-proposed", "That reflection asked to join no folders, or the owner's yes is already recorded.");
+        if (server.counterpart.store.reflection(reflection)?.share_state !== "told") {
+          return refused("share-not-told", "Tell the share first and mark it told (phase \"told\"); the yes must follow the owner hearing the question.");
+        }
+        const folderOn = server["folderOn"]();
+        const stale = joinStillStands(server.counterpart.store, asked, { day: server.counterpart.store.livedDay(), ...(folderOn === undefined ? {} : { folderOn }) });
+        if (stale !== null) return refused(stale.reason, `${stale.detail} Nothing was joined.`);
+        const out = server.counterpart.joinProject({ folder: asked.folder, project: asked.into, by: "night" });
+        if (!out.ok) return refused(out.reason, `${out.detail} Nothing was joined.`);
+        reflections.recordJoined(reflection, out.project.id, session);
+        server["emit"]("mcp.reflect", reflection, { phase: "join", changed: out.changed });
+        return server["result"]({ phase, reflection, joined: out.folder, project: { id: out.project.id, name: out.project.name, folders: out.project.folders.map((f) => f.folder) }, changed: out.changed }, false);
+      }
       default:
-        return refused("phase-unknown", "phase is one of launch, begin, part, finish, settle, told, close, reopen.");
+        return refused("phase-unknown", "phase is one of launch, begin, part, finish, settle, told, close, reopen, join.");
     }
   } catch (err) {
     return refused("threw", String((err as Error).message ?? err));

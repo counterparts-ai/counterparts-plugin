@@ -18,6 +18,8 @@
  */
 
 import type { Band, Kind, Salience } from "../types.js";
+import type { BirthRoute } from "../store/index.js";
+import type { SupportRoute } from "../physics/index.js";
 
 // ---------------------------------------------------------------------------
 // Roles and kinds
@@ -161,10 +163,23 @@ export interface BeliefInput {
   protected?: boolean;
   /** Provenance: the memory ids that grounded this belief. */
   groundedIn?: readonly string[];
+  /**
+   * HOW IT WAS BORN (v14, wave 2 lane C): `reflection`, `session`, `dream`,
+   * `correction`, `migrated` (`store#BIRTH_ROUTES`). Required: it is what
+   * makes the row a belief to physics (its support is its repetition arm,
+   * physics §5.13) and to every reader after it.
+   */
+  birthRoute: BirthRoute;
+  /** A belief about me, or about us (lane C): the row's `about` mark. Absent: about its subject. */
+  about?: "me" | "us";
+  /** The dream's candidate it was adopted from (`<dream id>#<seq>`, lane C3): kept in its meta. */
+  fromCandidate?: string;
 }
 
 export type BeliefAddReason =
   | "added"
+  /** Lane C: `migrated` is the route and the channel together, or neither. */
+  | "route-channel-mismatch"
   | "entity-unknown"
   | "entity-archived"
   | "statement-empty";
@@ -209,6 +224,74 @@ export interface PlacementOutcome {
 }
 
 // ---------------------------------------------------------------------------
+// Support (wave 2 lane C, 2026-10-21; physics §5.13)
+// ---------------------------------------------------------------------------
+
+export interface SupportFilingInput {
+  /** The belief, as declared; resolved through the supersede chain to its live head. */
+  beliefId: string;
+  /** The memory counted for or against it. */
+  memoryId: string;
+  stance: "support" | "contrary";
+  /**
+   * How it is counted. `testimony` and `choice` are READ OFF THE MEMORY
+   * (`said_by` owner, self) and never taken from a caller: a memory the owner
+   * said is testimony whatever the caller sent, and a caller's `testimony`
+   * on one he did not say is filed `found`, with a note. Absent: `found`.
+   */
+  route?: SupportRoute | string;
+  /** The lived day it is filed. */
+  day: number;
+}
+
+export type SupportFileReason =
+  | "filed"
+  | "already-counted"
+  | "belief-unknown"
+  | "belief-archived"
+  | "memory-unknown"
+  | "memory-is-the-belief"
+  /** A stance that is neither `support` nor `contrary` (review of #575: "against" was counted as support). */
+  | "stance-unknown"
+  /** Not a lived memory: a schema row (but a belief, by `link`), a dream's words, a reflection's own entry. */
+  | "not-lived"
+  /** A word that is not a support route — a rating, a showing, a recall is never one. */
+  | "route-unknown"
+  /** `use` backs beliefs about work, people and projects, not beliefs about me or us. */
+  | "use-not-about-me"
+  /** `link` is another belief, live and strong enough to lend (`SUPPORT_LINK_FLOOR`). */
+  | "link-not-a-belief"
+  | "link-too-weak";
+
+/** One belief as it stands on a subject (`Schemas#beliefStanding`). */
+export interface BeliefStanding {
+  id: string;
+  statement: string;
+  about: "me" | "us" | null;
+  strength: number;
+  /** Memories counted for it, and against it. */
+  support: number;
+  against: number;
+  /** Contrary pressure crossed its bar (physics §5.13): its text stands, waiting to be revised or retired. */
+  contested: boolean;
+}
+
+export interface SupportFileOutcome {
+  ok: boolean;
+  reason: SupportFileReason;
+  /** The live belief it was filed on (after the chain), when one resolved. */
+  beliefId: string | null;
+  /** The route it was counted by, when filed. */
+  route: SupportRoute | null;
+  /** What it counts for now (physics §5.13); 0 when not filed. */
+  weight: number;
+  /** Something said about a filing that WAS made (a route read off the memory). */
+  note?: string;
+  /** A contrary filing's challenge (§5.6), when one was pressed. */
+  revision?: RevisionOutcome;
+}
+
+// ---------------------------------------------------------------------------
 // Revision
 // ---------------------------------------------------------------------------
 
@@ -220,11 +303,15 @@ export interface ChallengeInput {
   day: number;
   /** The successor's prose. Defaults to the challenger's own body. */
   statement?: string;
+  /** A contrary support filing's weight (physics §5.13): the challenge presses at it. Absent: 1. */
+  weight?: number;
 }
 
 /** physics' own `ChallengeReason` values, plus this module's seam refusals. */
 export type RevisionReason =
   | "revised"
+  /** A belief past its bar (lane C): its text stands, it is marked contested and cut once. */
+  | "contested"
   | "below-bar"
   | "no-declared-target"
   | "target-mismatch"
@@ -286,6 +373,8 @@ export interface RevisionOutcome {
   pressureAfter: number;
   bar: number;
   increment: PressureIncrement | null;
+  /** The belief crossed its bar and was marked contested (lane C), not rewritten. */
+  contested?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +471,26 @@ export interface NameBirthReport {
   skippedForLimit: number;
   /** Names that met the bar but read as English words (the case test). */
   lowerCase: number;
+  /** Births tried within the limit — on a dry run, what a night would try (review of #576). */
+  attempts: number;
+}
+
+/** What one night's topic births did (`Schemas#birthsFromTags`, wave 2 lane B). */
+export interface TopicBirthReport {
+  day: number;
+  dryRun: boolean;
+  /** False when `TAGS_NIGHT` is off: nothing was read. */
+  on: boolean;
+  /** Tags over the bar that no card holds, heaviest first. */
+  offered: number;
+  /** Born this night (topic cards). Empty on a dry run. */
+  born: string[];
+  /** Tags over the bar held back, by reason: a stop word, a name a card already holds. */
+  refused: Record<string, number>;
+  /** Tags over the night's limit, left for the next night. */
+  skippedForLimit: number;
+  /** Births tried within the limit — on a dry run, what a night would try. */
+  attempts: number;
 }
 
 // ---------------------------------------------------------------------------

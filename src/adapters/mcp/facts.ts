@@ -439,11 +439,12 @@ function metaOf(row: RecallRow): Record<string, unknown> {
 }
 
 /** Never a result: the self page (delivered whole at the wake), a handoff (a directory's pointer), and a card
- *  (2026-10-11): the index that reaches its memories by name, a stub that asserts nothing itself. */
+ *  (2026-10-11): the index that reaches its memories by name, a stub that asserts nothing itself. And, for
+ *  now, a belief (wave 2 lane C, 2026-10-21): invisible until lane E shows beliefs in a slot of their own. */
 function neverAResult(row: RecallRow): boolean {
   if (row.type !== "schema") return false;
   const role = metaOf(row)["role"];
-  return role === "page" || role === "handoff" || role === "entity";
+  return role === "page" || role === "handoff" || role === "entity" || role === "belief";
 }
 
 function sessionOf(row: RecallRow): string | null {

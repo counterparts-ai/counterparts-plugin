@@ -84,7 +84,8 @@ import { randomUUID } from "node:crypto";
 
 import { Counterpart, MCP_SPILLED_EVENT, seatAsk } from "../../core/counterpart.js";
 import type { CounterpartEvent, Seat, SeatAnswer, SeatAsk, SeatTool } from "../../core/counterpart.js";
-import { CATCH_UP_ONLY_REASONS } from "../../core/dream/index.js";
+import { CATCH_UP_ONLY_REASONS, tagsBundle, tagsPrompt } from "../../core/dream/index.js";
+import { TUNABLES as SCHEMAS_TUNABLES } from "../../core/schemas/index.js";
 import type { CatchUpOnlyReason, NightChildRun, NightPart, NightRun } from "../../core/dream/index.js";
 import { CONFIG_ENV as CONFIG_PATH_ENV } from "../config-path.js";
 import { entryScript, scriptArgs } from "../runtime.js";
@@ -286,7 +287,11 @@ export function nightTimeoutMs(config: AdapterConfig): number {
  */
 export function nightChildrenTimeoutMs(config: AdapterConfig, kind: NightKind["kind"]): number {
   const one = nightTimeoutMs(config);
-  return kind === "night" ? 2 * one + KILL_GRACE_MS + REAP_GRACE_MS : one;
+  if (kind !== "night") return one;
+  // A whole night's third child, the tagging (2026-10-21), under its own
+  // short watchdog — only while the night's tag work is on (read at use).
+  const tags = SCHEMAS_TUNABLES.TAGS_NIGHT ? TUNABLES.NIGHT_TAGS_MS + KILL_GRACE_MS + REAP_GRACE_MS : 0;
+  return 2 * one + KILL_GRACE_MS + REAP_GRACE_MS + tags;
 }
 
 /**
@@ -376,6 +381,8 @@ export interface NightChildInput {
   /** Its turn ceiling and watchdog; absent, the night's own (`nightMaxTurns`, `nightTimeoutMs`). */
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
+  /** The model it runs on; absent, the night's (`dreaming.model`), else the host's default. The tagging child's is `NIGHT_TAGS_MODEL`. */
+  readonly model?: string;
   /**
    * The child's OWN session id, a fresh UUID (`--session-id`, 2026-10-09).
    * Absent, the host mints one (the catch-up child and the plain retry).
@@ -400,7 +407,7 @@ export function planNightChild(input: NightChildInput): NightChildPlan {
   const command = input.command ?? DEFAULT_HOST_COMMAND;
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(input.baseEnv ?? process.env)) if (v !== undefined) env[k] = v;
-  const model = input.config.dreaming?.model;
+  const model = input.model ?? input.config.dreaming?.model;
   const dataDir = input.config.dataDir ?? "";
   const args = [
     "-p",
@@ -657,6 +664,14 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
       }
     }
   }
+  // THE TAGGING, A THIRD CHILD (2026-10-21, wave 2 lane B): after the
+  // reflection, small and on a small model, outside the dream's room. Its
+  // exit never becomes the run's: a night is its dream and its reflection.
+  // Nothing to ask is no child and no line on the row.
+  if (input.kind.kind === "night") {
+    const tags = await tagsAfter(input.open, seat, (text) => seatAsk("tags", { prompt: text, run: input.run, session: input.session, scope: input.scope, limits: { turns: TUNABLES.NIGHT_TAGS_MAX_TURNS, ms: TUNABLES.NIGHT_TAGS_MS } }), input.session);
+    if (tags !== null) children.push(tags);
+  }
   const ms = now() - startedAt;
   // THE RUN'S EXIT, from its children: stopped if any was stopped; the first
   // non-zero exit, else the last child's. Its code is that child's own (a
@@ -877,6 +892,8 @@ export function claudeCodeSeat(input: ClaudeCodeSeatInput): Seat<ClaudeCodeAnswe
         tools: ask.tools.map(hostToolName),
         ...(ask.withhold.length === 0 ? {} : { deny: ask.withhold.map(hostToolName) }),
         ...(ask.act === "catch-up" ? {} : { child: ask.act }),
+        // The tagging child on the host's fastest model (read at use).
+        ...(ask.act === "tags" ? { model: TUNABLES.NIGHT_TAGS_MODEL } : {}),
         ...(ask.limits?.turns === undefined ? {} : { maxTurns: ask.limits.turns }),
         ...(ask.limits?.ms === undefined ? {} : { timeoutMs: ask.limits.ms }),
         ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
@@ -998,6 +1015,39 @@ async function runNightChild(
     });
   }
   return { result, ms, neverStarted, spill };
+}
+
+/**
+ * THE TAGGING CHILD (2026-10-21, wave 2 lane B), decided and run. Not
+ * started, and no line on the row, when the night's tag work is switched off
+ * (`schemas.TAGS_NIGHT`, read at use) or there is nothing to ask (no untagged
+ * memory, no look-alike pair, no card without a kind — no tokens spent): a
+ * night's row reads as it did before the child existed. Skipped and said when
+ * the store will not open. Otherwise one ask to the seat. Never throws.
+ */
+async function tagsAfter(open: () => Counterpart, seat: Seat<NightAnswer>, ask: (prompt: string) => SeatAsk, session: string): Promise<NightChildRun | null> {
+  if (!SCHEMAS_TUNABLES.TAGS_NIGHT) return null;
+  let prompt: string;
+  try {
+    const c = open();
+    try {
+      const b = tagsBundle(c.store);
+      if (b.memories.length === 0 && b.pairs.length === 0 && b.cards.length === 0) return null;
+      prompt = tagsPrompt({ session });
+    } finally {
+      c.close();
+    }
+  } catch {
+    return { child: "tags", code: null, ms: 0, skipped: "unread" };
+  }
+  try {
+    const out = await seat.answer(ask(prompt));
+    if (out.refused !== null) return { child: "tags", code: null, ms: 0, skipped: out.refused };
+    if (!out.started) return { child: "tags", code: null, ms: 0, skipped: out.spawnCode === "ENOENT" ? "no-claude" : "spawn-failed" };
+    return childRunOf("tags", out);
+  } catch {
+    return { child: "tags", code: null, ms: 0, skipped: "spawn-failed" };
+  }
 }
 
 /**

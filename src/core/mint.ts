@@ -279,6 +279,8 @@ export function mintProposal(store: Store, proposal: Proposal, opts: MintOptions
     ...(proposal.facts?.occurredOn === undefined ? {} : { occurredOn: proposal.facts.occurredOn }),
     ...(proposal.facts?.saidBy === undefined ? {} : { saidBy: proposal.facts.saidBy }),
     ...(proposal.facts?.status === undefined ? {} : { status: proposal.facts.status }),
+    // v14, lane B: its tags, written in the row's own transaction (`insertOne`).
+    ...(proposal.tags === undefined || proposal.tags.length === 0 ? {} : { tags: proposal.tags, tagsVia: proposal.tagsVia ?? "write" }),
     // What a revision carries over of what its memory was about (2026-10-11).
     ...(opts.inheritedAbout === undefined
       ? {}

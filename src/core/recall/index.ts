@@ -33,7 +33,7 @@ import { USE_TIER_WEIGHT, strength } from "../physics/index.js";
 import type { CreditOutcome, UseTier } from "../physics/index.js";
 import type { ProseDoc, Store } from "../store/index.js";
 import { isChapterSummary } from "../store/index.js";
-import { activate, primeOf } from "./activate.js";
+import { activate, isBeliefRow, primeOf } from "./activate.js";
 import type { Candidate, SpreadFn, SpreadStats } from "./activate.js";
 import type { FeelingAskInput } from "./feeling-ask.js";
 import { detectAffect, stripBoilerplate } from "./cues.js";
@@ -82,7 +82,7 @@ export * from "./standing.js";
 export * from "./recency-ask.js";
 export * from "./time-ask.js";
 export * from "./tunables.js";
-export { activate, isHandoff, isSelfPage, gatedSal, primeOf, recordedIdentity, salienceRank } from "./activate.js";
+export { activate, isBeliefRow, isHandoff, isSelfPage, gatedSal, primeOf, recordedIdentity, salienceRank } from "./activate.js";
 export type { CandidatePrime, FeelingLane, PrimeStats, SpreadFn, SpreadStats } from "./activate.js";
 export type { Candidate, ActivationResult } from "./activate.js";
 import type { ActivationResult } from "./activate.js";
@@ -175,6 +175,14 @@ export interface Turn {
    * (`gate.ts`). Absent or empty: nothing is skipped.
    */
   echo?: ReadonlySet<string>;
+  /**
+   * ANOTHER PROJECT'S WORK (2026-10-21, wave 2 lane G): is this id work from
+   * a project other than the turn's folder's? Ambient only — bound by
+   * `Counterpart#recallForTurn`. With `RECALL_BY_PROJECT` on the gate turns
+   * such a memory away as `project-skipped`; else, with
+   * `CROSS_PROJECT_BAR_LIFT` above 1, it faces that lift on its bars.
+   */
+  elsewhere?: (id: string) => boolean;
   /**
    * CONTEXT PRIMING (an experiment, 2026-10-19; `prime.ts`): this turn's own
    * vector for the train of thought, one hop along links, and what is open in
@@ -284,6 +292,12 @@ export interface RecallDecision {
    * long session lost. 0 when no echo set was given.
    */
   readonly echoSkipped: number;
+  /** How many this turn would have shown but did not because they are another
+   *  project's work (`Turn.elsewhere`, `RECALL_BY_PROJECT`, 2026-10-21). 0 when off. */
+  readonly projectSkipped: number;
+  /** How many only `CROSS_PROJECT_BAR_LIFT` kept below their bar this turn —
+   *  another project's work that would otherwise have shown (2026-10-21). */
+  readonly crossProjectLifted: number;
   /** What context priming did this turn (2026-10-19, `PrimeSummary`); null when it did not run. */
   readonly primed: PrimeSummary | null;
   /**
@@ -475,6 +489,8 @@ export class Recall {
         moodMatched: 0,
         moodMatchedIds: [],
         echoSkipped: 0,
+        projectSkipped: 0,
+        crossProjectLifted: 0,
         primed: plan === null ? null : { ...NO_PRIME, sources: plan.sources, train: plan.activation.train !== null },
         spread: null,
         dropped: 0,
@@ -567,6 +583,8 @@ export class Recall {
         affectStated: affect.stated,
         turn: turnNo,
         ...(turn.echo === undefined || turn.echo.size === 0 ? {} : { echo: turn.echo }),
+        ...(turn.elsewhere !== undefined && this.tunables.RECALL_BY_PROJECT ? { elsewhere: turn.elsewhere } : {}),
+        ...(turn.elsewhere !== undefined && !this.tunables.RECALL_BY_PROJECT && this.tunables.CROSS_PROJECT_BAR_LIFT > 1 ? { crossing: turn.elsewhere } : {}),
         ...(habituated.size === 0 ? {} : { habituated }),
       },
       this.tunables,
@@ -672,6 +690,8 @@ export class Recall {
       moodMatched: moodLifted.length,
       moodMatchedIds: moodLifted.slice(0, MOOD_MATCHED_IDS_CAP),
       echoSkipped: gated.verdicts.filter((v) => v.verdict === "echo-skipped").length,
+      projectSkipped: gated.verdicts.filter((v) => v.verdict === "project-skipped").length,
+      crossProjectLifted: gated.crossLifted.length,
       primed,
       // What the gate SHOWED of the pointers activation handed it, after the
       // render's trim: the pointer lane's last number (2026-09-28).
@@ -1116,7 +1136,8 @@ export function headsWin(store: Store, candidates: readonly Candidate[], day: nu
     if (direct !== undefined && (c.linkOnly === true || direct.activation >= c.activation)) return;
     try {
       const row = store.row(head);
-      if (row === undefined) return;
+      // A belief never stands in for a candidate either (lane C: invisible until lane E).
+      if (row === undefined || isBeliefRow(row)) return;
       const physics = store.physicsOf(head);
       out.push({
         ...c,

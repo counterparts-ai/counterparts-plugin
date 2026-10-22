@@ -192,6 +192,7 @@ import {
 import type { JournalCopyOutcome } from "./journal-file.js";
 import { lineOf } from "../fit/index.js";
 import { withTunables } from "./tunables.js";
+import { craftSince } from "./work.js";
 import type { SelfTunables } from "./tunables.js";
 import { calendarDate } from "./calendar.js";
 import { isDay, yearOf } from "../time.js";
@@ -1056,6 +1057,7 @@ export class Self {
         waiting: waitingIds(this.store, req.day),
         coveredByPage: this.pageCovers(scanned),
         workAtDelivery: this.tunables.CRAFT_AT_DELIVERY,
+        craftSince: craftSince(this.store),
         ...(coming.more.length === 0 || req.omit !== undefined ? {} : { horizonMore: coming.more }),
         ...(coming.later.length === 0 ? {} : { later: coming.later }),
       }),
@@ -1144,6 +1146,7 @@ export class Self {
       unsettled: unsettledAmong(this.store, open.map((s) => s.id)),
       waiting: waitingIds(this.store, day),
       workAtDelivery: this.tunables.CRAFT_AT_DELIVERY,
+        craftSince: craftSince(this.store),
       ...(coming.more.length === 0 ? {} : { horizonMore: coming.more }),
       ...(coming.later.length === 0 ? {} : { later: coming.later }),
     });

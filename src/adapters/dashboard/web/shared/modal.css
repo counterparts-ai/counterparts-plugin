@@ -28,6 +28,10 @@
 #modal .mc-title .kmark{padding-top:3px}
 #modal .mc-title .kic{width:16px;height:16px}
 .mc-kind{color:var(--faint);font-size:12px;margin:0 0 12px 24px;overflow-wrap:anywhere}
+.mc-subject{margin:-6px 0 12px 24px;font-size:13px}
+.mc-subject a{color:var(--cyan);text-decoration:none}
+.mc-subject a:hover{text-decoration:underline}
+@media (max-width:600px){.mc-subject{margin-left:0}}
 .mc-archived{color:var(--amber);font-size:13px;margin:-4px 0 12px;padding:7px 11px;border:1px solid rgba(255,215,64,.25);
   border-radius:var(--radius);background:rgba(255,215,64,.04)}
 .mc-arch .body,.mc-arch .mc-title span{color:var(--dim)}

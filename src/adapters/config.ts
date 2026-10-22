@@ -78,6 +78,16 @@ export const TUNABLES = {
    */
   NIGHT_MAX_TURNS: 60,
   /**
+   * THE NIGHT'S TAGGING CHILD (2026-10-21, wave 2 lane B): after the
+   * reflection, a small child of its own (`core/dream/tags.ts`) on the host's
+   * fastest model — its work is short labels, and Mike watches the night's
+   * tokens. Two tool calls and a line; the ceilings are generous for that.
+   * Whether it runs at all is `schemas.TAGS_NIGHT`.
+   */
+  NIGHT_TAGS_MODEL: "haiku",
+  NIGHT_TAGS_MAX_TURNS: 8,
+  NIGHT_TAGS_MS: 5 * 60_000,
+  /**
    * THE CATCH-UP (2026-10-01, build 3; unbounded 2026-10-11): before the page
    * writer, the nightly run writes up EVERYTHING owed in any directory, and
    * `counterparts catch-up` does the same on demand

@@ -50,6 +50,7 @@ import {
   SELF_BRIEFING_EVENT,
   SEMANTIC_LAG_EVENT,
   SLEEP_CYCLE_EVENT,
+  SLEEP_CYCLE_HELD_EVENT,
   SNAPSHOT_FAILED_EVENT,
   SNAPSHOT_ROTATED_EVENT,
   SNAPSHOT_TAKEN_EVENT,
@@ -180,6 +181,7 @@ export type DurableEventName =
   | typeof SWEEP_GATE_EVENT
   | typeof SWEEP_WAKE_EVENT
   | typeof SLEEP_CYCLE_EVENT
+  | typeof SLEEP_CYCLE_HELD_EVENT
   | typeof SELF_BRIEFING_EVENT
   | typeof SELF_PAGE_REVISED_EVENT
   | typeof SELF_PAGE_REFUSED_EVENT
@@ -311,6 +313,7 @@ export const DURABLE_EVENTS = {
   // cycle run today, did every phase succeed, what did the wake trim" could not
   // be answered from the store at all.
   "sleep.cycle": "the consolidation cycle ran (every phase by name, with its status, and the run's counts)",
+  "sleep.cycle.held": "a boundary's cycle stood aside for another holding the store, at the start (its flush ran, no phase did) or part-way when its lease was taken over (the holder's pid, how long it had held)",
   "self.briefing": "the wake briefing was re-rendered (what rendered per lane, and which elements the trim dropped)",
   // The page's two (2026-09-18, S1). The refusal has a row of its own because a
   // cap reports what it refused where the owner will see it (owner ruling 2's

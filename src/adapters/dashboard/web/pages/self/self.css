@@ -34,6 +34,9 @@
 
 /* ── the top: the page on the left, a side column on the right ── */
 h2.sp-title{margin:0 0 12px;font-size:19px;color:var(--cyan)}
+.self-beliefs-link{margin:-6px 0 14px;font-size:13.5px}
+.self-beliefs-link a{color:var(--dim);text-decoration:none}
+.self-beliefs-link a:hover{color:var(--cyan)}
 .self-top{display:grid;grid-template-columns:minmax(0,1fr) clamp(17rem,30vw,22rem);gap:20px;align-items:start}
 .self-top>*{min-width:0}
 .self-side{display:flex;flex-direction:column;gap:12px}

@@ -38,6 +38,7 @@ export function memoryCard(d) {
   return '<div class="mc' + (d.archived ? " mc-arch" : "") + '">' +
     '<h3 class="mc-title">' + kindMark(d.kind, false) + "<span>" + title + "</span></h3>" +
     '<div class="mc-kind">' + esc(k.label) + (d.askedFor ? " · you asked for " + esc(d.askedFor) + ", which forwards here" : "") + "</div>" +
+    subjectLink(d) +
     (d.archived ? '<div class="mc-archived">Put away — ' + esc(d.archivedWords || d.archived) + ". Kept, not deleted.</div>" : "") +
     "<div class='body'>" + esc(d.shownText || d.text) + "</div>" +
     (d.journal ? '<p class="mc-note">My journal, kept as written. Nothing in it fades.</p>' : "") +
@@ -46,6 +47,17 @@ export function memoryCard(d) {
     written(d) +
     footer(d) +
     "</div>";
+}
+
+/** A card for a subject, or a belief about one, links to the subject's page
+ *  (the subjects tab) rather than repeating it here. Closes the card on the way. */
+export function subjectLink(d) {
+  const s = d.subject;
+  if (!s) return "";
+  const href = "#subjects/" + encodeURIComponent(s.id);
+  return '<p class="mc-subject"><a href="' + esc(href) + '" onclick="closeModal()">' +
+    (s.self ? (s.isCard ? "Open my page →" : "A belief about me — open my page →")
+      : s.isCard ? "Open " + esc(s.name) + "'s page →" : "A belief about " + esc(s.name) + " — open the page →") + "</a></p>";
 }
 
 /** The day it was written, once: "Written Sep 28th, 2026" — the moment it entered

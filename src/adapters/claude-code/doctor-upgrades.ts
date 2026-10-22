@@ -1,5 +1,5 @@
-/** `doctor`'s findings on the store upgrades v8 to v11, read from what each upgrade recorded (moved out of `doctor.ts`, 2026-10-11). */
-import { CONFIDENTIAL_RETIRED_KEY, Store, rowTombstoned } from "../../core/store/index.js";
+/** `doctor`'s findings on the store upgrades v8 to v11 and v14, read from what each upgrade recorded (moved out of `doctor.ts`, 2026-10-11). */
+import { CONFIDENTIAL_RETIRED_KEY, Store, V14_UPGRADE_KEY, rowTombstoned } from "../../core/store/index.js";
 import { finding } from "./doctor-finding.js";
 import type { Finding } from "./doctor-finding.js";
 
@@ -230,6 +230,41 @@ export function upgradeV11Findings(store: Store): Finding[] {
       `Upgrade to v11: feelings use seven cores now (happy, warm, calm, curious, sad, uneasy, angry) — ${String(refiled)} of ${String(feelings)} recorded ${feelings === 1 ? "feeling" : "feelings"} re-filed${listed.length > 0 ? ` (${listed})` : ""}, each keeping its old core beside it`,
       "",
       { feelings, refiled, moves: listed },
+    ),
+  ];
+}
+
+/**
+ * WHAT THE v14 UPGRADE DID (2026-10-21, wave 2's one bump), informational:
+ * the retired confidential column was dropped (after its count, when no
+ * open had taken it), the new tables for tags, belief support, projects and
+ * recall turns are there and empty, and the cards whose kind of subject is
+ * not a judgement have theirs. Silent on a store born at v14.
+ */
+export function upgradeV14Findings(store: Store): Finding[] {
+  const upgrade = metaJson(store, V14_UPGRADE_KEY);
+  if (upgrade === null) return [];
+  const dropped = upgrade["confidentialDropped"] === true;
+  const counted = typeof upgrade["confidentialCounted"] === "number" ? upgrade["confidentialCounted"] : null;
+  const raw = upgrade["subjects"];
+  const subjects: Record<string, number> = {};
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) subjects[k] = metaNum(v);
+  }
+  const people = subjects["person"] ?? 0;
+  const places = subjects["place"] ?? 0;
+  const given = `${String(people)} ${people === 1 ? "card" : "cards"} marked a person, ${String(places)} a place; the rest wait for the night`;
+  const column = dropped
+    ? `the retired confidential column dropped${counted === null ? "" : ` (${String(counted)} marked ${counted === 1 ? "memory" : "memories"} counted first)`}`
+    : "no confidential column to drop";
+  return [
+    finding(
+      "upgrade-v14",
+      "green",
+      "Upgrade",
+      `Upgrade to v14: room for tags, beliefs and their support, projects and what recall showed (empty until they are used) — ${column}; ${given}`,
+      "",
+      { confidentialDropped: dropped, confidentialCounted: counted ?? -1, people, places },
     ),
   ];
 }

@@ -617,6 +617,9 @@ export const MECHANISMS: readonly Mechanism[] = [
     label: "the consolidation cycle ran, with every phase by name",
     module: "sleep/, bin/runner.ts",
     evidence: { kind: "event", names: ["sleep.cycle"] },
+    // A boundary that found another cycle holding the store (`sleep/lease.ts`,
+    // 2026-10-21): the same mechanism standing aside, not a mechanism of its own.
+    covers: ["sleep.cycle.held"],
   },
   {
     id: "decay",

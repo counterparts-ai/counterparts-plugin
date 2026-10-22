@@ -643,6 +643,8 @@ export interface MemoryHere {
  */
 export interface HereSession {
   readonly session: string;
+  /** Its folder, when it is another folder of this one's project (2026-10-21). Absent: this folder. */
+  readonly scope?: string;
   /** The model the host last saw in it (`SessionRecord.model`), or null. */
   readonly model: string | null;
   /** When it started, epoch ms — for "Since you started", only when it started
@@ -724,7 +726,7 @@ export function todayElsewhereLines(
     return `${placeWords(d.scope)}${when}${chapter}${countWords(d.memories, d.titles, titles)}`;
   };
   const oneHere = (h: HereSession, titles: number): string =>
-    `${sessionWords(h.session, h.model)}${h.startedAt === null ? "" : ` since ${start(h.startedAt, h.lastAt ?? null)}`}${titleWords(h.titles, titles)}`;
+    `${sessionWords(h.session, h.model)}${h.scope === undefined ? "" : ` in ${placeWords(h.scope)}`}${h.startedAt === null ? "" : ` since ${start(h.startedAt, h.lastAt ?? null)}`}${titleWords(h.titles, titles)}`;
   return elsewhereForms("Today, elsewhere:", named, one, { sessions: hereOrder(here), one: oneHere, head: HERE_ALSO_OPEN });
 }
 
@@ -936,6 +938,6 @@ export function sinceElsewhereLines(
   // or wrote something that may be named.
   const changed = here.filter((h) => h.startedAt !== null || h.titles.length > 0);
   const oneHere = (h: HereSession, titles: number): string =>
-    `${sessionWords(h.session, h.model)}${h.startedAt === null ? "" : ` open since ${when(h.startedAt)}`}${titleWords(h.titles, titles)}`;
+    `${sessionWords(h.session, h.model)}${h.scope === undefined ? "" : ` in ${placeWords(h.scope)}`}${h.startedAt === null ? "" : ` open since ${when(h.startedAt)}`}${titleWords(h.titles, titles)}`;
   return elsewhereForms(head, named, one, { sessions: hereOrder(changed), one: oneHere, head: `${head} ${HERE_ALSO_OPEN.toLowerCase()}` });
 }

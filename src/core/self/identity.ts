@@ -22,7 +22,7 @@ import type { Band, Kind, MemoryPhysics } from "../types.js";
 import { strength } from "../physics/index.js";
 import type { ProseDoc, ReadOnlyStore, Store, WakeDisplayRow } from "../store/index.js";
 import type { SelfTunables } from "./tunables.js";
-import { isWorkMemory } from "./work.js";
+import { craftBornDay, isCraft, isWorkMemory } from "./work.js";
 import { TUNABLES as SLEEP_TUNABLES } from "../sleep/tunables.js";
 
 export type LaneName = "identity" | "craft" | "threads" | "hints" | "horizon";
@@ -482,7 +482,10 @@ export interface Lanes {
  * (`handoff/work-here.ts`, `counterpart.ts#addHandoffPointer`), and Nearby is
  * left with what is personal. An unresolved work memory is still a thread:
  * an open question stays open wherever the session wakes. Off, the lanes are
- * what they were before: craft is skill-kind above the warm floor.
+ * what they were before: craft is skill-kind above the warm floor. With
+ * `PROJECTS_TRAVEL` (2026-10-21) craft — a skill not marked `work` — is
+ * delivered as a work line in any folder (`work.ts#workHere`), so it is in
+ * no stored lane either.
  */
 export function rankLanes(
   scanned: readonly Scanned[],
@@ -492,6 +495,8 @@ export function rankLanes(
     readonly settledOver?: ReadonlySet<string>;
     readonly coveredByPage?: ReadonlySet<string>;
     readonly workAtDelivery?: boolean;
+    /** The lived day craft started travelling (`work.ts#craftSince`); absent: none travels. */
+    readonly craftSince?: number;
     /** Arriving ids past the caller's own count (review of #367): the lane's
      *  overflow, after its cap's, filtered as the lane is. */
     readonly horizonMore?: readonly string[];
@@ -539,16 +544,20 @@ export function rankLanes(
       threads.push(asThread(s));
       continue;
     }
-    if (
-      opts.workAtDelivery === true &&
-      isWorkMemory({
+    if (opts.workAtDelivery === true) {
+      const facts = {
         about: s.about ?? null,
         kind: s.kind,
         originScope: s.originScope ?? null,
         journal: typeof s.doc.meta["episodeId"] === "string",
-      })
-    ) {
-      continue;
+        bornDay: craftBornDay(s.doc.meta, s.doc.bornDay),
+      };
+      // Craft travels (`PROJECTS_TRAVEL`, 2026-10-21): it is delivered as a
+      // work line too, in any folder, so it is in no stored lane — unless the
+      // store-wide "How I work" lane is on (`CRAFT_IN_WAKE`), which carries it.
+      const travels = t.PROJECTS_TRAVEL;
+      const rule = { craftTravels: travels, craftSince: opts.craftSince ?? Number.POSITIVE_INFINITY };
+      if (isWorkMemory(facts, rule) || (travels && !t.CRAFT_IN_WAKE && isCraft(facts, rule))) continue;
     }
     if (s.strength < t.WARM_FLOOR) continue;
     if (s.kind === "skill") {

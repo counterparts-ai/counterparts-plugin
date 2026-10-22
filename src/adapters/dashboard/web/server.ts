@@ -100,6 +100,9 @@ import {
   overviewView,
   pulse,
   searchView,
+  subjectView,
+  subjectsView,
+  tagView,
 } from "./views.js";
 
 /** bansai's 3737 is in use for the length of the parallel run. */
@@ -315,6 +318,20 @@ export function router(
       return json(searchView(src, url.searchParams.get("q") ?? "", intParam(url, "limit", 25)));
     }
     if (path === "/api/mind") return json(mindView(src));
+    // THE SUBJECTS TAB (wave 2 lane D, 2026-10-21): the cloud and every
+    // subject; one subject's page (`me` is the subject that is me); one tag.
+    if (path === "/api/subjects") return json(subjectsView(src));
+    if (path === "/api/subject") {
+      const id = url.searchParams.get("id") ?? "";
+      if (id.length === 0) return json({ error: "id is required" }, 400);
+      // Not a subject (or not one yet) is `found: false` with its absence named, as `/api/memory` answers.
+      return json(subjectView(src, id));
+    }
+    if (path === "/api/tag") {
+      const tag = url.searchParams.get("tag") ?? "";
+      if (tag.trim().length === 0) return json({ error: "tag is required" }, 400);
+      return json(tagView(src, tag));
+    }
     if (path === "/api/dreams") return json(dreamsView(src, intParam(url, "limit", DREAM_LIMIT)));
     if (path === "/api/flow") return json(flowView(src, intParam(url, "limit", 24)));
     if (path === "/api/node") {

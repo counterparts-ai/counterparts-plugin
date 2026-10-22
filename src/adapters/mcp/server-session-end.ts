@@ -14,15 +14,17 @@ import {
   readAbout,
   readTraits,
   readWriteFacts,
+  readTags,
   MEMORY_KINDS,
   reminderEcho,
   titleEcho,
   undatedReminderWarning,
   factsEcho,
+  tagsEcho,
   threadOf,
 } from "./server-args.js";
 import { TITLE_ASKED_NOTE } from "./server-words.js";
-import type { FeelingsRead, ReminderRead, AboutRead, TraitsRead, FactsRead } from "./server-args.js";
+import type { FeelingsRead, ReminderRead, AboutRead, TraitsRead, FactsRead, TagsRead } from "./server-args.js";
 import type { McpServer } from "./server.js";
 
 /**
@@ -233,6 +235,7 @@ export async function depositEntries(
   const aboutOf: AboutRead[] = [];
   const traitsOf: TraitsRead[] = [];
   const factsOf: FactsRead[] = [];
+  const tagsOf: TagsRead[] = [];
   const today = server["today"]();
   for (const item of raw) {
     if (item === null || typeof item !== "object" || Array.isArray(item)) {
@@ -242,6 +245,7 @@ export async function depositEntries(
       aboutOf.push({ mark: null });
       traitsOf.push({ inputs: [] });
       factsOf.push({ sent: {}, dropped: [], notes: [] });
+      tagsOf.push({ dropped: [] });
       continue;
     }
     const rec = item as Record<string, unknown>;
@@ -267,6 +271,7 @@ export async function depositEntries(
     aboutOf.push(readAbout(rec["about"]));
     traitsOf.push(readTraits(rec["traits"]));
     factsOf.push(readWriteFacts(rec, today));
+    tagsOf.push(readTags(rec));
   }
 
   const outcomes: Record<string, unknown>[] = [];
@@ -301,6 +306,7 @@ export async function depositEntries(
       continue;
     }
     const facts = factsOf[n] ?? { sent: {}, dropped: [], notes: [] };
+    const tags = tagsOf[n] ?? { dropped: [] };
     let result: DepositResult;
     try {
       result = await server.counterpart.submitSessionEnd(draft, {
@@ -309,6 +315,7 @@ export async function depositEntries(
         // The day this server reads, for a done that closes one occurrence (2026-10-20).
         at: server["today"](),
         facts: facts.sent,
+        ...(tags.sent === undefined ? {} : { tags: tags.sent }),
         // What it is about sets an unclaimed entry's default floor (2026-10-10).
         about: about.mark,
         // The dump's earlier entries: never read as an earlier state of this one.
@@ -316,6 +323,8 @@ export async function depositEntries(
         ...(cover === undefined ? {} : { cover }),
         ...(model === undefined ? {} : { model }),
         ...(writeUp === undefined ? {} : { writeUp }),
+        // The nightly run's own writing (lane C3): it never corrects a belief at once.
+        ...(server["nightRun"]() ? { night: true } : {}),
       });
     } catch (err) {
       // Isolation, not a lost dump: this entry failed, the rest still run.
@@ -347,6 +356,7 @@ export async function depositEntries(
       ...titleEcho(result, TITLE_ASKED_NOTE),
       ...undatedReminderWarning(result, dated, draft["title"], draft["content"]),
       ...factsEcho(result, facts),
+      ...tagsEcho(result, tags),
       ...server["settledOf"](result, draft["how"] !== undefined),
       ...threadOf(result),
       ...(neighbours.length === 0 ? {} : { neighbours }),

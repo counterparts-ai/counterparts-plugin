@@ -435,6 +435,24 @@ function isEntityCardRow(row: { meta: string }): boolean {
   }
 }
 
+/**
+ * A BELIEF IS NOT A RECALL CANDIDATE, FOR NOW (wave 2 lane C, 2026-10-21): a
+ * belief row (`type: schema`, `meta.role: belief`) is kept out of every
+ * candidate, footnote and "came to mind" until lane E gives beliefs a slot of
+ * their own. Showing them is that lane's to decide, behind its own switch;
+ * left in the pool today, the night's new beliefs would surface as footnotes
+ * the day they are born. Read off the row's meta column, as a card is. The
+ * constant's owner is `schemas/` (`role: "belief"`).
+ */
+export function isBeliefRow(row: { type: string; meta: string }): boolean {
+  if (row.type !== "schema" || !row.meta.includes('"belief"')) return false;
+  try {
+    return (JSON.parse(row.meta) as { role?: unknown } | null)?.role === "belief";
+  } catch {
+    return false;
+  }
+}
+
 /** `isHandoff` by id, for the scan. */
 function isHandoffRow(store: Store, id: string): boolean {
   try {
@@ -753,6 +771,8 @@ export function activate(
     // born from the names the memories say, a turn naming someone surfaced
     // the stub as a footnote. Off the row's meta column; no prose read.
     if (row.type === "schema" && isEntityCardRow(row)) return undefined;
+    // A belief (wave 2 lane C): invisible until lane E's slot (`isBeliefRow`).
+    if (isBeliefRow(row)) return undefined;
     // BELOW REACH, exactly (2026-10-10): the ranking cache's prefilter is a
     // pass stale at most; this is the day's own number. Ambient only; never a
     // chapter, a chapter's copy or an entity card (`reachExempt`).

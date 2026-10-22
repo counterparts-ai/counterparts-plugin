@@ -72,6 +72,13 @@ export const TUNABLES = {
      * projects said most their cards first; the rest wait, counted.
      */
     births: 10,
+    /**
+     * Card names written as tags a night at most (2026-10-21, wave 2 lane B).
+     * CAL, chosen not measured: the first night on a store with years of
+     * linked memories takes its backlog a few nights at a time; a night's own
+     * new links are a few dozen.
+     */
+    tags: 500,
     dedup: 1_000,
     versions: 1,
     briefing: 1,
@@ -100,11 +107,24 @@ export const TUNABLES = {
     fade: 3,
     /** Every lived day: the tally is one read of the live memories. */
     births: 1,
+    /** Every lived day: card names, stems and dead merges are a few reads. */
+    tags: 1,
     dedup: 1,
     versions: 1,
     briefing: 1,
     log: 1,
   } as const satisfies Record<Phase, number>,
+
+  /**
+   * How long a cycle's lease holds before another cycle may reclaim it
+   * (`lease.ts`, 2026-10-21). A cycle takes seconds; this is only how long a
+   * DEAD holder keeps the next one waiting. Not shorter than `remember/`'s
+   * `STALE_CLAIM_MS`, which `adapters/spawn.ts` already holds every worker's
+   * watchdog under, so a worker's own watchdog fires before its lease can be
+   * reclaimed — a test pins the inequality. A wedged holder is the fence's
+   * job, not this number's.
+   */
+  CYCLE_LEASE_MS: 10 * 60_000,
 } as const;
 
 /** A marker that has never been written. Reads as "due", which is forward-safe. */

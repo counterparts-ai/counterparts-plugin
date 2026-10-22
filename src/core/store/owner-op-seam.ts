@@ -45,6 +45,7 @@ import { hashText } from "./prose.js";
 import { unfade } from "../physics/index.js";
 import type { Db } from "./db.js";
 import { CARD_TOMBSTONE_PREFIX } from "./operational.js";
+import { BELIEF_SUPPORT_META_PREFIX, recountSupport } from "./wave2.js";
 import type { MemoryRow } from "./operational.js";
 import type { RemovalNote, Store } from "./index.js";
 
@@ -328,6 +329,44 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
     } catch {
       /* a store from before v12 */
     }
+    // v13's `derivations` (its comment promised this; nothing writes the
+    // table yet) and v14's wave-2 tables: a removed memory's tags, its support
+    // rows on either side (as a belief, and as a memory counted for one), a
+    // removed card's folders, and its id in every recall turn that showed it —
+    // the turn row stays (it happened), the id leaves its list, as it leaves a
+    // reflection's. Ids only in all of them, but a tag is a word OF the memory.
+    // A file without the tables has nothing here.
+    try {
+      db.run("DELETE FROM derivations WHERE child = ? OR parent = ?", id, id);
+    } catch {
+      /* a store from before v13 */
+    }
+    try {
+      db.run("DELETE FROM memory_tags WHERE memory_id = ?", id);
+      // The beliefs it was counted for are counted again without it (lane C),
+      // and a removed belief's own count goes with it.
+      const backed = db.all<{ belief_id: string }>("SELECT DISTINCT belief_id FROM belief_support WHERE memory_id = ?", id).map((r) => r.belief_id);
+      db.run("DELETE FROM belief_support WHERE belief_id = ? OR memory_id = ?", id, id);
+      db.run("DELETE FROM meta WHERE key = ?", `${BELIEF_SUPPORT_META_PREFIX}${id}`);
+      for (const b of backed) recountSupport(store, b);
+      db.run("DELETE FROM folder_projects WHERE project_id = ?", id);
+      const turns = db.all<{ session_id: string; turn: number; shown: string }>(
+        "SELECT session_id, turn, shown FROM recall_turns WHERE shown LIKE ?",
+        `%${JSON.stringify(id)}%`,
+      );
+      for (const t of turns) {
+        let shown: unknown;
+        try {
+          shown = JSON.parse(t.shown);
+        } catch {
+          shown = [];
+        }
+        const kept = Array.isArray(shown) ? shown.filter((x) => x !== id) : [];
+        db.run("UPDATE recall_turns SET shown = ? WHERE session_id = ? AND turn = ?", JSON.stringify(kept), t.session_id, t.turn);
+      }
+    } catch {
+      /* a store from before v14 */
+    }
 
     if (row !== undefined) {
       // The skeleton: an address, its family, and nothing else. Physics is
@@ -345,7 +384,7 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
                 uses = 0, reinforced_days = 0, consolidated = 0, promoted_identity = 0,
                 protected = 0, pressure = 0, last_challenged_day = NULL,
                 archived = 1, archived_reason = ?, content_hash = '',
-                title = NULL, body = '', meta = '{}', confidential = 0,
+                title = NULL, body = '', meta = '{}',
                 learned_on = '', happened_on = NULL,
                 created_at = NULL, updated_at = NULL, model = NULL, event_date = NULL,
                 returns = 0, return_days = 0, first_return_day = NULL, last_return_day = NULL,
@@ -358,6 +397,16 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
         db.run("UPDATE memories SET occurred_on = NULL, said_by = NULL, status = NULL WHERE id = ?", id);
       } catch {
         /* a store from before v12 */
+      }
+      // v14: what kind of subject it was, how a belief was born, its
+      // confidence and the salience it was born with — facts ABOUT it, too.
+      try {
+        db.run(
+          "UPDATE memories SET subject_kind = NULL, birth_route = NULL, confidence = NULL, birth_salience = NULL WHERE id = ?",
+          id,
+        );
+      } catch {
+        /* a store from before v14 */
       }
       if (!noop) {
         db.run(

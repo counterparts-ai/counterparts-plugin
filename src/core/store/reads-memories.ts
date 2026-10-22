@@ -26,6 +26,7 @@ import type {
 import { aboutMarkOf, CORE_ABOUT_MARKS, STATUSES } from "./marks.js";
 import type { MemoryStatus } from "./marks.js";
 import type { Store } from "./index.js";
+import { BELIEF_SUPPORT_META_PREFIX } from "./wave2.js";
 
 /** `LATER_FEELING_SOURCES` as a SQL list — the sources `feeling_peak_lived` leaves out. Constants only, never input. */
 const LATER_SQL = LATER_FEELING_SOURCES.map((x) => `'${x}'`).join(", ");
@@ -39,6 +40,22 @@ const MAX_CHAIN = 32;
  *  entry — as SQL (temporal contiguity's reads, review of #281 finding 1). */
 const NIGHTLY_SQL = `(COALESCE(source, '') IN ('dreamed', 'reflection')
   OR COALESCE(origin_ref, '') LIKE 'dream:%' OR COALESCE(origin_ref, '') LIKE 'reflection:%')`;
+
+/**
+ * Does this store have `memories.birth_route` (v14)? Asked at most until the
+ * answer is yes, then never again for that store: `row()` is the hottest read
+ * in the code, and an uncached `PRAGMA table_info` there cost a 40k-row sleep
+ * scan about a second (review of #575; `test/beliefs-support.test.ts` counts
+ * the PRAGMAs). Only a yes is kept — a v13 file read before its upgrade asks
+ * again, and gets its yes once the upgrade has run. Nothing removes the column.
+ */
+const birthRouteSeen = new WeakSet<Store>();
+function hasBirthRoute(store: Store): boolean {
+  if (birthRouteSeen.has(store)) return true;
+  if (!store.hasColumn("memories", "birth_route")) return false;
+  birthRouteSeen.add(store);
+  return true;
+}
 
 export function row(store: Store, id: string): (MemoryRow & FeelingPeak) | undefined {
   // v9: `feeling_peak_lived` is the same peak WITHOUT the feelings a
@@ -71,7 +88,14 @@ export function row(store: Store, id: string): (MemoryRow & FeelingPeak) | undef
                     AND f.created_at = (SELECT MAX(g.created_at) FROM feelings g WHERE g.memory_id = m.id AND g.source IN (${RECORDED_LATER_SQL}))),
                 (SELECT MAX(f.strength) FROM feelings f WHERE f.memory_id = m.id)) AS feeling_peak,
               (SELECT MAX(f.strength) FROM feelings f
-                WHERE f.memory_id = m.id AND (f.source IS NULL OR f.source NOT IN (${LATER_SQL}))) AS feeling_peak_lived
+                WHERE f.memory_id = m.id AND (f.source IS NULL OR f.source NOT IN (${LATER_SQL}))) AS feeling_peak_lived,
+              ${
+                // A belief's counted support (lane C), on a store with the v14
+                // column; a v13 file read before its upgrade has none.
+                hasBirthRoute(store)
+                  ? `CASE WHEN m.birth_route IS NOT NULL THEN (SELECT value FROM meta WHERE key = '${BELIEF_SUPPORT_META_PREFIX}' || m.id) END`
+                  : "NULL"
+              } AS belief_support
          FROM memories m WHERE m.id = ?`,
     id,
   );
@@ -154,6 +178,38 @@ export function workCandidates(store: Store, scope: string, limit: number): stri
       Math.max(0, Math.floor(limit)),
     )
     .map((r) => r.id);
+}
+
+export function craftCandidates(store: Store, limit: number, sinceDay: number): string[] {
+  if (!Number.isFinite(sinceDay)) return [];
+  return store["ops"]
+    .all<{ id: string }>(
+      `SELECT id FROM memories
+          WHERE type = 'memory' AND archived = 0 AND kind = 'skill'
+            AND (about IS NULL OR about = 'world') AND birth_day >= ?
+            AND band != 'identity' AND event_date IS NULL AND body != ''
+          ORDER BY MAX(birth_day, last_used_day) DESC, id
+          LIMIT ?`,
+      Math.floor(sinceDay),
+      Math.max(0, Math.floor(limit)),
+    )
+    .map((r) => r.id);
+}
+
+/**
+ * CO-USE, for the night's project proposal (2026-10-21, lane G): for each
+ * memory born on or after lived day `sinceDay` in a directory, its folder,
+ * its lived birth day, and each subject it names (`memory_subjects`; null
+ * when none). Archived rows count: what was written there that day is the
+ * evidence, not whether it is still held. Columns only.
+ */
+export function folderCoUse(store: Store, sinceDay: number): { id: string; scope: string; day: number; subject: string | null }[] {
+  return store["ops"].all<{ id: string; scope: string; day: number; subject: string | null }>(
+    `SELECT m.id AS id, m.origin_scope AS scope, m.birth_day AS day, s.subject_id AS subject
+       FROM memories m LEFT JOIN memory_subjects s ON s.memory_id = m.id
+      WHERE m.type = 'memory' AND m.origin_scope LIKE '/%' AND m.birth_day >= ? AND m.body != ''`,
+    Math.floor(sinceDay),
+  );
 }
 
 export function planCandidates(store: Store, input: {

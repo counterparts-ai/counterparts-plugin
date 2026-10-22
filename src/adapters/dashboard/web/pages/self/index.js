@@ -22,6 +22,7 @@ import { q, wireTips } from "../../shared/widgets/tips.js";
 
 const markup = `
     <h2 class="sp-title" id="mind-opening"></h2>
+    <p class="self-beliefs-link"><a href="#subjects/me">What I believe about myself, and about us →</a></p>
     <div class="self-top">
       <div class="self-main">${page.mainMarkup}${layers.markup}
       </div>

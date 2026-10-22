@@ -167,6 +167,15 @@ export interface Proposal {
    * with a revision's carried over. Absent on a proposal no author wrote.
    */
   facts?: WriteFacts;
+  /**
+   * v14, lane B (2026-10-21): the memory's tags — a few words for what it is
+   * about — set by `Counterpart#deposit` from what the door read, a
+   * revision's carried over (`carryTags`), with how they came (`tagsVia`:
+   * `write`, or `carried`). Like `facts`, not a draft field. Absent on a
+   * proposal no author wrote.
+   */
+  tags?: readonly string[];
+  tagsVia?: "write" | "carried";
   at: number;
   day: number;
   /** Identity for idempotency: CONTENT, not span text (§4.1 G9). */

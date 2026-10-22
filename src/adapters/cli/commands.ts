@@ -117,6 +117,7 @@ import {
   settleCommand,
   aboutCommand,
 } from "./commands-self.js";
+import { projectCommand } from "./commands-project.js";
 import {
   installCommand,
   installDesktop,
@@ -236,6 +237,10 @@ export const COMMANDS = [
   // owner. Reads and writes, like `settle`; the write refuses under observer
   // at the core's own door (`Counterpart.markAbout`).
   "about",
+  // Which folders are one piece of work (2026-10-21, wave 2 lane G): list,
+  // and the owner's join and leave. Reads and writes, like `about`; the
+  // write refuses under observer at the store's seam.
+  "project",
   // What is written up and what is not yet, for one date (2026-09-30,
   // `core/coverage/`). Read-only.
   "coverage",
@@ -583,6 +588,7 @@ export const COMMAND_FLAGS: Record<Command, readonly string[]> = {
   core: ["list", "demote", "reaffirm", "reason", "reflected-feeling"],
   settle: ["list", "pair", "holds", "against", "how", "why", "undo"],
   about: ["why"],
+  project: [],
   coverage: ["date"],
   // `--config` because the store it opens is the one the configuration names,
   // and the child's memory server reads the same file.
@@ -666,7 +672,9 @@ export const COMMAND_BLURB: Record<Command, string> = {
   settle:
     "Two memories that disagree. With no flags (or --list), the pairs nobody has settled — a dream flags them — and the ones settled lately: how, which holds, who settled it and why; and the corrections held in the last 7 lived days (a memory said it changes or corrects one that didn't look related, so nothing was settled) that nobody has settled since, each with the command that settles it. --pair <id> --holds <memory id> --how changed|corrected|open --why \"...\" settles one as you (or --holds <id> --against <id> for two memories no dream flagged): changed — both were true at their time, the older fades once and is shown as earlier; corrected — the older was wrong, it leaves recall and stays readable by its id; open — a real disagreement, both kept and shown together. No memory is rewritten. --undo <pair> reverses a settle: the strength comes back, a corrected memory comes back into recall, and the pair is unsettled again. Reading works under observer; the two changes refuse there.",
   about:
-    "What a memory is about — me (who I am), us (the two of us), owner (you, as a person), work (the craft) or world (anything else). With an id alone, its mark and who set it; with an id and a mark, it changes the mark as you, keeps --why with it, and records it the way a nightly reflection's re-mark is recorded. Unmarked, a fact written in a project (or a skill) counts as that project's work and is shown only there; me, us and owner are shown everywhere and can become part of who I am. An archived memory can be marked too (the mark counts if it comes back); an earlier version's id marks the current one. Reading works under observer; the change refuses there.",
+    "What a memory is about — me (who I am), us (the two of us), owner (you, as a person), work (one project's own) or world (anything else). With an id alone, its mark and who set it; with an id and a mark, it changes the mark as you, keeps --why with it, and records it the way a nightly reflection's re-mark is recorded. Unmarked, a fact written in a project counts as that project's work and is shown only there (and in the folders joined to it), while an unmarked skill is craft and may show in any folder; me, us and owner are shown everywhere and can become part of who I am. An archived memory can be marked too (the mark counts if it comes back); an earlier version's id marks the current one. Reading works under observer; the change refuses there.",
+  project:
+    "Which folders are one piece of work. A folder is its own project until you join it to another: join <folder> <project> puts the folder in a project named by a word (found by its name, or made) or in another folder's project, and from then on each folder's wake shows the work of all of them under \"Work here\" — a skill nobody marked work is craft and may show in any folder. leave <folder> makes it its own project again. With no words (or list), the projects and their folders. Reading works under observer; join and leave refuse there.",
   coverage:
     "What is written up, and what is not yet, for one date (default today): each session that captured something that day, how much of it is written up, and what is not yet written up — how many pieces, over how long, since when — and whether that is owed (the nightly run catches it up, or counterparts catch-up does now), lapsed (let go unwritten after fourteen days of use — lost to memory; its text is deleted with the rest, never more than 14 days after the session), under the floor, or still at work. Read-only.",
   "catch-up":
@@ -700,6 +708,7 @@ const COMMAND_ARGS: Partial<Record<Command, string>> = {
   core: " [--demote <id> --reason \"...\" | --reaffirm <id> --reason \"...\" | --reflected-feeling on|off]",
   settle: " [--list | --pair <id> --holds <id> --how changed|corrected|open --why \"...\" | --undo <pair>]",
   about: " <id> [me|us|owner|work|world] [--why \"...\"]",
+  project: " [list | join <folder> <project name or folder> | leave <folder>]",
   coverage: " [--date YYYY-MM-DD]",
 };
 
@@ -1705,6 +1714,8 @@ export async function run(argv: readonly string[], opts: RunOptions): Promise<nu
         return settleCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string");
       case "about":
         return aboutCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string");
+      case "project":
+        return projectCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string", opts.home ?? homedir());
       case "coverage":
         return coverageCommand(dir, io, parsed, now, typeof parsed.flags["dir"] === "string");
     }

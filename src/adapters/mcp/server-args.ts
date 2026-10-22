@@ -1,8 +1,9 @@
-/** The MCP tools' argument readers — kinds, dimensions, reminders, feelings, traits, facts, `about` — and the echoes that say back what was read (moved out of `server.ts`, 2026-10-11). */
+/** The MCP tools' argument readers — kinds, dimensions, reminders, feelings, traits, facts, tags, `about` — and the echoes that say back what was read (moved out of `server.ts`, 2026-10-11). */
 import type { DepositResult, SentFacts } from "../../core/counterpart.js";
 import { isRecurrence, occurrenceOnOrAfter, parseCalendarDate, readableDate, readableRecurrence } from "../../core/time.js";
 import type { Recurrence } from "../../core/time.js";
 import { AUTHOR_DIMENSIONS } from "../../core/remember/index.js";
+import { screenTags } from "../../core/tag-screen.js";
 import {
   ABOUT_MARKS,
   SAID_BY,
@@ -490,6 +491,55 @@ export function factsEcho(deposit: DepositResult, read: FactsRead): Record<strin
       ...(f === undefined || f.inherited.length === 0 ? {} : { carriedOver: [...f.inherited], from: f.from }),
       ...dropped,
       ...(read.notes.length === 0 ? {} : { note: read.notes.join(" ") }),
+    },
+  };
+}
+
+/**
+ * v14, lane B (2026-10-21): A MEMORY'S TAGS off a `remember` or a
+ * `session_end` entry — a few words for what it is about. LOOSE FIRST, as the
+ * three fields: nothing here refuses the memory. The screen is the core's
+ * (`core/tag-screen.ts#screenTags`, the one every door shares): one that is
+ * not text, carries a secret, is too long or comes past the limit is dropped
+ * and said. A comma-separated string is read as its parts. `null` or an empty
+ * list is sent as none: a revision carries nothing over. Absent is not sent —
+ * and so is a list whose tags were all blank or all dropped, so a revision
+ * still carries its memory's (review of #570).
+ */
+export interface TagsRead {
+  /** Absent: not sent. Null: sent as none. */
+  readonly sent?: readonly string[] | null;
+  readonly dropped: readonly string[];
+}
+
+export { TAG_MAX_CHARS, TAGS_PER_MEMORY } from "../../core/tag-screen.js";
+
+export function readTags(rec: Record<string, unknown>): TagsRead {
+  const raw = rec["tags"];
+  if (raw === undefined) return { dropped: [] };
+  if (raw === null || (Array.isArray(raw) && raw.length === 0)) return { sent: null, dropped: [] };
+  const items: unknown[] = typeof raw === "string" ? raw.split(",") : Array.isArray(raw) ? raw : [raw];
+  const { kept, dropped } = screenTags(items);
+  return kept.length === 0 ? { dropped: [...dropped] } : { sent: [...kept], dropped: [...dropped] };
+}
+
+/** The tags' half of a deposit's answer (v14, lane B): what was recorded — after a revision's carry-over — and what was dropped. Nothing when nothing was sent, dropped or carried. */
+export function tagsEcho(deposit: DepositResult, read: TagsRead): Record<string, unknown> {
+  if (read.sent === undefined && read.dropped.length === 0 && deposit.tags === undefined) return {};
+  const all = [...read.dropped, ...(deposit.tags?.dropped ?? [])];
+  const dropped = all.length === 0 ? {} : { dropped: all };
+  if (!deposit.deposited) {
+    // A duplicate's words were already there: its tags were not added to the memory it repeats (review of #570).
+    const dup = deposit.reason === "duplicate-content" ? { note: "This memory was already stored; these tags were not added to it." } : {};
+    return { tags: { stored: false, reason: "memory-not-stored", ...dup, ...dropped } };
+  }
+  const t = deposit.tags;
+  return {
+    tags: {
+      stored: true,
+      tags: t === undefined ? [] : [...t.tags],
+      ...(t === undefined || t.from === null ? {} : { carriedFrom: t.from }),
+      ...dropped,
     },
   };
 }

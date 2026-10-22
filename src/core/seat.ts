@@ -22,8 +22,8 @@
  * implementer exists.
  */
 
-/** What is asked: a write-up owed from a session that ended unwritten, the night's dream (with the page writer's phase), or the reflection. */
-export type SeatAct = "catch-up" | "dream" | "reflection";
+/** What is asked: a write-up owed from a session that ended unwritten, the night's dream (with the page writer's phase), the reflection, or the night's tagging (wave 2 lane B, 2026-10-21). */
+export type SeatAct = "catch-up" | "dream" | "reflection" | "tags";
 
 /** The memory's tools an answer goes through, by the memory's own names (a host prefixes them as it names tools). */
 export type SeatTool = "session_end" | "dream" | "reflect" | "self_page" | "recall";
@@ -38,6 +38,8 @@ export const SEAT_TOOLS: Readonly<Record<SeatAct, { readonly tools: readonly Sea
   "catch-up": { tools: ["session_end"], withhold: [] },
   dream: { tools: ["dream", "self_page", "recall"], withhold: ["reflect"] },
   reflection: { tools: ["dream", "reflect", "self_page", "recall"], withhold: [] },
+  // The tagging child answers through the dream tool's `tags` phase alone (`dream/tags.ts`).
+  tags: { tools: ["dream"], withhold: ["reflect", "self_page"] },
 };
 
 /**

@@ -83,7 +83,7 @@ import { Associate } from "./associate/index.js";
 import { lineOf } from "./fit/index.js";
 import { band, changedFade, cosine, fadeOf, strength, unfade } from "./physics/index.js";
 import { CUE_MODE_META, DATE_FROM_META, DATE_MOVED_TO_META, cueModeOf, recurrenceOf } from "./prospective/index.js";
-import { earlierMark, headOf, isHandoff } from "./recall/index.js";
+import { earlierMark, headOf, isBeliefRow, isHandoff } from "./recall/index.js";
 import { similarity } from "./remember/index.js";
 import { RECURRING_META, isStoreError, rowTombstoned, statusOf } from "./store/index.js";
 import type { ContradictionRow, MemoryRow, Store } from "./store/index.js";
@@ -276,6 +276,8 @@ export type SettleRefusal =
   | "archived"
   | "protected"
   | "core-takes-pressure"
+  /** A belief settled over by a dream, or by a reflection while it is not contested (lane C): it takes pressure instead. */
+  | "belief-takes-pressure"
   | "pending-date"
   | "failed";
 
@@ -352,11 +354,15 @@ export function pairStanding(store: Pick<Store, "row">, pair: ContradictionRow):
  * What every door checks of both memories: there, not removed, a memory row,
  * not replaced, not archived. A refusal or null.
  */
-function doorRefusal(store: Store, id: string): SettleOutcome | null {
+function doorRefusal(store: Store, id: string, opts: { beliefMay?: boolean } = {}): SettleOutcome | null {
   const row = store.row(id);
   if (row === undefined) return refuse("unknown-memory", `There is no memory ${id}.`);
   if (rowTombstoned(row)) return refuse("removed", `${id} was removed by the owner.`);
-  if (row.type !== "memory") {
+  // A BELIEF MAY BE SETTLED OVER (wave 2 lane C, 2026-10-21): the owner's
+  // correction and a reasoned settle are the "at once" door, beside the
+  // pressure arithmetic, and they pass no bar. Only as the one OVER — a
+  // belief never holds over a memory — and never a protected one (below).
+  if (row.type !== "memory" && !(opts.beliefMay === true && isBeliefRow(row))) {
     return refuse(
       "not-a-memory",
       `${id} is not a memory (a ${row.type} row): a belief or an entity changes through a new memory that updates it, and a journal chapter is not a claim.`,
@@ -370,6 +376,34 @@ function doorRefusal(store: Store, id: string): SettleOutcome | null {
 }
 
 /**
+ * WHO MAY SETTLE OVER A BELIEF AT ONCE (lane C, 2026-10-21, the design
+ * session; lightly held). The owner's correction and an awake session's settle
+ * are the "at once" door. A dream suggests and the waking self decides, so a
+ * dream never does; a reflection may only let go a belief life has already
+ * CONTESTED (`meta.contested`) — it cannot silently unmake one it did not
+ * like. Either is told to file the memory as contrary support instead, which
+ * presses the belief through its bar. Null for any other row.
+ */
+function beliefOverRefusal(store: Store, over: string, actor: SettleActor): SettleOutcome | null {
+  const row = store.row(over);
+  if (row === undefined || !isBeliefRow(row)) return null;
+  if (actor === "owner" || actor === "session") return null;
+  if (actor === "reflection") {
+    let contested = false;
+    try {
+      contested = store.readProse(over).meta["contested"] !== undefined;
+    } catch {
+      contested = false;
+    }
+    if (contested) return null;
+  }
+  return refuse(
+    "belief-takes-pressure",
+    `${over} is a belief: ${actor === "reflection" ? "a reflection lets one go only once life has contested it" : "only the owner or an awake session corrects one at once"}. File the memory that goes against it as contrary support instead; that presses it through its bar.`,
+  );
+}
+
+/**
  * The checks a memory in a SETTLE must pass, as a refusal or null: the
  * door's, and for the memory a `changed` / `corrected` settle is OVER
  * (`moves`) — the one whose standing changes — the owner's protection and the
@@ -378,7 +412,7 @@ function doorRefusal(store: Store, id: string): SettleOutcome | null {
  * plan) and the dream merge (its own refusals) call `supersede` directly.
  */
 function memoryRefusal(store: Store, id: string, moves: boolean): SettleOutcome | null {
-  const door = doorRefusal(store, id);
+  const door = doorRefusal(store, id, { beliefMay: moves });
   if (door !== null) return door;
   const row = store.row(id) as MemoryRow;
   if (moves && row.protected === 1) return refuse("protected", `${id} is protected by the owner: it can be marked open, never changed or corrected.`);
@@ -480,7 +514,7 @@ export function settle(store: Store, input: SettleInput, opts: { closeFlags?: bo
       );
     }
   }
-  const bad = memoryRefusal(store, over, how !== "open") ?? memoryRefusal(store, holds, false);
+  const bad = memoryRefusal(store, over, how !== "open") ?? memoryRefusal(store, holds, false) ?? (how === "open" ? null : beliefOverRefusal(store, over, input.actor));
   if (bad !== null) return bad;
   return supersede(
     store,
@@ -629,7 +663,7 @@ export function supersede(store: Store, input: SupersedeInput, opts: { retarget?
   if (store.observer) return refuse("observer", "This session is an observer: it reads the store and writes nothing. Nothing was settled.");
   const { holds, over, how } = input;
   if (holds === over) return refuse("same-memory", `holds and over are both ${holds}.`);
-  const bad = doorRefusal(store, over) ?? doorRefusal(store, holds);
+  const bad = doorRefusal(store, over, { beliefMay: true }) ?? doorRefusal(store, holds) ?? (how === "open" ? null : beliefOverRefusal(store, over, input.actor));
   if (bad !== null) return bad;
   const day = input.day ?? store.livedDay();
   const pair = input.pair;

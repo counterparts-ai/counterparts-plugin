@@ -240,10 +240,14 @@ export function carryAboutMark(ops: Db, fromId: string, toId: string): void {
  * had and it was not given — a revision or a merge is still the same memory
  * (as `carryAboutMark`). Of several originals merged, the first that has one
  * gives it. Inside the caller's transaction; a file without the columns is
- * left alone.
+ * left alone. Since v14 (2026-10-21) a card's kind of subject travels the
+ * same way. A belief's `birth_route` and `confidence` do NOT (review of
+ * #569): a challenge's successor exists because the old belief lost, so what
+ * it was born by and how sure it was are not the successor's; lane C decides
+ * them. Nor `birth_salience`: a successor's is its own insert's.
  */
 export function carryWriteFacts(ops: Db, fromId: string, toId: string): void {
-  for (const col of ["occurred_on", "said_by", "status"] as const) {
+  for (const col of ["occurred_on", "said_by", "status", "subject_kind"] as const) {
     try {
       ops.run(
         `UPDATE memories SET ${col} = (SELECT ${col} FROM memories WHERE id = ?)

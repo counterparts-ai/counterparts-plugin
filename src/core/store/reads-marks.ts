@@ -133,6 +133,13 @@ export function memoriesNaming(store: Store, subjectId: string, opts: { archived
     .map((r) => r.memory_id);
 }
 
+export function subjectsLinkedVia(store: Store, via: string): string[] {
+  if (!store["hasTable"]("memory_subjects")) return [];
+  return store["ops"]
+    .all<{ subject_id: string }>("SELECT DISTINCT subject_id FROM memory_subjects WHERE via = ? ORDER BY subject_id", via)
+    .map((r) => r.subject_id);
+}
+
 export function subjectLinksOf(store: Store, memoryId: string): { subjectId: string; via: string; createdAt: number }[] {
   if (!store["hasTable"]("memory_subjects")) return [];
   return store["ops"]

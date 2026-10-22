@@ -24,6 +24,8 @@
  */
 
 export { runCycle, todayDate, census } from "./cycle.js";
+export { CYCLE_LEASE_KEY, CycleLeaseLost, holdsLease, leaseStale, pidAlive, readLease, releaseLease, takeLease } from "./lease.js";
+export type { CycleLease, LeaseStale, LeaseStore, LeaseTake } from "./lease.js";
 export type { SleepOptions } from "./cycle.js";
 
 export {
@@ -112,6 +114,8 @@ export { runFade } from "./fade.js";
 export type { FadeFn, FadeInput, FadeResult, FadeSweepOutcome } from "./fade.js";
 export { runBirths } from "./births.js";
 export type { BirthsFn, BirthsInput, BirthsResult, BirthsSweepOutcome } from "./births.js";
+export { runTags } from "./tags.js";
+export type { TagsFn, TagsInput, TagsSweepOutcome } from "./tags.js";
 
 export { runBriefing } from "./briefing.js";
 export type { BriefingContext, BriefingOutcome, BriefingResult, RenderFn } from "./briefing.js";

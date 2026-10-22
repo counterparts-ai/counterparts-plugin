@@ -465,6 +465,15 @@ export interface SentFacts {
 /** The three fields' names, as a writer sends them. */
 export type FactField = "occurredOn" | "saidBy" | "status";
 
+/** What a deposit recorded of its tags (v14, lane B), and where they came from. */
+export interface DepositTags {
+  readonly tags: readonly string[];
+  /** The memory this revision took them from because the writer sent none; null when they were sent. */
+  readonly from: string | null;
+  /** What the core's screen dropped (`tag-screen.ts`), said plainly; absent when nothing was. */
+  readonly dropped?: readonly string[];
+}
+
 /** What a deposit recorded of the three fields (v12), and what it carried over. */
 export interface DepositFacts {
   readonly occurredOn: string | null;
@@ -489,6 +498,12 @@ export interface DepositContext {
   /** v12: the writer's three fields, as sent (`SentFacts`). Absent: none sent. */
   facts?: SentFacts;
   /**
+   * v14, lane B (2026-10-21): the memory's tags as the door read them
+   * (normalized, screened). Absent: none sent — a revision carries its
+   * memory's over (`carryTags`); `null` or empty: sent as none.
+   */
+  tags?: readonly string[] | null;
+  /**
    * What the memory is about, as the writer marked it (`me`, `us`, `owner`,
    * `work`, `world`), or null/absent when unmarked. Read at the mint only for
    * an UNCLAIMED memory's default floor (`physics.defaultClaimFor`, 2026-10-10);
@@ -506,6 +521,13 @@ export interface DepositContext {
    * review of #284 M1).
    */
   siblings?: readonly string[];
+  /**
+   * Written by the nightly run — its dream, writer or reflection child, or its
+   * catch-up (`NIGHT_CHILD_ENV` / `NIGHT_RUN_ENV` on the door's server; lane
+   * C3, 2026-10-21). The night retells; it is not the owner speaking now, so
+   * its words never correct a belief at once (`revision.ts`).
+   */
+  night?: boolean;
 }
 
 /**
@@ -595,6 +617,8 @@ export interface DepositResult {
   readonly thread?: { readonly from: string; readonly closed: boolean; readonly refused?: ThreadRefusal };
   /** v12: the writer's three fields as recorded — after a revision's carry-over. */
   readonly facts?: DepositFacts;
+  /** v14, lane B: the tags recorded, and the memory they were carried from when the writer sent none. */
+  readonly tags?: DepositTags;
   /**
    * The older memory the slot detector read this one as the newer state of
    * (2026-10-11, Group 2): proposed provisionally, for the writer to confirm

@@ -178,7 +178,19 @@ export const DREAM_TUNABLES = {
     slot: 4,
     "feeling-now": 10,
     "nominate-core": 3,
+    // 2026-10-21 (wave 2 lane C3): a belief proposed, never made. Its ceiling
+    // is `BELIEF_CANDIDATES` (below, top-level so a compare can set it); this
+    // entry names the action.
+    "belief-candidate": 2,
   },
+  /**
+   * BELIEF CANDIDATES A NIGHT (wave 2 lane C3, 2026-10-21; design §3, Mike's
+   * "try it"): a pattern the dream sees across memories may be proposed as a
+   * belief — never minted by the dream ("the interpreter flags; the engine
+   * mints", v1). The next reflection adopts it (route `dream`) or lets it go.
+   * Read at use; off with `schemas.BELIEFS_BIRTH`. CAL.
+   */
+  BELIEF_CANDIDATES: 2,
   /**
    * FOLDS A NIGHT (2026-10-11, Group 3 part B; review 11 D5): a fold is a
    * `gist` flagged `fold: true` — not an action of its own — so it has its own
@@ -226,6 +238,36 @@ export const DREAM_TUNABLES = {
   MAX_TITLE_CHARS: 200,
   /** Longest nomination why (was 300). */
   MAX_WHY_CHARS: 1_000,
+  /**
+   * THE NIGHT PROPOSES A PROJECT (2026-10-21, wave 2 lane G, design §8):
+   * two folders used on the same lived days, their memories naming the same
+   * subjects, are proposed as one project in the morning share — one pair a
+   * night at most, never one asked about in the last `PROJECT_JOIN_REST`
+   * reflections — and the owner's yes joins them (`dream/project-ask.ts`).
+   * Off: no proposal. Read at use.
+   */
+  PROJECT_JOIN_ASK: true,
+  /** Lived days looked back over for co-use. CAL. */
+  PROJECT_JOIN_WINDOW: 14,
+  /** Lived days both folders were written in, at least. CAL. */
+  PROJECT_JOIN_DAYS: 3,
+  /** Subjects (cards, by name) both folders' memories name, at least — only
+   *  subjects named in at most half the active folders count. CAL. */
+  PROJECT_JOIN_SUBJECTS: 3,
+  /** ...and at least this share of the telling subjects of the folder that
+   *  names fewer. CAL. */
+  PROJECT_JOIN_OVERLAP: 0.4,
+  /** ...and at least this share of the telling subjects of the folder that
+   *  names more (review of #580: a general folder names much). CAL. */
+  PROJECT_JOIN_OVERLAP_MAX: 0.25,
+  /** A folder used on the same days as this many others or more is general,
+   *  and never proposed. CAL. */
+  PROJECT_JOIN_GENERAL: 3,
+  /** Lived days a proposal may be acted on; past them a yes is refused and
+   *  the night may ask again. CAL. */
+  PROJECT_JOIN_EXPIRE_DAYS: 3,
+  /** Reflections a pair is not asked about again after it was. CAL. */
+  PROJECT_JOIN_REST: 7,
 } as const;
 
 export type DreamAction = keyof typeof DREAM_TUNABLES.LIMITS;

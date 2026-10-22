@@ -39,6 +39,12 @@ export interface BirthsSweepOutcome {
   readonly refused: Readonly<Record<string, number>>;
   /** Names left for the next night by the budget. */
   readonly skippedForLimit: number;
+  /**
+   * Births tried within their limits (review of #576): what an observer
+   * reports a night would do. Absent: `min(offered, budget)`, one budget's
+   * arithmetic, which miscounts when names and topics each have their own.
+   */
+  readonly attempts?: number;
 }
 
 export type BirthsFn = (input: BirthsInput) => BirthsSweepOutcome;
@@ -56,7 +62,7 @@ export function runBirths(ctx: PhaseCtx, births: BirthsFn | undefined): BirthsRe
   const r = births({ day: ctx.day, apply: ctx.apply, budget: ctx.budget });
   out.examined = r.offered;
   // Under observer nothing is born, and `changed` is what a night would try.
-  out.changed = ctx.apply ? r.born.length : Math.min(r.offered, ctx.budget);
+  out.changed = ctx.apply ? r.born.length : (r.attempts ?? Math.min(r.offered, ctx.budget));
   out.budgetExhausted = r.skippedForLimit > 0;
   out.skippedForBudget = r.skippedForLimit;
   for (const [reason, n] of Object.entries(r.refused)) countSkip(out, `refused:${reason}`, n);

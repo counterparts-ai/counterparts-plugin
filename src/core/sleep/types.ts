@@ -88,6 +88,14 @@ export interface SleepStore {
   // writes
   advanceClock(date: string): number;
   setMeta(key: string, value: string): void;
+  /**
+   * One meta row read, changed and written in ONE transaction (`Store#updateMeta`),
+   * OPTIONAL: the cycle's lease is taken through it (`lease.ts`, 2026-10-21). A
+   * port without it runs its cycle unleased, and says so in the ring.
+   */
+  updateMeta?(key: string, fn: (current: string | undefined) => string | null | undefined): string | null | undefined;
+  /** The store's clock, ms (OPTIONAL; the lease falls back to `Date.now()`). */
+  now?(): number;
   archive(id: string, reason: string): void;
   updatePhysics(id: string, patch: Partial<MemoryPhysics>): void;
   setBand(id: string, band: Band, day: number): void;
@@ -199,6 +207,9 @@ export interface SleepStore {
  *   - `births` runs right after `fade` (2026-10-11): a name whose card faded
  *     tonight is a faded card's name, so the tally leaves it to come back the
  *     way a faded card does — when a new memory names it.
+ *   - `tags` runs right after `births` (2026-10-21, wave 2 lane B): a card
+ *     born tonight lends its name as a tag tonight. The topic births are part
+ *     of `births` and read the merges this phase left, a night later.
  *   - `briefing` is the cycle's final CONTENT write. `log` runs after it and
  *     writes no content: it deletes telemetry rows past the retention window
  *     (§5 G16), and it is last so "what the cycle forgot" and "what the log
@@ -212,6 +223,7 @@ export const PHASES = [
   "prune",
   "fade",
   "births",
+  "tags",
   "dedup",
   "versions",
   "briefing",
@@ -232,6 +244,7 @@ export type PhaseReason =
   | "no-render-fn"
   | "no-fade-fn"
   | "no-births-fn"
+  | "no-tags-fn"
   | "no-durable-event-log"
   | "failed";
 
@@ -529,6 +542,23 @@ export interface CycleReport {
   /** A kind with a zero exit count after bake-in is a defect (§5 G13). */
   readonly census: Readonly<Record<Kind, KindCensus>>;
   readonly events: readonly SleepEvent[];
+  /**
+   * PRESENT ONLY WHEN THIS CYCLE STOOD ASIDE (2026-10-21, `lease.ts`): another
+   * cycle held the store's lease. Found held at the start, no phase ran and
+   * `order`/`phases` are empty. Taken over while it ran (`lostAt`, the fence,
+   * review of #581), they are the phases it finished before it stopped, and the
+   * night is the other cycle's. `symmetry` was not computed; `census` is the
+   * day's births read as they stand. Who holds it, as far as the row says (all
+   * null when the row was gone by the time it looked).
+   */
+  readonly held?: {
+    readonly owner: string | null;
+    readonly pid: number | null;
+    readonly since: number | null;
+    readonly until: number | null;
+    /** The phase the fence stopped it before (or after, for the last); absent when it never started. */
+    readonly lostAt?: Phase;
+  };
 }
 
 export function phaseReport(report: CycleReport, phase: Phase): PhaseReport {
@@ -723,6 +753,22 @@ export function isEntityCard(row: MemoryRow): boolean {
   try {
     const meta = JSON.parse(row.meta) as { role?: unknown } | null;
     return meta !== null && typeof meta === "object" && meta.role === "entity";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A BELIEF ROW (wave 2 lane C, 2026-10-21): `type: schema`, `meta.role:
+ * belief`. Kept out of the core lanes for now (`consolidate.ts`): a belief
+ * about me reaching the core is lane F's, behind its own switch. The role's
+ * owner is `schemas/`.
+ */
+export function isBeliefRow(row: Pick<MemoryRow, "type" | "meta">): boolean {
+  if (row.type !== "schema" || !row.meta.includes('"belief"')) return false;
+  try {
+    const meta = JSON.parse(row.meta) as { role?: unknown } | null;
+    return meta !== null && typeof meta === "object" && meta.role === "belief";
   } catch {
     return false;
   }

@@ -112,7 +112,7 @@ import type { ProseType } from "./prose.js";
  * `store/NOTES.md` 2026-09-25.
  *
  * Bumped to 6 (2026-09-20, the floor): **the memory IS the row.** `title`,
- * `body`, `meta` and `confidential` are columns on `memories`; a version row
+ * `body`, `meta` and `confidential` (dropped at v14) are columns on `memories`; a version row
  * carries its own `title`/`body`/`meta` plus the two provenance dates; and
  * `memories.prose_path` and `versions.path` are GONE, because there are no
  * files for them to name. Markdown became an export (`render.ts`).
@@ -155,7 +155,27 @@ import type { ProseType } from "./prose.js";
  * knows only v12 refuses the file `SCHEMA_AHEAD`, and the way back is that
  * copy (`store/NOTES.md` 2026-10-10).
  */
-export const SCHEMA_VERSION = 13;
+/*
+ * Bumped to 14 (2026-10-21, wave 2's ONE schema bump: tags, subjects,
+ * beliefs, projects — `counterparts-notes/2026-10-21-beliefs-design.md`).
+ * Pre-provisioned so lanes B–G need no second bump; nothing writes the new
+ * tables yet. `memories` gains `subject_kind` (a card's kind of subject:
+ * person, project, place, topic, self — NOT `kind`, which feeds the revision
+ * inertia and the core lanes), `birth_route` and `confidence` (a belief's),
+ * and `birth_salience` (`sal()` of the salience a row was written with; the
+ * row's own dimensions can be rewritten later). Five tables are new:
+ * `memory_tags` and `tag_merges` (lane B), `belief_support` (lane C),
+ * `folder_projects` (lane G) and `recall_turns` (lane 1's per-turn shown set).
+ * The first NON-additive step since v6: `memories.confidential`, inert since
+ * the confidential removal (#564/#565), is DROPPED — after the retirement's
+ * count is taken, when the first writable open has not taken it yet
+ * (`CONFIDENTIAL_RETIRED_KEY`). The upgrade gives the cards whose subject kind
+ * is not a judgement theirs (`backfillSubjectKinds`) and records what it did
+ * (`V14_UPGRADE_KEY`). The copy is taken before migrating (`copyBeforeMigrating`);
+ * a build that knows only v13 refuses the file `SCHEMA_AHEAD`, and the way back
+ * is that copy (`store/NOTES.md` 2026-10-21).
+ */
+export const SCHEMA_VERSION = 14;
 /**
  * The oldest schema an OBSERVER may open without a migration having run.
  *
@@ -205,6 +225,13 @@ export const SCHEMA_VERSION = 13;
  * v12 row simply has no `next_change_day` / `dream_shown_day` (nothing an
  * instrument reads), and a v12 feeling with no `recorded_day` softens from its
  * memory's birth (`feelings.ts#feltDay`) — what every build before v13 did.
+ *
+ * NOT raised with v14 (2026-10-21), for the same reason. A v13 row read
+ * `m.*` lacks the four new columns, which nothing an instrument reads yet,
+ * and keeps a `confidential` column no read names any more (every SELECT that
+ * named it was rewritten with the drop). The five new tables are empty until
+ * lanes B–G write them, and every reader asks `hasTable` first, so a v13 file
+ * reads as "none yet" — which is what it holds.
  */
 export const OBSERVER_READ_FLOOR = 11;
 /** Retention for superseded-version rows, in LIVED days. TUNABLE (module-map ruling 2).
@@ -293,9 +320,6 @@ export const DDL: readonly string[] = [
      -- "unrecognized fields survive parse -> serialize untouched" (G6, v1's named
      -- incident) is satisfied for free by storing the text as given.
      meta              TEXT NOT NULL DEFAULT '{}',
-     -- Retired 2026-10-21: written 0, read by no gate. Planned (lightly held)
-     -- to be dropped in the next batched store-format change.
-     confidential      INTEGER NOT NULL DEFAULT 0,
      created_at        INTEGER,
      updated_at        INTEGER,
      model             TEXT,
@@ -313,7 +337,11 @@ export const DDL: readonly string[] = [
      said_by           TEXT,
      status            TEXT,
      next_change_day   INTEGER,
-     dream_shown_day   INTEGER
+     dream_shown_day   INTEGER,
+     subject_kind      TEXT,
+     birth_route       TEXT,
+     confidence        REAL,
+     birth_salience    REAL
    )`,
   `CREATE INDEX IF NOT EXISTS memories_band ON memories (band, archived)`,
   `CREATE INDEX IF NOT EXISTS memories_kind ON memories (kind, archived)`,
@@ -637,6 +665,82 @@ export const DDL: readonly string[] = [
      PRIMARY KEY (memory_id, subject_id)
    )`,
   `CREATE INDEX IF NOT EXISTS memory_subjects_subject ON memory_subjects (subject_id, memory_id)`,
+  // v14 (2026-10-21, pre-provisioned for wave 2 lane B): A MEMORY'S TAGS —
+  // one row per memory and tag, mirroring `memory_subjects`. `tag` is the
+  // normalized word (lowercase, trimmed; stemming and synonyms are lane B's).
+  // No weight: a tag has none of its own. `via`: `write` (the memory's own
+  // write), `night` (the night tagged an older memory), `merge` (a synonym
+  // merge moved it), `backfill`. Concept edges (tags that keep appearing
+  // together) are read off this table by a self-join for now, not kept
+  // (`Store#tagNeighbours`). Not foreign-keyed: the owner's removal deletes a
+  // removed memory's rows itself.
+  `CREATE TABLE IF NOT EXISTS memory_tags (
+     memory_id  TEXT NOT NULL,
+     tag        TEXT NOT NULL,
+     via        TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     PRIMARY KEY (memory_id, tag)
+   )`,
+  `CREATE INDEX IF NOT EXISTS memory_tags_tag ON memory_tags (tag, memory_id)`,
+  // v14: A SYNONYM MERGE, recorded so it can be undone — `alias` is now read
+  // as `tag`. `via`: who merged it (`night`, `owner`, `stem`). Lane B decides
+  // whether the merge rewrites `memory_tags` or is applied on read.
+  `CREATE TABLE IF NOT EXISTS tag_merges (
+     alias      TEXT PRIMARY KEY,
+     tag        TEXT NOT NULL,
+     via        TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS tag_merges_tag ON tag_merges (tag)`,
+  // v14 (pre-provisioned for lane C): A BELIEF'S SUPPORT — one row per belief
+  // and memory, so a memory counts ONCE per belief (the primary key), for it
+  // (`stance` `support`) or against it (`contrary`). `route`: how it was filed
+  // (`session`, `reflection`, `testimony`, `choice`, `use`, ...; lane C's
+  // vocabulary); `day`: the lived day it was filed; `weight`: what lane C's
+  // rule gave it. Where the support came from — its day, session and folder —
+  // is the memory's own row (`birth_day`, `origin_session`, `origin_scope`),
+  // read by a join, not copied here. Not `derivations` (provenance, no stance,
+  // no weight, `how` in its key). Not foreign-keyed: the owner's removal
+  // deletes a removed memory's rows, either side.
+  `CREATE TABLE IF NOT EXISTS belief_support (
+     belief_id  TEXT NOT NULL,
+     memory_id  TEXT NOT NULL,
+     stance     TEXT NOT NULL,
+     route      TEXT NOT NULL,
+     day        INTEGER NOT NULL,
+     weight     REAL NOT NULL,
+     created_at INTEGER NOT NULL,
+     PRIMARY KEY (belief_id, memory_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS belief_support_memory ON belief_support (memory_id)`,
+  // v14 (pre-provisioned for lane G): WHICH PROJECT A FOLDER BELONGS TO — a
+  // project is a card (`subject_kind` `project`), so this is store state, not
+  // `scopes.json` (which sits beside the config because hooks decide `off`
+  // before the store opens). `via`: `owner` (his word), `night` (proposed from
+  // co-use and accepted), `default`. One project per folder for now. The
+  // owner's removal of the card deletes its rows.
+  `CREATE TABLE IF NOT EXISTS folder_projects (
+     folder     TEXT PRIMARY KEY,
+     project_id TEXT NOT NULL,
+     via        TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS folder_projects_project ON folder_projects (project_id)`,
+  // v14 (pre-provisioned, lane 1's ask): WHAT ONE RECALL TURN SHOWED against
+  // how many candidates it weighed — the pool test `gate_session` cannot
+  // answer (it keeps a memory's latest turn and no count). `shown` is a JSON
+  // array of ids, in order; `day` the lived day, for a sweep. Ids and numbers
+  // only. The owner's removal takes a removed id out of `shown`.
+  `CREATE TABLE IF NOT EXISTS recall_turns (
+     session_id TEXT NOT NULL,
+     turn       INTEGER NOT NULL,
+     at         INTEGER NOT NULL,
+     day        INTEGER NOT NULL,
+     candidates INTEGER NOT NULL,
+     shown      TEXT NOT NULL DEFAULT '[]',
+     PRIMARY KEY (session_id, turn)
+   )`,
+  `CREATE INDEX IF NOT EXISTS recall_turns_day ON recall_turns (day)`,
   `CREATE INDEX IF NOT EXISTS core_events_memory ON core_events (memory_id)`,
   `CREATE INDEX IF NOT EXISTS core_events_at ON core_events (at)`,
   `CREATE INDEX IF NOT EXISTS feelings_whose_core ON feelings (whose, core)`,
@@ -822,6 +926,85 @@ export interface MemoryRow extends Row {
   next_change_day: number | null;
   /** v13 (pre-provisioned for Group 3): the last lived day a standing dream SHOWED it. Nothing writes it yet. */
   dream_shown_day: number | null;
+  /**
+   * v14 (2026-10-21, pre-provisioned for wave 2): what kind of SUBJECT a card
+   * is — `person`, `project`, `place`, `topic` or `self` (`SUBJECT_KINDS`) —
+   * NULL on every other row, and on a card nobody has judged yet. Not `kind`:
+   * a card's `kind` is its physics (revision inertia, the core's kinds). The
+   * v14 upgrade fills it where it is not a judgement (`backfillSubjectKinds`).
+   * Undefined on a v13 file read before its upgrade: read it `?? null`.
+   */
+  subject_kind: string | null;
+  /** v14 (lane C): how a belief was born — `reflection`, `session`, `dream`, `correction`, `migrated` (`BIRTH_ROUTES`). NULL on every other row. */
+  birth_route: string | null;
+  /** v14 (lane C, design "still open" 1): a belief's confidence beside its strength. Nothing writes it yet. */
+  confidence: number | null;
+  /**
+   * v14: `sal()` of the salience the row was WRITTEN with — the dimensions and
+   * the claim at birth, which `updatePhysics` may rewrite later. Written by
+   * every insert since v14; NULL on a row written before (it cannot be known).
+   */
+  birth_salience: number | null;
+}
+
+/** v14: a card's kind of subject (`memories.subject_kind`). `self` is the one subject that is me (`Store#ensureSelfSubject`). */
+export const SUBJECT_KINDS = ["person", "project", "place", "topic", "self"] as const;
+export type SubjectKind = (typeof SUBJECT_KINDS)[number];
+
+/** v14: how a belief was born (`memories.birth_route`). */
+export const BIRTH_ROUTES = ["reflection", "session", "dream", "correction", "migrated"] as const;
+export type BirthRoute = (typeof BIRTH_ROUTES)[number];
+
+/** v14: one tag on one memory (`memory_tags`). */
+export interface MemoryTagRow extends Row {
+  memory_id: string;
+  /** The normalized word. */
+  tag: string;
+  /** `write`, `night`, `merge`, `backfill`. */
+  via: string;
+  created_at: number;
+}
+
+/** v14: one synonym merge (`tag_merges`): `alias` reads as `tag`. */
+export interface TagMergeRow extends Row {
+  alias: string;
+  tag: string;
+  via: string;
+  created_at: number;
+}
+
+/** v14: one memory counted for or against one belief (`belief_support`). */
+export interface BeliefSupportRow extends Row {
+  belief_id: string;
+  memory_id: string;
+  /** `support` or `contrary`. */
+  stance: string;
+  route: string;
+  /** The lived day it was filed. */
+  day: number;
+  weight: number;
+  created_at: number;
+}
+
+/** v14: the project a folder belongs to (`folder_projects`). */
+export interface FolderProjectRow extends Row {
+  folder: string;
+  /** The project's card. */
+  project_id: string;
+  /** `owner`, `night`, `default`. */
+  via: string;
+  created_at: number;
+}
+
+/** v14: what one recall turn showed against how many candidates it weighed (`recall_turns`). */
+export interface RecallTurnRow extends Row {
+  session_id: string;
+  turn: number;
+  at: number;
+  day: number;
+  candidates: number;
+  /** JSON array of the ids shown, in order. */
+  shown: string;
 }
 
 export interface ReflectionRow extends Row {
@@ -1008,6 +1191,12 @@ export interface FeelingPeak {
   feeling_peak?: number | null;
   /** v9: the same peak without the feelings a reflection recorded later. */
   feeling_peak_lived?: number | null;
+  /**
+   * NOT A COLUMN (lane C, 2026-10-21): a belief's counted support, `{ sum,
+   * days }` as JSON, from its box-2 meta row (`wave2.ts#recountSupport`), read
+   * beside a row with a birth route. Absent on a bare `SELECT *`: no support.
+   */
+  belief_support?: string | null;
 }
 
 export interface VersionRow extends Row {
@@ -1483,6 +1672,21 @@ export function openOperational(path: string, opts: OpenOperationalOptions = {})
           JSON.stringify({ from: now, day: Number.parseInt(lived, 10) || 0, at: Date.now(), ...backfilled }),
         );
       }
+      // v14 (2026-10-21, wave 2's one bump): the retired confidential column
+      // is counted (when no writable open has counted it yet) and DROPPED;
+      // the cards whose subject kind is not a judgement get theirs; the moment
+      // and what moved are kept for doctor. The new tables and columns came
+      // with the DDL above.
+      if (now !== null && Number.parseInt(now, 10) < 14) {
+        const lived = db.get<{ value: string }>("SELECT value FROM meta WHERE key = 'livedDay'")?.value ?? "0";
+        const retired = retireConfidentialColumn(db, opts.localToday ?? null);
+        const subjects = backfillSubjectKinds(db);
+        db.run(
+          "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+          V14_UPGRADE_KEY,
+          JSON.stringify({ from: now, day: Number.parseInt(lived, 10) || 0, at: Date.now(), ...retired, subjects }),
+        );
+      }
       const put = db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)");
       put.run("livedDay", "0");
       put.run("lastActiveDate", "");
@@ -1647,6 +1851,11 @@ export const DDL_AFTER_COLUMNS: readonly string[] = [
   // `origin_ref` (`Store#copiesOf`) — a scan of the store without this
   // (≈3 ms at a synthetic 9,250). Rides the v13 upgrade, as above.
   `CREATE INDEX IF NOT EXISTS memories_origin_ref ON memories (origin_ref) WHERE origin_ref IS NOT NULL`,
+  // v14 (2026-10-21): the cards by kind of subject (the self subject, a
+  // kind's page list) and the beliefs, without a scan. Partial: few rows
+  // carry either.
+  `CREATE INDEX IF NOT EXISTS memories_subject_kind ON memories (subject_kind) WHERE subject_kind IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS memories_birth_route ON memories (birth_route) WHERE birth_route IS NOT NULL`,
 ];
 
 /** Every trigger `DDL_AFTER_COLUMNS` creates, read off the statements (`ensureCurrentTables`). */
@@ -1744,7 +1953,98 @@ export const ADDED_COLUMNS: readonly { table: string; column: string; ddl: strin
   { table: "edges", column: "reinforced", ddl: "ALTER TABLE edges ADD COLUMN reinforced INTEGER NOT NULL DEFAULT 0" },
   { table: "feelings", column: "recorded_day", ddl: "ALTER TABLE feelings ADD COLUMN recorded_day INTEGER" },
   { table: "returns", column: "session", ddl: "ALTER TABLE returns ADD COLUMN session TEXT" },
+  // v14 (2026-10-21, wave 2's one bump): nullable, no default; NULL on every
+  // row the upgrade finds but the cards `backfillSubjectKinds` names. Listed
+  // in the fresh CREATE's order, last, so a migrated `memories` (which loses
+  // `confidential` from the middle and appends these) reads as a fresh one.
+  { table: "memories", column: "subject_kind", ddl: "ALTER TABLE memories ADD COLUMN subject_kind TEXT" },
+  { table: "memories", column: "birth_route", ddl: "ALTER TABLE memories ADD COLUMN birth_route TEXT" },
+  { table: "memories", column: "confidence", ddl: "ALTER TABLE memories ADD COLUMN confidence REAL" },
+  { table: "memories", column: "birth_salience", ddl: "ALTER TABLE memories ADD COLUMN birth_salience REAL" },
 ];
+
+/**
+ * THE v14 DROP of `memories.confidential` (2026-10-21), inert since the
+ * confidential removal (#564/#565: written 0, read by no gate). FIRST, the
+ * retirement's count (`CONFIDENTIAL_RETIRED_KEY`): a store upgraded straight
+ * from a build before the removal has never been counted, and after the drop
+ * nothing can count it — so when the row is absent it is written here, in the
+ * shape the `Store` constructor writes (`{count, ids ≤ 50, at, day}`, `day`
+ * the person's calendar day of this open). Then the drop, guarded by
+ * `table_info` (a file without the column has nothing to drop). SQLite
+ * refuses `DROP COLUMN` on a column an index, a trigger or a view names; none
+ * does (checked on the corpus copy, 2026-10-21). In the migrating
+ * transaction, after the copy. Counts only come back.
+ */
+export function retireConfidentialColumn(db: Db, today: string | null): { confidentialDropped: boolean; confidentialCounted: number | null } {
+  const has = db.all<{ name: string }>("PRAGMA table_info(memories)").some((c) => c.name === "confidential");
+  if (!has) return { confidentialDropped: false, confidentialCounted: null };
+  let counted: number | null = null;
+  if (db.get("SELECT 1 FROM meta WHERE key = ?", CONFIDENTIAL_RETIRED_KEY) === undefined) {
+    const live = "confidential = 1 AND archived = 0 AND superseded_by IS NULL";
+    counted = db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM memories WHERE ${live}`)?.n ?? 0;
+    const ids =
+      counted === 0
+        ? []
+        : db.all<{ id: string }>(`SELECT id FROM memories WHERE ${live} ORDER BY id LIMIT ?`, CONFIDENTIAL_RETIRED_IDS).map((r) => r.id);
+    db.run(
+      "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+      CONFIDENTIAL_RETIRED_KEY,
+      JSON.stringify({ count: counted, ids, at: Date.now(), day: today ?? "" }),
+    );
+  }
+  db.run("ALTER TABLE memories DROP COLUMN confidential");
+  return { confidentialDropped: true, confidentialCounted: counted };
+}
+
+/**
+ * A CARD'S KIND OF SUBJECT WHERE IT IS NOT A JUDGEMENT (v14, 2026-10-21), or
+ * null where it is (the night's, lane B). An entity card (`type = 'schema'`,
+ * `meta.role` `entity`) of kind `person` is a person and of kind `place` a
+ * place; the identity core (kind `self`, the one card install names after the
+ * OWNER — `self/identity.ts#findIdentityCore`) is a person too. Kind `entity`
+ * cards (projects, tools, topics, organisations) get null. One rule, read by
+ * the upgrade's backfill and by every insert (`Store#insertOne`), so a card
+ * born after v14 is marked as an upgraded one is.
+ */
+export function deterministicSubjectKind(
+  type: string,
+  kind: string,
+  meta: Readonly<Record<string, unknown>> | null,
+): SubjectKind | null {
+  if (type !== "schema" || meta === null || meta["role"] !== "entity") return null;
+  if (kind === "person" || kind === "self") return "person";
+  if (kind === "place") return "place";
+  return null;
+}
+
+/**
+ * THE v14 BACKFILL of `memories.subject_kind`, by `deterministicSubjectKind`,
+ * on live and archived cards (not a removed one), so the night (lane B) is
+ * left only the cards that need a model. Rows still NULL only; idempotent.
+ * Returns how many of each it gave.
+ */
+export function backfillSubjectKinds(db: Db): Record<string, number> {
+  const rows = db.all<{ id: string; type: string; kind: string; meta: string }>(
+    `SELECT id, type, kind, meta FROM memories
+      WHERE type = 'schema' AND kind IN ('person', 'place', 'self') AND subject_kind IS NULL AND body != ''`,
+  );
+  const write = db.prepare("UPDATE memories SET subject_kind = ? WHERE id = ? AND subject_kind IS NULL");
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    let meta: Record<string, unknown> | null;
+    try {
+      meta = JSON.parse(r.meta) as Record<string, unknown> | null;
+    } catch {
+      meta = null;
+    }
+    const subject = deterministicSubjectKind(r.type, r.kind, meta);
+    if (subject === null) continue;
+    write.run(subject, r.id);
+    out[subject] = (out[subject] ?? 0) + 1;
+  }
+  return out;
+}
 
 /**
  * THE HISTORY A LEGACY ROW ALREADY HAD, credited as returns at the v8 upgrade
@@ -1815,6 +2115,9 @@ export const V12_UPGRADE_KEY = "recall.v12.upgrade";
 
 /** Meta key: what the v13 upgrade did (`physics.v13.upgrade`) — the mechanisms bump. */
 export const V13_UPGRADE_KEY = "physics.v13.upgrade";
+
+/** Meta key: what the v14 upgrade did (`beliefs.v14.upgrade`) — wave 2's bump: the drop, the cards' subject kinds. */
+export const V14_UPGRADE_KEY = "beliefs.v14.upgrade";
 
 /**
  * THE v13 BACKFILL of `feelings.recorded_day` (2026-10-10, review 02 C5): the
@@ -2352,7 +2655,9 @@ export const CLAIMS_ERA_RECORDED_KEY = "claims.era.recorded";
  * rows carried `confidential = 1` at the first writable open by a build that
  * no longer withholds them — `{count, ids (at most 50), at (UTC ms), day}`.
  * Nothing is archived or changed; doctor names the count when it is above 0.
- * Written once, keyed on this row's absence, as the claims era is.
+ * Written once, keyed on this row's absence, as the claims era is. The column
+ * itself was dropped at v14 (`retireConfidentialColumn`), which writes this
+ * row first when no writable open had; the row stays, and doctor reads it.
  */
 export const CONFIDENTIAL_RETIRED_KEY = "confidential.retired";
 /** How many ids the retirement record keeps. */
@@ -2493,6 +2798,20 @@ function eraExemptRow(
  * old-claims era's cutoff rides the same way (`claims_era_cutoff`); a bare
  * `SELECT *` carries none, and reads every claim as stored.
  */
+/** A belief's counted support from its meta row's JSON (`{ sum, days }`); zeros when there is none or it will not read. */
+function beliefSupportOf(json: string | null | undefined): { support: number; supportDays: number } {
+  if (typeof json !== "string" || json.length === 0) return { support: 0, supportDays: 0 };
+  try {
+    const v = JSON.parse(json) as { sum?: unknown; days?: unknown };
+    return {
+      support: typeof v.sum === "number" && Number.isFinite(v.sum) ? v.sum : 0,
+      supportDays: typeof v.days === "number" && Number.isFinite(v.days) ? v.days : 0,
+    };
+  } catch {
+    return { support: 0, supportDays: 0 };
+  }
+}
+
 export function rowToPhysics(row: MemoryRow & FeelingPeak, today?: string | null): MemoryPhysics {
   const hold = datedHold(row, today ?? row.today_date ?? null);
   const eraClaim = eraClaimOf(row, row.claims_era_cutoff, hold);
@@ -2532,5 +2851,10 @@ export function rowToPhysics(row: MemoryRow & FeelingPeak, today?: string | null
     protected: row.protected === 1,
     pressure: row.pressure,
     lastChallengedDay: row.last_challenged_day,
+    // v14 (wave 2 lane C): a belief is the row with a birth route (physics
+    // §5.13) — but a `migrated` one keeps the physics it lived, for now.
+    // Undefined on a v13 row read before its upgrade: not one. Its support is
+    // its own, read beside the row (`belief_support`), never `uses`.
+    ...(row.birth_route !== null && row.birth_route !== undefined && row.birth_route !== "migrated" ? { belief: true, ...beliefSupportOf(row.belief_support) } : {}),
   };
 }

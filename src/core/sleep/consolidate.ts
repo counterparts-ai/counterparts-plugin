@@ -53,7 +53,7 @@ import type { Phase, PhaseCtx, PhaseOutcome, PromotionRecord, SleepStore } from 
 
 /** The two reads "who is this about" needs — a read-only store has both. */
 export type ReadsDocs = Pick<SleepStore, "list" | "read">;
-import { countSkip, emptyOutcome, isJournal } from "./types.js";
+import { countSkip, emptyOutcome, isBeliefRow, isJournal } from "./types.js";
 
 /** This phase's own name, for the cursor it keeps. Typed, so a rename in the
  *  phase vocabulary fails `tsc` here rather than reading an empty cursor. */
@@ -670,9 +670,18 @@ export function runConsolidate(ctx: PhaseCtx): ConsolidateResult {
     // THE SELF PAGE DOES NOT CROSS (2026-09-18): it can be given the physics a
     // lane wants and would then carry `promoted_identity` on a row the wake can
     // never rank. The guard is THE PAGE, not schema rows generally — see
-    // `sleep/NOTES.md` for why the identity core and beliefs are not exempted.
+    // `sleep/NOTES.md` for why the identity core is not exempted (beliefs are,
+    // for now, just below: lane C, 2026-10-21).
     if (row.type === "schema" && row.kind === "self" && isThePage(store, id)) {
       block("self-page");
+      continue;
+    }
+    // A BELIEF DOES NOT CROSS, FOR NOW (wave 2 lane C, 2026-10-21): a belief
+    // about me or us reaching the core is lane F's, behind its own switch. A
+    // belief on a person card is kind `person` (a core kind), so the kind
+    // alone would not keep it out; the role does (`types.ts#isBeliefRow`).
+    if (isBeliefRow(row)) {
+      block("a-belief");
       continue;
     }
     if (p.promotedIdentity) {

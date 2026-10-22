@@ -6,10 +6,11 @@
    and `app.html` carries one `<section class="tab" id="tab-<name>">` for it. */
 import home from "../pages/home/index.js";
 import memories from "../pages/memories/index.js";
+import subjects from "../pages/subjects/index.js";
 import self from "../pages/self/index.js";
 import flow from "../pages/flow/index.js";
 import health from "../pages/health/index.js";
 
-export const PAGES = [home, memories, self, flow, health];
+export const PAGES = [home, memories, subjects, self, flow, health];
 export const TABS = PAGES.map((p) => p.name);
 export const PAGE = Object.fromEntries(PAGES.map((p) => [p.name, p]));

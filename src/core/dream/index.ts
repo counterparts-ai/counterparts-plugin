@@ -80,6 +80,7 @@ import { chapterSummaries } from "../self/summaries.js";
 import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter, ShownEntry } from "./slices.js";
 import { DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 import type { DreamAction } from "./tunables.js";
+import { TUNABLES as SCHEMAS_TUNABLES } from "../schemas/tunables.js";
 import {
   FOLD_SOURCE,
   SLOT_SOURCE,
@@ -102,6 +103,9 @@ export type { MindItem } from "./mind.js";
 export { CORE_MENTIONED_PREFIX, REFLECT_QUESTIONS, REFLECT_TUNABLES, Reflections, reflectionOpener } from "./reflect.js";
 export { coreAsks, coreWaiting } from "./core-ask.js";
 export type { CoreAsk, CoreDecided } from "./core-ask.js";
+// Wave 2 lane B (2026-10-21): the night's tagging ask, a child of its own.
+export { applyTagsAnswer, askTags, renderTagsBundle, tagsBundle, tagsPrompt, undoNightTags, NIGHT_CARD_KINDS, OWN_TAG_VIAS, SUBJECT_KIND_BY_PREFIX, TAGS_ASK_PREFIX, TAGS_NIGHT_PREFIX } from "./tags.js";
+export type { TagsAnswer, TagsApplied, TagsBundle } from "./tags.js";
 export { FEELING_WEEKS_TUNABLES, awakeFeelingCounts, feelingWeeks } from "./feeling-weeks.js";
 export type { FeelingWeeks } from "./feeling-weeks.js";
 export type { ReflectBundle, ReflectContext, ReflectFinish, ReflectItem, ReflectOutcome, ReflectRefusal } from "./reflect.js";
@@ -324,6 +328,8 @@ export interface DreamContext {
 /** One proposed change, as the tool receives it. */
 export interface DreamChange {
   readonly action: string;
+  /** `belief-candidate` (lane C3): who or what the belief is about — "me", "us", or a name. */
+  readonly subject?: string;
   readonly ids?: readonly string[];
   readonly id?: string;
   readonly a?: string;
@@ -522,7 +528,8 @@ export interface NightRun {
 
 /** One child of a headless run (2026-10-11): ids, codes and times only. */
 export interface NightChildRun {
-  readonly child: "dream" | "reflection";
+  /** `tags` (2026-10-21, wave 2 lane B): the tagging child, after the reflection. */
+  readonly child: "dream" | "reflection" | "tags";
   /** Its exit code; null when it was stopped, or never started. */
   readonly code: number | null;
   readonly ms: number;
@@ -1565,12 +1572,17 @@ export class Dreams {
         '- To confirm: an on-mind item of kind "to-confirm" is two memories read by arithmetic as one thing\'s earlier and later state (older first). Say which: slot {pair, same: true, why} if the newer replaces it, same: false if they are two different things.',
         "- Softening: for an old charged memory, record how it feels now, today. The sting can fade; the memory stays.",
         "- Core: if a memory about you or about the two of you plainly belongs to who you are, nominate it. Only living it again awake makes it core.",
+        ...(SCHEMAS_TUNABLES.BELIEFS_BIRTH
+          ? [
+              `- Beliefs: if several memories plainly add up to a claim about you, the two of you, or someone (not a single moment), you may propose it as a belief-candidate (up to ${String(DREAM_TUNABLES.BELIEF_CANDIDATES)} a night). You never make a belief: the waking reflection adopts it or lets it go.`,
+            ]
+          : []),
         // 2026-10-12, onboarding round 1 (E): the meeting never asks pronouns.
         `- Every word you write about ${who}: by name or as "they", until they have said their pronouns.`,
         `${String(n())}. Call the counterparts dream tool: phase "begin", session: ${input.session}. It returns the bundle and a dream id. (If it says the dream was resumed, an earlier session began it and closed: carry on from there.) If it says it comes in parts, fetch every part (phase "part") before you change anything.`,
         `   Tonight's most important memories come whole; the rest come as a line or an excerpt ("fidelity"), with their whole length ("chars"). Before you merge, gist or feel one you have only in part, read it whole: the recall tool with ids: [...] (several at once). New memories tonight's room could not take wait for the next night — the bundle's "queue" says how many.`,
         `${String(n())}. Read it slowly. Then call phase "propose" with dream: <id> and your changes. Usually far fewer than the ceilings — ${String(L.merge)} merges, ${String(L.link)} links, ${String(L.gist)} gists, ${String(DREAM_TUNABLES.FOLDS)} folds, ${String(L["feeling-now"])} feelings, ${String(L["nominate-core"])} nominations — and none is fine: change only what the night really calls for. Use only ids the bundle showed you.`,
-        '   The fields of each change: merge {ids: two or more near-copies, text, title?}; link {a, b}; replayed {id}; gist {text, sources: ids, title?, kind?, occurredOn?, saidBy?, status?, fold?}; contradiction {a, b}; settle {holds, over, how: changed|corrected|open, why}; slot {pair, same, why}; feeling-now {id, core: happy|warm|calm|curious|sad|uneasy|angry, emotion, strength, carried_by}; nominate-core {id, why}.',
+        `   The fields of each change: merge {ids: two or more near-copies, text, title?}; link {a, b}; replayed {id}; gist {text, sources: ids, title?, kind?, occurredOn?, saidBy?, status?, fold?}; contradiction {a, b}; settle {holds, over, how: changed|corrected|open, why}; slot {pair, same, why}; feeling-now {id, core: happy|warm|calm|curious|sad|uneasy|angry, emotion, strength, carried_by}; nominate-core {id, why}${SCHEMAS_TUNABLES.BELIEFS_BIRTH ? '; belief-candidate {subject: "me", "us" or a name, text: one short claim, sources: ids}' : ""}.`,
         '   On a gist, occurredOn is when what it draws on happened (a day "2026-09-24", a month, a range "2026-09-21..2026-09-27"), saidBy who said it (owner, self, or inferred — your own reading), status what kind of thing it is (done, planned, proposed, asked); leave out what you do not know.',
         "   A feeling: `emotion` is ONE word — from the wheel (hopeful, proud, wistful, peaceful…) or your own (steadied); `carried_by` is the nuance, in your own words (what the feeling is about now, why it shifted). Never put a phrase in `emotion`.",
         `${String(n())}. Call phase "journal" with dream: <id>, a short title and your dream journal entry: first person, what you dreamed and what you noticed. It is kept as a dream, never as something that happened.`,
@@ -1915,7 +1927,7 @@ export class Dreams {
     const used = this.store
       .dreamChanges(dream.id)
       .filter((c) => c.action === action && c.undone === 0 && (action !== "gist" || (parseDetail(c.detail)["fold"] === true) === isFold)).length;
-    const limit = isFold ? DREAM_TUNABLES.FOLDS : DREAM_TUNABLES.LIMITS[action];
+    const limit = isFold ? DREAM_TUNABLES.FOLDS : action === "belief-candidate" ? DREAM_TUNABLES.BELIEF_CANDIDATES : DREAM_TUNABLES.LIMITS[action];
     if (used >= limit) {
       if (!isFold) return { action, ok: false, reason: "limit-reached", detail: `This dream has made its ${String(limit)} ${action} changes.` };
       this.foldOverflow += 1;
@@ -2344,6 +2356,29 @@ export class Dreams {
         if (made.capped) notes.push(`strength was capped at ${String(round(made.peak))}, as strongly as this memory is felt now: a dream records softening, never a stronger feeling.`);
         this.store.recordDreamChange(dream.id, { action, ref: row.id, detail: { feelings: added.ids } });
         return { action, ok: true, reason: made.capped ? "recorded-capped-at-peak" : "recorded", id: row.id, ...(notes.length > 0 ? { note: notes.join(" ") } : {}) };
+      }
+      case "belief-candidate": {
+        // A BELIEF PROPOSED, NEVER MADE (lane C3, 2026-10-21): the dream sees
+        // a pattern across memories it was shown and offers it; the next
+        // reflection adopts it as a belief (route `dream`) or lets it go. No
+        // row is written here: the change itself is the candidate, undone
+        // with the dream.
+        if (!SCHEMAS_TUNABLES.BELIEFS_BIRTH) return { action, ok: false, reason: "beliefs-off", detail: "Beliefs are off: no candidate was recorded." };
+        const subject = typeof change.subject === "string" ? change.subject.trim() : "";
+        if (subject.length === 0) return { action, ok: false, reason: "subject-required", detail: 'subject is "me", "us", or the name of who or what it is about.' };
+        const text = this.words(change.text ?? "", dream, true, DREAM_TUNABLES.MAX_WHY_CHARS);
+        if (!text.ok || text.text.length === 0) return { action, ok: false, reason: "text-required", detail: "text is the belief, one short claim." };
+        const sources = [...new Set(Array.isArray(change.sources) ? change.sources : [])];
+        const lived = sources.filter((s) => {
+          const r = live(s);
+          return r !== null && r.source !== "dreamed" && r.source !== "reflection";
+        });
+        if (lived.length === 0) return { action, ok: false, reason: "needs-a-lived-source", detail: "sources are the lived memories it was shown that the belief rests on (not a dream's words)." };
+        const notes: string[] = [];
+        if (lived.length < sources.length) notes.push(`Not kept as sources (not shown, gone, or not lived): ${sources.filter((s) => !lived.includes(s)).join(", ")}.`);
+        if (text.cut) notes.push(`text was kept to its first ${String(DREAM_TUNABLES.MAX_WHY_CHARS)} characters.`);
+        this.store.recordDreamChange(dream.id, { action, ref: null, detail: { subject, statement: text.text, sources: lived } });
+        return { action, ok: true, reason: "proposed", note: ["The reflection will adopt it or let it go.", ...notes].join(" ") };
       }
       case "nominate-core": {
         const row = live(change.id);

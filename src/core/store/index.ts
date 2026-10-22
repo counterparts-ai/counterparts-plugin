@@ -57,7 +57,7 @@ import type { AddFeelingsResult, FeelingInput, FeelingRow, FeelingSource } from 
 import { checkTraitsRepaired } from "./traits.js";
 import type { TraitRepair } from "./traits.js";
 import type { TraitInput, TraitRead, TraitRow, TraitSource } from "./traits.js";
-import { PARTIAL_RETURN_SOURCES, USE_TIER_WEIGHT, creditReturn, creditUse, partialSourceOf } from "../physics/index.js";
+import { PARTIAL_RETURN_SOURCES, USE_TIER_WEIGHT, creditReturn, creditUse, partialSourceOf, sal } from "../physics/index.js";
 import type { CreditOutcome, ReturnOutcome, UseTier } from "../physics/index.js";
 import type { Db, Statement, WalFold } from "./db.js";
 import { foldWal, isLocked, wroteOn } from "./db.js";
@@ -65,6 +65,7 @@ import { StoreError } from "./errors.js";
 import { isObserver } from "../observer.js";
 import type { Stance } from "../observer.js";
 import {
+  BIRTH_ROUTES,
   CLAIMS_ERA_CUTOFF_KEY,
   CLAIMS_ERA_RECORDED_KEY,
   CONFIDENTIAL_RETIRED_IDS,
@@ -72,6 +73,8 @@ import {
   DEFAULT_RETENTION_DAYS,
   RECURRING_META,
   SCHEMA_VERSION,
+  SUBJECT_KINDS,
+  deterministicSubjectKind,
   olderFirst,
   openOperational,
   rowToPhysics,
@@ -87,13 +90,18 @@ import type {
   EventRow,
   FeelingPeak,
   GateSessionRow,
+  BirthRoute,
+  FolderProjectRow,
   MemoryRow,
   MigrationNote,
   ProspectiveRow,
+  RecallTurnRow,
   ReflectionRow,
   RemovalRow,
   ReturnRow,
   SettleRow,
+  SubjectKind,
+  TagMergeRow,
   VersionRow,
   WakeDisplayRow,
 } from "./operational.js";
@@ -197,6 +205,21 @@ import {
 import * as memoryReads from "./reads-memories.js";
 import * as markReads from "./reads-marks.js";
 import * as historyReads from "./reads-history.js";
+import * as wave2 from "./wave2.js";
+import * as tagReads from "./tag-reads.js";
+import type { CardLink, TagUse, UnkindedCard, UntaggedMemory } from "./tag-reads.js";
+
+/** A belief gains no return of any kind (lane C, physics §5.13): the refusal, its fields unchanged. */
+function beliefReturnRefused(source: "dream" | "reflection"): ReturnOutcome {
+  return {
+    counted: false,
+    reason: "a-belief",
+    source,
+    gap: 0,
+    weight: 0,
+    next: { returns: 0, returnDays: 0, firstReturnDay: null, lastReturnDay: null, lastDreamDay: null },
+  };
+}
 
 /** The partial return sources (`physics#PARTIAL_RETURN_SOURCES`), quoted for an `IN (...)` list. Constants, never input. */
 const PARTIAL_SOURCES_SQL = Object.keys(PARTIAL_RETURN_SOURCES)
@@ -280,6 +303,13 @@ export type {
   ReturnRow,
   WakeDisplayRow,
   MemoryRow,
+  MemoryTagRow,
+  TagMergeRow,
+  BeliefSupportRow,
+  FolderProjectRow,
+  RecallTurnRow,
+  SubjectKind,
+  BirthRoute,
   FeelingPeak,
   VersionRow,
   EdgeRow,
@@ -299,6 +329,9 @@ export {
   writeRollbackHold,
 } from "./rollback-hold.js";
 export type { RollbackHold } from "./rollback-hold.js";
+export { normalizeTag } from "./wave2.js";
+export type { CardLink, TagUse, UnkindedCard, UntaggedMemory } from "./tag-reads.js";
+export type { RecallTurnInput, SupportInput, SupportRead } from "./wave2.js";
 export type { ChapterSummaryKind } from "./operational.js";
 export {
   PRE_MIGRATION_NAME_RE,
@@ -323,6 +356,11 @@ export {
   V11_UPGRADE_KEY,
   V12_UPGRADE_KEY,
   V13_UPGRADE_KEY,
+  V14_UPGRADE_KEY,
+  SUBJECT_KINDS,
+  BIRTH_ROUTES,
+  backfillSubjectKinds,
+  retireConfidentialColumn,
   CLAIMS_ERA_CUTOFF_KEY,
   CLAIMS_ERA_RECORDED_KEY,
   CONFIDENTIAL_RETIRED_KEY,
@@ -429,6 +467,7 @@ export const WRITE_METHODS = [
   "reinforce",
   "setBand",
   "carryInto",
+  "carryCraftBorn",
   "link",
   "linkMany",
   "setProspective",
@@ -495,6 +534,21 @@ export const WRITE_METHODS = [
   "clearNextChangeDays",
   // 2026-10-19 (the feedback loop): a derived note in box 3 (recall's habituation).
   "setCacheNote",
+  // 2026-10-21 (the card twins): a put whose precondition is asked under the write lock.
+  "putUnless",
+  // v14 (2026-10-21, wave 2's one bump): pre-provisioned, no caller yet.
+  "tagMemory",
+  "untagMemory",
+  "recordTagMerge",
+  "undoTagMerge",
+  "setSubjectKind",
+  "ensureSelfSubject",
+  "setBeliefFields",
+  "fileSupport",
+  "unfileSupport",
+  "setFolderProject",
+  "clearFolderProject",
+  "recordRecallTurn",
 ] as const;
 
 export type WriteMethod = (typeof WRITE_METHODS)[number];
@@ -561,6 +615,12 @@ function verdictData(v: EmbedderVerdict): Record<string, string | number | boole
       return { kind: v.kind, reason: v.reason };
   }
 }
+
+/**
+ * The lived day a skill was first learned, carried across its revisions
+ * (`Store#carryCraftBorn`); `self/work.ts` reads it for craft's start.
+ */
+export const CRAFT_BORN_META = "craftBornDay";
 
 export class Store {
   readonly dir: string;
@@ -830,15 +890,19 @@ export class Store {
     // THE CONFIDENTIAL MARK'S RETIREMENT (2026-10-21, `CONFIDENTIAL_RETIRED_KEY`),
     // counted ONCE at the first writable open by this build, as the claims era
     // above is recorded: read first, written only when absent, asked again
-    // under the write lock. The one read of the retired column outside the
-    // removal scrub. A lost lock costs the record for this open, never the open.
+    // under the write lock. A lost lock costs the record for this open, never
+    // the open. Since v14 the column is gone: the upgrade that dropped it
+    // counted it first (`operational.ts#retireConfidentialColumn`), so the row
+    // is already here on an upgraded store; a store born at v14 has nothing
+    // to count and records 0, as a store born at v13 did.
     if (!this.observer) {
       try {
         if (this.ops.get("SELECT 1 FROM meta WHERE key = ?", CONFIDENTIAL_RETIRED_KEY) === undefined) {
           this.ops.transaction(() => {
             if (this.ops.get("SELECT 1 FROM meta WHERE key = ?", CONFIDENTIAL_RETIRED_KEY) !== undefined) return;
             const live = "confidential = 1 AND archived = 0 AND superseded_by IS NULL";
-            const count = this.ops.get<{ n: number }>(`SELECT COUNT(*) AS n FROM memories WHERE ${live}`)?.n ?? 0;
+            const column = this.hasColumn("memories", "confidential");
+            const count = column ? (this.ops.get<{ n: number }>(`SELECT COUNT(*) AS n FROM memories WHERE ${live}`)?.n ?? 0) : 0;
             const ids =
               count === 0
                 ? []
@@ -1173,6 +1237,26 @@ export class Store {
   }
 
   /**
+   * A PUT WHOSE PRECONDITION IS ASKED UNDER THE WRITE LOCK (2026-10-21, the card
+   * twins). `unless` runs INSIDE the write transaction — `BEGIN IMMEDIATE`, so a
+   * second process doing the same waits on the busy timeout and then reads what
+   * the first committed — and the row is inserted only if it returned false.
+   * True stages nothing and returns null.
+   *
+   * For a row two processes may mint at once from one stale view: an entity
+   * card, which `Schemas` judges against an index read at open
+   * (`Schemas#birth`). A check made before the transaction can still race; this
+   * one cannot. `unless` reads through this store and must not write.
+   */
+  putUnless(input: PutInput, unless: () => boolean): string | null {
+    const doc = this.mutate("putUnless", () => (unless() ? null : this.insertOne(input)));
+    if (doc === null) return null;
+    this.indexOne(doc);
+    this.emit("store.put", doc.id, { type: doc.type, kind: input.kind, hash: hashText(doc.body) });
+    return doc.id;
+  }
+
+  /**
    * Atomic by default: one bad input and NOTHING lands. `isolate: true` opts into
    * per-item persistence isolation (§16 G6) — the failure is logged and skipped and
    * the rest persist. Two different promises; the caller picks, out loud.
@@ -1321,7 +1405,7 @@ export class Store {
       this.ops.run(
         `UPDATE memories
             SET content_hash = ?, revision = ?, title = ?, body = ?, meta = ?,
-                confidential = 0, learned_on = ?, happened_on = ?,
+                learned_on = ?, happened_on = ?,
                 event_date = ?, model = ?, updated_at = ?,
                 occurred_on = ?, said_by = ?, status = ?
           WHERE id = ?`,
@@ -1384,7 +1468,7 @@ export class Store {
       const nextHash = hashText(next.body);
       this.ops.run(
         `UPDATE memories
-            SET content_hash = ?, body = ?, meta = ?, confidential = 0, model = ?, updated_at = ?
+            SET content_hash = ?, body = ?, meta = ?, model = ?, updated_at = ?
           WHERE id = ?`,
         nextHash,
         next.body,
@@ -1454,7 +1538,8 @@ export class Store {
       // the successor was given its own — a revision is still the same memory.
       carryAboutMark(this.ops, oldId, created.id);
       carryWriteFacts(this.ops, oldId, created.id);
-      return { doc: created, newId: created.id };
+      const born = this.craftBornInto(oldId, created.id);
+      return { doc: born === null ? created : { ...created, meta: born }, newId: created.id };
     });
     this.indexOne(doc);
     // The head leaves box 3 as the successor enters it. Box 2 keeps the row,
@@ -1572,6 +1657,14 @@ export class Store {
     const outcome = this.mutate("reinforce", () => {
       const row = this.requireRow(id);
       let physics = rowToPhysics(row);
+      // A BELIEF IS EARNED BY SUPPORT ALONE (lane C, physics §5.13): shown,
+      // opened, rated or drawn on, it is credited nothing — the shown → used →
+      // stronger loop. Lane E may let a slot's rating be a plain use; it would
+      // still never reach the support arm, which reads `support`, not `uses`.
+      if (physics.belief === true) {
+        const unchanged = { uses: physics.uses, lastUsedDay: physics.lastUsedDay, reinforcedDays: physics.reinforcedDays ?? 0 };
+        return { credited: false, reason: "a-belief" as const, w: 0, next: unchanged, ret: null };
+      }
       const upgradeFrom = opts.upgradeFrom ?? this.partialToday(id, day, row.last_used_day, tier);
       const verdict = creditUse(physics, day, tier, upgradeFrom === undefined ? {} : { upgradeFrom });
       let ret: ReturnOutcome | null = null;
@@ -1640,6 +1733,7 @@ export class Store {
   replayReturn(id: string, day: number, dreamId: string): ReturnOutcome {
     const outcome = this.mutate("replayReturn", () => {
       const row = this.requireRow(id);
+      if (rowToPhysics(row).belief === true) return beliefReturnRefused("dream");
       const ret = creditReturn(rowToPhysics(row), day, { source: "dream", since: this.spacingSince(id) });
       if (ret.counted) this.writeReturn(id, day, ret, dreamId);
       return ret;
@@ -1662,6 +1756,7 @@ export class Store {
   reflectReturn(id: string, day: number, opts: { session?: string | null } = {}): ReturnOutcome {
     const outcome = this.mutate("reflectReturn", () => {
       const row = this.requireRow(id);
+      if (rowToPhysics(row).belief === true) return beliefReturnRefused("reflection");
       const last =
         this.ops.get<{ d: number | null }>("SELECT MAX(day) AS d FROM returns WHERE memory_id = ? AND source = 'reflection'", id)?.d ??
         null;
@@ -1936,6 +2031,7 @@ export class Store {
       this.requireRow(toId);
       carryAboutMark(this.ops, fromId, toId);
       carryWriteFacts(this.ops, fromId, toId);
+      this.craftBornInto(fromId, toId);
       if (opts.returns !== false) this.copyReturnsRaw(fromId, toId);
     });
   }
@@ -4201,6 +4297,23 @@ export class Store {
     return memoryReads.workCandidates(this, scope, limit);
   }
 
+  /** Id, folder, lived day and named subject of each memory written in a directory since `sinceDay` (`reads-memories.ts#folderCoUse`). */
+  folderCoUse(sinceDay: number): { id: string; scope: string; day: number; subject: string | null }[] {
+    return memoryReads.folderCoUse(this, sinceDay);
+  }
+
+  /**
+   * CRAFT THAT MAY TRAVEL (2026-10-21, `self/work.ts#isCraft`): live skill
+   * memories with no mark or marked `world`, born on or after lived day
+   * `sinceDay`, from any folder or none, and not identity, dated or emptied;
+   * newest touched first, then id, at most `limit`. The columns only, as
+   * `workCandidates`; the caller confirms each on the prose and gates its
+   * folder. A `sinceDay` that is not finite: none.
+   */
+  craftCandidates(limit: number, sinceDay = 0): string[] {
+    return memoryReads.craftCandidates(this, limit, sinceDay);
+  }
+
   /**
    * WHAT A SESSION WROTE IN ONE DIRECTORY AFTER A MOMENT THAT MAY BE A PLAN
    * (2026-10-09, the handoff's "since" line): live memories a session wrote
@@ -4481,6 +4594,287 @@ export class Store {
    */
   memoriesNaming(subjectId: string, opts?: { archived?: boolean }): string[] {
     return markReads.memoriesNaming(this, subjectId, opts);
+  }
+
+  // ── wave 2 (v14, 2026-10-21): tags, subjects, beliefs, projects ──────────
+  //
+  // Pre-provisioned with the one bump: nothing calls these yet. Lanes B–G
+  // build on them, and may reshape them; the tables are what is fixed.
+
+  /** Tags on a memory (`memory_tags`), normalized (`normalizeTag`); an existing tag stays as it was found. Returns how many were new. */
+  tagMemory(memoryId: string, tags: readonly string[], via: string): number {
+    return this.mutate("tagMemory", () => wave2.tagMemory(this, memoryId, tags, via, this.nowFn()));
+  }
+
+  /** Takes tags off a memory — the ones named, or every one. Returns how many went. */
+  untagMemory(memoryId: string, tags?: readonly string[]): number {
+    return this.mutate("untagMemory", () => wave2.untagMemory(this, memoryId, tags));
+  }
+
+  /** A memory's tags, sorted, with how each was found. */
+  tagsOf(memoryId: string): { tag: string; via: string; createdAt: number }[] {
+    return wave2.tagsOf(this, memoryId);
+  }
+
+  /** The memories carrying a tag, live ones unless `archived`. */
+  memoriesTagged(tag: string, opts?: { archived?: boolean }): string[] {
+    return wave2.memoriesTagged(this, tag, opts);
+  }
+
+  /** Every tag with how many live memories carry it, most first (the tag cloud). */
+  tagCounts(opts?: { limit?: number }): { tag: string; memories: number }[] {
+    return wave2.tagCounts(this, opts);
+  }
+
+  /** Concept edges: the tags sharing live memories with any of `tags`, derived by a self-join (`wave2.ts#tagNeighbours`). */
+  tagNeighbours(tags: readonly string[], opts?: { limit?: number }): { tag: string; together: number }[] {
+    return wave2.tagNeighbours(this, tags, opts);
+  }
+
+  /** Records that `alias` reads as `tag` (`tag_merges`), replacing an earlier merge of the same alias. False for an empty or self merge. */
+  recordTagMerge(alias: string, tag: string, via: string): boolean {
+    return this.mutate("recordTagMerge", () => wave2.recordTagMerge(this, alias, tag, via, this.nowFn()));
+  }
+
+  /** Undoes a merge: `alias` is its own tag again. False when there was none. */
+  undoTagMerge(alias: string): boolean {
+    return this.mutate("undoTagMerge", () => wave2.undoTagMerge(this, alias));
+  }
+
+  /** Every recorded merge, by alias. */
+  tagMerges(): TagMergeRow[] {
+    return wave2.tagMerges(this);
+  }
+
+  // ── the night's tag reads (lane B, 2026-10-21; `tag-reads.ts`) ──────────
+
+  /** Live memories' links to live named cards (not the core), with the card's name, newest memory first. */
+  cardLinks(): CardLink[] {
+    return tagReads.cardLinks(this);
+  }
+
+  /** Every tag on every live memory, with the memory's day, session, use and feeling (the topic bar's read). */
+  tagUses(): TagUse[] {
+    return tagReads.tagUses(this);
+  }
+
+  /** Whether any memory — live or not — carries the tag. */
+  tagInUse(tag: string): boolean {
+    return tagReads.tagInUse(this, tag);
+  }
+
+  /** Live memories with no tag of their own (a card name alone does not count), recent and strong first, and how many there are. */
+  untaggedMemories(limit: number): { memories: UntaggedMemory[]; total: number } {
+    return tagReads.untaggedMemories(this, limit);
+  }
+
+  /** Live named cards with no subject kind, most-linked first, with a few titles each, and how many there are. */
+  unkindedCards(limit: number, titles?: number): { cards: UnkindedCard[]; total: number } {
+    return tagReads.unkindedCards(this, limit, titles);
+  }
+
+  /** The topic cards, by the tag each was promoted from (archived ones too). */
+  topicCards(): Map<string, string> {
+    return tagReads.topicCards(this);
+  }
+
+  /** The memories that declared themselves a revision of `id` (`meta.updates`), whether or not they superseded it. */
+  revisionsOf(id: string): string[] {
+    return tagReads.revisionsOf(this, id);
+  }
+
+  /** The tags one hand (`via`) wrote at or after `sinceAt`, epoch ms. */
+  tagsWrittenVia(via: string, sinceAt: number): { memoryId: string; tag: string }[] {
+    return tagReads.tagsWrittenVia(this, via, sinceAt);
+  }
+
+  /** Sets (or, with null, clears) a card's kind of subject (`SUBJECT_KINDS`); an unknown word is refused. */
+  setSubjectKind(id: string, kind: SubjectKind | null): void {
+    if (kind !== null && !(SUBJECT_KINDS as readonly string[]).includes(kind)) {
+      throw new StoreError("SUBJECT_KIND_INVALID", { id });
+    }
+    this.mutate("setSubjectKind", () => {
+      this.requireRow(id);
+      this.ops.run("UPDATE memories SET subject_kind = ?, updated_at = ? WHERE id = ?", kind, this.nowFn(), id);
+    });
+  }
+
+  /** The cards of one kind of subject, live ones unless `archived`. */
+  subjectsOfKind(kind: SubjectKind, opts?: { archived?: boolean }): string[] {
+    return wave2.subjectsOfKind(this, kind, opts);
+  }
+
+  /** The one subject that is me (`subject_kind` `self`), or null before `ensureSelfSubject` made it. */
+  selfSubject(): string | null {
+    return wave2.subjectsOfKind(this, "self")[0] ?? null;
+  }
+
+  /**
+   * THE SUBJECT MY BELIEFS ABOUT MYSELF AND ABOUT US ATTACH TO (v14, for lane
+   * C), made once: an entity card (`meta.role` `entity`, no name, so the alias
+   * index links nothing to it) with `subject_kind = 'self'`, born PROTECTED.
+   * Idempotent under the write lock: a second call returns the first card,
+   * and one that was archived (a fade, a prune) is revived — protected again,
+   * back in the index — rather than a second minted. A card the owner removed
+   * is gone (its `subject_kind` blanked with it), and the next call mints
+   * anew. "Us" is the same subject; a belief about us says so with `about = 'us'`.
+   *
+   * The door lane C calls is `Schemas#ensureSelfSubject`, which calls this and
+   * registers the card in what `schemas/` has loaded, so `addBelief` finds it.
+   *
+   * Not `kind: "self"`: that is the identity core, the one card install names
+   * after the OWNER (`self/identity.ts#findIdentityCore`, `ownerNames`), and
+   * a second would be read as him. Its `kind` is `fact` for now, and a belief
+   * minted on it inherits it (`schemas#addBelief`): outside the core's kinds,
+   * so the core lanes refuse such a belief whatever its `about` says
+   * (`sleep/consolidate.ts#identityBlock`, "not-a-core-kind"); with the lowest
+   * revision inertia (ι 0.2), so its resistance is its support's; and with
+   * κ 1.0 and a fact's short floors, which is why the card is protected (a
+   * belief's support does not count as attached for the fade, `schemas#fadeVerdict`).
+   * Recall does NOT leave belief rows out by kind or role today (it leaves out
+   * the card itself, `role: entity`); that gate is lane C's. Lightly held:
+   * the lane that lets beliefs about me reach the core re-decides the kind.
+   */
+  ensureSelfSubject(): string {
+    const out = this.mutate("ensureSelfSubject", (): { id: string; doc: ProseDoc | null; minted: boolean } => {
+      const found = this.ops.get<{ id: string; archived: number }>(
+        `SELECT id, archived FROM memories
+          WHERE subject_kind = 'self' AND body != '' AND superseded_by IS NULL
+          ORDER BY archived, id LIMIT 1`,
+      );
+      if (found !== undefined && found.archived === 0) return { id: found.id, doc: null, minted: false };
+      if (found !== undefined) {
+        this.ops.run(
+          "UPDATE memories SET archived = 0, archived_reason = NULL, protected = 1, updated_at = ? WHERE id = ?",
+          this.nowFn(),
+          found.id,
+        );
+        return { id: found.id, doc: this.docOf(this.requireRow(found.id)), minted: false };
+      }
+      const doc = this.insertOne({
+        type: "schema",
+        kind: "fact",
+        title: "Me",
+        body: "Me: the subject my beliefs about myself, and about us, belong to.",
+        meta: { role: "entity", name: "", aliases: [] },
+        subjectKind: "self",
+        physics: { protected: true },
+      });
+      return { id: doc.id, doc, minted: true };
+    });
+    if (out.doc !== null) {
+      this.indexOne(out.doc);
+      if (out.minted) this.emit("store.put", out.id, { type: "schema", kind: "fact", hash: hashText(out.doc.body) });
+      else this.emit("store.self-subject.revived", out.id);
+    }
+    return out.id;
+  }
+
+  /** Sets a belief's fields after birth (`birth_route`, `confidence`); a route not in `BIRTH_ROUTES` is refused. */
+  setBeliefFields(id: string, fields: { birthRoute?: BirthRoute | null; confidence?: number | null }): void {
+    if (fields.birthRoute !== undefined && fields.birthRoute !== null && !(BIRTH_ROUTES as readonly string[]).includes(fields.birthRoute)) {
+      throw new StoreError("BIRTH_ROUTE_INVALID", { id });
+    }
+    this.mutate("setBeliefFields", () => {
+      const row = this.requireRow(id);
+      // HOW A BELIEF WAS BORN IS SET ONCE (lane C, review of #575): it is what
+      // makes a row a belief to physics, and `migrated` keeps another
+      // physics, so a route set at birth is never changed after.
+      if (fields.birthRoute !== undefined && row.birth_route !== null && row.birth_route !== undefined && fields.birthRoute !== row.birth_route) {
+        throw new StoreError("BIRTH_ROUTE_FIXED", { id });
+      }
+      const at = this.nowFn();
+      if (fields.birthRoute !== undefined) this.ops.run("UPDATE memories SET birth_route = ?, updated_at = ? WHERE id = ?", fields.birthRoute, at, id);
+      if (fields.confidence !== undefined) this.ops.run("UPDATE memories SET confidence = ?, updated_at = ? WHERE id = ?", fields.confidence, at, id);
+    });
+  }
+
+  /**
+   * Counts a memory for (`support`) or against (`contrary`) a belief, ONCE:
+   * a second filing of the same pair changes nothing and returns false, so
+   * re-citing what was counted adds nothing (design §4). A belief cannot
+   * support itself.
+   *
+   * Lane C (2026-10-21): a new row is COUNTED in the same transaction — every
+   * weight on the belief recounted from the table (`wave2.ts#recountSupport`,
+   * physics §5.13) and the belief's own support written from the count. The
+   * row is written at 0 and the count gives it its weight, so the `weight`
+   * passed in is not what it keeps; `supportOf` reads what it counts for. A
+   * stance other than `support` or `contrary` is refused (false). Whether a memory MAY be filed (a lived memory, a known
+   * route) is `schemas#fileSupport`'s to decide; this keeps the count.
+   */
+  fileSupport(input: wave2.SupportInput): boolean {
+    return this.mutate("fileSupport", () => {
+      const filed = wave2.fileSupport(this, { ...input, weight: 0 }, this.nowFn());
+      if (filed) wave2.recountSupport(this, input.beliefId);
+      return filed;
+    });
+  }
+
+  /** Takes a memory's count off a belief (an undo), and counts what is left. False when it was not counted. */
+  unfileSupport(beliefId: string, memoryId: string): boolean {
+    return this.mutate("unfileSupport", () => {
+      const gone = wave2.unfileSupport(this, beliefId, memoryId);
+      if (gone) wave2.recountSupport(this, beliefId);
+      return gone;
+    });
+  }
+
+  /** What a belief is counted on, each row with its memory's own day, session and folder — the spread, by a join. */
+  supportOf(beliefId: string): wave2.SupportRead[] {
+    return wave2.supportOf(this, beliefId);
+  }
+
+  /** The beliefs a memory is counted for or against. */
+  supportGivenBy(memoryId: string): wave2.SupportRead[] {
+    return wave2.supportGivenBy(this, memoryId);
+  }
+
+  /** The project a folder belongs to (one per folder for now), replacing an earlier one. */
+  setFolderProject(folder: string, projectId: string, via: string): void {
+    this.mutate("setFolderProject", () => {
+      this.requireRow(projectId);
+      wave2.setFolderProject(this, folder, projectId, via, this.nowFn());
+    });
+  }
+
+  /** The folder belongs to no project again. False when it belonged to none. */
+  clearFolderProject(folder: string): boolean {
+    return this.mutate("clearFolderProject", () => wave2.clearFolderProject(this, folder));
+  }
+
+  /** The project a folder belongs to, or null. */
+  projectOfFolder(folder: string): FolderProjectRow | null {
+    return wave2.projectOfFolder(this, folder);
+  }
+
+  /** Every folder row, by project then folder (lane G's list). */
+  folderProjects(): FolderProjectRow[] {
+    return wave2.folderProjects(this);
+  }
+
+  /** The folders that belong to a project, sorted. */
+  foldersOfProject(projectId: string): string[] {
+    return wave2.foldersOfProject(this, projectId);
+  }
+
+  /** What one recall turn showed against how many candidates it weighed (lane 1's pool test); a turn recorded again replaces itself. */
+  recordRecallTurn(input: wave2.RecallTurnInput): void {
+    this.mutate("recordRecallTurn", () => wave2.recordRecallTurn(this, input, this.nowFn()));
+  }
+
+  /** Recorded recall turns, oldest first — one session's, or every one since a lived day. */
+  recallTurns(opts?: { sessionId?: string; sinceDay?: number }): RecallTurnRow[] {
+    return wave2.recallTurns(this, opts);
+  }
+
+  /**
+   * The cards that hold at least one link found `via` this route (`birth`,
+   * `write`, `backfill`), in one read (2026-10-21: a card whose birth committed
+   * and whose look-back never ran is one with no `birth` link).
+   */
+  subjectsLinkedVia(via: string): string[] {
+    return markReads.subjectsLinkedVia(this, via);
   }
 
   /**
@@ -5060,6 +5454,18 @@ export class Store {
     // a function or a NaN in `meta` is silent data loss, and the refusal must
     // land while nothing has been written.
     const metaJson = serializeMeta(meta, id);
+    // v14: a card's kind of subject and a belief's birth route are refused by
+    // name when not in their lists, as `setSubjectKind` / `setBeliefFields`
+    // refuse them, before anything is written. A card given none gets the
+    // deterministic one (`deterministicSubjectKind`: people, places, the
+    // identity core), as the v14 upgrade gave the cards it found.
+    if (input.subjectKind !== undefined && !(SUBJECT_KINDS as readonly string[]).includes(input.subjectKind)) {
+      throw new StoreError("SUBJECT_KIND_INVALID", { id });
+    }
+    if (input.birthRoute !== undefined && !(BIRTH_ROUTES as readonly string[]).includes(input.birthRoute)) {
+      throw new StoreError("BIRTH_ROUTE_INVALID", { id });
+    }
+    const subjectKind = input.subjectKind ?? deterministicSubjectKind(input.type, input.kind, meta);
     const contentHash = hashText(doc.body);
     const s: Salience = {
       novelty: input.salience?.novelty ?? null,
@@ -5075,9 +5481,9 @@ export class Store {
          promoted_identity, protected, pressure, last_challenged_day, archived,
          archived_reason, superseded_by, revision, content_hash,
          learned_on, happened_on, source, origin_session, origin_scope, origin_ref,
-         title, body, meta, confidential, created_at, updated_at, model, event_date, legacy,
-         about, about_by, occurred_on, said_by, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         title, body, meta, created_at, updated_at, model, event_date, legacy,
+         about, about_by, occurred_on, said_by, status, subject_kind, birth_route, birth_salience)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       input.type,
       input.kind,
@@ -5107,10 +5513,6 @@ export class Store {
       doc.title ?? null,
       doc.body,
       metaJson,
-      // The retired confidentiality column (2026-10-21): written 0, read by
-      // no gate; dropping it in the next batched store-format change is
-      // planned, lightly held.
-      0,
       at,
       at,
       modelOrNull(input.model),
@@ -5125,13 +5527,61 @@ export class Store {
       input.occurredOn === undefined ? null : occurredOnOf(input.occurredOn),
       input.saidBy === undefined ? null : saidByOf(input.saidBy),
       input.status === undefined ? null : statusOf(input.status),
+      subjectKind,
+      input.birthRoute ?? null,
+      // v14: the salience it was written with, before anything rewrites the
+      // dimensions (`updatePhysics`) — `sal()`, the author's mean and claim.
+      // An import or a copy (a dream's merge, a chapter copy) carries the
+      // salience it was inserted with, not its source's birth.
+      sal(s),
     );
     // v12: WHAT IT NAMES, linked in the same transaction as the row — every
     // door that writes a memory passes here (a note, a session's dump, a
     // write-up, the sweep, a chapter copy, a dream's merge or gist, a
     // reflection's entry), so no door can forget. Memories only.
     if (input.type === "memory") this.relinkSubjects(id, doc.title ?? null, doc.body, "write");
+    // v14, lane B: ITS TAGS, in the same transaction for the same reason —
+    // a row that lands has its tags, and one refused leaves none behind.
+    if (input.type === "memory" && input.tags !== undefined && input.tags.length > 0) {
+      wave2.tagMemory(this, id, input.tags, input.tagsVia ?? "write", at);
+    }
     return doc;
+  }
+
+  /**
+   * A REVISED SKILL KEEPS THE DAY IT WAS FIRST LEARNED, for craft's rule
+   * (2026-10-21, re-review of #572): `self/work.ts#craftSince` grandfathers the
+   * unmarked skills born before craft started travelling, and a successor is
+   * born today — so a reworded old skill would start travelling without anyone
+   * choosing that. `toId`'s meta takes `CRAFT_BORN_META`: the earliest of its
+   * own carried day and `fromId`'s (its carried day, else its birth day), when
+   * that is earlier than its own birth. Only between skills. Called by every
+   * door where one memory becomes another: a write's declared `updates`
+   * (`revision.ts#applyRevision`), `supersede`, and `carryInto` (a dream's
+   * merge, a pressure crossing) — so a merge keeps the earliest of its parts.
+   * Inside the caller's transaction; returns the new meta, or null when nothing changed.
+   */
+  private craftBornInto(fromId: string, toId: string): Record<string, unknown> | null {
+    const from = this.ops.get<MemoryRow>("SELECT * FROM memories WHERE id = ?", fromId);
+    const to = this.ops.get<MemoryRow>("SELECT * FROM memories WHERE id = ?", toId);
+    if (from === undefined || to === undefined || from.kind !== "skill" || to.kind !== "skill") return null;
+    if (from.body.length === 0 || to.body.length === 0) return null;
+    const carried = (row: MemoryRow): number => {
+      const v = this.docOf(row).meta[CRAFT_BORN_META];
+      return typeof v === "number" && Number.isFinite(v) ? Math.min(v, row.birth_day) : row.birth_day;
+    };
+    const born = Math.min(carried(from), carried(to));
+    if (!(born < to.birth_day)) return null;
+    const prior = this.docOf(to).meta;
+    if (prior[CRAFT_BORN_META] === born) return null;
+    const meta = { ...prior, [CRAFT_BORN_META]: born };
+    this.ops.run("UPDATE memories SET meta = ? WHERE id = ?", serializeMeta(meta, toId), toId);
+    return meta;
+  }
+
+  /** `craftBornInto` as its own write: a declared `updates` successor (`revision.ts`). */
+  carryCraftBorn(fromId: string, toId: string): boolean {
+    return this.mutate("carryCraftBorn", () => this.craftBornInto(fromId, toId) !== null);
   }
 
   /**

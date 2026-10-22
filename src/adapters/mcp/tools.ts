@@ -239,7 +239,7 @@ const ABOUT_PROPERTY = {
   type: "string",
   enum: ["me", "us", "owner", "work", "world"],
   description:
-    "What this is about, by meaning — me (who I am), us (the owner and me), owner (the owner, as a person), work (the craft: how a job is done), world (anything else). Mark anything personal — people, feelings, life outside the work — owner or us, so it reaches every folder: a friend visiting this weekend, how a long week left the owner. Work belongs to the folder it was written in, though sessions elsewhere may see its title. Left unmarked, a fact written here counts as this folder's work and is shown only here — so mark the personal ones. Left out on a revision (`updates`), it keeps the mark of the memory it revises. Only me and us can become part of who I am — never a plan.",
+    "What this is about, by meaning — me (who I am), us (the owner and me), owner (the owner, as a person), work (this project's own: what is being built here, and how), world (anything else). Mark anything personal — people, feelings, life outside the work — owner or us, so it reaches every folder: a friend visiting this weekend, how a long week left the owner. Work belongs to the folder it was written in (and the folders joined to it as one project), though sessions elsewhere may see its title. Left unmarked, a fact written here counts as this folder's work and is shown only here — so mark the personal ones. A skill left unmarked is craft — how a job is done — and reaches every folder; mark a skill work only when it belongs to this project alone. Left out on a revision (`updates`), it keeps the mark of the memory it revises. Only me and us can become part of who I am — never a plan.",
 };
 
 /**
@@ -462,6 +462,19 @@ const STATUS_PROPERTY = {
   enum: ["done", "planned", "proposed", "asked"],
   description:
     'Optional: what kind of thing it is — "done" (it happened; with `updates` at a repeating reminder, this occurrence is done and the repeat stays), "planned" (decided, not done yet), "proposed" (put forward, not decided), "asked" (a question or request still open).',
+} as const;
+
+/**
+ * v14, lane B (2026-10-21): a few TAGS on a `remember` or a `session_end`
+ * entry — what the memory is about, in words the night can promote into a
+ * subject. Plain data: no privilege row, since nothing the model reads
+ * changes with them yet (recall does not read tags; lane E).
+ */
+const TAGS_PROPERTY = {
+  type: ["array", "null"],
+  items: { type: "string" },
+  description:
+    'Optional: 3-5 short tags for what this is about — a topic ("taxes", "backups"), a person, a project, a place; one to three words each, lowercase. Not a date, not a feeling, not "memory" or "note". Revising a memory with `updates`: its tags carry over unless you send your own (null: none).',
 } as const;
 
 /** The privilege `remember` and `session_end` share for the three fields (v12). */
@@ -711,6 +724,16 @@ const REMEMBER: ToolSpec = {
       },
       how: HOW_PROPERTY,
       settle: SETTLE_PROPERTY,
+      belief: {
+        type: "object",
+        description:
+          "Rare, optional: a belief about me or about us this memory plainly shows — the owner's own words (saidBy owner), my real choice (saidBy self), or a strongly felt moment. One short claim; it starts weak and grows only as life backs it. Most memories carry none: the night's reflection draws beliefs from them. One that says what a belief already says is refused with that belief's id; the memory stands, and the night's reflection may count it there.",
+        properties: {
+          statement: { type: "string" },
+          about: { type: "string", enum: ["me", "us"] },
+        },
+        required: ["statement"],
+      },
       salience: { type: "number", minimum: 0, maximum: 1, description: SALIENCE_TEXT },
       relevance: { type: "number", minimum: 0, maximum: 1, description: RELEVANCE_TEXT },
       emotional: {
@@ -737,6 +760,7 @@ const REMEMBER: ToolSpec = {
       occurredOn: OCCURRED_ON_PROPERTY,
       saidBy: SAID_BY_PROPERTY,
       status: STATUS_PROPERTY,
+      tags: TAGS_PROPERTY,
       feelings: FEELINGS_PROPERTY,
       about: ABOUT_PROPERTY,
       unresolved: UNRESOLVED_PROPERTY,
@@ -1177,6 +1201,7 @@ const SESSION_END: ToolSpec = {
             occurredOn: OCCURRED_ON_PROPERTY,
             saidBy: SAID_BY_PROPERTY,
             status: STATUS_PROPERTY,
+            tags: TAGS_PROPERTY,
             feelings: FEELINGS_PROPERTY,
             about: ABOUT_PROPERTY,
             unresolved: UNRESOLVED_PROPERTY,
@@ -1552,8 +1577,8 @@ const DREAM: ToolSpec = {
     properties: {
       phase: {
         type: "string",
-        enum: ["launch", "begin", "part", "propose", "journal", "writer", "decline", "setting", "undo"],
-        description: "Which step: launch, begin, part (the rest of a bundle that came in parts), propose, journal, writer, decline, setting, or undo (only when the owner asks to undo a dream; pass `dream`).",
+        enum: ["launch", "begin", "part", "propose", "journal", "writer", "decline", "setting", "undo", "tags"],
+        description: "Which step: launch, begin, part (the rest of a bundle that came in parts), propose, journal, writer, decline, setting, undo (only when the owner asks to undo a dream; pass `dream`), or tags (the nightly run's tagging child only).",
       },
       session: {
         type: "string",
@@ -1576,13 +1601,13 @@ const DREAM: ToolSpec = {
       changes: {
         type: "array",
         description:
-          "`propose`: the changes, each an object with `action` — `merge` (ids: two or more near-copies, text: the one memory in better words, title?), `link` (a, b), `replayed` (id), `gist` (text, sources: ids, title?, kind?, occurredOn?: when what it draws on happened, saidBy?: owner|self|inferred, status?: done|planned|proposed|asked, fold?: true when it says what two or more of them add up to — the parts fade under it), `contradiction` (a, b), `settle` (holds, over, how: changed|corrected|open, why — only when the reason is plain; flag otherwise), `slot` (pair, same: true|false, why — an on-mind to-confirm pair: is the newer the later state of the same thing?), `feeling-now` (id, core, emotion: ONE word, strength, carried_by: the nuance in your own words), `nominate-core` (id, why). Usually far fewer changes than the limits; none is fine.",
+          "`propose`: the changes, each an object with `action` — `merge` (ids: two or more near-copies, text: the one memory in better words, title?), `link` (a, b), `replayed` (id), `gist` (text, sources: ids, title?, kind?, occurredOn?: when what it draws on happened, saidBy?: owner|self|inferred, status?: done|planned|proposed|asked, fold?: true when it says what two or more of them add up to — the parts fade under it), `contradiction` (a, b), `settle` (holds, over, how: changed|corrected|open, why — only when the reason is plain; flag otherwise), `slot` (pair, same: true|false, why — an on-mind to-confirm pair: is the newer the later state of the same thing?), `feeling-now` (id, core, emotion: ONE word, strength, carried_by: the nuance in your own words), `nominate-core` (id, why), `belief-candidate` (subject: \"me\", \"us\" or a name, text: one short claim, sources: ids — a belief proposed for the reflection to adopt, never made by the dream). Usually far fewer changes than the limits; none is fine.",
         items: {
           type: "object",
           properties: {
             action: {
               type: "string",
-              enum: ["merge", "link", "replayed", "gist", "contradiction", "settle", "slot", "feeling-now", "nominate-core"],
+              enum: ["merge", "link", "replayed", "gist", "contradiction", "settle", "slot", "feeling-now", "nominate-core", "belief-candidate"],
             },
             ids: { type: "array", items: { type: "string" } },
             id: { type: "string" },
@@ -1605,6 +1630,7 @@ const DREAM: ToolSpec = {
             over: { type: "string", description: "`settle`: the memory it changes, corrects or disagrees with." },
             how: { type: "string", enum: ["changed", "corrected", "open"] },
             pair: { type: "string", description: "`slot`: the to-confirm pair's id (ctr_…)." },
+            subject: { type: "string", description: "`belief-candidate`: who or what it is about — \"me\", \"us\", or a name." },
             same: { type: "boolean", description: "`slot`: true when the newer is the later state of the same thing; false when they are two things." },
           },
           required: ["action"],
@@ -1617,6 +1643,21 @@ const DREAM: ToolSpec = {
       text: {
         type: "string",
         description: "`journal`: the dream journal entry, first person — what you dreamed and what you noticed.",
+      },
+      tagged: {
+        type: "array",
+        items: { type: "object", properties: { id: { type: "string" }, tags: { type: "array", items: { type: "string" } } }, required: ["id", "tags"] },
+        description: "`tags` (the tagging child): a memory with no tags and the 3-5 tags it gets.",
+      },
+      merges: {
+        type: "array",
+        items: { type: "object", properties: { a: { type: "string" }, b: { type: "string" }, same: { type: "boolean" } }, required: ["a", "b", "same"] },
+        description: "`tags`: two tags that look alike, and whether they are one topic.",
+      },
+      kinds: {
+        type: "array",
+        items: { type: "object", properties: { id: { type: "string" }, kind: { type: "string", enum: ["person", "project", "place", "topic"] } }, required: ["id", "kind"] },
+        description: "`tags`: a card with no kind, and its kind.",
       },
     },
     required: ["phase"],
@@ -1686,6 +1727,11 @@ const REFLECT: ToolSpec = {
     },
     {
       claim:
+        "It may file support only from memories it was shown and lived, to beliefs it was shown or bore; it births at most a few a night, each born weak and backed by its lived cites, a near-duplicate refused with the belief to file to; it lets go only a contested belief, through the settle door. A belief's id is never citable, feelable or markable. Off when the owner's switch says so.",
+      mechanizedBy: "src/core/dream/reflect.ts#Reflections.finishBeliefs -> src/core/schemas/index.ts#Schemas.fileSupport + #Schemas.addBelief + src/core/reconsolidation.ts#settle",
+    },
+    {
+      claim:
         "Every word it writes is scanned for credentials first; its hand-back carries the mark capture refuses, so the share is told in the session's own words rather than filed from the tool's.",
       mechanizedBy: "src/core/dream/reflect.ts#Reflections.words + src/core/dream/mark.ts#DREAM_MARK -> src/core/remember/spans.ts#enters",
     },
@@ -1695,8 +1741,8 @@ const REFLECT: ToolSpec = {
     properties: {
       phase: {
         type: "string",
-        enum: ["launch", "begin", "part", "finish", "settle", "told", "close", "reopen"],
-        description: "Which step: launch, begin, part, finish, settle, told, close, or reopen.",
+        enum: ["launch", "begin", "part", "finish", "settle", "told", "close", "reopen", "join"],
+        description: "Which step: launch, begin, part, finish, settle, told, close, reopen, or join (the owner said yes to the share's question about two folders being one project).",
       },
       close: {
         type: "array",
@@ -1814,6 +1860,59 @@ const REFLECT: ToolSpec = {
             carried_by: { type: "string" },
           },
           required: ["id", "axis", "toward", "strength"],
+        },
+      },
+      beliefs: {
+        type: "object",
+        description:
+          "`finish`, optional: beliefs on the subjects in the bundle's beliefs.subjects. A belief is a claim life has to back: it starts weak and grows only as lived memories back it, each counted once — so filing support for one already held beats writing a new one. Most nights need few or none.",
+        properties: {
+          filings: {
+            type: "array",
+            description: "A lived memory you were shown, counted for (support) or against (contrary) a belief shown in beliefs.subjects. One counted before adds nothing.",
+            items: {
+              type: "object",
+              properties: {
+                belief: { type: "string" },
+                memory: { type: "string" },
+                stance: { type: "string", enum: ["support", "contrary"] },
+              },
+              required: ["belief", "memory", "stance"],
+            },
+          },
+          births: {
+            type: "array",
+            description: "A few new beliefs (the bundle says how many): subject is \"me\" (for me or us) or a subject's id; statement one short claim in your own words; about \"me\" or \"us\" on me; cites the lived memories it rests on (each is filed as its support); replaces, the id of a contested belief it says better. One that says what a belief already says is refused with that belief's id.",
+            items: {
+              type: "object",
+              properties: {
+                subject: { type: "string" },
+                statement: { type: "string" },
+                about: { type: "string", enum: ["me", "us"] },
+                cites: { type: "array", items: { type: "string" } },
+                replaces: { type: "string" },
+              },
+              required: ["subject", "statement", "cites"],
+            },
+          },
+          retire: {
+            type: "array",
+            description: "A belief marked contested that you let go, with why: it leaves through the settle door, the memory that contested it holding over it.",
+            items: {
+              type: "object",
+              properties: { belief: { type: "string" }, why: { type: "string" } },
+              required: ["belief", "why"],
+            },
+          },
+          adopt: {
+            type: "array",
+            description: "A belief tonight's dream proposed (beliefs.candidates) that rings true: adopted, it starts weak, its lived sources its first support; subject and statement may say it better. The rest are let go.",
+            items: {
+              type: "object",
+              properties: { candidate: { type: "string" }, subject: { type: "string" }, statement: { type: "string" } },
+              required: ["candidate"],
+            },
+          },
         },
       },
     },

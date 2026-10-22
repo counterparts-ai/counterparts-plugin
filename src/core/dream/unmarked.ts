@@ -2,8 +2,9 @@
  * THE UNMARKED OFFER'S ORDER (2026-10-20, Mike's go, lightly held, an
  * experiment). A memory nobody marked that the work lane counts as a
  * project's work only for want of a mark (`self/work.ts#isWorkMemory`: an
- * unmarked fact, entity or place written in a directory, or a skill) is shown
- * only in that directory. The nightly reflection is offered some of them to
+ * unmarked fact, entity or place written in a directory) is shown only in
+ * that directory's project. An unmarked skill is offered too: since 2026-10-21
+ * it is craft that travels, and a `work` mark is how it stays with its project. The nightly reflection is offered some of them to
  * mark by meaning, and the ones most likely personal come first, so the
  * personal ones — which, marked owner or us, flow to every folder — are not
  * left waiting behind the work.

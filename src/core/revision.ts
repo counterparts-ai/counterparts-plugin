@@ -95,7 +95,8 @@ import { TUNABLES, applyChallenge, successorSeed, supersedeRecord } from "./phys
 import { directionOf } from "./mint.js";
 import { DATE_MOVED_TO_META } from "./prospective/index.js";
 import { headOf } from "./recall/standing.js";
-import { FULFILLED_SOURCE, PRESSURE_UNDONE_REASON, flag, settleOnWrite, supersede } from "./reconsolidation.js";
+import { isBeliefRow } from "./recall/index.js";
+import { FULFILLED_SOURCE, PRESSURE_UNDONE_REASON, flag, settle as settlePair, settleOnWrite, supersede } from "./reconsolidation.js";
 import type { SettleOutcome } from "./reconsolidation.js";
 import type { SettleHow } from "./types.js";
 import type { Schemas } from "./schemas/index.js";
@@ -118,6 +119,8 @@ export type RevisionApplyReason =
   | "target-is-an-entity"
   | "confirmation-not-a-challenge"
   | "target-removed"
+  /** Lane C3: the owner's words, written awake, said a belief is wrong — settled `corrected` at once. */
+  | "corrected-by-owner"
   | "observer";
 
 export interface RevisionInput {
@@ -147,6 +150,14 @@ export interface RevisionInput {
   howSent?: boolean;
   /** The writing session, for the settle's trail. */
   session?: string | null;
+  /**
+   * Written AWAKE (lane C3, 2026-10-21): a session's own note or answer — not
+   * the crash-fallback sweep's retelling, a write-up of an ended session, or
+   * anything the nightly run writes (the coordinator's ruling: the night
+   * neither makes nor unmakes beliefs on its own say-so). The owner's
+   * correction of a belief is at once only from an awake write.
+   */
+  awake?: boolean;
 }
 
 export interface RevisionOptions {
@@ -291,6 +302,16 @@ export function applyRevision(
     return settle("none", "challenger-unknown", targetId, { retargeted });
   }
 
+  // A REVISED SKILL KEEPS THE DAY IT WAS FIRST LEARNED (re-review of #572):
+  // the successor of a declared `updates` is the same memory, so craft's
+  // grandfathering (`self/work.ts#craftSince`) follows it. Whatever path
+  // follows, link, settle or pressure. Never fails the revision.
+  try {
+    store.carryCraftBorn(targetId, input.challengerId);
+  } catch {
+    /* the successor keeps its own day */
+  }
+
   const target = store.physicsOf(targetId);
   // Protected elements refuse EVERY revision path, always (schemas §5 G11), and
   // the check is BEFORE the arithmetic on every arm — permanence that quietly
@@ -304,9 +325,27 @@ export function applyRevision(
   // purpose — a distinct fact from "not a belief" and from "gone".
   if (row.archived === 1) return settle("none", "target-archived", targetId, { retargeted });
 
+  // THE OWNER'S CORRECTION, AT ONCE (wave 2 lane C3, 2026-10-21): a belief
+  // born under lane C that the owner's own words, written awake, say is wrong
+  // leaves through the settle door, `corrected` — archived, its words and
+  // support kept on the record — passing no bar, recorded as the owner's.
+  // Read off the row in hand (review of #583), not `schemas/`' index, which a
+  // long-lived process built before the belief was born elsewhere. A refused
+  // settle falls to the pressure below.
+  const said = store.row(input.challengerId);
+  if (isBeliefRow(row) && input.awake === true && target.belief === true && said?.said_by === "owner") {
+    const out = settlePair(
+      store,
+      { holds: input.challengerId, over: targetId, how: "corrected", why: "the owner said it is wrong", actor: "owner", actorId: input.session ?? null, day: input.day },
+      opts.retarget === undefined ? {} : { retarget: opts.retarget },
+    );
+    if (out.ok) return settle("belief", "corrected-by-owner", targetId, { moved: true, retargeted, settle: out });
+  }
+
   const element = schemas.element(targetId);
 
-  // ── a schema BELIEF: pressure, and supersede only past the bar ─────────────
+  // ── a schema BELIEF: pressure — a migrated one superseded past its bar, ───
+  // one born under lane C contested there and never rewritten (physics §5.13)
   if (element?.role === "belief") {
     const out = schemas.challengeBelief({
       updates: targetId,

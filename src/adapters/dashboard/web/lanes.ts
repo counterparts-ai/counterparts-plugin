@@ -84,6 +84,9 @@ export const LANES = {
   // A sleep that did something is a home line; a CHECK that found nothing due
   // (`isSleepCheck`) is housekeeping.
   "sleep.cycle": (p) => (isSleepCheck(p) ? "flow" : "home"),
+  // A boundary that left the sleep to a cycle already running: housekeeping,
+  // like a check that found nothing due.
+  "sleep.cycle.held": "flow",
   "prospective.fire": "home",
   "prospective.plain": "home",
   // Dreaming and the core (2026-09-26): a dream that wrote its journal, what

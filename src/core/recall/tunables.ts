@@ -316,6 +316,28 @@ export interface RecallTunables {
   /** Salience a memory gains when it carried the SAME person's matching feeling,
    *  times that feeling's softened strength. Modulates the relative bar only —
    *  never activation, never an uncued memory. CAL. */
+  /**
+   * WORK STAYS IN ITS PROJECT, IN AMBIENT RECALL TOO (2026-10-21, wave 2 lane
+   * G, design §8; OFF — Mike has not said, and §8 came from the wake's rule).
+   * On: a turn in a folder does not show (footnote, surfaced or pointer) a
+   * memory that is ANOTHER project's work (`self/work.ts#isWorkMemory`, craft
+   * travelling as the wake's switch says) — the gate turns it away as
+   * `project-skipped` where it would have been shown, and the decision row
+   * counts it (`projectSkipped`). Deliberate recall is never filtered. Off:
+   * nothing is skipped. Read at use.
+   */
+  RECALL_BY_PROJECT: boolean;
+  /**
+   * ANOTHER PROJECT'S WORK FACES A SLIGHTLY HIGHER BAR (2026-10-21, Mike's
+   * ruling on lane G item 4: "we could try a slightly higher bar, and review
+   * after a week"; an experiment, check ~2026-10-29). A memory that is another
+   * project's work (`Turn.elsewhere`) has its admit and loud bars multiplied
+   * by this, as habituation's lift does (`HABITUATION_BAR_LIFT`), after the
+   * floor. Personal memories and craft are never another project's work, so
+   * never lifted. The decision row counts what the lift alone turned away
+   * (`crossProjectLifted`). 1 is off. Read at use. CAL.
+   */
+  CROSS_PROJECT_BAR_LIFT: number;
   MOOD_SAME_WEIGHT: number;
   /** The same for the OTHER person's matching feeling: the light cross-link. CAL. */
   MOOD_CROSS_WEIGHT: number;
@@ -585,6 +607,8 @@ export const TUNABLES: RecallTunables = {
   // Decided by b2+f8, 2026-10-10, lightly held. Evidence from the old use metric (lifted memories used 1.3% vs 2.4%); re-test after Group 1's engaged credit gives a real signal.
   // (Review 02 C3. Were 0.3 and 0.1; the code in `mood.ts` is kept whole, and
   // with both at 0 recall skips the per-turn `feelings` scan — `Recall#turn`.)
+  RECALL_BY_PROJECT: false,
+  CROSS_PROJECT_BAR_LIFT: 1.25,
   MOOD_SAME_WEIGHT: 0,
   MOOD_CROSS_WEIGHT: 0,
   // Wheel v2 (2026-09-30): 0.5 lets neighbours match in part — a sad mood

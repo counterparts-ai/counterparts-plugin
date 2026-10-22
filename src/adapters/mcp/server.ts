@@ -207,10 +207,12 @@ import {
   readAbout,
   readTraits,
   readWriteFacts,
+  readTags,
   reminderEcho,
   titleEcho,
   undatedReminderWarning,
   factsEcho,
+  tagsEcho,
   threadOf,
   addressBlocked,
   resolvedIdOf,
@@ -1656,13 +1658,18 @@ export class McpServer {
     // v12: when it happened, who said it, what kind — never a refusal: what
     // cannot be read is dropped and said beside the memory that landed.
     const facts = readWriteFacts(args, this.today());
+    // v14, lane B: its tags, loose first the same way.
+    const tags = readTags(args);
     const deposit = await this.counterpart.submitJot(draft, {
       session,
       scope: this.scope,
+      // The nightly run's own writing (lane C3): it never corrects a belief at once.
+      ...(this.nightRun() ? { night: true } : {}),
       // The day this server reads, for a done that closes one occurrence (2026-10-20).
       at: this.today(),
       ownSpanHash,
       facts: facts.sent,
+      ...(tags.sent === undefined ? {} : { tags: tags.sent }),
       // What it is about sets an unclaimed memory's default floor (2026-10-10).
       about: about.mark,
       ...(model === undefined ? {} : { model }),
@@ -1677,11 +1684,14 @@ export class McpServer {
     return this.depositResult("remember", deposit, {
       ...this.recordFeelings(deposit, feelings.inputs, model),
       ...this.recordAbout(deposit, about.mark),
+      // A BELIEF IN THE MOMENT (lane C3), after the feelings: a vivid one is read off them.
+      ...this.recordBelief(deposit, args["belief"]),
       ...this.recordTraits(deposit, traits.inputs, model),
       ...reminderEcho(deposit, dated, this.today()),
       ...titleEcho(deposit, TITLE_ASKED_NOTE),
       ...undatedReminderWarning(deposit, dated, args["title"], text),
       ...factsEcho(deposit, facts),
+      ...tagsEcho(deposit, tags),
       ...this.settledOf(deposit, args["how"] !== undefined),
       ...threadOf(deposit),
       // IN THE PAYLOAD, so it rides in `structuredContent` — which is what
@@ -3289,6 +3299,30 @@ export class McpServer {
     } catch (err) {
       return { about: { stored: false, reason: "threw", detail: String((err as Error).message ?? err) } };
     }
+  }
+
+  /**
+   * Is this server the nightly run's — a child's (`NIGHT_CHILD_ENV`) or its
+   * catch-up's (`NIGHT_RUN_ENV`)? The same two marks `remark` reads.
+   */
+  private nightRun(): boolean {
+    return (this.env[NIGHT_CHILD_ENV] ?? "").trim().length > 0 || (this.env[NIGHT_RUN_ENV] ?? "").trim().length > 0;
+  }
+
+  /** `remember`'s `belief` (lane C3, 2026-10-21): born beside the memory, or said why not. */
+  private recordBelief(deposit: DepositResult, arg: unknown): Record<string, unknown> {
+    if (arg === undefined) return {};
+    if (arg === null || typeof arg !== "object" || Array.isArray(arg) || typeof (arg as Record<string, unknown>)["statement"] !== "string") {
+      return { belief: { stored: false, reason: "belief-malformed", note: 'belief is one object: {statement, about?: "me" | "us"}.' } };
+    }
+    if (!deposit.deposited || deposit.memoryId === null) return { belief: { stored: false, reason: "memory-not-stored" } };
+    const a = arg as Record<string, unknown>;
+    const out = this.counterpart.sessionBelief({
+      memoryId: deposit.memoryId,
+      statement: a["statement"] as string,
+      ...(a["about"] === "us" || a["about"] === "me" ? { about: a["about"] } : {}),
+    });
+    return { belief: { stored: out.ok && out.reason === "born", reason: out.reason, ...(out.id === null ? {} : { id: out.id }), ...(out.note === undefined ? {} : { note: out.note }) } };
   }
 
   /**

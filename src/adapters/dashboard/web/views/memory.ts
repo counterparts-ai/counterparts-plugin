@@ -228,6 +228,41 @@ export interface MemoryDetail {
    */
   readonly about: string | null;
   readonly aboutBy: string | null;
+  /**
+   * The subject page this row belongs to (wave 2 lane D, 2026-10-21): itself
+   * for an entity card, the card it hangs on for a belief, else null. The card
+   * links there rather than repeating the page.
+   */
+  readonly subject: { readonly id: string; readonly name: string; readonly isCard: boolean; readonly self: boolean } | null;
+}
+
+/** The subject page a schema row belongs to — see `MemoryDetail.subject`. */
+function subjectOf(store: DashboardSource["store"], id: string, meta: Record<string, unknown>): MemoryDetail["subject"] {
+  const isSelf = (cardId: string): boolean => (store.row(cardId)?.subject_kind ?? null) === "self";
+  const nameOf = (cardId: string): string | null => {
+    // A page exists only for a live card: not archived, not replaced, not removed.
+    const row = store.row(cardId);
+    if (row === undefined || row.archived === 1 || row.body === "" || row.superseded_by !== null) return null;
+    if (store.deniedIds().includes(cardId)) return null;
+    try {
+      const m = JSON.parse(row.meta) as Record<string, unknown>;
+      if (m["role"] !== "entity") return null;
+      const name = typeof m["name"] === "string" ? m["name"].trim() : "";
+      return name.length > 0 ? name : (row.subject_kind ?? null) === "self" ? "Me" : (row.title ?? cardId);
+    } catch {
+      return null;
+    }
+  };
+  if (meta["role"] === "entity") {
+    const name = nameOf(id);
+    return name === null ? null : { id, name, isCard: true, self: isSelf(id) };
+  }
+  const entityId = meta["entityId"];
+  if (meta["role"] === "belief" && typeof entityId === "string") {
+    const name = nameOf(entityId);
+    return name === null ? null : { id: entityId, name, isCard: false, self: isSelf(entityId) };
+  }
+  return null;
 }
 
 export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
@@ -300,6 +335,7 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
     writtenDate: null,
     about: null,
     aboutBy: null,
+    subject: null,
   } satisfies MemoryDetail;
 
   if (!r.present || r.headId === null) return empty;
@@ -438,6 +474,7 @@ export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
     ...cardWords(doc.body.trim(), chapter, row?.happened_on ?? null),
     about: row?.about ?? null,
     aboutBy: row?.about === null || row?.about === undefined ? null : row.about_by ?? null,
+    subject: row?.type === "schema" ? subjectOf(store, headId, doc.meta) : null,
   };
 }
 

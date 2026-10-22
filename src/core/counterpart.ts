@@ -73,6 +73,7 @@ import {
   refreshHabituation,
   NO_RATED_USE,
   RATED_SAME_TURN_ROWS,
+  isBeliefRow,
 } from "./recall/index.js";
 import { DREW_ON_MAX_PER_BOUNDARY, resolveReferences } from "./recall/reference.js";
 import type { ReferenceCandidate } from "./recall/reference.js";
@@ -107,6 +108,9 @@ import type {
   UpdatesResolution,
 } from "./remember/index.js";
 import { redactSecrets } from "./encode/index.js";
+import { TUNABLES as SCHEMAS_TUNABLES } from "./schemas/tunables.js";
+import { similarity as textSimilarity } from "./remember/updates.js";
+import { REFLECT_TUNABLES } from "./dream/reflect.js";
 import type { SchemaSlice as EncodeSchemaSlice } from "./encode/index.js";
 import { recallTurn } from "./retrieval.js";
 import { applyRevision } from "./revision.js";
@@ -165,6 +169,12 @@ import {
   writerInstruction,
   fitNightWriter,
   isWorkMemory,
+  projectFolders,
+  projectFolder,
+  craftSince,
+  craftBornDay,
+  CRAFT_SINCE_KEY,
+  isDirectoryScope,
 } from "./self/index.js";
 import type {
   BriefingResult,
@@ -191,7 +201,7 @@ import { dayJournal } from "./dream/slices.js";
 import { DREAM_TUNABLES } from "./dream/tunables.js";
 import type { CoreDecision, CoreDecisionActor } from "./sleep/index.js";
 import type { CyclePartial, CycleReport } from "./sleep/index.js";
-import { ABOUT_MARKS, CORE_ABOUT_MARKS, Store, assertSafeDataDir, rowTombstoned, hashText, indexTextOf } from "./store/index.js";
+import { ABOUT_MARKS, CORE_ABOUT_MARKS, Store, aboutMarkOf, assertSafeDataDir, rowTombstoned, hashText, indexTextOf } from "./store/index.js";
 import type {
   AboutMark,
   AddFeelingsResult,
@@ -256,6 +266,7 @@ import * as boundaryPart from "./counterpart-boundary.js";
 import { rowIds } from "./counterpart-boundary.js";
 import * as sweepPart from "./counterpart-sweep.js";
 import * as depositPart from "./counterpart-deposit.js";
+import * as projectsPart from "./counterpart-projects.js";
 
 // What moved to the counterpart-*.ts parts, re-exported so every import of this file still resolves.
 export {
@@ -267,6 +278,7 @@ export {
   SWEEP_GATE_EVENT,
   SWEEP_WAKE_EVENT,
   SLEEP_CYCLE_EVENT,
+  SLEEP_CYCLE_HELD_EVENT,
   SELF_BRIEFING_EVENT,
   PRIMACY_STANDDOWN_EVENT,
   PRIMACY_DELIVER_EVENT,
@@ -337,6 +349,7 @@ export type {
   SentFacts,
   FactField,
   DepositFacts,
+  DepositTags,
   DepositContext,
   SessionEndDepositContext,
   DepositReason,
@@ -572,6 +585,16 @@ export class Counterpart {
       now: this.nowFn,
       ...(opts.recallTunables === undefined ? {} : { tunables: opts.recallTunables }),
     });
+    // CRAFT TRAVELS FROM TODAY ON (review of #572): the first writable open
+    // with `PROJECTS_TRAVEL` on records the lived day; skills born before it
+    // keep their folder (`self/work.ts#craftSince`). Once per store.
+    if (!this.observer && this.self.tunables.PROJECTS_TRAVEL && this.store.getMeta(CRAFT_SINCE_KEY) === undefined) {
+      try {
+        this.store.setMeta(CRAFT_SINCE_KEY, String(this.store.livedDay()));
+      } catch {
+        /* the next open records it */
+      }
+    }
     this.prospective = new Prospective({
       store: this.store,
       onEvent: (e) => this.relay("prospective", e),
@@ -695,6 +718,9 @@ export class Counterpart {
             : { ok: false, reason: written.reason, note };
       },
       emit: (name, ref, data) => this.emit(name, ref, data),
+      // BELIEFS (wave 2 lane C, 2026-10-21): what it is shown on the subjects
+      // in play, and the doors it births, files and retires through.
+      schemas: this.schemas,
     });
 
     if (opts.identity !== undefined) this.self.ensureIdentityCore(opts.identity);
@@ -1003,16 +1029,22 @@ export class Counterpart {
     reader: string | null;
     /** This session's own directory, normalized ("" when none). */
     own: string;
+    /** Every folder of its project, normalized, `own` among them (2026-10-21). */
+    ours: ReadonlySet<string>;
   } | null {
     const exportsFrom = here?.exportsFrom;
     if (exportsFrom === undefined) return null;
     const norm = (scope: string): string => scope.trim().replace(/\/+$/, "");
     const own = norm(here?.scope ?? "");
+    // A JOINED FOLDER IS HERE (2026-10-21, `PROJECTS_TRAVEL`): the folders of
+    // this one's project are never named elsewhere; their work is "Work
+    // here", and their open sessions are this folder's (`hereSessions`).
+    const ours = new Set(own.length === 0 ? [] : projectFolders(this.store, own, this.self.tunables.PROJECTS_TRAVEL, exportsFrom).map(norm));
     const reader = here?.session ?? null;
     const allowed = new Map<string, boolean>();
     const named = (scope: string): boolean => {
       const key = norm(scope);
-      if (key.length === 0 || key === own || key === norm(this.store.dir)) return false;
+      if (key.length === 0 || key === own || ours.has(key) || key === norm(this.store.dir)) return false;
       let open = allowed.get(key);
       if (open === undefined) {
         try {
@@ -1029,7 +1061,7 @@ export class Counterpart {
       if (reader !== null && c.session === reader) return false;
       return named(c.scope);
     };
-    return { named, crosses, norm, reader, own };
+    return { named, crosses, norm, reader, own, ours };
   }
 
   /**
@@ -1057,6 +1089,8 @@ export class Counterpart {
       // Work, by the wake's own rule of what work is; a status mark puts it
       // first, never makes a personal memory work (review of #543: an
       // unmarked person or self memory, or Desktop chat's unmarked fact).
+      // An unmarked skill still counts here though craft travels (2026-10-21):
+      // what a folder did today is named by its craft as much as its work.
       if (!isWorkMemory({ about: m.about, kind: m.kind as Kind, originScope: m.scope, journal: false })) continue;
       const key = gate.norm(m.scope);
       const held = out.get(key) ?? [];
@@ -1085,7 +1119,7 @@ export class Counterpart {
    * Throws only what the store throws.
    */
   private hereSessions(
-    gate: { norm(scope: string): string; reader: string | null; own: string },
+    gate: { norm(scope: string): string; reader: string | null; own: string; ours: ReadonlySet<string> },
     sessions: readonly WakeSession[],
     since: number,
     until: number,
@@ -1093,14 +1127,19 @@ export class Counterpart {
   ): HereSession[] {
     const own = gate.own;
     if (own.length === 0 || own === gate.norm(this.store.dir)) return [];
+    // This folder, or another of its project's (2026-10-21).
+    const here = (scope: string): boolean => {
+      const key = gate.norm(scope);
+      return key === own || gate.ours.has(key);
+    };
     const live = sessions.filter(
-      (s) => s.live && s.session !== gate.reader && s.startedAt < until && gate.norm(s.scope) === own,
+      (s) => s.live && s.session !== gate.reader && s.startedAt < until && here(s.scope),
     );
     if (live.length === 0) return [];
     const ids = [...new Set(live.map((s) => s.session))];
     const titles = new Map<string, (MemoryHere & { tier: number })[]>();
     for (const m of this.store.memoryTitlesByScopeSince(since, { until, perScope: ELSEWHERE_TITLES_MAX, sessions: ids })) {
-      if (m.session === null || opts.skip?.has(m.id) === true || gate.norm(m.scope) !== own) continue;
+      if (m.session === null || opts.skip?.has(m.id) === true || !here(m.scope)) continue;
       if (!isWorkMemory({ about: m.about, kind: m.kind as Kind, originScope: m.scope, journal: false })) continue;
       const held = titles.get(m.session) ?? [];
       held.push({ id: m.id, title: m.title, at: m.at, tier: m.tier });
@@ -1113,6 +1152,8 @@ export class Counterpart {
       const held = (titles.get(id) ?? []).sort((a, b) => a.tier - b.tier || b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       out.push({
         session: id,
+        // Another folder of this project says which (review of #572).
+        ...(gate.norm(s.scope) === own ? {} : { scope: gate.norm(s.scope) }),
         model: s.model ?? null,
         startedAt: opts.startedSince && s.startedAt < since ? null : s.startedAt,
         lastAt: s.lastAt,
@@ -1372,7 +1413,9 @@ export class Counterpart {
     // A memory the elsewhere line printed above already names — another
     // session here at work on it (2026-10-20) — is that line's, not repeated
     // as a work line; one the line gave up for room is still a work line.
-    const work = this.workHereLines(scope, elsewhereNamedIn(result.text));
+    // Craft from another folder only where the host's setting lets that
+    // folder be named elsewhere; with no way to ask, none (2026-10-21).
+    const work = this.workHereLines(scope, elsewhereNamedIn(result.text), here?.exportsFrom ?? (() => false));
     if (newest === undefined && aboveLadder.length === 0) return { kind: "work-only", scope, budget, work, lastHere };
     const fits = (block: string): ReturnType<typeof spliceBeforeSentinel> | null => {
       const spliced = spliceBeforeSentinel(result.text, block);
@@ -1443,13 +1486,24 @@ export class Counterpart {
    * answer. What a later memory settled over is left out, as every lane but
    * identity leaves it out. Up to `WORK_HERE_POOL` are ranked and today's
    * `WORK_HERE_MAX` chosen from them (`rotateWork`, 2026-10-02); `found` is
-   * how many were ranked, for the overflow row. Never throws.
+   * how many were ranked, for the overflow row. `craftFrom`: may craft
+   * written in that folder be a line here (2026-10-21) — the delivery passes
+   * the host's setting; the boundary's reserve, which cannot know, every
+   * folder. Never throws.
    */
-  private workHereLines(scope: string, skip: ReadonlySet<string> = new Set()): { lines: string[]; found: number } {
+  private workHereLines(
+    scope: string,
+    skip: ReadonlySet<string> = new Set(),
+    craftFrom: (scope: string) => boolean = () => true,
+  ): { lines: string[]; found: number } {
     const t = this.self.tunables;
     if (!t.CRAFT_AT_DELIVERY || scope.trim().length === 0) return { lines: [], found: 0 };
     try {
       const day = this.store.livedDay();
+      // PROJECTS (2026-10-21, `PROJECTS_TRAVEL`): every folder of this one's
+      // project is here, and craft from a folder `craftFrom` lets be named
+      // elsewhere may take a few of the lines.
+      const travels = t.PROJECTS_TRAVEL;
       const ranked = workHere(this.store, scope, {
         day,
         max: t.WORK_HERE_MAX,
@@ -1457,6 +1511,13 @@ export class Counterpart {
         excerpt: t.WORK_HERE_EXCERPT,
         skip: skip.size === 0 ? settledOver(this.store) : new Set([...settledOver(this.store), ...skip]),
         year: yearOf(this.store.today()),
+        // The project's folders the host lets be named elsewhere, this one always.
+        folders: projectFolders(this.store, scope, travels, craftFrom),
+        craftTravels: travels,
+        craftSince: craftSince(this.store),
+        // The store-wide "How I work" lane carries craft when it is on.
+        craftHere: !t.CRAFT_IN_WAKE,
+        ...(t.CRAFT_IN_WAKE ? {} : { craft: { max: t.WORK_HERE_CRAFT_MAX, from: craftFrom } }),
       });
       return { lines: rotateWork(ranked, t.WORK_HERE_MAX, day), found: ranked.length };
     } catch {
@@ -2170,7 +2231,8 @@ export class Counterpart {
     const cued: RecallTurn =
       arrived === null ? turn : { ...turn, temporal: arrived.map((a) => ({ id: a.memoryId, weight: a.cueWeight })) };
     const echo = turn.echo ?? this.echoOf(turn.sessionId, opts.echoSince, opts.sessionFrom);
-    const withCues: RecallTurn = echo.size === 0 ? cued : { ...cued, echo };
+    const echoed: RecallTurn = echo.size === 0 ? cued : { ...cued, echo };
+    const withCues: RecallTurn = turn.elsewhere !== undefined ? echoed : this.withElsewhere(echoed, opts.scope);
     const result = recallTurn(this.recall, this.withPrime(this.withSemantic(withCues), opts.scope), {
       schemas: this.schemas,
       prospective: this.prospective,
@@ -2180,6 +2242,44 @@ export class Counterpart {
     this.recordDecision(result.decision, opts.at ?? null);
     if (arrived !== null && opts.at !== undefined) this.spendArrivals(arrived, result.decision, opts.at);
     return result;
+  }
+
+  /**
+   * ANOTHER PROJECT'S WORK, FOR AMBIENT RECALL (2026-10-21, wave 2 lane G;
+   * `recall/tunables.ts#CROSS_PROJECT_BAR_LIFT`, on at 1.25 — Mike's "a
+   * slightly higher bar" — and the hard filter `RECALL_BY_PROJECT`, off):
+   * with either on and a folder to read, the turn carries a check the gate
+   * asks of what it would show — a memory that is work (`self/work.ts#isWorkMemory`, craft
+   * travelling as `PROJECTS_TRAVEL` says) written in a folder outside this
+   * one's project (`projectFolders`). A memory with no folder, personal, or
+   * craft is never another project's. Off, or with no folder: the turn as it
+   * was. Reads only.
+   */
+  private withElsewhere(turn: RecallTurn, scope: string | undefined): RecallTurn {
+    const t = this.recall.tunables;
+    if (!(t.RECALL_BY_PROJECT || t.CROSS_PROJECT_BAR_LIFT > 1) || scope === undefined || !isDirectoryScope(scope)) return turn;
+    const travels = this.self.tunables.PROJECTS_TRAVEL;
+    const ours = new Set(projectFolders(this.store, scope, travels));
+    const since = craftSince(this.store);
+    const elsewhere = (id: string): boolean => {
+      const row = this.store.row(id);
+      if (row === undefined || row.origin_scope === null) return false;
+      const origin = projectFolder(row.origin_scope);
+      if (origin.length === 0 || ours.has(origin)) return false;
+      // THE WAKE'S OWN RULE, EXACTLY (review of #579): the meta read once, a
+      // journal copy as `workHere` tells one (`meta.episodeId`), the mark
+      // through `aboutMarkOf`, and a revised skill's first-learned day.
+      let meta: Readonly<Record<string, unknown>>;
+      try {
+        meta = this.store.readProse(id).meta;
+      } catch {
+        return false;
+      }
+      const journal = typeof meta["episodeId"] === "string";
+      const bornDay = row.kind === "skill" ? craftBornDay(meta, row.birth_day) : row.birth_day;
+      return isWorkMemory({ about: aboutMarkOf(row.about), kind: row.kind as Kind, originScope: row.origin_scope, journal, bornDay }, { craftTravels: travels, craftSince: since });
+    };
+    return { ...turn, elsewhere };
   }
 
   /**
@@ -3676,6 +3776,101 @@ export class Counterpart {
     }
   }
 
+  /**
+   * A SESSION'S RARE BELIEF (wave 2 lane C3, 2026-10-21): written in the
+   * moment beside the memory that carries it — the owner's words about me or
+   * us (testimony), my own real choice, or a vivid moment (a memory FELT at
+   * least `BELIEF_SESSION_VIVID` at the time, by its recorded feelings: the
+   * caller's own `emotional` score is not read). On the self subject, born
+   * weak (route `session`), that memory its first support; at most
+   * `BELIEF_SESSION_BIRTHS_PER_DAY` a lived day; the statement kept to
+   * `MAX_BELIEF_CHARS`. One that says what a belief already says is refused
+   * with that belief's id and NOTHING is filed (review of #583: eight repeats
+   * from eight memories had pumped a belief's support to 8 in one session) —
+   * the reflection files what fits, spread and counted once. Off with
+   * `schemas.BELIEFS_BIRTH`.
+   */
+  sessionBelief(input: { memoryId: string; statement: string; about?: "me" | "us" }): {
+    ok: boolean;
+    reason: "born" | "near-duplicate" | "beliefs-off" | "observer" | "memory-unknown" | "not-testimony-choice-or-vivid" | "statement-required" | "limit-reached" | string;
+    id: string | null;
+    note?: string;
+  } {
+    if (this.observer) return { ok: false, reason: "observer", id: null };
+    if (!SCHEMAS_TUNABLES.BELIEFS_BIRTH) return { ok: false, reason: "beliefs-off", id: null, note: "Beliefs are off: none was written." };
+    const row = this.store.row(input.memoryId);
+    if (row === undefined || row.type !== "memory") return { ok: false, reason: "memory-unknown", id: null };
+    const vivid = (row.feeling_peak_lived ?? 0) >= SCHEMAS_TUNABLES.BELIEF_SESSION_VIVID;
+    if (row.said_by !== "owner" && row.said_by !== "self" && !vivid) {
+      return { ok: false, reason: "not-testimony-choice-or-vivid", id: null, note: "A belief is written in the moment only from the owner's words (saidBy owner), my own choice (saidBy self), or a strongly felt moment; the reflection can draw it later." };
+    }
+    const flat = redactSecrets(input.statement).replace(/\s+/g, " ").trim();
+    if (flat.length === 0) return { ok: false, reason: "statement-required", id: null };
+    const max = REFLECT_TUNABLES.MAX_BELIEF_CHARS;
+    const statement = flat.length > max ? flat.slice(0, max).trim() : flat;
+    // A memory pasted in is not a belief drawn from it (review of #577).
+    if (textSimilarity(statement, row.body) > SCHEMAS_TUNABLES.BELIEF_PASTED) {
+      return { ok: false, reason: "pasted-from-memory", id: null, note: "The belief is the memory's own words: say the claim it shows, in a line of your own." };
+    }
+    const day = this.store.livedDay();
+    const me = this.schemas.ensureSelfSubject();
+    const near = this.schemas.nearestBelief(me, statement);
+    if (near !== null) {
+      return { ok: false, reason: "near-duplicate", id: near.id, note: `It says what ${near.id} says. The memory stands; tonight's reflection may count it for that belief.` };
+    }
+    const today = this.store
+      .list({ type: "schema", archived: false })
+      .filter((id) => {
+        const r = this.store.row(id);
+        return r !== undefined && r.birth_route === "session" && r.birth_day === day;
+      }).length;
+    if (today >= SCHEMAS_TUNABLES.BELIEF_SESSION_BIRTHS_PER_DAY) {
+      return { ok: false, reason: "limit-reached", id: null, note: `At most ${String(SCHEMAS_TUNABLES.BELIEF_SESSION_BIRTHS_PER_DAY)} beliefs are written in the moment a day; the reflection can draw this one tonight.` };
+    }
+    const made = this.schemas.addBelief({
+      entityId: me,
+      statement,
+      day,
+      birthRoute: "session",
+      channel: "authored",
+      groundedIn: [input.memoryId],
+      about: input.about === "us" ? "us" : "me",
+    });
+    if (!made.ok || made.id === null) return { ok: false, reason: made.reason, id: null };
+    const filed = this.schemas.fileSupport({ beliefId: made.id, memoryId: input.memoryId, stance: "support", day });
+    const cut = statement.length < flat.length ? ` The statement was kept to its first ${String(max)} characters.` : "";
+    return { ok: true, reason: "born", id: made.id, note: `Born weak, backed by this memory (${String(filed.route)}).${cut}` };
+  }
+
+  /**
+   * THE OWNER SAYS A BELIEF IS WRONG (wave 2 lane C3, 2026-10-21; lane D's
+   * "this is wrong" calls it): his words become a memory, said by him, that
+   * updates the belief — and a belief born under lane C is settled
+   * `corrected` at once through the settle door (`revision.ts`, the owner's
+   * correction), its history kept. A migrated belief takes it as pressure.
+   */
+  async correctBelief(input: { beliefId: string; text: string; session: string; scope: string; at?: string }): Promise<DepositResult | { readonly deposited: false; readonly reason: "not-a-belief"; readonly memoryId: null }> {
+    const row = this.store.row(input.beliefId);
+    // Only a belief (review of #583): the self subject, a card or a memory is not one to correct here.
+    if (row === undefined || !isBeliefRow(row)) return { deposited: false, reason: "not-a-belief", memoryId: null };
+    const about = row.about === "me" || row.about === "us" ? row.about : "owner";
+    // HIS WORDS ARE THE ACT (review of #583): the button may send only
+    // "That's wrong.", which the battery's length floor refuses. The memory
+    // says what it answers, the belief's own words beside his — a whole
+    // record, and over the floor — while every other gate still reads it.
+    const content = `${this.ownerDisplayName() ?? "The owner"} said this belief is wrong — "${row.body}": ${input.text.trim()}`;
+    return this.submitJot(
+      { content, updates: input.beliefId },
+      {
+        session: input.session,
+        scope: input.scope,
+        ...(input.at === undefined ? {} : { at: input.at }),
+        facts: { saidBy: "owner" },
+        about,
+      },
+    );
+  }
+
   /** An in-the-moment deliberate deposit. Channel: `authored`. Always covers
    *  its own session's words: `cover` is not taken here, and is dropped if a
    *  caller outside TypeScript sends it. */
@@ -3686,7 +3881,9 @@ export class Counterpart {
       ...(ctx.ownSpanHash === undefined ? {} : { ownSpanHash: ctx.ownSpanHash }),
       ...(ctx.model === undefined ? {} : { model: ctx.model }),
       ...(ctx.facts === undefined ? {} : { facts: ctx.facts }),
+      ...(ctx.tags === undefined ? {} : { tags: ctx.tags }),
       ...(ctx.about === undefined ? {} : { about: ctx.about }),
+      ...(ctx.night === true ? { night: true } : {}),
     });
   }
 
@@ -3921,6 +4118,35 @@ export class Counterpart {
   keepCore(id: string, opts: { why: string; actor?: CoreDecisionActor }): CoreDecision {
     const out = keepCore(this.store, { id, why: opts.why, actor: opts.actor ?? "owner" });
     if (out.ok) this.emit("counterpart.core.kept", id, { day: this.store.livedDay() });
+    return out;
+  }
+
+  /**
+   * PROJECTS (2026-10-21, wave 2 lane G): which folders are one piece of
+   * work, so a folder's "Work here" reads them all (`self/work.ts`). Bodies
+   * in `counterpart-projects.ts`. Reads work under observer; a join or a
+   * leave refuses there at the store's seam.
+   */
+  projects(): projectsPart.ProjectView[] {
+    return projectsPart.listProjects(this.store);
+  }
+
+  /** The project `folder` belongs to, or null when it is its own. */
+  projectOf(folder: string): projectsPart.ProjectView | null {
+    return projectsPart.projectOf(this.store, folder);
+  }
+
+  /** Joins `folder` to a project — by its name, or by another folder — as the owner, or the night on his yes. */
+  joinProject(input: { folder: string; project: string; by: "owner" | "night" }): projectsPart.JoinOutcome {
+    const out = projectsPart.joinProject(this.store, input);
+    if (out.ok && out.changed) this.emit("counterpart.project.joined", out.project.id, { by: input.by, born: out.born });
+    return out;
+  }
+
+  /** `folder` is its own project again. */
+  leaveProject(folder: string): { left: string | null; folder: string } {
+    const out = projectsPart.leaveProject(this.store, folder);
+    if (out.left !== null) this.emit("counterpart.project.left", out.left, {});
     return out;
   }
 
@@ -4690,8 +4916,9 @@ export class Counterpart {
     mint: MintResult,
     door: string,
     session?: string | null,
+    awake?: boolean,
   ): RevisionApplication | null {
-    return sweepPart.applyDeclaredRevision(this, proposal, mint, door, session);
+    return sweepPart.applyDeclaredRevision(this, proposal, mint, door, session, awake);
   }
 
   private resolveUpdatesFor(scope: string, declared: string | null, content: string): Promise<UpdatesResolution> {

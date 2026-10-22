@@ -463,11 +463,18 @@ export async function runOnce(input: {
     } catch {
       /* the held page stays on its refusal row for the next boundary */
     }
-    try {
-      const wake = counterpart.refreshWake({ at: today });
-      if (wake.reason !== "current") emit("runner.wake", { reason: wake.reason, triggers: wake.triggers.join(","), bytes: wake.bytes });
-    } catch (err) {
-      noteFailure(counterpart, emit, err instanceof Error ? err.name : "UNKNOWN", "wake", today);
+    // NOT WHEN THE CYCLE STOOD ASIDE (`sleep/lease.ts`, review of #581): the
+    // cycle holding the store renders the wake, and this worker's refresh
+    // would render it a second time beside it.
+    if (report.cycle.held === undefined) {
+      try {
+        const wake = counterpart.refreshWake({ at: today });
+        if (wake.reason !== "current") emit("runner.wake", { reason: wake.reason, triggers: wake.triggers.join(","), bytes: wake.bytes });
+      } catch (err) {
+        noteFailure(counterpart, emit, err instanceof Error ? err.name : "UNKNOWN", "wake", today);
+      }
+    } else {
+      emit("runner.wake", { reason: "held-elsewhere", triggers: "", bytes: 0 });
     }
     result = {
       ran: true,

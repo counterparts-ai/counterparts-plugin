@@ -36,15 +36,18 @@
 import {
   applyChallenge,
   band as bandOfPhysics,
+  fadeOf,
   clampSalienceAtSeam,
   pruneVerdict,
   revisionBar,
   strength as strengthOf,
   successorSeed,
   supersedeRecord,
+  supportRouteWeight,
+  SUPPORT_ROUTES,
   TUNABLES as PHYSICS_TUNABLES,
 } from "../physics/index.js";
-import type { MemoryPhysics } from "../physics/index.js";
+import type { MemoryPhysics, SupportRoute } from "../physics/index.js";
 import { gateAliases } from "../encode/aliases.js";
 import { containsSecret, redactSecrets } from "../encode/secrets.js";
 import { nameRegex, occursAsWholeWord } from "../encode/words.js";
@@ -54,11 +57,13 @@ import { Store, hashText } from "../store/index.js";
 // the two files `test/cli.test.ts` allows to import it.
 import { readProseWalking } from "../store/walk-seam.js";
 import { rowTombstoned } from "../store/index.js";
-import type { MemoryRow, PutInput } from "../store/index.js";
+import type { BirthRoute, MemoryRow, PutInput } from "../store/index.js";
 import type { Band, Kind, Salience } from "../types.js";
 import { AliasIndex, collision, handleKey } from "./aliases.js";
 import { TUNABLES } from "./tunables.js";
 import { tallyNames } from "./names.js";
+import { clearsTopicBar, isStopTag, tallyTags } from "./tags.js";
+import { similarity } from "../remember/updates.js";
 import type { NameCount } from "./names.js";
 import {
   BIRTH_KINDS,
@@ -66,6 +71,7 @@ import {
 } from "./types.js";
 import type {
   BeliefInput,
+  BeliefStanding,
   BeliefOutcome,
   BeliefStory,
   BirthKind,
@@ -87,6 +93,7 @@ import type {
   NamedInTextReport,
   NameBirthOptions,
   NameBirthReport,
+  TopicBirthReport,
   PlacementOutcome,
   PlacementReason,
   PressureIncrement,
@@ -97,12 +104,17 @@ import type {
   SchemaEvent,
   SchemaRole,
   SchemaSliceOut,
+  SupportFileOutcome,
+  SupportFileReason,
+  SupportFilingInput,
 } from "./types.js";
 
 export * from "./types.js";
 export { AliasIndex, collision, handleKey, nameTokens } from "./aliases.js";
 export type { AliasHit, CollisionKind } from "./aliases.js";
 export { TUNABLES } from "./tunables.js";
+export { clearsTopicBar, isStopTag, lookAlikePairs, mergeMap, nightTagWork, notSameKey, NOT_SAME_PREFIX, resolveTag, stemKey, tallyTags } from "./tags.js";
+export type { LookAlike, TagTally, TagsNightInput, TagsNightOutcome } from "./tags.js";
 
 /**
  * Every public method, enumerated. The totality test asserts the class exposes
@@ -117,18 +129,27 @@ export const PUBLIC_SURFACE = [
   "creditNamedIn",
   "addAliases",
   "addBelief",
+  // 2026-10-21 (wave 2 lane C): a memory counted for or against a belief, once.
+  "fileSupport",
   "addCurrentState",
   "challengeBelief",
   "replaceCurrentState",
   "fadeSweep",
   // 2026-10-11 (Group 3 part D): the night's name tally offers names to `mention`.
   "birthsFromNames",
+  // store v14 (2026-10-21): the card my beliefs about me and us attach to (lane C).
+  "ensureSelfSubject",
+  // 2026-10-21 (wave 2 lane B): a tag that matters becomes a topic card.
+  "birthsFromTags",
   // reads
   "entity",
   "entities",
   "element",
   "beliefs",
   "currentState",
+  // 2026-10-21 (wave 2 lane C): beliefs as they stand on a subject, and the one a birth repeats (reads).
+  "beliefStanding",
+  "nearestBelief",
   "slices",
   "loadSkips",
   "aliasIndex",
@@ -153,6 +174,12 @@ const NAME_SOURCE_MEMORIES = 20;
 
 /** The share of a removed card's live linked memories a name must cover to be its name (review of #429). */
 const REMOVED_COVER = 0.8;
+
+/**
+ * A card that has looked back for its memories once (`relinkUnlinked`, review of #578): one
+ * meta row per card, so a card that truly names no memory is not scanned for again every night.
+ */
+export const RELINKED_PREFIX = "schema.relinked.";
 
 /**
  * A tallied name's kind, from what its memories are ABOUT: the person, place
@@ -200,6 +227,9 @@ export interface SchemasOptions {
 
 const ZERO_DIMS: DimensionsInput = { relevance: 0, emotional: 0, predictive: 0 };
 
+/** The memory sources that are not lived: a dream's words, a reflection's own entry (reflect.ts `notLivedReason`). */
+const NOT_LIVED_SOURCES: ReadonlySet<string> = new Set(["dreamed", "reflection"]);
+
 export class Schemas {
   readonly store: Store;
   private readonly index = new AliasIndex();
@@ -212,6 +242,8 @@ export class Schemas {
   private readonly ring: SchemaEvent[] = [];
   /** What `load` left out, by whether the store could account for it. */
   private readonly skips = { removed: 0, unaccounted: [] as string[] };
+  /** Every schema id `load` or `adopt` has looked at, taken or skipped. */
+  private readonly walked = new Set<string>();
   private readonly onEvent: ((e: SchemaEvent) => void) | undefined;
   private readonly retarget: ((oldId: string, newId: string, day: number) => void) | undefined;
 
@@ -249,6 +281,7 @@ export class Schemas {
   private load(): void {
     const denied = new Set(this.store.deniedIds());
     for (const id of this.store.list({ type: "schema" })) {
+      this.walked.add(id);
       const row = this.store.row(id);
       if (row === undefined) continue;
       if (denied.has(id)) {
@@ -259,16 +292,183 @@ export class Schemas {
         this.skips.unaccounted.push(id);
         continue;
       }
-      const doc = readProseWalking(this.store, id, row);
-      const rec = toMetaRecord(doc.meta);
-      if (rec === null) continue;
-      this.remember(id, rec);
-      if (rec.role === "entity" && row.archived === 0) {
-        this.index.register(id, rec.name ?? "", rec.aliases ?? []);
-      } else if (rec.role === "entity" && row.archived_reason === TUNABLES.FADE_REASON) {
-        this.faded.register(id, rec.name ?? "", rec.aliases ?? []);
-      }
+      this.take(id, row);
     }
+  }
+
+  /**
+   * ONE ROW ANOTHER PROCESS WROTE SINCE THIS INDEX WAS BUILT (review of #583):
+   * a long-lived server opened before a belief or a card was born elsewhere
+   * read its index once, at open, and would not know it — a correction
+   * would find "no belief" and a duplicate would pass. Learned on a miss, as
+   * `load` would have read it — its meta only: the alias index (which names
+   * link a memory to a card) stays as this process built it, for now, so a
+   * name another process gave a card does not start linking mid-run. False
+   * when it is not an element or a card.
+   */
+  private learn(id: string): boolean {
+    if (this.notElements.has(id)) return false;
+    const row = this.store.row(id);
+    if (row === undefined) return false;
+    // A memory never becomes a schema row: asked once (an update's target), not read again.
+    if (row.type !== "schema") {
+      this.notElements.add(id);
+      return false;
+    }
+    if (rowTombstoned(row) || this.store.deniedIds().includes(id)) return false;
+    let rec: MetaRecord | null;
+    try {
+      rec = toMetaRecord(readProseWalking(this.store, id, row).meta);
+    } catch {
+      return false;
+    }
+    if (rec === null) {
+      this.notElements.add(id);
+      return false;
+    }
+    this.remember(id, rec);
+    return true;
+  }
+
+  /** Every BELIEF this index has not seen yet (`learn` each): a subject's beliefs read whole, across processes. */
+  private catchUp(): void {
+    for (const id of this.store.list({ type: "schema" })) {
+      if (this.meta.has(id) || this.notElements.has(id) || this.notBeliefs.has(id)) continue;
+      const row = this.store.row(id);
+      if (row === undefined || row.birth_route === null || row.birth_route === undefined) this.notBeliefs.add(id);
+      else this.learn(id);
+    }
+  }
+
+  /** Schema rows that are not elements or cards (the page, a handoff): not read again. */
+  private readonly notElements = new Set<string>();
+  /** Schema rows `catchUp` passed as not beliefs (a card another process made, the identity core). */
+  private readonly notBeliefs = new Set<string>();
+
+  /** One schema row into the index, as `load` reads it. */
+  private take(id: string, row: MemoryRow): void {
+    const doc = readProseWalking(this.store, id, row);
+    const rec = toMetaRecord(doc.meta);
+    if (rec === null) return;
+    this.remember(id, rec);
+    if (rec.role === "entity" && row.archived === 0) {
+      this.index.register(id, rec.name ?? "", rec.aliases ?? []);
+    } else if (rec.role === "entity" && row.archived_reason === TUNABLES.FADE_REASON) {
+      this.faded.register(id, rec.name ?? "", rec.aliases ?? []);
+    }
+  }
+
+  /**
+   * THE ROWS ANOTHER PROCESS WROTE SINCE `load` (2026-10-21, the card twins).
+   * `load` reads the store once, at open, so a card born since in another
+   * process is a row this index has never seen, and the name it holds reads as
+   * free here. That is how one name got two cards (NOTES, "Card twins"): two
+   * workers ran the births phase at once, each against its own index.
+   *
+   * Two passes. The rows neither `load` nor an earlier call has walked (ids
+   * this process minted are already in `meta`), taken the way `load` takes
+   * them, removed and blanked rows skipped (not counted: `loadSkips` is what
+   * the OPEN left out). Then the live cards still missing from the index — one
+   * archived when `load` read it and brought back by another process since
+   * (review of #578) — registered as live. Returns the ids it put in the index.
+   */
+  private adopt(): string[] {
+    const added: string[] = [];
+    let denied: Set<string> | undefined;
+    const unwalked = this.store.list({ type: "schema" }).filter((id) => !this.walked.has(id) && !this.meta.has(id));
+    for (const id of unwalked) {
+      this.walked.add(id);
+      const row = this.store.row(id);
+      if (row === undefined || rowTombstoned(row)) continue;
+      if ((denied ??= new Set(this.store.deniedIds())).has(id)) continue;
+      this.take(id, row);
+      if (this.index.has(id)) added.push(id);
+    }
+    for (const { id, rec } of this.unseenCards()) {
+      this.remember(id, rec);
+      this.faded.unregister(id);
+      this.index.register(id, rec.name ?? "", rec.aliases ?? []);
+      added.push(id);
+    }
+    return added;
+  }
+
+  /**
+   * THE LIVE CARDS THIS INDEX DOES NOT HOLD: live schema rows not in the index,
+   * less the ones it knows are not cards. A row it has never read is read here
+   * (and not remembered: this is a read, asked inside a write transaction);
+   * removed and blanked rows are skipped.
+   */
+  private unseenCards(): { id: string; rec: MetaRecord }[] {
+    const out: { id: string; rec: MetaRecord }[] = [];
+    let denied: Set<string> | undefined;
+    for (const id of this.store.list({ type: "schema", archived: false })) {
+      if (this.index.has(id)) continue;
+      const known = this.meta.get(id);
+      if (known !== undefined && known.role !== "entity") continue;
+      // Walked and still unknown: `load` skipped it, or it carries no record.
+      if (known === undefined && this.walked.has(id)) continue;
+      const row = this.store.row(id);
+      if (row === undefined || row.archived !== 0 || rowTombstoned(row)) continue;
+      if ((denied ??= new Set(this.store.deniedIds())).has(id)) continue;
+      const rec = known ?? toMetaRecord(readProseWalking(this.store, id, row).meta);
+      if (rec === null || rec.role !== "entity") continue;
+      out.push({ id, rec });
+    }
+    return out;
+  }
+
+  /**
+   * A CARD BORN WITHOUT ITS LOOK-BACK (review of #578). A birth commits the
+   * card, then links the memories already naming it (`linkNamingMemories`); a
+   * process killed between the two leaves a card nothing links, and nothing
+   * would ever link them: the tally skips the name the card holds. So before
+   * the night's tally, a live card with no `birth` link at all looks back — one
+   * read finds them, and this runs outside any write lock. A births card always
+   * has some (its name was in at least `MIN_MEMORIES` memories). One that truly
+   * names none would be scanned for again every night, a full pass over the
+   * memories each time, so a card looks back ONCE: a look-back that ran (found
+   * something or nothing) leaves `RELINKED_PREFIX<id>`, and a card with that row
+   * is not asked again. A look-back that failed leaves none and is retried. The
+   * identity core is not born here and is left alone, and so is a topic card
+   * (wave 2): it has no name to look back by, and its memories are its tags.
+   */
+  private relinkUnlinked(day: number): number {
+    const linked = new Set(this.store.subjectsLinkedVia("birth"));
+    let relinked = 0;
+    for (const [id, rec] of this.meta) {
+      if (rec.role !== "entity" || linked.has(id) || !this.index.has(id)) continue;
+      if ((rec.name ?? "").length === 0) continue;
+      const row = this.store.row(id);
+      if (row === undefined || row.archived !== 0 || row.kind === "self") continue;
+      if (this.store.getMeta(`${RELINKED_PREFIX}${id}`) !== undefined) continue;
+      const links = this.linkNamingMemories(id);
+      if (links !== null) this.store.setMeta(`${RELINKED_PREFIX}${id}`, String(day));
+      this.emit("schema.subjects.relinked", id, { day, links: links ?? 0, failed: links === null });
+      relinked += 1;
+    }
+    return relinked;
+  }
+
+  /**
+   * `settle`'s three name gates — an exact holder, a near collision, an alias
+   * held — asked of the live cards this index does not hold (2026-10-21, the
+   * card twins). Reads only, so it is safe inside the write transaction
+   * `Schemas#birth` asks it in, and the index changes only when the answer is
+   * yes and `birth` adopts what it found.
+   */
+  private heldUnseen(name: string, aliases: readonly string[]): boolean {
+    const unseen = new AliasIndex();
+    const terms: string[] = [];
+    for (const { id, rec } of this.unseenCards()) {
+      unseen.register(id, rec.name ?? "", rec.aliases ?? []);
+      terms.push(rec.name ?? "", ...(rec.aliases ?? []));
+    }
+    return (
+      unseen.lookup(name).length > 0 ||
+      terms.some((t) => collision(name, t) === "near") ||
+      aliases.some((alias) => unseen.lookup(alias).length > 0)
+    );
   }
 
   private remember(id: string, rec: MetaRecord): void {
@@ -628,15 +828,33 @@ export class Schemas {
     }
 
     const seam = clampSalienceAtSeam({ novelty: null, ...ZERO_DIMS }, null);
-    const id = this.store.put({
-      type: "schema",
-      kind,
-      title: name,
-      body: stubBody(name, kept, input.day),
-      meta: { role: "entity", name, aliases: kept },
-      salience: seam.salience,
-      physics: { birthDay: input.day, lastUsedDay: input.day },
-    });
+    // ASKED AGAIN UNDER THE WRITE LOCK (2026-10-21, the card twins). Everything
+    // above judged this index, read at open; another process may have given the
+    // name a card since. The same gates `settle` applied are asked of the cards
+    // this index has not seen, inside the transaction that would write this
+    // one, so of two processes minting one name, the second sees the first's.
+    const id = this.store.putUnless(
+      {
+        type: "schema",
+        kind,
+        title: name,
+        body: stubBody(name, kept, input.day),
+        meta: { role: "entity", name, aliases: kept },
+        salience: seam.salience,
+        physics: { birthDay: input.day, lastUsedDay: input.day },
+      },
+      () => this.heldUnseen(name, kept),
+    );
+    if (id === null) {
+      // Taken in, and judged again against the index as it now stands: the
+      // other card, a collision, or a birth without the aliases it took. That
+      // second birth asks again too; only a card born meanwhile can refuse it,
+      // since what was found is in the index now. The per-chunk cap was
+      // already passed, and nothing was spent from it.
+      this.adopt();
+      this.emit("schema.birth.raced", input.chunkRef, { nameHash, kind, day: input.day });
+      return this.settle(name, kind, input, nameHash, false);
+    }
     this.remember(id, { role: "entity", name, aliases: kept });
     this.index.register(id, name, kept);
     this.birthsPerChunk.set(input.chunkRef, (this.birthsPerChunk.get(input.chunkRef) ?? 0) + 1);
@@ -710,6 +928,28 @@ export class Schemas {
   // ── beliefs and current state ──────────────────────────────────────────────
 
   /**
+   * THE SUBJECT THAT IS ME (store v14, 2026-10-21; for lane C): the one card
+   * my beliefs about myself and about us attach to, made, found, or revived
+   * by `Store#ensureSelfSubject` (its comment has the shape and why its kind is
+   * `fact`), and registered here so `addBelief` finds it with no
+   * `entity-unknown` refusal. It has no name, so the alias index gains no
+   * handle from it. Nothing calls this yet.
+   */
+  ensureSelfSubject(): string {
+    const id = this.store.ensureSelfSubject();
+    const row = this.store.row(id);
+    if (row !== undefined) {
+      const rec = toMetaRecord(readProseWalking(this.store, id, row).meta);
+      if (rec !== null) {
+        this.remember(id, rec);
+        this.faded.unregister(id);
+        this.index.register(id, rec.name ?? "", rec.aliases ?? []);
+      }
+    }
+    return id;
+  }
+
+  /**
    * Mint a belief on an entity. The row's kind is the ENTITY's kind, which is
    * how "revision bars differ by kind" becomes arithmetic rather than policy:
    * a belief about a person inherits iota 0.8, project state on an entity 0.5 —
@@ -726,25 +966,150 @@ export class Schemas {
       this.emit("schema.belief.refused", input.entityId, { reason: "statement-empty" });
       return { ok: false, reason: "statement-empty", id: null };
     }
+    // BORN WEAK (wave 2 lane C, 2026-10-21; physics §5.13): every belief
+    // starts provisional, whoever writes it — its dimensions and its claim at
+    // most `BELIEF_BIRTH_CEILING` (the seam's ceiling, so a cut is recorded as
+    // one), no feeling of its own (its support carries feeling), the ceiling
+    // itself when nothing was said, and a birth route, which is what makes it
+    // a belief to physics. What lifts it after is support, counted once per
+    // memory (`fileSupport`). A MIGRATED belief is not born here: it keeps the
+    // strength it lived in v1 (owner ruling 2026-08-29), for now.
+    // MIGRATED IS ONE FACT, READ OFF THE ROUTE (review of #575): physics reads
+    // the row's birth route alone, so the channel must agree with it.
+    const migrated = input.birthRoute === "migrated";
+    if (migrated !== (input.channel === "migrated")) {
+      this.emit("schema.belief.refused", input.entityId, { reason: "route-channel-mismatch" });
+      return { ok: false, reason: "route-channel-mismatch", id: null };
+    }
+    const ceiling = PHYSICS_TUNABLES.BELIEF_BIRTH_CEILING;
+    const dims = input.dimensions;
     const put = this.mintElement({
       role: "belief",
       entityId: input.entityId,
       kind: entity.row.kind,
       body: statement,
       day: input.day,
-      dimensions: input.dimensions,
-      claimedSalience: input.claimedSalience ?? null,
+      ...(migrated
+        ? { dimensions: dims, claimedSalience: input.claimedSalience ?? null }
+        : {
+            dimensions:
+              dims === undefined
+                ? undefined
+                : { relevance: Math.min(ceiling, dims.relevance), emotional: 0, predictive: Math.min(ceiling, dims.predictive) },
+            claimedSalience: input.claimedSalience ?? (dims === undefined ? ceiling : null),
+            ceiling,
+          }),
       ...(input.channel === undefined ? {} : { channel: input.channel }),
       protectedFlag: input.protected === true,
-      meta: { groundedIn: [...(input.groundedIn ?? [])] },
+      meta: { groundedIn: [...(input.groundedIn ?? [])], ...(input.fromCandidate === undefined ? {} : { fromCandidate: input.fromCandidate }) },
+      birthRoute: input.birthRoute,
+      ...(input.about === undefined ? {} : { about: input.about }),
     });
     this.emit("schema.belief.added", put, {
       entityId: input.entityId,
       kind: entity.row.kind,
       day: input.day,
       protected: input.protected === true,
+      route: input.birthRoute,
     });
     return { ok: true, reason: "added", id: put };
+  }
+
+  /**
+   * COUNTS A MEMORY FOR OR AGAINST A BELIEF, ONCE (wave 2 lane C, 2026-10-21;
+   * physics §5.13). Support is how a belief is earned: lived memories that
+   * fit, each counted once per belief (the table's key — filing it again is
+   * `already-counted` and adds nothing), weighed by route, by spread (a day,
+   * session or folder the belief already has counts less) and by feeling. The
+   * store recounts the belief in the same transaction.
+   *
+   * What may be filed, for now: a LIVED memory (a memory or a chapter; not a
+   * dream's words or a reflection's own entry), or, by `link`, another live
+   * belief strong enough to lend. Never the belief itself, and never a
+   * showing, a recall or a rating of it — those are not memories and not
+   * routes (lane E: a rating of the belief's slot is a use credit, not
+   * support). `testimony` and `choice` are read off the memory's `said_by`.
+   *
+   * A CONTRARY filing is counted the same way and then presses the belief
+   * through the pressure arithmetic (`challengeBelief`, §5.6) at its weight:
+   * REVISE when P > iota x strength, as any challenge.
+   */
+  fileSupport(input: SupportFilingInput): SupportFileOutcome {
+    const refuse = (reason: SupportFileReason, beliefId: string | null): SupportFileOutcome => {
+      this.emit("schema.support.refused", beliefId ?? input.beliefId, { reason, memoryId: input.memoryId, day: input.day });
+      return { ok: false, reason, beliefId, route: null, weight: 0 };
+    };
+    let beliefId: string;
+    try {
+      beliefId = this.store.resolve(input.beliefId);
+    } catch {
+      return refuse("belief-unknown", null);
+    }
+    if (!this.meta.has(beliefId)) this.learn(beliefId);
+    const rec = this.meta.get(beliefId);
+    const belief = this.store.row(beliefId);
+    if (rec === undefined || rec.role !== "belief" || belief === undefined) return refuse("belief-unknown", beliefId);
+    if (belief.archived === 1) return refuse("belief-archived", beliefId);
+    if (input.memoryId === beliefId || input.memoryId === input.beliefId) return refuse("memory-is-the-belief", beliefId);
+    if (input.stance !== "support" && input.stance !== "contrary") return refuse("stance-unknown", beliefId);
+    const memory = this.store.row(input.memoryId);
+    if (memory === undefined || this.removed(input.memoryId, memory)) return refuse("memory-unknown", beliefId);
+
+    const asked = input.route ?? "found";
+    if (!(SUPPORT_ROUTES as readonly string[]).includes(asked)) return refuse("route-unknown", beliefId);
+    let route = asked as SupportRoute;
+    let note: string | undefined;
+    if (route === "link") {
+      if (!this.meta.has(input.memoryId)) this.learn(input.memoryId);
+      const other = this.meta.get(input.memoryId);
+      if (other === undefined || other.role !== "belief" || memory.archived === 1 || memory.superseded_by !== null) {
+        return refuse("link-not-a-belief", beliefId);
+      }
+      if (strengthOf(this.store.physicsOf(input.memoryId), input.day) < PHYSICS_TUNABLES.SUPPORT_LINK_FLOOR) {
+        return refuse("link-too-weak", beliefId);
+      }
+    } else {
+      if ((memory.type !== "memory" && memory.type !== "episode") || NOT_LIVED_SOURCES.has(memory.source ?? "")) {
+        return refuse("not-lived", beliefId);
+      }
+      // Testimony and choice are what the memory says it is, never a claim.
+      const read: SupportRoute | null = memory.said_by === "owner" ? "testimony" : memory.said_by === "self" ? "choice" : null;
+      if (read !== null && read !== route) {
+        if (route !== "found") note = `filed as ${read}: the memory was said by ${memory.said_by === "owner" ? "the owner" : "me"}`;
+        route = read;
+      } else if (read === null && (route === "testimony" || route === "choice")) {
+        note = `filed as found: ${route} is read off the memory's said_by, and it has none`;
+        route = "found";
+      }
+      if (route === "use" && this.aboutMe(belief, rec)) return refuse("use-not-about-me", beliefId);
+    }
+
+    const filed = this.store.fileSupport({
+      beliefId,
+      memoryId: input.memoryId,
+      stance: input.stance,
+      route,
+      day: input.day,
+      weight: supportRouteWeight(route),
+    });
+    if (!filed) {
+      this.emit("schema.support.counted-before", beliefId, { memoryId: input.memoryId, day: input.day });
+      return { ok: false, reason: "already-counted", beliefId, route: null, weight: 0 };
+    }
+    const weight = this.store.supportOf(beliefId).find((r) => r.memoryId === input.memoryId)?.weight ?? 0;
+    this.emit("schema.support.filed", beliefId, { memoryId: input.memoryId, stance: input.stance, route, weight, day: input.day });
+    const out: SupportFileOutcome = { ok: true, reason: "filed", beliefId, route, weight, ...(note === undefined ? {} : { note }) };
+    if (input.stance === "contrary") {
+      return { ...out, revision: this.challengeBelief({ updates: beliefId, challengerId: input.memoryId, day: input.day, weight }) };
+    }
+    return out;
+  }
+
+  /** A belief about me or us — marked so, or on the self subject or the identity core — which `use` does not back. */
+  private aboutMe(belief: MemoryRow, rec: MetaRecord): boolean {
+    if (belief.about === "me" || belief.about === "us") return true;
+    const subject = rec.entityId === undefined ? undefined : this.store.row(rec.entityId);
+    return subject !== undefined && (subject.subject_kind === "self" || subject.kind === "self");
   }
 
   /**
@@ -804,6 +1169,7 @@ export class Schemas {
   private requireEntity(
     id: string,
   ): { problem: "entity-unknown" | "entity-archived" | null; row: MemoryRow } {
+    if (!this.meta.has(id)) this.learn(id);
     const rec = this.meta.get(id);
     const row = this.store.row(id);
     if (rec === undefined || rec.role !== "entity" || row === undefined) {
@@ -829,6 +1195,11 @@ export class Schemas {
     meta?: Record<string, unknown>;
     salience?: Salience;
     seed?: Partial<MemoryPhysics>;
+    /** A lower ceiling on the claim than the channel's (a belief born weak, lane C). */
+    ceiling?: number;
+    /** A belief's birth route (v14) and its about mark, written at birth. */
+    birthRoute?: BirthRoute;
+    about?: "me" | "us";
   }): string {
     // The CEILING derives from the channel with "authored" as the arithmetic
     // default — but the PERSISTED source is `spec.channel ?? null`: a caller
@@ -851,7 +1222,7 @@ export class Schemas {
       const seam = clampSalienceAtSeam(
         { novelty: null, ...(spec.dimensions ?? ZERO_DIMS) },
         spec.claimedSalience,
-        channel === "fallback" ? PHYSICS_TUNABLES.SWEEP_CLAIM_CEILING : 1,
+        Math.min(channel === "fallback" ? PHYSICS_TUNABLES.SWEEP_CLAIM_CEILING : 1, spec.ceiling ?? 1),
       );
       if (seam.event !== null) {
         this.emit("salience.lifted", spec.entityId, {
@@ -889,6 +1260,10 @@ export class Schemas {
         ...(spec.seed ?? {}),
       },
       ...(spec.channel === undefined ? {} : { source: spec.channel }),
+      ...(spec.birthRoute === undefined ? {} : { birthRoute: spec.birthRoute }),
+      // "Me" and "us" are the mark (v9) a belief about the self carries; the
+      // engine sets it at birth, so it is the writer's.
+      ...(spec.about === undefined ? {} : { about: spec.about, aboutBy: "writer" as const }),
     };
     if (spec.happenedOn !== undefined) put.happenedOn = spec.happenedOn;
     const id = this.store.put(put);
@@ -956,6 +1331,7 @@ export class Schemas {
       });
     }
 
+    if (!this.meta.has(targetId)) this.learn(targetId);
     const rec = this.meta.get(targetId);
     if (rec === undefined || rec.role !== "belief") return refuse("target-not-a-belief", targetId);
     const row = this.store.row(targetId);
@@ -975,14 +1351,20 @@ export class Schemas {
     if (challengerRow === undefined) return refuse("challenger-unknown", targetId);
     const challenger = this.store.physicsOf(input.challengerId);
 
+    // A BELIEF'S DAY IS PRESSED BY ITS STRONGEST CONTRARY MEMORY (review of
+    // #575): what was credited against it today, from the durable increments,
+    // so a stronger one the same day tops it up rather than being lost.
+    const creditedToday = target.belief === true && target.lastChallengedDay === input.day ? this.creditedOn(targetId, input.day) : undefined;
     const outcome = applyChallenge(
       targetId,
       target,
       // The RESOLVED id is what physics is told, and the raw declaration stays in
       // the retarget event: the model proposes semantics, the engine resolves
       // references (scar §2.5).
-      { id: input.challengerId, declaredUpdates: targetId, physics: challenger },
+      { id: input.challengerId, declaredUpdates: targetId, physics: challenger, ...(input.weight === undefined ? {} : { weight: input.weight }) },
       input.day,
+      undefined,
+      creditedToday === undefined ? {} : { creditedToday },
     );
 
     let increment: PressureIncrement | null = null;
@@ -1031,6 +1413,27 @@ export class Schemas {
     }
 
     let successorId: string | null = null;
+    // A BELIEF BORN UNDER LANE C IS CONTESTED, NEVER REWRITTEN (2026-10-21):
+    // past its bar it keeps its words — no memory's body becomes a belief —
+    // takes one cut, and waits for the next reflection to revise or retire it
+    // through the settle door. A migrated belief keeps the accommodation path.
+    if (outcome.verdict === "revise" && target.belief === true) {
+      this.contest(targetId, input, outcome.pressureAfter, outcome.bar);
+      return {
+        verdict: "hold",
+        reason: "contested",
+        credited: outcome.credited,
+        targetId,
+        retargeted,
+        successorId: null,
+        force: outcome.force,
+        pressureBefore: outcome.pressureBefore,
+        pressureAfter: outcome.pressureAfter,
+        bar: outcome.bar,
+        increment,
+        contested: true,
+      };
+    }
     if (outcome.verdict === "revise") {
       successorId = this.supersedeBelief(targetId, rec, row, input, challenger);
     }
@@ -1048,6 +1451,59 @@ export class Schemas {
       bar: outcome.bar,
       increment,
     };
+  }
+
+  /**
+   * CONTESTED (lane C, physics §5.13): the contrary pressure on a belief
+   * crossed its support's resistance. Its text stands; its strength takes one
+   * cut (`BELIEF_CONTESTED_FADE`, as a `changed` settle's: a multiplier, undone
+   * by dividing it back out), its pressure starts again from nothing, and its
+   * meta says so (`contested`: the day, the memory that carried it, the
+   * pressure and the bar) for the next reflection to revise or retire it. A
+   * durable `belief.contested` event keeps the story.
+   */
+  private contest(id: string, input: ChallengeInput, pressure: number, bar: number): void {
+    // ONE CUT (review of #575): a belief already contested takes no second
+    // one; later contrary memories add pressure until the reflection or the
+    // owner settles it.
+    let already = false;
+    try {
+      already = this.store.readProse(id).meta["contested"] !== undefined;
+    } catch {
+      already = false;
+    }
+    if (already) {
+      this.emit("schema.belief.contested.again", id, { day: input.day, challengerId: input.challengerId, pressure, bar });
+      return;
+    }
+    const p = this.store.physicsOf(id);
+    const factor = PHYSICS_TUNABLES.BELIEF_CONTESTED_FADE;
+    this.store.updatePhysics(id, { fade: fadeOf(p) * factor, pressure: 0, lastChallengedDay: input.day });
+    const contested = { day: input.day, by: input.challengerId, pressure, bar, fade: factor };
+    this.store.revise(id, { meta: { contested }, reason: "belief-contested" });
+    this.store.appendEvent({
+      name: "belief.contested",
+      day: input.day,
+      ref: id,
+      dedupKey: `belief.contested:${id}:${String(input.day)}`,
+      payload: { beliefId: id, ...contested },
+    });
+    this.emit("schema.belief.contested", id, { day: input.day, challengerId: input.challengerId, pressure, bar });
+  }
+
+  /** The force credited against a belief on one lived day, from its durable increments (a read). */
+  private creditedOn(id: string, day: number): number {
+    let total = 0;
+    for (const e of this.store.eventLog({ name: "revision.pressure", ref: id })) {
+      if (e.day !== day || e.payload === null) continue;
+      try {
+        const f = (JSON.parse(e.payload) as { force?: unknown }).force;
+        if (typeof f === "number" && Number.isFinite(f)) total += f;
+      } catch {
+        /* a payload that will not read adds nothing */
+      }
+    }
+    return total;
   }
 
   /**
@@ -1202,8 +1658,14 @@ export class Schemas {
         ...(spec.meta ?? {}),
       },
       // The evidence that carried the revision sets the successor's salience:
-      // an element is as strongly held as what made it (NOTES §3).
+      // an element is as strongly held as what made it (NOTES §3). Since lane
+      // C (2026-10-21) only a MIGRATED belief reaches this path — a belief
+      // born under lane C's rules is contested, never rewritten
+      // (`challengeBelief`) — so its successor stays migrated (the store
+      // carries no route to a successor), on the physics it lived, and its
+      // predecessor's support stays where it was counted.
       salience: spec.challenger.salience,
+      ...(spec.role === "belief" ? { birthRoute: "migrated" as const } : {}),
       physics: { birthDay: input.day, lastUsedDay: input.day, ...seed },
       // The channel vocabulary's fifth member finally has its writer (PR-2
       // review should-fix 1): an accommodation successor is the engine
@@ -1441,10 +1903,19 @@ export class Schemas {
    * already there when it faded. Each name is its own chunk, so the per-chunk
    * birth cap does not bind; `limit` (sleep's nightly budget) does, and the
    * names past it are counted and offered again the next night.
+   *
+   * Two processes can run this at once (a session's Stop and SessionEnd
+   * workers both run the cycle; NOTES, "Card twins"). The index takes in the
+   * cards other processes made before the tally (`adopt`), and each birth asks
+   * again under the write lock, so a name gets one card whichever runs first.
    */
   birthsFromNames(day: number, opts: NameBirthOptions = {}): NameBirthReport {
     const dryRun = opts.dryRun === true;
     const limit = opts.limit ?? Number.POSITIVE_INFINITY;
+    // The cards other processes made since this index was read (the card
+    // twins, 2026-10-21): a name one of them holds is not offered.
+    this.adopt();
+    if (!dryRun) this.relinkUnlinked(day);
     const denied = new Set(this.store.deniedIds());
     const texts = this.store.liveMemoryTexts().filter((m) => !denied.has(m.id));
     const tally = tallyNames(texts, {
@@ -1497,6 +1968,12 @@ export class Schemas {
         born.push(out.id);
       } else {
         refused[out.reason] = (refused[out.reason] ?? 0) + 1;
+        // A name offered as free that came back held was given its card by
+        // another process running this phase at the same time. It spends
+        // tonight's budget here too, so two workers that tally together birth
+        // one night's worth between them, not one each (one that tallies after
+        // the other has born some can still overshoot; NOTES, "Card twins").
+        if (out.reason === "existing") attempts += 1;
       }
     });
     this.emit("schema.births.sweep", undefined, {
@@ -1509,7 +1986,91 @@ export class Schemas {
       lowerCase: tally.lowerCase,
       dryRun,
     });
-    return { day, dryRun, memories: texts.length, offered: names.length, born, refused, skippedForLimit, lowerCase: tally.lowerCase };
+    return { day, dryRun, memories: texts.length, offered: names.length, born, refused, skippedForLimit, lowerCase: tally.lowerCase, attempts };
+  }
+
+  /**
+   * A TAG THAT MATTERS BECOMES A TOPIC (wave 2 lane B, 2026-10-21; design §1,
+   * lightly held): the night's tag tally (`tags.ts#tallyTags`, through the
+   * merges) offers every tag over the topic bar (`clearsTopicBar`: memories
+   * weighted by use and feeling, lived days, sessions), heaviest first, and
+   * each is born a TOPIC CARD — unless it stays a tag (`isStopTag`: a date
+   * word, a word with a digit), a card already holds it or one of its merged
+   * words as a name (a name is a tag already promoted), or a topic card
+   * already holds it (a faded one too, for now). `limit` (the night's
+   * `TOPIC_BIRTHS_PER_NIGHT`) at most; the rest wait, counted.
+   *
+   * A topic card is shaped like the self subject (`Store#ensureSelfSubject`):
+   * an entity card with NO name and no aliases, so the alias index links
+   * nothing to it — recall's aliases (`retrieval.ts`), the names a memory is
+   * linked by and the credit a mention gives are unchanged, which is lane B's
+   * promise (no recall change; lane E decides how topics reach recall). Its
+   * tag and merged words are in `meta.topic` / `meta.topicAliases`, its kind
+   * of subject is `topic`, and its memories are the ones tagged — no
+   * `memory_subjects` rows. Off (`TAGS_NIGHT`): nothing.
+   */
+  birthsFromTags(day: number, opts: NameBirthOptions = {}): TopicBirthReport {
+    const dryRun = opts.dryRun === true;
+    const limit = opts.limit ?? Number.POSITIVE_INFINITY;
+    if (!TUNABLES.TAGS_NIGHT) return { day, dryRun, on: false, offered: 0, born: [], refused: {}, skippedForLimit: 0, attempts: 0 };
+    const topics = this.store.topicCards();
+    const refused: Record<string, number> = {};
+    const refuse = (reason: string): false => {
+      refused[reason] = (refused[reason] ?? 0) + 1;
+      return false;
+    };
+    const offered = tallyTags(this.store).filter((t) => {
+      if (!clearsTopicBar(t)) return false;
+      // Any of its words: a later merge can move the canonical word, and the same cluster is one topic.
+      if (t.words.some((w) => topics.has(w))) return false;
+      if (isStopTag(t.tag)) return refuse("stays-a-tag");
+      if (t.words.some((w) => this.index.lookup(w).length > 0 || this.faded.lookup(w).length > 0)) return refuse("a-name-already");
+      return true;
+    });
+    const born: string[] = [];
+    let skippedForLimit = 0;
+    let attempts = 0;
+    for (const t of offered) {
+      if (attempts >= limit) {
+        skippedForLimit += 1;
+        continue;
+      }
+      attempts += 1;
+      // A dry run (the observer's report) counts what a night would try.
+      if (dryRun) continue;
+      const aliases = t.words.filter((w) => w !== t.tag);
+      const seam = clampSalienceAtSeam({ novelty: null, ...ZERO_DIMS }, null);
+      // ASKED AGAIN UNDER THE WRITE LOCK (review of #576; the card twins'
+      // class): two processes' cycles on one day both read the tally before
+      // either wrote, so the "no topic holds it yet" check runs inside the
+      // insert's own transaction (`Store#putUnless`).
+      const id = this.store.putUnless(
+        {
+          type: "schema",
+          kind: "entity",
+          title: t.tag,
+          body: `${t.tag}: a topic — the memories tagged with it.`,
+          meta: { role: "entity", name: "", aliases: [], topic: t.tag, topicAliases: aliases },
+          subjectKind: "topic",
+          salience: seam.salience,
+          physics: { birthDay: day, lastUsedDay: day },
+        },
+        () => {
+          const now = this.store.topicCards();
+          return t.words.some((w) => now.has(w));
+        },
+      );
+      if (id === null) {
+        refuse("a-topic-already");
+        continue;
+      }
+      this.remember(id, { role: "entity", name: "", aliases: [] });
+      this.index.register(id, "", []);
+      born.push(id);
+      this.emit("schema.topic.birth", id, { day, memories: t.memories.length, days: t.days, sessions: t.sessions, weight: t.weight });
+    }
+    this.emit("schema.topics.sweep", undefined, { day, offered: offered.length, born: born.length, skippedForLimit, dryRun });
+    return { day, dryRun, on: true, offered: offered.length, born, refused, skippedForLimit, attempts };
   }
 
   // ── reads ──────────────────────────────────────────────────────────────────
@@ -1578,6 +2139,7 @@ export class Schemas {
   }
 
   element(id: string): ElementView | undefined {
+    if (!this.meta.has(id)) this.learn(id);
     const rec = this.meta.get(id);
     const row = this.store.row(id);
     if (rec === undefined || row === undefined) return undefined;
@@ -1638,9 +2200,63 @@ export class Schemas {
   }
 
   beliefs(entityId: string): ElementView[] {
+    this.catchUp();
+    return this.beliefsKnown(entityId);
+  }
+
+  /** A subject's beliefs as this index knows them, no catch-up: `slices()` catches up once for every card (review of #583). */
+  private beliefsKnown(entityId: string): ElementView[] {
     return this.liveElementIds(entityId, "belief")
       .map((id) => this.element(id))
       .filter((e): e is ElementView => e !== undefined);
+  }
+
+  /**
+   * THE BELIEFS ON A SUBJECT AS THEY STAND (lane C, 2026-10-21): each live
+   * belief with its strength on `day`, and how many memories are counted for
+   * and against it, strongest first. What a reflection is shown so it can file
+   * to a belief rather than write it again. A read.
+   */
+  beliefStanding(entityId: string, day: number): BeliefStanding[] {
+    return this.beliefs(entityId)
+      .map((b): BeliefStanding => {
+        const rows = this.store.supportOf(b.id);
+        const row = this.store.row(b.id);
+        let contested = false;
+        try {
+          contested = this.store.readProse(b.id).meta["contested"] !== undefined;
+        } catch {
+          contested = false;
+        }
+        return {
+          id: b.id,
+          statement: b.statement,
+          about: row?.about === "me" ? "me" : row?.about === "us" ? "us" : null,
+          strength: strengthOf(this.store.physicsOf(b.id), day),
+          support: rows.filter((r) => r.stance === "support").length,
+          against: rows.filter((r) => r.stance === "contrary").length,
+          contested,
+        };
+      })
+      .sort((a, b) => b.strength - a.strength || (a.id < b.id ? -1 : 1));
+  }
+
+  /**
+   * THE LIVE BELIEF ON A SUBJECT CLOSEST TO A STATEMENT, at or past
+   * `BELIEF_NEAR_DUPLICATE` (token cosine, `remember/updates.ts#similarity`),
+   * or null (lane C): a birth that close is the same belief said again, and
+   * the writer is told to file to it instead. `except`: the belief a birth
+   * replaces (says better), never its duplicate. A read.
+   */
+  nearestBelief(entityId: string, statement: string, except?: string): { id: string; statement: string; similarity: number } | null {
+    let best: { id: string; statement: string; similarity: number } | null = null;
+    for (const b of this.beliefs(entityId)) {
+      // The belief a birth says better is not the one it repeats.
+      if (b.id === except) continue;
+      const s = similarity(statement, b.statement);
+      if (s >= TUNABLES.BELIEF_NEAR_DUPLICATE && (best === null || s > best.similarity)) best = { id: b.id, statement: b.statement, similarity: s };
+    }
+    return best;
   }
 
   currentState(entityId: string): ElementView[] {
@@ -1665,6 +2281,7 @@ export class Schemas {
    * prompt cards and the gate slices, so the two surfaces cannot drift.
    */
   slices(opts: { excludeProtected?: boolean } = {}): SchemaSliceOut[] {
+    this.catchUp();
     return this.entities().map((e) => {
       let elided = 0;
       const keep = (v: ElementView): boolean => {
@@ -1674,7 +2291,7 @@ export class Schemas {
         }
         return true;
       };
-      const beliefs = this.beliefs(e.id)
+      const beliefs = this.beliefsKnown(e.id)
         .filter(keep)
         .map((b) => ({ id: b.id, statement: b.statement }));
       const currentState = this.currentState(e.id)
@@ -1721,9 +2338,10 @@ export class Schemas {
    * A card's birth looks back (v12): every memory already written whose title
    * or body names it — by its own unambiguous terms — is linked to it, `via:
    * birth`. One read of the memories' words and one regex per term. Fail-open:
-   * the card is born whatever this does, and an event says so when it fails.
+   * the card is born whatever this does, and an event says so when it fails —
+   * and the count is null then, so a caller can tell a failure from "none".
    */
-  private linkNamingMemories(cardId: string): number {
+  private linkNamingMemories(cardId: string): number | null {
     try {
       const terms = this.index.termsFor(cardId);
       if (terms === undefined) return 0;
@@ -1745,7 +2363,7 @@ export class Schemas {
       return added;
     } catch (err) {
       this.emit("schema.subjects.failed", cardId, { via: "birth", reason: String((err as { code?: string }).code ?? "UNKNOWN") });
-      return 0;
+      return null;
     }
   }
 

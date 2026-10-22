@@ -73,6 +73,23 @@ export interface SelfTunables {
   WORK_HERE_POOL: number;
   /** Characters of a work line's excerpt, after its title. CAL. */
   WORK_HERE_EXCERPT: number;
+  /**
+   * WORK STAYS IN ITS PROJECT, CRAFT TRAVELS (2026-10-21, wave 2 lane G,
+   * design §8; on, lightly held). On: "Work here" and the elsewhere lines
+   * read a folder's PROJECT (`folder_projects`; by default the folder alone),
+   * and a skill nobody marked `work` is craft, not work — it may be a work
+   * line in any folder (`WORK_HERE_CRAFT_MAX`) — `work.ts`. Off: a folder is
+   * its own project and an unmarked skill is work where it was written.
+   * Read from the copy `withTunables` makes when `Self` opens, after the
+   * harness applies its settings, so `harness compare --set
+   * self.PROJECTS_TRAVEL=false` sets it.
+   */
+  PROJECTS_TRAVEL: boolean;
+  /** With `PROJECTS_TRAVEL`: how many places of the ranked work lines
+   *  (`WORK_HERE_POOL`) are craft written outside the project, from a folder
+   *  the host lets be named elsewhere — taking turns by lived day among the
+   *  newest. 0: craft from elsewhere is in no wake. CAL. */
+  WORK_HERE_CRAFT_MAX: number;
   /** Most open threads considered. CAL. [v1 threads lane: count-capped at 12;
    *  5 since 2026-10-01, when a session could first set the flag — kept small] */
   THREADS_MAX: number;
@@ -300,6 +317,8 @@ export const SELF_TUNABLES: SelfTunables = {
   WORK_HERE_MAX: 4,
   WORK_HERE_POOL: 8,
   WORK_HERE_EXCERPT: 60,
+  PROJECTS_TRAVEL: true,
+  WORK_HERE_CRAFT_MAX: 2,
   THREADS_MAX: 5,
   RECONSIDERING_MAX: 1,
   STILL_OPEN_STALE_DAYS: 14,

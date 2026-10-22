@@ -233,6 +233,23 @@ export interface MemoryPhysics {
    * (`physics#curveSal`), never read alone. Computed at the read seam, never stored.
    */
   eraExempt?: boolean;
+  /**
+   * A BELIEF (wave 2 lane C, 2026-10-21; physics §5.13) — NOT a column:
+   * computed at the read seam from `memories.birth_route`, which only a belief
+   * carries — one born under lane C's rules, not a `migrated` one, which keeps
+   * the strength and the kind's inertia it lived in v1. Its height, its
+   * steepness and its resistance come from its SUPPORT (`physics#supportArm`,
+   * `#beliefResistance`). Absent or false: any other memory.
+   */
+  belief?: boolean;
+  /**
+   * A BELIEF'S SUPPORT (§5.13) — NOT a column: the sum of its support's
+   * weights and the lived days it comes from, as the store last counted them
+   * (`store/wave2.ts#recountSupport`), read beside the row. Its own fields, so
+   * a use credited by any door is never support. Absent: 0.
+   */
+  support?: number;
+  supportDays?: number;
   /** Set only by the explicit promotion crossing or revision inheritance (§5.3). */
   promotedIdentity: boolean;
   protected: boolean;

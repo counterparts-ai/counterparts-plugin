@@ -775,7 +775,7 @@ export async function applySweep(
  * one with `encode/`'s `revision.challenge` effects — an address that resolves
  * to nothing becomes a countable refusal instead of silence.
  */
-export function applyDeclaredRevision(cp: Counterpart, proposal: Proposal, mint: MintResult, door: string, session: string | null = null): RevisionApplication | null {
+export function applyDeclaredRevision(cp: Counterpart, proposal: Proposal, mint: MintResult, door: string, session: string | null = null, awake = true): RevisionApplication | null {
   const address = mint.updates ?? proposal.updates?.declared ?? null;
   if (address === null) return null;
   const out = applyRevision(
@@ -794,6 +794,9 @@ export function applyDeclaredRevision(cp: Counterpart, proposal: Proposal, mint:
       ...(proposal.how === undefined ? {} : { how: proposal.how }),
       ...(proposal.howSent === undefined ? {} : { howSent: proposal.howSent }),
       session,
+      // Written awake unless the crash-fallback sweep, a write-up or the
+      // nightly run retold it (lane C3): the door says which.
+      awake: awake && door !== "sweep",
     },
     {
       // SEAMS E again, for the memory paths `schemas/` does not own.

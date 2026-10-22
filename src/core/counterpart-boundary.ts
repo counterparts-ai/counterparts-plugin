@@ -16,6 +16,7 @@ import {
 } from "./self/index.js";
 import type { WakeTrigger } from "./self/index.js";
 import { runCycle, cyclePartial } from "./sleep/index.js";
+import { nightTagWork, TUNABLES as SCHEMAS_TUNABLES } from "./schemas/index.js";
 import type { CycleReport, CyclePartial } from "./sleep/index.js";
 import { boundedIds, isKnownSession } from "./types.js";
 import type {
@@ -38,6 +39,7 @@ import {
   nonzero,
   CLOCK_PHASE,
   SLEEP_CYCLE_EVENT,
+  SLEEP_CYCLE_HELD_EVENT,
   numberField,
   renderedEvent,
   TRIMMED_FIELD,
@@ -170,7 +172,26 @@ export async function sessionEnd(cp: Counterpart, input: SessionEndInput = {}): 
         cp.schemas.fadeSweep(f.day, { date: f.date, dryRun: !f.apply, limit: f.budget }),
       // Cards are born where names are (2026-10-11, Group 3 part D): the
       // night's name tally, judged by `mention()`, a nightly budget at most.
-      births: (b) => cp.schemas.birthsFromNames(b.day, { dryRun: !b.apply, limit: b.budget }),
+      // And where tags are (2026-10-21, wave 2 lane B): a tag that matters
+      // becomes a topic card, `TOPIC_BIRTHS_PER_NIGHT` at most, beside the names.
+      births: (b) => {
+        const names = cp.schemas.birthsFromNames(b.day, { dryRun: !b.apply, limit: b.budget });
+        const topics = cp.schemas.birthsFromTags(b.day, { dryRun: !b.apply, limit: SCHEMAS_TUNABLES.TOPIC_BIRTHS_PER_NIGHT });
+        const refused = { ...names.refused };
+        for (const [reason, n] of Object.entries(topics.refused)) refused[`topic-${reason}`] = n;
+        return {
+          memories: names.memories,
+          offered: names.offered + topics.offered,
+          born: [...names.born, ...topics.born],
+          refused,
+          skippedForLimit: names.skippedForLimit + topics.skippedForLimit,
+          // Each door's own limit (review of #576): min(names, budget) + min(topics, 5).
+          attempts: names.attempts + topics.attempts,
+        };
+      },
+      // The night's tag work with no model (wave 2 lane B): card names as
+      // tags, stem merges, dead merges let go — behind `TAGS_NIGHT`.
+      tags: (t) => nightTagWork(cp.store, t),
       date,
       ...(composeBudget === null ? {} : { budgetBytes: composeBudget }),
       onEvent: (e) => cp["relay"]("sleep", e),
@@ -187,11 +208,20 @@ export async function sessionEnd(cp: Counterpart, input: SessionEndInput = {}): 
     throw err;
   }
   const briefingEvents = cp["takeBriefingEvents"]();
-  cp["recordSleepCycle"](cycle, date, briefingEvents, null);
-  cp["recordSelfBriefing"](briefingEvents, date);
-  if (briefingEvents.some((e) => e.name === BRIEFING_PUBLISHED_EVENT)) {
-    if (behind !== null) noteWakeCaught(cp.store, behind.raw);
-    noteWakeBuild(cp.store, cp["build"]);
+  if (cycle.held !== undefined) {
+    // ANOTHER CYCLE HOLDS THE STORE (`sleep/lease.ts`): this boundary's flush
+    // ran above; the night is the other cycle's — whether this one found it
+    // held at the start or had its lease taken over part-way. Neither cycle
+    // row nor briefing row nor the wake's caught-up marks (the holder writes
+    // those), but its own row, so the stand-aside is countable.
+    recordCycleHeld(cp, cycle, date);
+  } else {
+    cp["recordSleepCycle"](cycle, date, briefingEvents, null);
+    cp["recordSelfBriefing"](briefingEvents, date);
+    if (briefingEvents.some((e) => e.name === BRIEFING_PUBLISHED_EVENT)) {
+      if (behind !== null) noteWakeCaught(cp.store, behind.raw);
+      noteWakeBuild(cp.store, cp["build"]);
+    }
   }
 
   cp["emit"]("counterpart.sessionEnd", undefined, {
@@ -203,8 +233,37 @@ export async function sessionEnd(cp: Counterpart, input: SessionEndInput = {}): 
     budgetBytes,
     observer: cycle.observer,
     episodesIngested: episodes.ingested + episodes.regrown,
+    held: cycle.held !== undefined,
   });
   return { sweeps, edges, contiguity, carried, cycle, budgetBytes, episodes };
+}
+
+/** `SLEEP_CYCLE_HELD_EVENT`'s row. Guarded as `recordSleepCycle` is: a failed append costs the row, never the boundary. */
+function recordCycleHeld(cp: Counterpart, cycle: CycleReport, date: string): void {
+  const held = cycle.held;
+  if (cp.observer || held === undefined) return;
+  try {
+    const now = cp.store.now();
+    // ONE DAY on the row: the lived day the cycle stood aside on, as its report
+    // read it (`sleep/cycle.ts#standAside`) — for the row's column and the
+    // payload alike. A holder that has just advanced the clock may be a day ahead.
+    cp.store.appendEvent({
+      name: SLEEP_CYCLE_HELD_EVENT,
+      day: cycle.day,
+      payload: {
+        // Found held at the start, or taken over part-way (the fence).
+        reason: held.lostAt === undefined ? "held-elsewhere" : "lease-lost",
+        ...(held.lostAt === undefined ? {} : { lostAt: held.lostAt, phasesDone: cycle.phases.length }),
+        date,
+        day: cycle.day,
+        holderPid: held.pid,
+        heldMs: held.since === null ? null : Math.max(0, now - held.since),
+        untilMs: held.until === null ? null : Math.max(0, held.until - now),
+      },
+    });
+  } catch (err) {
+    cp["emit"]("counterpart.sleep.cycle.held.failed", undefined, { code: errCode(err) });
+  }
 }
 
 export function contiguityPass(cp: Counterpart): ContiguityPass {

@@ -4,7 +4,7 @@ import { isDay, isRecurrence } from "../time.js";
 import type { Recurrence } from "../time.js";
 import type { Stance } from "../observer.js";
 import { RECURRING_META } from "./operational.js";
-import type { DreamRow } from "./operational.js";
+import type { BirthRoute, DreamRow, SubjectKind } from "./operational.js";
 import type { ProseType, ProseDoc } from "./prose.js";
 import type { EmbedderIdentity } from "./cache.js";
 import type { AboutMark, AboutSetter, SaidBy, MemoryStatus } from "./marks.js";
@@ -151,6 +151,21 @@ export interface PutInput {
   occurredOn?: string;
   saidBy?: SaidBy;
   status?: MemoryStatus;
+  /**
+   * v14 (2026-10-21): a card's kind of subject (`SUBJECT_KINDS`) and a
+   * belief's birth route (`BIRTH_ROUTES`), given at birth. Absent, or a word
+   * not in the list, writes NULL. Nothing passes them yet (lanes B and C).
+   */
+  subjectKind?: SubjectKind;
+  birthRoute?: BirthRoute;
+  /**
+   * v14, lane B (2026-10-21): the memory's tags, written to `memory_tags` in
+   * the same transaction as the row (`normalizeTag`; empty ones skipped), with
+   * `tagsVia` as their `via` (default `write`). Memories only. Absent or empty:
+   * no tags.
+   */
+  tags?: readonly string[];
+  tagsVia?: string;
 }
 
 /** How a subject link was found (`memory_subjects.via`, v12). */

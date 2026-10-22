@@ -39,9 +39,13 @@ import { runFade } from "./fade.js";
 import type { FadeFn } from "./fade.js";
 import { runBirths } from "./births.js";
 import type { BirthsFn } from "./births.js";
+import { runTags } from "./tags.js";
+import type { TagsFn } from "./tags.js";
 import type { DedupCandidateSource } from "./dedup.js";
 import { runLogSweep } from "./log.js";
 import { advanceMarker, budgetFor, cadenceFor, markerDue, readMarker } from "./markers.js";
+import { CYCLE_LEASE_KEY, CycleLeaseLost, holdsLease, readLease, releaseLease, takeLease } from "./lease.js";
+import type { CycleLease, LeaseStore } from "./lease.js";
 import { runPrune } from "./prune.js";
 import { sqliteStrengthCache, storeRankingCache, supportsRanking } from "./strength-cache.js";
 import type { StrengthCache } from "./strength-cache.js";
@@ -91,6 +95,11 @@ export interface SleepOptions {
    * the births phase reports `no-births-fn`, and no card is born.
    */
   births?: BirthsFn;
+  /**
+   * `schemas/`' night tag work (wave 2 lane B), injected like `births`.
+   * Absent ⇒ the tags phase reports `no-tags-fn`, and nothing is tagged.
+   */
+  tags?: TagsFn;
   /** Injected ranking cache. Absent ⇒ the box-3 SQLite one, opened lazily. */
   strengthCache?: StrengthCache;
   /** Extra dedup candidates (embeddings). Isolated: a throw degrades to lexical. */
@@ -152,19 +161,92 @@ export function runCycle(opts: SleepOptions): CycleReport {
   const faded: string[] = [];
   const bandTransitions: BandTransition[] = [];
 
-  // The ranking cache is opened LAZILY by the decay phase, and never at all
-  // under observer: a created file is a mutation.
-  const injectedCache = opts.strengthCache;
-  // SEAMS item J: box 3's own `ranking` table, through the store's connection, is
-  // the default wherever the port implements it; the side file remains only for a
-  // store-shaped port that does not.
-  const cache: StrengthCache | null = observer
-    ? null
-    : (injectedCache ?? (supportsRanking(store) ? storeRankingCache(store) : sqliteStrengthCache(store.dir)));
+  // ONE CYCLE AT A TIME, PER STORE (`lease.ts`, 2026-10-21). Taken before
+  // anything else this cycle does; held elsewhere, the cycle stands aside at
+  // once and reports who holds it. Never under observer: a lease is a write.
+  let leaseOwner: string | null = null;
+  /**
+   * The report of a cycle that stood aside: at the start (nothing ran), or
+   * part-way when the fence found its lease taken over (`lostAt`; the phases it
+   * finished). The day is the store's lived day as it stands, read once here,
+   * and the boundary's row uses the same.
+   */
+  const standAside = (holder: CycleLease | null, lostAt?: Phase): CycleReport => {
+    const day = store.livedDay();
+    return {
+      day,
+      date,
+      observer,
+      order: [...order],
+      phases: [...reports],
+      promoted: [...promoted],
+      pruned: [...pruned],
+      merged: [...merged],
+      faded: [...faded],
+      bandTransitions: [...bandTransitions],
+      symmetry: [],
+      census: census(store, day, pruned, merged, faded),
+      events,
+      held: {
+        owner: holder?.owner ?? null,
+        pid: holder?.pid ?? null,
+        since: holder?.at ?? null,
+        until: holder?.until ?? null,
+        ...(lostAt === undefined ? {} : { lostAt }),
+      },
+    };
+  };
+  if (!observer) {
+    const leaseStore = store.updateMeta === undefined ? null : (store as SleepStore & LeaseStore);
+    if (leaseStore === null) {
+      emit("sleep.lease.unavailable", undefined, { date });
+    } else {
+      const owner = globalThis.crypto.randomUUID();
+      const now = store.now?.() ?? Date.now();
+      const took = takeLease(leaseStore, { owner, now, pid: process.pid });
+      if (!took.taken) {
+        emit("sleep.cycle.held", undefined, {
+          date,
+          holderPid: took.holder.pid,
+          heldMs: Math.max(0, now - took.holder.at),
+          untilMs: Math.max(0, took.holder.until - now),
+        });
+        return standAside(took.holder);
+      }
+      leaseOwner = owner;
+      if (took.reclaimed !== null || took.torn) {
+        emit("sleep.lease.reclaimed", undefined, {
+          date,
+          torn: took.torn,
+          why: took.why,
+          priorPid: took.reclaimed?.pid ?? null,
+          overdueMs: took.reclaimed === null ? null : Math.max(0, now - took.reclaimed.until),
+        });
+      }
+    }
+  }
+  /** The fence: before every phase, the lease is still this cycle's, or it stops. */
+  const fence = (phase: Phase): void => {
+    if (leaseOwner === null || holdsLease(store, leaseOwner)) return;
+    throw new CycleLeaseLost(phase, readLease(store.getMeta(CYCLE_LEASE_KEY)));
+  };
 
-  emit("sleep.cycle.start", undefined, { date, observer, spawn: shouldSpawn(store).reason });
+  // The ranking cache is opened LAZILY by the decay phase, and never at all
+  // under observer: a created file is a mutation. Opened inside the `try`, so a
+  // throw here still gives the lease back.
+  const injectedCache = opts.strengthCache;
+  let cache: StrengthCache | null = null;
 
   try {
+    // SEAMS item J: box 3's own `ranking` table, through the store's connection, is
+    // the default wherever the port implements it; the side file remains only for a
+    // store-shaped port that does not.
+    cache = observer
+      ? null
+      : (injectedCache ?? (supportsRanking(store) ? storeRankingCache(store) : sqliteStrengthCache(store.dir)));
+
+    emit("sleep.cycle.start", undefined, { date, observer, spawn: shouldSpawn(store).reason });
+
     // ── phase 1: the clock ────────────────────────────────────────────────
     const day = runClock();
 
@@ -187,6 +269,7 @@ export function runCycle(opts: SleepOptions): CycleReport {
       collect?: (result: T) => void,
       precheck?: () => PhaseReason | null,
     ): void => {
+      fence(phase);
       const before = readMarker(store, phase);
       if (before.health === "torn") {
         // A torn marker is LOUD (§3, v1 §11 G9) and repairs forward only.
@@ -324,6 +407,14 @@ export function runCycle(opts: SleepOptions): CycleReport {
       () => (opts.births === undefined ? "no-births-fn" : null),
     );
 
+    // ── phase 4d: the tags (card names, stem merges, dead merges) ─────────
+    runPhase(
+      "tags",
+      (ctx) => runTags(ctx, opts.tags),
+      () => {},
+      () => (opts.tags === undefined ? "no-tags-fn" : null),
+    );
+
     // ── phase 5: dedup ────────────────────────────────────────────────────
     runPhase(
       "dedup",
@@ -375,6 +466,26 @@ export function runCycle(opts: SleepOptions): CycleReport {
           : null,
     );
 
+    // ── the last fence: giving the lease back (review of #581) ────────────
+    // A holder wedged inside the LAST phase and taken over meanwhile has no
+    // next phase to be stopped before. Its release is that check: false means
+    // the row is another cycle's, and this one reports that it stood aside
+    // rather than ran — so the boundary writes no second cycle row and no
+    // second briefing row. A release that cannot write says so; if the row is
+    // still ours it runs out on its own, and the cycle stands.
+    if (leaseOwner !== null) {
+      const owner = leaseOwner;
+      leaseOwner = null;
+      let ours: boolean;
+      try {
+        ours = releaseLease(store as SleepStore & LeaseStore, owner);
+      } catch (err) {
+        emit("sleep.lease.release.failed", undefined, { date, error: errorCode(err) });
+        ours = holdsLease(store, owner);
+      }
+      if (!ours) throw new CycleLeaseLost(order.at(-1) ?? "log", readLease(store.getMeta(CYCLE_LEASE_KEY)), "marked");
+    }
+
     // ── the tripwire, at cycle end (physics guarantee 12, scar §2.10) ─────
     const symmetry = symmetryVerdicts(store, day, emit);
 
@@ -406,6 +517,14 @@ export function runCycle(opts: SleepOptions): CycleReport {
     });
     return report;
   } catch (err) {
+    // A CYCLE WHOSE LEASE WAS TAKEN OVER did not die: another cycle holds the
+    // store, and the night is that one's. It returns as one that stood aside
+    // part-way, with what it finished, and the boundary grades it so (no
+    // `threw` row, no runner failure: review of #581).
+    if (err instanceof CycleLeaseLost) {
+      emit("sleep.lease.lost", undefined, { date, phase: err.phase, stage: err.stage, holderPid: err.holder?.pid ?? null });
+      return standAside(err.holder, err.phase);
+    }
     // A CYCLE THAT DIES CARRIES ITS WORK OUT WITH IT (see `CyclePartial`).
     // Degrade-don't-abort already covers a phase body that throws; what escapes
     // here threw from OUTSIDE one — a marker advance, the clock, `onStep`'s hard
@@ -422,11 +541,23 @@ export function runCycle(opts: SleepOptions): CycleReport {
   } finally {
     // Only a cache this cycle created is this cycle's to close.
     if (injectedCache === undefined) cache?.close();
+    // A cycle that left by a throw still gives its lease back, only if it is
+    // still its own (`releaseLease` checks the owner): a reclaimer's row is
+    // never deleted. A release that cannot write says so, and costs the next
+    // cycle one lease's wait, never this one.
+    if (leaseOwner !== null) {
+      try {
+        releaseLease(store as SleepStore & LeaseStore, leaseOwner);
+      } catch (err) {
+        emit("sleep.lease.release.failed", undefined, { date, error: errorCode(err) });
+      }
+    }
   }
 
   // ── the clock phase, inline: it produces the day everything else gates on ──
   function runClock(): number {
     const phase: Phase = "clock";
+    fence(phase);
     const before = readMarker(store, phase);
     const budget = budgetFor(phase, opts.budgets);
     const skeleton = { phase, budget, markerBefore: before.day, markerAfter: before.day };
