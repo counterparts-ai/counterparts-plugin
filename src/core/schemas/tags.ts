@@ -8,7 +8,9 @@
  * the look-alike pairs a model is asked about.
  *
  * Everything here is lightly held (an experiment with a check on 2026-10-26).
- * Nothing in recall or the wake reads tags yet (lane E).
+ * Since lane E (2026-10-22) recall reads tags twice, through the composition
+ * root: a source's tags prime (`tagPartners`, recall `TAGS_PRIME`), and a
+ * topic a turn names brings its beliefs to the slot (`topicsNamedIn`).
  */
 import { normalizeTag, stemTerm } from "../store/index.js";
 import type { Store } from "../store/index.js";
@@ -296,4 +298,121 @@ export function nightTagWork(store: Store, input: TagsNightInput): TagsNightOutc
     stemMerged,
     mergesPruned,
   };
+}
+
+// ── tags at recall (wave 2 lane E, 2026-10-22) ─────────────────────────────
+
+/** The words a cluster reads as through the merges: canonical tag → every word that resolves to it. */
+function clusterWords(merges: ReadonlyMap<string, string>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const alias of merges.keys()) {
+    const head = resolveTag(merges, alias);
+    const words = out.get(head) ?? new Set<string>([head]);
+    words.add(alias);
+    out.set(head, words);
+  }
+  return out;
+}
+
+/**
+ * TAGS AS A PRIMING PARTNER SOURCE (wave 2 lane E, 2026-10-22; recall
+ * `TAGS_PRIME`): for each source memory, the live memories that carry one of
+ * its tags (through the merges) at weight 1, and those that carry one of the
+ * `neighbours` tags most often on the same memories as its own (B's concept
+ * edges, `Store#tagNeighbours`, sharing at least two) at 0.5 — the stronger
+ * one when both; recall scales them by `TAGS_PRIME_WEIGHT`. A stop tag
+ * (`isStopTag`) and a tag on more than `maxTagMemories` live memories are
+ * skipped: a word on everything says nothing, and it bounds the reads.
+ * Shaped as recall's `TagPartnersFn`. Reads only; never throws (a source that
+ * fails partners nothing).
+ */
+export function tagPartners(
+  store: Store,
+  ids: readonly string[],
+  opts: { readonly maxTagMemories: number; readonly neighbours: number },
+): Map<string, { id: string; weight: number }[]> {
+  const out = new Map<string, { id: string; weight: number }[]>();
+  if (ids.length === 0) return out;
+  let merges: Map<string, string>;
+  try {
+    merges = mergeMap(store);
+  } catch {
+    return out;
+  }
+  const clusters = clusterWords(merges);
+  const members = new Map<string, string[] | null>();
+  const membersOf = (head: string): string[] | null => {
+    if (members.has(head)) return members.get(head) ?? null;
+    const ids = new Set<string>();
+    for (const w of clusters.get(head) ?? [head]) for (const id of store.memoriesTagged(w)) ids.add(id);
+    const kept = ids.size > opts.maxTagMemories ? null : [...ids];
+    members.set(head, kept);
+    return kept;
+  };
+  for (const id of new Set(ids)) {
+    try {
+      const own = new Set(
+        store
+          .tagsOf(id)
+          .map((t) => resolveTag(merges, t.tag))
+          .filter((t) => !isStopTag(t)),
+      );
+      if (own.size === 0) continue;
+      const got = new Map<string, number>();
+      const give = (head: string, w: number): void => {
+        for (const m of membersOf(head) ?? []) if (m !== id && w > (got.get(m) ?? 0)) got.set(m, w);
+      };
+      const usable = [...own].filter((t) => membersOf(t) !== null);
+      for (const t of usable) give(t, 1);
+      if (opts.neighbours > 0 && usable.length > 0) {
+        const words = usable.flatMap((t) => [...(clusters.get(t) ?? [t])]);
+        const near: string[] = [];
+        for (const n of store.tagNeighbours(words, { limit: opts.neighbours * 4 + words.length })) {
+          const head = resolveTag(merges, n.tag);
+          if (own.has(head) || near.includes(head) || isStopTag(head) || n.together < 2) continue;
+          near.push(head);
+          if (near.length >= opts.neighbours) break;
+        }
+        for (const t of near) give(t, 0.5);
+      }
+      if (got.size > 0) out.set(id, [...got].map(([m, w]) => ({ id: m, weight: w })));
+    } catch {
+      /* a source whose tags will not read partners nothing */
+    }
+  }
+  return out;
+}
+
+/** A tag's words as the turn's would be read: tokenized and stemmed. */
+function stemmedWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 2)
+    .map((t) => stemTerm(t));
+}
+
+/**
+ * THE TOPICS A TEXT NAMES (wave 2 lane E): the topic cards (`Store#topicCards`,
+ * a topic's word and its merged words → its card) whose word — every word of
+ * it, in order, stemmed as the index stems — occurs in `text`. Sorted card ids.
+ * A promoted tag is a subject; this is how a turn names one.
+ */
+export function topicsNamedIn(text: string, topics: ReadonlyMap<string, string>): string[] {
+  if (topics.size === 0 || text.trim().length === 0) return [];
+  const words = stemmedWords(text);
+  if (words.length === 0) return [];
+  const out = new Set<string>();
+  for (const [word, card] of topics) {
+    if (out.has(card) || isStopTag(word)) continue;
+    const want = stemmedWords(word);
+    if (want.length === 0) continue;
+    for (let i = 0; i + want.length <= words.length; i++) {
+      if (want.every((w, j) => words[i + j] === w)) {
+        out.add(card);
+        break;
+      }
+    }
+  }
+  return [...out].sort();
 }

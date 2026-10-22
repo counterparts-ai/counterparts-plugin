@@ -164,11 +164,23 @@ export interface CandidatePrime {
   readonly train: number;
   readonly from: readonly PrimeSourceKind[];
   readonly cut?: true;
+  /** The part of `link` that came through a source's TAGS (lane E, `TAGS_PRIME`); absent when none. */
+  readonly tag?: number;
+  /** The source that gave the most along links or tags (lane E); absent when only the train primed. */
+  readonly top?: string;
 }
 
 /** The part of a candidate's activation priming gave it; 0 when none. */
 export function primeOf(c: { readonly prime?: CandidatePrime | undefined }): number {
   return c.prime === undefined ? 0 : c.prime.link + c.prime.train;
+}
+
+/** The channel that gave a primed candidate the most (lane E): links, tags or the train. Ties go to the train, then links. */
+export function primeChannel(p: Pick<CandidatePrime, "link" | "train" | "tag">): "link" | "tag" | "train" {
+  const tag = p.tag ?? 0;
+  const link = p.link - tag;
+  if (p.train >= link && p.train >= tag) return "train";
+  return link >= tag ? "link" : "tag";
 }
 
 /**
@@ -436,12 +448,12 @@ function isEntityCardRow(row: { meta: string }): boolean {
 }
 
 /**
- * A BELIEF IS NOT A RECALL CANDIDATE, FOR NOW (wave 2 lane C, 2026-10-21): a
- * belief row (`type: schema`, `meta.role: belief`) is kept out of every
- * candidate, footnote and "came to mind" until lane E gives beliefs a slot of
- * their own. Showing them is that lane's to decide, behind its own switch;
- * left in the pool today, the night's new beliefs would surface as footnotes
- * the day they are born. Read off the row's meta column, as a card is. The
+ * A BELIEF IS NOT A RECALL CANDIDATE (wave 2 lane C, 2026-10-21): a belief
+ * row (`type: schema`, `meta.role: belief`) is kept out of every candidate,
+ * footnote and "came to mind". Since lane E (2026-10-22) beliefs reach a turn
+ * through their OWN slot only (`Turn.beliefs`, `BELIEFS_IN_RECALL`), never
+ * this pool: left in it, the night's new beliefs would surface as footnotes
+ * the day they are born, and the footnote numbers would move. Read off the row's meta column, as a card is. The
  * constant's owner is `schemas/` (`role: "belief"`).
  */
 export function isBeliefRow(row: { type: string; meta: string }): boolean {
@@ -771,7 +783,7 @@ export function activate(
     // born from the names the memories say, a turn naming someone surfaced
     // the stub as a footnote. Off the row's meta column; no prose read.
     if (row.type === "schema" && isEntityCardRow(row)) return undefined;
-    // A belief (wave 2 lane C): invisible until lane E's slot (`isBeliefRow`).
+    // A belief (wave 2 lane C): never a candidate; lane E's slot shows it (`isBeliefRow`).
     if (isBeliefRow(row)) return undefined;
     // BELOW REACH, exactly (2026-10-10): the ranking cache's prefilter is a
     // pass stale at most; this is the day's own number. Ambient only; never a
@@ -1191,11 +1203,15 @@ export function activate(
     scored = scored.map((c) => {
       if (!reached(c) || pr.exclude.has(c.id)) return c;
       let linkW = 0;
+      let tagW = 0;
+      let top: { id: string; weight: number } | null = null;
       const from = new Set<PrimeSourceKind>();
       for (const id of [c.id, ...(absorbed.get(c.id) ?? [])]) {
         const l = pr.link.get(id);
         if (l === undefined) continue;
         linkW += l.weight;
+        tagW += l.tag ?? 0;
+        if (l.top !== undefined && (top === null || l.top.weight > top.weight)) top = l.top;
         for (const k of l.from) from.add(k);
       }
       const link = linkW * linkUnit;
@@ -1205,7 +1221,13 @@ export function activate(
       const ceiling = t.PRIME_CEILING * (c.cue - c.stamp + c.semantic);
       const scale = raw > ceiling ? ceiling / raw : 1;
       if (raw > ceiling) capped += 1;
-      const prime: CandidatePrime = { link: link * scale, train: train * scale, from: [...from].sort() };
+      const prime: CandidatePrime = {
+        link: link * scale,
+        train: train * scale,
+        from: [...from].sort(),
+        ...(tagW > 0 ? { tag: tagW * linkUnit * scale } : {}),
+        ...(top === null || !(link > 0) ? {} : { top: top.id }),
+      };
       const activation = c.activation + prime.link + prime.train;
       return { ...c, activation, cutKey: salienceRank(activation, c.sal, t), prime };
     });

@@ -914,6 +914,10 @@ export const RECALL_DECISION_FIELDS = [
   // Context priming (2026-10-19, an experiment): what primed, and what it
   // changed of what was shown — counts; the ids are `primed` on the tier rows.
   "primed",
+  // The beliefs slot (wave 2 lane E, 2026-10-22, an experiment): what the
+  // subjects named offered, which beliefs were shown, and their bytes; null
+  // when the slot did not run (off, or a quiet turn). Added the way `primed` was.
+  "beliefs",
 ] as const;
 
 export type SurfaceSetField = (typeof RECALL_DECISION_FIELDS)[number];
@@ -935,7 +939,7 @@ function tierRows(
   activation: number | null;
   via?: "link";
   habituated?: true;
-  primed?: { link: number; train: number; from: readonly string[]; lifted?: true };
+  primed?: { link: number; train: number; from: readonly string[]; lifted?: true; tag?: number; by?: "link" | "tag" | "train"; top?: string };
 }[] {
   return ids.map((id) => {
     const v = verdicts.find((x) => x.id === id);
@@ -960,6 +964,13 @@ function tierRows(
               train: round4(v.primed.train),
               from: v.primed.from,
               ...(v.primed.lifted === true ? { lifted: true as const } : {}),
+              // Per footnote (lane E, 2026-10-22, the 0.3.27 read's ask), so a
+              // rating joins to it: how much of `link` came through tags, the
+              // channel that gave most, and the source that gave the most
+              // along links or tags (an id, for reading tunnel vision).
+              ...(v.primed.tag !== undefined && v.primed.tag > 0 ? { tag: round4(v.primed.tag) } : {}),
+              ...(v.primed.by === undefined ? {} : { by: v.primed.by }),
+              ...(v.primed.top === undefined ? {} : { top: v.primed.top }),
             },
           }),
     };
@@ -1044,6 +1055,8 @@ export function recallDecisionRecord(
     crossProjectLifted: d.crossProjectLifted,
     // CONTEXT PRIMING (2026-10-19, an experiment): null on a turn it did not run.
     primed: d.primed,
+    // THE BELIEFS SLOT (lane E): null when it did not run.
+    beliefs: d.beliefs,
   } satisfies Record<SurfaceSetField, unknown>;
   return surfaceSet;
 }

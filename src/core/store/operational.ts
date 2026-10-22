@@ -9,7 +9,9 @@
  * Every multi-row mutation is wrapped in a transaction by the seam in `index.ts`.
  */
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { remapV10Feeling } from "../feelings-wheel.js";
 import { TUNABLES as PHYSICS_TUNABLES, defaultClaimFor, spacingWeight } from "../physics/index.js";
@@ -2662,6 +2664,146 @@ export const CLAIMS_ERA_RECORDED_KEY = "claims.era.recorded";
 export const CONFIDENTIAL_RETIRED_KEY = "confidential.retired";
 /** How many ids the retirement record keeps. */
 export const CONFIDENTIAL_RETIRED_IDS = 50;
+
+// ── THE BUILD STAMP (2026-10-22, provenance) ───────────────────────────────
+//
+// Rows said WHO wrote them; none said WHICH BUILD. So a read after a release
+// split its numbers by date and had to remember what shipped when. Two
+// pieces, no schema bump:
+//
+//   - THE BUILD LOG, in `meta`: at the first writable open by a build this
+//     store has not seen, `build.<version>.since` (the lived day) and
+//     `build.<version>.settings` (the tunables in force that differ from the
+//     build's own, as JSON — `[]` on a person's store). Written once per
+//     build and never rewritten (`Store` constructor), so any read can split
+//     rows by build through their lived day, rows with no JSON column too.
+//   - THE STAMP, `build: <version>`, on rows that carry JSON, at write time:
+//     a memory's `meta` at its birth, an event's payload, a reflection's
+//     `detail`, a dream change's `detail`. The version only: the settings are
+//     in the log.
+//
+// The version is the package's own `package.json#version`, read beside this
+// code (`src/core/store/` is three directories under the package root in the
+// repository, the tarball and the transpiled tree alike), or "unknown". The
+// compiled binary's modules have no real path, so its entry hands the version
+// in (`setRunningBuild`, tools/single-binary/main.ts). Revert: stop writing
+// the field; the log rows are inert.
+
+/** What a build whose manifest cannot be read is stamped: never a guess at a number. */
+export const BUILD_UNKNOWN = "unknown";
+/** The build log's key family in `meta`: `build.<version>.since`, `build.<version>.settings`. */
+export const BUILD_LOG_PREFIX = "build.";
+
+/** One tunable set from outside the build (the harness's `module.KEY=VALUE`), as `tools/harness/settings.ts#appliedSettings` records it. */
+export interface SettingInForce {
+  readonly module: string;
+  readonly key: string;
+  readonly value: number | boolean;
+  /** The build's own value. */
+  readonly was: number | boolean;
+}
+
+/** The version a `package.json` at `path` names, or `BUILD_UNKNOWN`. Never throws. */
+export function readBuildFrom(path: string): string {
+  try {
+    const said = (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)["version"];
+    return typeof said === "string" && said.trim().length > 0 ? said.trim() : BUILD_UNKNOWN;
+  } catch {
+    return BUILD_UNKNOWN;
+  }
+}
+
+let runningBuildValue: string | undefined;
+
+/**
+ * The build this process runs: read once, from the package's own manifest.
+ * The path is joined, not written as a `new URL("…", import.meta.url)`
+ * literal: the plugin bundle's tracer copies what such a literal names, and
+ * the bundle writes a `package.json` of its own (tools/plugin-bundle/build.ts).
+ */
+export function runningBuild(): string {
+  if (runningBuildValue === undefined) {
+    let path: string | null;
+    try {
+      path = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "package.json");
+    } catch {
+      path = null;
+    }
+    runningBuildValue = path === null ? BUILD_UNKNOWN : readBuildFrom(path);
+  }
+  return runningBuildValue;
+}
+
+/** Name the running build: the single binary's entry (its modules have no real path), and tests. `undefined` reads the manifest again. */
+export function setRunningBuild(version: string | undefined): void {
+  runningBuildValue = version === undefined ? undefined : version.trim().length > 0 ? version.trim() : BUILD_UNKNOWN;
+}
+
+let settingsInForceValue: readonly SettingInForce[] = [];
+
+/** The tunables this process set from outside the build; empty for the build as it is. */
+export function settingsInForce(): readonly SettingInForce[] {
+  return settingsInForceValue;
+}
+
+/** Mirror what the harness set (`tools/harness/settings.ts`), so a store opened after it logs them. */
+export function setSettingsInForce(settings: readonly SettingInForce[]): void {
+  settingsInForceValue = settings.map((s) => ({ module: s.module, key: s.key, value: s.value, was: s.was }));
+}
+
+/** The two log keys of one build. */
+export function buildLogKeys(version: string): { readonly since: string; readonly settings: string } {
+  return { since: `${BUILD_LOG_PREFIX}${version}.since`, settings: `${BUILD_LOG_PREFIX}${version}.settings` };
+}
+
+/** One build in the log. */
+export interface BuildLogLine {
+  readonly build: string;
+  /** The lived day of the first writable open by this build; null if unreadable. */
+  readonly since: number | null;
+  /** The settings it was first opened with; null if the row is missing or unreadable. */
+  readonly settings: readonly SettingInForce[] | null;
+}
+
+/**
+ * The log read back from its meta rows (`key`, `value`, in the order they
+ * went in), oldest first: by `since`, then by that order. Pure.
+ */
+export function parseBuildLog(rows: readonly { readonly key: string; readonly value: string }[]): BuildLogLine[] {
+  const lines = new Map<string, { since: number | null; settings: SettingInForce[] | null; order: number }>();
+  rows.forEach((r, order) => {
+    if (!r.key.startsWith(BUILD_LOG_PREFIX)) return;
+    const rest = r.key.slice(BUILD_LOG_PREFIX.length);
+    const field = rest.endsWith(".since") ? "since" : rest.endsWith(".settings") ? "settings" : null;
+    if (field === null) return;
+    const build = rest.slice(0, rest.length - field.length - 1);
+    if (build.length === 0) return;
+    const line = lines.get(build) ?? { since: null, settings: null, order };
+    if (field === "since") {
+      const n = Number(r.value);
+      line.since = r.value.trim() !== "" && Number.isFinite(n) ? n : null;
+    } else {
+      try {
+        const parsed = JSON.parse(r.value) as unknown;
+        line.settings = Array.isArray(parsed) ? (parsed as SettingInForce[]) : null;
+      } catch {
+        line.settings = null;
+      }
+    }
+    line.order = Math.min(line.order, order);
+    lines.set(build, line);
+  });
+  return [...lines.entries()]
+    .sort(([, a], [, b]) => (a.since ?? -1) - (b.since ?? -1) || a.order - b.order)
+    .map(([build, l]) => ({ build, since: l.since, settings: l.settings }));
+}
+
+/** `{...payload, build}` for a JSON object; anything else as it came. A payload's own `build` stands. */
+export function withBuild<T>(payload: T): T {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const rec = payload as Record<string, unknown>;
+  return (rec["build"] === undefined ? { ...rec, build: runningBuild() } : rec) as T;
+}
 /** `mint.ts#CLAIMED_DEFAULT_META_KEY`, spelled here (store imports no core module); a test holds them equal. */
 export const CLAIMED_DEFAULT_SPELLED = "claimedDefault";
 /**

@@ -492,7 +492,7 @@ export interface MeetContext {
   readonly dreaming: "auto" | "ask" | "off";
   /** Whether a folder question makes sense here (not in a Claude Desktop chat, which has no folder). */
   readonly folders: boolean;
-  /** A Claude Code plugin install: the `/counterparts` sidebar exists, and no `counterparts` command does. */
+  /** A Claude Code plugin install: no `counterparts` command exists (the sidebar may not: `finishText`'s `sidebar`). */
   readonly plugin: boolean;
   /** The meeting's state when the script was asked for (after the read marked it offered). */
   readonly state: MeetState;
@@ -588,9 +588,10 @@ export function meetingInstructions(ctx: MeetContext): string {
  * here in the session rather than by the end-of-turn ask (which the meeting
  * held, `meetingHold`), then a few lines that show memory working at once, then
  * the close — what to do next, not facts. `session` is the id the write-up
- * tools are bound with.
+ * tools are bound with. `sidebar`: a sidebar answers `/counterparts` here (since
+ * the split, 2026-10-22, a plugin install alone no longer means one).
  */
-export function finishText(ctx: Pick<MeetContext, "name" | "dreaming" | "plugin"> & { session: string }): string {
+export function finishText(ctx: Pick<MeetContext, "name" | "dreaming"> & { session: string; sidebar: boolean }): string {
   const name = ctx.name === null ? "<their name>" : ctx.name;
   const dream = firstDream(ctx.dreaming);
   return [
@@ -598,8 +599,8 @@ export function finishText(ctx: Pick<MeetContext, "name" | "dreaming" | "plugin"
     `1) The write-up: hand back anything from the meeting that a meet step did not already save, one idea each, with the counterparts session_end tool, session: ${ctx.session} (the answers and the style are saved already: don't repeat them; often there is nothing more). Then write the first chapter with the counterparts chapter tool, session: ${ctx.session}: a short, true page about meeting them. ${PRONOUN_RULE}`,
     `2) Show memory working: two or three short lines of what you'll carry from today, in your words — "Here's what I'll remember: …".${dream.length === 0 ? "" : ` Then: "${dream}"`}`,
     "3) Close, close to this, and nothing about retention or uninstalling unless they ask:",
-    ...(ctx.plugin ? ["   \"/counterparts shows the memory sidebar on the right, once this window is wide enough. Off, quiet and pause are at its bottom."] : []),
-    `   ${ctx.plugin ? "" : "\""}Ask me anything about Counterparts, any time.`,
+    ...(ctx.sidebar ? ["   \"/counterparts shows the memory sidebar on the right, once this window is wide enough. Off, quiet and pause are at its bottom."] : []),
+    `   ${ctx.sidebar ? "" : "\""}Ask me anything about Counterparts, any time.`,
     `   Great meeting you, ${name}! What would you like to work on today? Or we can keep chatting — what's been on your mind lately?"`,
   ].join("\n");
 }

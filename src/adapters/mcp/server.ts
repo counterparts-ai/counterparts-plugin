@@ -88,7 +88,9 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 
 import { CODE_TAB_ENTRYPOINT, DEFAULT_HOST, DESKTOP_HOST, DESKTOP_SCOPE, claudeCodeEnvMarker, hostOfClient, isPseudoScope, wordingFor } from "../hosts.js";
+import { PLUGIN_ROOT_ENV } from "../plugin.js";
 import type { InstallRoute } from "../plugin.js";
+import { sidebarBeside } from "../host-wiring.js";
 import {
   MEET_STEPS,
   STYLE_CHOICES,
@@ -1427,10 +1429,20 @@ export class McpServer {
         this.emit("mcp.meet.step", undefined, { step, stored: null });
         const view = { recorded: step, ...onboardingView(store) };
         // Unbound, the close still comes; the write-up names the id to pass.
+        // The close names `/counterparts` only where a sidebar answers it, the
+        // plugin install's or the npm one's: the counterparts-sidebar plugin,
+        // or a counterparts plugin from before the split. Never in Desktop.
         const next = finishText({
           name: this.counterpart.ownerDisplayName(),
           dreaming: this.counterpart.dreams.setting(),
-          plugin: this.install === "plugin" && !this.desktop,
+          sidebar:
+            !this.desktop &&
+            sidebarBeside({
+              home: homedir(),
+              env: this.env,
+              pluginRoot: this.install === "plugin" ? (this.env[PLUGIN_ROOT_ENV] ?? null) : null,
+              cwd: this.env["CLAUDE_PROJECT_DIR"] ?? null,
+            }),
           session: writeUp ? session : "<your session id, as the wake names it>",
         });
         return { content: [{ type: "text", text: next }], structuredContent: { ...view, next } };

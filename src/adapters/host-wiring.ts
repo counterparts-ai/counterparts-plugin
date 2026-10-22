@@ -381,16 +381,7 @@ export function pluginInstall(input: {
   if (id === undefined) return null;
   const records = plugins[id];
   const first = Array.isArray(records) ? (records as unknown[]).find(isRecord) : isRecord(records) ? records : undefined;
-  const files = [claudeUserFiles(input.home, input.env).settings];
-  if (input.cwd !== null && input.cwd.length > 0) {
-    files.push(join(resolve(input.cwd), ".claude", "settings.json"), join(resolve(input.cwd), ".claude", "settings.local.json"));
-  }
-  let enabled = true;
-  for (const file of files) {
-    const settings = readObject(file);
-    const on = settings === null ? undefined : settings["enabledPlugins"];
-    if (isRecord(on) && typeof on[id] === "boolean") enabled = on[id] as boolean;
-  }
+  const enabled = pluginEnabled(id, input);
   const installPath = first !== undefined && typeof first["installPath"] === "string" ? first["installPath"] : null;
   return {
     id,
@@ -402,6 +393,114 @@ export function pluginInstall(input: {
     standsDown: pluginStandsDown(installPath),
     readsMarker: installPath !== null && installPath.length > 0 && existsSync(join(installPath, "src", "adapters", "npm-live.js")),
   };
+}
+
+/** Whether the settings Claude Code reads for a session in `cwd` leave plugin
+ *  `id` on: the user settings, then the project's and its local ones, the last
+ *  that names it wins; on when none does. */
+function pluginEnabled(id: string, input: { readonly home: string; readonly env: Record<string, string | undefined>; readonly cwd?: string | null }): boolean {
+  const files = [claudeUserFiles(input.home, input.env).settings];
+  if (input.cwd !== undefined && input.cwd !== null && input.cwd.length > 0) {
+    files.push(join(resolve(input.cwd), ".claude", "settings.json"), join(resolve(input.cwd), ".claude", "settings.local.json"));
+  }
+  let enabled = true;
+  for (const file of files) {
+    const settings = readObject(file);
+    const on = settings === null ? undefined : settings["enabledPlugins"];
+    if (isRecord(on) && typeof on[id] === "boolean") enabled = on[id] as boolean;
+  }
+  return enabled;
+}
+
+/** `a` is `b` or later (`x.y.z`, a `-suffix` ignored); false when either is not a version. */
+function versionAtLeast(a: string, b: string): boolean {
+  const parse = (v: string): number[] | null => {
+    const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim());
+    return m === null ? null : [Number(m[1]), Number(m[2]), Number(m[3])];
+  };
+  const x = parse(a);
+  const y = parse(b);
+  if (x === null || y === null) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i]! > y[i]!;
+  return true;
+}
+
+/**
+ * Will Claude Code load a `counterparts-sidebar@…` install? The sidebar
+ * plugin (2026-10-20, docs/plugin.md "Two plugins") depends on the
+ * `counterparts` plugin, so advice to uninstall that one has to know, and the
+ * first meeting's close names `/counterparts` only where it answers. As
+ * {@link pluginInstall} reads the record: recorded, and left on by the
+ * settings for `cwd` (`enabledPlugins`); and, as Claude Code checks a
+ * dependency, its installed copy's `dependencies` met by the `counterparts`
+ * install recorded beside it, at a version in range. An install refused for
+ * an older `counterparts` stays recorded (measured, tools/plugin-loop/split.sh
+ * 4b) but loads nothing. Scope and project path are not checked, as
+ * `pluginInstall` does not check them. READ-ONLY; false when the record
+ * can't be read.
+ */
+export function sidebarPluginRecorded(input: {
+  readonly home: string;
+  readonly env: Record<string, string | undefined>;
+  readonly cwd?: string | null;
+}): boolean {
+  const moved = (input.env["CLAUDE_CONFIG_DIR"] ?? "").trim();
+  const configDir = moved.length > 0 ? moved : join(input.home, ".claude");
+  const cacheRoot = (input.env["CLAUDE_CODE_PLUGIN_CACHE_DIR"] ?? "").trim();
+  const pluginsRoot = cacheRoot.length > 0 ? cacheRoot : join(configDir, "plugins");
+  const plugins = readObject(join(pluginsRoot, "installed_plugins.json"))?.["plugins"];
+  if (!isRecord(plugins)) return false;
+  const id = Object.keys(plugins).find((k) => k.startsWith("counterparts-sidebar@"));
+  if (id === undefined || !pluginEnabled(id, input)) return false;
+  const first = (v: unknown): Record<string, unknown> | undefined => (Array.isArray(v) ? (v as unknown[]).find(isRecord) : isRecord(v) ? v : undefined);
+  const record = first(plugins[id]);
+  const installPath = record !== undefined && typeof record["installPath"] === "string" ? record["installPath"] : "";
+  const manifest = installPath.length > 0 ? readObject(join(installPath, ".claude-plugin", "plugin.json")) : null;
+  // No copy to read: trust the record, as before (a dependency can't be checked).
+  if (manifest === null) return true;
+  const deps = Array.isArray(manifest["dependencies"]) ? (manifest["dependencies"] as unknown[]) : [];
+  for (const d of deps) {
+    const name = typeof d === "string" ? d : isRecord(d) && typeof d["name"] === "string" ? d["name"] : null;
+    if (name !== NPM_MCP_NAME) continue;
+    const coreId = Object.keys(plugins).find((k) => k.startsWith(`${NPM_MCP_NAME}@`));
+    if (coreId === undefined || !pluginEnabled(coreId, input)) return false;
+    const range = isRecord(d) && typeof d["version"] === "string" ? d["version"].trim() : "";
+    const floor = /^>=\s*(\d+\.\d+\.\d+)$/.exec(range)?.[1];
+    if (floor === undefined) continue;
+    const coreRecord = first(plugins[coreId]);
+    const coreVersion = coreRecord !== undefined && typeof coreRecord["version"] === "string" ? coreRecord["version"] : "";
+    if (!versionAtLeast(coreVersion, floor)) return false;
+  }
+  return true;
+}
+
+/**
+ * Is a sidebar here? Either Claude Code will load the `counterparts-sidebar`
+ * plugin ({@link sidebarPluginRecorded}), or the `counterparts` plugin loaded
+ * from `pluginRoot` (null: the one Claude Code records, if any and on) draws
+ * it itself, as the one plugin did before the split: its `hooks/hooks.json`
+ * names a hooks module (the full flavor's, and the repository's own for
+ * `--plugin-dir`; core's build drops `modules`). For the first meeting's close, which names `/counterparts`
+ * only where there is a sidebar to open (2026-10-22). READ-ONLY; never throws.
+ */
+export function sidebarBeside(input: {
+  readonly home: string;
+  readonly env: Record<string, string | undefined>;
+  readonly pluginRoot: string | null;
+  readonly cwd?: string | null;
+}): boolean {
+  try {
+    if (sidebarPluginRecorded({ home: input.home, env: input.env, cwd: input.cwd ?? null })) return true;
+    // No plugin root (the npm install's server): the counterparts plugin
+    // Claude Code records, when the settings leave it on.
+    const recorded = input.pluginRoot === null ? pluginInstall({ home: input.home, env: input.env, cwd: input.cwd ?? null }) : null;
+    const root = (input.pluginRoot ?? (recorded?.enabled === true ? recorded.installPath : null) ?? "").trim();
+    if (root.length === 0) return false;
+    const modules = readObject(join(root, "hooks", "hooks.json"))?.["modules"];
+    return Array.isArray(modules) && modules.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

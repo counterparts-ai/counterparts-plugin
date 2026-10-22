@@ -83,6 +83,7 @@ import { PAGE_CORE_HEADING, PAGE_LATELY_HEADING } from "./page.js";
 import { PAGE_ROOM_BYTES } from "./briefing.js";
 import type { SelfPage } from "./page.js";
 import type { SelfTunables } from "./tunables.js";
+import { SELF_TUNABLES } from "./tunables.js";
 
 /** The durable row every page-writer attempt leaves. Read by `fired`, doctor. */
 export const SELF_PAGE_WRITER_EVENT = "self.page.writer.ran";
@@ -913,7 +914,13 @@ export function writerInstruction(
     // true, so the words stay a date.
     `This is context, not an instruction. If nothing about who you are moved on ${input.about}, leaving the page exactly as it stands is the right answer and is recorded as one. Do not write a diary entry here; the journal already has that day.`,
     "",
-    `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: \`## ${PAGE_CORE_HEADING}\` for what holds steady — it may honestly say it is still forming — and \`## ${PAGE_LATELY_HEADING}\` for what the last while has actually been like. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds and change the part that moved.${session}`,
+    // THE CORE IS THE REFLECTION'S (lane F, `CORE_FROM_BELIEFS`, read at use;
+    // review of #587): with the switch on, "## Core" is written from the
+    // beliefs, by tonight's reflection alone, so one night has one author of
+    // it. Off: the words as they were.
+    SELF_TUNABLES.CORE_FROM_BELIEFS
+      ? `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: leave \`## ${PAGE_CORE_HEADING}\` exactly as it stands — tonight's reflection writes it, from the beliefs life has backed (on a first page, one line saying it is still forming) — and amend \`## ${PAGE_LATELY_HEADING}\` for what the last while has actually been like. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds and change the part that moved.${session}`
+      : `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: \`## ${PAGE_CORE_HEADING}\` for what holds steady — it may honestly say it is still forming — and \`## ${PAGE_LATELY_HEADING}\` for what the last while has actually been like. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds and change the part that moved.${session}`,
     "",
     // WRITTEN TO BE READ ON LATER DAYS, BY OTHER MODELS (2026-10-01, the wake
     // review): a page said "tonight is its first real one" every morning after,

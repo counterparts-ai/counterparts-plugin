@@ -760,8 +760,9 @@ export function isEntityCard(row: MemoryRow): boolean {
 
 /**
  * A BELIEF ROW (wave 2 lane C, 2026-10-21): `type: schema`, `meta.role:
- * belief`. Kept out of the core lanes for now (`consolidate.ts`): a belief
- * about me reaching the core is lane F's, behind its own switch. The role's
+ * belief`. Kept out of the core lanes (`consolidate.ts`): a belief about me
+ * reaches the core only by lane F's view, behind `self.CORE_FROM_BELIEFS`
+ * (`self/measures.ts#coreFromBeliefs`), and is never promoted. The role's
  * owner is `schemas/`.
  */
 export function isBeliefRow(row: Pick<MemoryRow, "type" | "meta">): boolean {

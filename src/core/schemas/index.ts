@@ -62,7 +62,7 @@ import type { Band, Kind, Salience } from "../types.js";
 import { AliasIndex, collision, handleKey } from "./aliases.js";
 import { TUNABLES } from "./tunables.js";
 import { tallyNames } from "./names.js";
-import { clearsTopicBar, isStopTag, tallyTags } from "./tags.js";
+import { clearsTopicBar, isStopTag, tagPartners, tallyTags, topicsNamedIn } from "./tags.js";
 import { similarity } from "../remember/updates.js";
 import type { NameCount } from "./names.js";
 import {
@@ -113,7 +113,7 @@ export * from "./types.js";
 export { AliasIndex, collision, handleKey, nameTokens } from "./aliases.js";
 export type { AliasHit, CollisionKind } from "./aliases.js";
 export { TUNABLES } from "./tunables.js";
-export { clearsTopicBar, isStopTag, lookAlikePairs, mergeMap, nightTagWork, notSameKey, NOT_SAME_PREFIX, resolveTag, stemKey, tallyTags } from "./tags.js";
+export { clearsTopicBar, isStopTag, lookAlikePairs, mergeMap, nightTagWork, notSameKey, NOT_SAME_PREFIX, resolveTag, stemKey, tagPartners, tallyTags, topicsNamedIn } from "./tags.js";
 export type { LookAlike, TagTally, TagsNightInput, TagsNightOutcome } from "./tags.js";
 
 /**
@@ -165,6 +165,12 @@ export const PUBLIC_SURFACE = [
   // backfill's reading (both reads; the links are the store's to write).
   "subjectsIn",
   "subjectLinksForAll",
+  // 2026-10-22 (wave 2 lane E): the beliefs on the subjects a text names, for
+  // recall's slot; a source's tag partners, for priming; and whether a belief
+  // is about me or us, for the slot's rating (all reads).
+  "beliefsNamedIn",
+  "tagPartnersOf",
+  "aboutMeBelief",
 ] as const;
 
 const EVENT_RING = 500;
@@ -1105,6 +1111,78 @@ export class Schemas {
     return out;
   }
 
+  /**
+   * IS THIS A BELIEF ABOUT ME OR US? (wave 2 lane E, 2026-10-22): the check
+   * the beliefs slot's rating makes before it credits a use — a rating never
+   * counts for one. False for an id that is not a belief. A read.
+   */
+  aboutMeBelief(id: string): boolean {
+    if (!this.meta.has(id)) this.learn(id);
+    const rec = this.meta.get(id);
+    const row = this.store.row(id);
+    if (rec === undefined || rec.role !== "belief" || row === undefined) return false;
+    return this.aboutMe(row, rec);
+  }
+
+  /**
+   * THE BELIEFS ON THE SUBJECTS A TEXT NAMES (wave 2 lane E, 2026-10-22;
+   * recall's beliefs slot): the live cards its words name (`subjectsIn`, the
+   * alias index's one whole-word rule) and the topics it names
+   * (`tags.ts#topicsNamedIn`, a promoted tag), each subject's live beliefs as
+   * they stand on `day` (`beliefStanding`), with the subject's name. Not the
+   * self subject: it has no name, so no turn names it (the self is the wake's
+   * page). A card that is archived or removed offers nothing. Recall picks
+   * from these (floor, dedup, cap). A read; a subject that fails offers nothing.
+   */
+  beliefsNamedIn(text: string, day: number): { id: string; subject: string; statement: string; strength: number; support: number; contested: boolean }[] {
+    if (text.trim().length === 0) return [];
+    const subjects = new Set(this.subjectsIn(text));
+    let topics: string[] = [];
+    try {
+      topics = topicsNamedIn(text, this.store.topicCards());
+    } catch {
+      topics = [];
+    }
+    for (const id of topics) subjects.add(id);
+    const self = this.store.selfSubject();
+    if (self !== null) subjects.delete(self);
+    const out: { id: string; subject: string; statement: string; strength: number; support: number; contested: boolean }[] = [];
+    for (const id of [...subjects].sort()) {
+      try {
+        const row = this.store.row(id);
+        if (row === undefined || row.archived === 1 || this.removed(id, row)) continue;
+        const standing = this.beliefStanding(id, day);
+        if (standing.length === 0) continue;
+        const name = this.subjectName(id, row);
+        for (const b of standing) out.push({ id: b.id, subject: name, statement: b.statement, strength: b.strength, support: b.support, contested: b.contested });
+      } catch {
+        /* a subject that will not read offers nothing */
+      }
+    }
+    return out;
+  }
+
+  /** A subject's name as a line says it: its name, a topic's word, or its title; "" when none. */
+  private subjectName(id: string, row: MemoryRow): string {
+    const rec = this.meta.get(id);
+    if (rec?.name !== undefined && rec.name.trim().length > 0) return rec.name.trim();
+    try {
+      const meta = this.store.readProse(id).meta;
+      if (typeof meta["topic"] === "string" && meta["topic"].trim().length > 0) return meta["topic"].trim();
+    } catch {
+      /* the title, below */
+    }
+    return (row.title ?? "").trim();
+  }
+
+  /**
+   * A SOURCE'S TAG PARTNERS, for context priming (wave 2 lane E, 2026-10-22;
+   * recall `TAGS_PRIME`): `tags.ts#tagPartners` over this store. A read.
+   */
+  tagPartnersOf(ids: readonly string[], opts: { readonly maxTagMemories: number; readonly neighbours: number }): Map<string, { id: string; weight: number }[]> {
+    return tagPartners(this.store, ids, opts);
+  }
+
   /** A belief about me or us — marked so, or on the self subject or the identity core — which `use` does not back. */
   private aboutMe(belief: MemoryRow, rec: MetaRecord): boolean {
     if (belief.about === "me" || belief.about === "us") return true;
@@ -2004,7 +2082,8 @@ export class Schemas {
    * an entity card with NO name and no aliases, so the alias index links
    * nothing to it — recall's aliases (`retrieval.ts`), the names a memory is
    * linked by and the credit a mention gives are unchanged, which is lane B's
-   * promise (no recall change; lane E decides how topics reach recall). Its
+   * promise. Lane E (2026-10-22) reads a topic in recall by its word instead
+   * (`tags.ts#topicsNamedIn`, the beliefs slot), never through the index. Its
    * tag and merged words are in `meta.topic` / `meta.topicAliases`, its kind
    * of subject is `topic`, and its memories are the ones tagged — no
    * `memory_subjects` rows. Off (`TAGS_NIGHT`): nothing.

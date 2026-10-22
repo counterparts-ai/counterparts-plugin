@@ -26,7 +26,7 @@ Do not choose for them, and do not go on until they answer. If they answer neith
 sh "${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh" cli uninstall --keep-memories --json
 ```
 
-It disconnects Counterparts from Claude Code and leaves the memories where they are. Run it as written above, not the plan's `keepArgs`: without `--config` it acts on the same configuration the plan read. Show its `lines` as they are, and its `errors` if there are any. If `outcome` is not `ok`, say that the uninstall did not finish and that its lines say why, and stop. Otherwise, tell them the last step is theirs: in Claude Code, /plugin → Installed → counterparts → Uninstall (the closing line of its output says the same). The memories stay on this machine, and installing Counterparts again later finds them.
+It disconnects Counterparts from Claude Code and leaves the memories where they are. Run it as written above, not the plan's `keepArgs`: without `--config` it acts on the same configuration the plan read. Show its `lines` as they are, and its `errors` if there are any. If `outcome` is not `ok`, say that the uninstall did not finish and that its lines say why, and stop. Otherwise, tell them the last step is theirs: in Claude Code, /plugin → Installed → counterparts → Uninstall (the closing line of its output says the same). If the counterparts-sidebar plugin is installed too, they uninstall that one first, the same way: it needs this plugin and stops loading without it. The memories stay on this machine, and installing Counterparts again later finds them.
 
 **Step 4: they chose delete.** Do not run anything. This command cannot delete the memories, by design: a running session holds the memory open, and the confirmation has to be typed by the person, at a real terminal, not by you. Tell them plainly, in this order:
 
@@ -39,6 +39,6 @@ It disconnects Counterparts from Claude Code and leaves the memories where they 
    ```
 
 4. In the terminal it shows what it would delete and asks whether to delete it. They answer it themselves and type the confirmation it asks for. Nothing is deleted unless they type it.
-5. Then remove the plugin. The command's last lines name Claude Code's terminal command for it (`claude plugin uninstall …`); they can run that in the same terminal, or open Claude Code again and use /plugin → Installed → counterparts → Uninstall. Either is safe, because step 1 disabled the plugin.
+5. Then remove the plugin. The command's last lines name Claude Code's terminal command for it (`claude plugin uninstall …`); they can run that in the same terminal, or open Claude Code again and use /plugin → Installed → counterparts → Uninstall. Either is safe, because step 1 disabled the plugin. If the counterparts-sidebar plugin is installed too, remove it first the same way (`claude plugin uninstall counterparts-sidebar@…`): it needs this plugin and stops loading without it.
 
 Give them the command in a code block so they can copy it. Do not offer to run it for them, and do not run it, even if they ask: tell them it has to be typed at their own terminal, with Claude Code closed.

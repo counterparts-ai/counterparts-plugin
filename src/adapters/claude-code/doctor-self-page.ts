@@ -16,7 +16,7 @@ import {
 import type { DreamingSetting } from "../../core/dream/index.js";
 // The page's own reader, so this line cannot drift from what the wake prints.
 import { clearedMarker, findPageRow, readSelfPage } from "../../core/self/page.js";
-import { coreSupport, pageTrace } from "../../core/self/measures.js";
+import { coreBeliefFloors, coreFromBeliefs, coreSupport, pageTrace } from "../../core/self/measures.js";
 import type { CoreSupportRow } from "../../core/self/measures.js";
 import {
   dayBefore,
@@ -311,6 +311,46 @@ export function selfPageTraceFindings(store: Store): Finding[] {
  * session-start reading.
  */
 export function coreSupportFindings(store: Store): Finding[] {
+  return [...coreLaneFindings(store), ...coreBeliefFindings(store)];
+}
+
+/**
+ * THE CORE FROM BELIEFS (wave 2 lane F, 2026-10-22; `self.CORE_FROM_BELIEFS`):
+ * with the switch on, the beliefs about me and us the core reads, what stands
+ * behind each (memories, lived days), and what the floors held back. A
+ * reading, always green. Off: nothing, so doctor reads as before.
+ */
+function coreBeliefFindings(store: Store): Finding[] {
+  if (!SELF_TUNABLES.CORE_FROM_BELIEFS) return [];
+  const f = coreBeliefFloors();
+  const r = coreFromBeliefs(store, store.livedDay(), f);
+  const els = r.elements;
+  const floors = `strength ${String(f.strength)}+, ${String(f.memories)}+ memories, ${String(f.days)}+ lived days`;
+  const held = Object.entries(r.held)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${String(n)} by ${k}`)
+    .join(", ");
+  const range = (pick: (e: (typeof els)[number]) => number): string => {
+    const v = els.map(pick);
+    const lo = Math.min(...v);
+    const hi = Math.max(...v);
+    return lo === hi ? String(lo) : `${String(lo)}–${String(hi)}`;
+  };
+  const what =
+    els.length === 0
+      ? `none of ${String(r.considered)} ${r.considered === 1 ? "belief" : "beliefs"} about me and us has earned it yet`
+      : `${String(els.length)} of ${String(r.considered)} ${r.considered === 1 ? "belief" : "beliefs"} about me and us; memories ${range((e) => e.memories)}, lived days ${range((e) => e.days)}`;
+  return [
+    finding("core-beliefs", "green", "Core from beliefs", `${what} (floors: ${floors})${held.length > 0 ? `; held back: ${held}` : ""}`, "", {
+      elements: els.length,
+      considered: r.considered,
+      ...r.held,
+      rows: els.map((e) => `${e.id}:${String(e.memories)}m/${String(e.days)}d/${e.strength.toFixed(2)}`).join(" "),
+    }),
+  ];
+}
+
+function coreLaneFindings(store: Store): Finding[] {
   const s = coreSupport(store);
   const els = s.elements;
   if (els.length === 0) return [finding("core-support", "green", "Core", "no elements yet", "", { elements: 0 })];

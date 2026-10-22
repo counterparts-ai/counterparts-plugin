@@ -1211,6 +1211,8 @@ export class Lifecycle implements HostLifecycle {
       reason: decision.reason,
       surfaced: decision.surfaced.length,
       footnotes: decision.footnotes.length,
+      // The beliefs slot's lines (lane E): a turn may hand over these alone.
+      beliefs: decision.beliefs?.shown.length ?? 0,
       bytes: decision.bytes,
       budget: decision.budgetBytes,
       observer: decision.observer,

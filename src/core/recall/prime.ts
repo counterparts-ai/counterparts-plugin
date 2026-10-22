@@ -74,6 +74,12 @@ export const USED_TIERS: ReadonlySet<UseTier> = new Set<UseTier>(["referenced", 
 /** Ids → each one's live linked partners with the edge's DECAYED weight (one hop). */
 export type PartnersFn = (ids: readonly string[], day: number) => ReadonlyMap<string, readonly { id: string; weight: number }[]>;
 
+/** Ids → the memories their tags reach, weight 1 for a shared tag and 0.5 through a concept edge (lane E). */
+export type TagPartnersFn = (
+  ids: readonly string[],
+  opts: { readonly maxTagMemories: number; readonly neighbours: number },
+) => ReadonlyMap<string, readonly { id: string; weight: number }[]>;
+
 /** What is open in this folder, read once a session: memory ids (link and
  *  meaning sources) and texts' vectors that are not memories (a handoff), each
  *  with a weight in [0, 1] — a handoff's by its age (`PRIME_HANDOFF_DAY_DECAY`),
@@ -92,6 +98,13 @@ export interface PrimeInput {
   readonly vector?: readonly number[] | null;
   /** One hop along links (`Associate#partnersOf`). Absent: the link channel is dark. */
   readonly partners?: PartnersFn;
+  /**
+   * One hop along TAGS (wave 2 lane E, 2026-10-22; `schemas/tags.ts#tagPartners`):
+   * memories sharing a source's tag (weight 1), or a tag that keeps appearing
+   * with it (B's concept edges, weight 0.5), scaled here by `TAGS_PRIME_WEIGHT`.
+   * Asked only with `TAGS_PRIME` on and the link channel lit. Absent: no tag priming.
+   */
+  readonly tagPartners?: TagPartnersFn;
   /** What is open here — called only on a turn the folder has not yet been read. */
   readonly open?: () => OpenHere;
 }
@@ -233,8 +246,18 @@ export function wakeOpenIds(store: Store, sessionId: string): string[] {
 
 /** What `activate()` takes: the link head starts (raw, before units), the train, who may not be primed. */
 export interface PrimeActivation {
-  /** Partner id → Σ source weight × decayed edge weight, and which kinds of source sent it. */
-  readonly link: ReadonlyMap<string, { readonly weight: number; readonly from: ReadonlySet<PrimeSourceKind> }>;
+  /** Partner id → Σ source weight × decayed edge weight, and which kinds of
+   *  source sent it; `tag`, the part of `weight` that came through tags (lane
+   *  E), and `top`, the source that sent the most. */
+  readonly link: ReadonlyMap<
+    string,
+    {
+      readonly weight: number;
+      readonly from: ReadonlySet<PrimeSourceKind>;
+      readonly tag?: number;
+      readonly top?: { readonly id: string; readonly weight: number };
+    }
+  >;
   /** The train of thought this turn is primed by (not unit length), or null. */
   readonly train: readonly number[] | null;
   /** How much the train holds, capped at one prompt (`TrainState.mass`): its
@@ -384,26 +407,45 @@ export function planPrime(input: {
     .map(([id, kind]) => ({ id, kind, turn: seen.get(id)?.turn ?? turnNo }))
     .sort((a, b) => b.turn - a.turn || (a.id < b.id ? -1 : 1))
     .slice(0, t.PRIME_MAX_SOURCES);
-  const link = new Map<string, { weight: number; from: Set<PrimeSourceKind> }>();
-  if (t.PRIME_LINK_UNITS > 0 && input.prime.partners !== undefined && live.length > 0) {
-    let partners: ReadonlyMap<string, readonly { id: string; weight: number }[]> = new Map();
-    try {
-      partners = input.prime.partners(
-        live.map((s) => s.id),
-        input.day,
-      );
-    } catch {
-      partners = new Map();
-    }
-    for (const s of live) {
-      const w = W[s.kind] * t.PRIME_SOURCE_DECAY ** Math.max(0, turnNo - s.turn);
-      if (!(w > 0)) continue;
-      for (const p of partners.get(s.id) ?? []) {
-        if (!(p.weight > 0) || p.id === s.id) continue;
-        const had = link.get(p.id) ?? { weight: 0, from: new Set<PrimeSourceKind>() };
-        had.weight += w * p.weight;
-        had.from.add(s.kind);
-        link.set(p.id, had);
+  const link = new Map<string, { weight: number; from: Set<PrimeSourceKind>; tag: number; top?: { id: string; weight: number } }>();
+  // Two partner sources through the one link channel: links, and (lane E,
+  // `TAGS_PRIME`) tags. Off, the tag source is never asked.
+  const sourcesOf: { fn: PartnersFn; tag: boolean }[] = [];
+  if (input.prime.partners !== undefined) sourcesOf.push({ fn: input.prime.partners, tag: false });
+  const tagPartners = input.prime.tagPartners;
+  if (t.TAGS_PRIME && t.TAGS_PRIME_WEIGHT > 0 && tagPartners !== undefined) {
+    const scaled: PartnersFn = (ids) => {
+      const out = new Map<string, { id: string; weight: number }[]>();
+      const got = tagPartners(ids, { maxTagMemories: t.TAGS_PRIME_MAX_TAG_MEMORIES, neighbours: t.TAGS_PRIME_NEIGHBOURS });
+      for (const [id, ps] of got) out.set(id, ps.map((p) => ({ id: p.id, weight: p.weight * t.TAGS_PRIME_WEIGHT })));
+      return out;
+    };
+    sourcesOf.push({ fn: scaled, tag: true });
+  }
+  if (t.PRIME_LINK_UNITS > 0 && sourcesOf.length > 0 && live.length > 0) {
+    for (const source of sourcesOf) {
+      let partners: ReadonlyMap<string, readonly { id: string; weight: number }[]> = new Map();
+      try {
+        partners = source.fn(
+          live.map((s) => s.id),
+          input.day,
+        );
+      } catch {
+        partners = new Map();
+      }
+      for (const s of live) {
+        const w = W[s.kind] * t.PRIME_SOURCE_DECAY ** Math.max(0, turnNo - s.turn);
+        if (!(w > 0)) continue;
+        for (const p of partners.get(s.id) ?? []) {
+          if (!(p.weight > 0) || p.id === s.id) continue;
+          const had = link.get(p.id) ?? { weight: 0, from: new Set<PrimeSourceKind>(), tag: 0 };
+          const gave = w * p.weight;
+          had.weight += gave;
+          if (source.tag) had.tag += gave;
+          had.from.add(s.kind);
+          if (had.top === undefined || gave > had.top.weight) had.top = { id: s.id, weight: gave };
+          link.set(p.id, had);
+        }
       }
     }
   }

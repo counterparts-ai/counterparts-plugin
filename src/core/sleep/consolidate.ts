@@ -676,10 +676,13 @@ export function runConsolidate(ctx: PhaseCtx): ConsolidateResult {
       block("self-page");
       continue;
     }
-    // A BELIEF DOES NOT CROSS, FOR NOW (wave 2 lane C, 2026-10-21): a belief
-    // about me or us reaching the core is lane F's, behind its own switch. A
-    // belief on a person card is kind `person` (a core kind), so the kind
-    // alone would not keep it out; the role does (`types.ts#isBeliefRow`).
+    // A BELIEF DOES NOT CROSS (wave 2 lane C, 2026-10-21): a belief about me
+    // or us reaches the core by lane F's VIEW, behind `self.CORE_FROM_BELIEFS`
+    // (`self/measures.ts#coreFromBeliefs`), never by a crossing here: a
+    // promoted row reads strength 1 for ever (`physics#strength`), which would
+    // stop a belief from fading and a contest from cutting it (lane F,
+    // 2026-10-22). A belief on a person card is kind `person` (a core kind), so
+    // the kind alone would not keep it out; the role does (`types.ts#isBeliefRow`).
     if (isBeliefRow(row)) {
       block("a-belief");
       continue;

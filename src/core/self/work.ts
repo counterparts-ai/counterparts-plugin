@@ -481,3 +481,13 @@ export function workHereBlock(lines: readonly string[]): string {
 export function workHereBytes(lines: readonly string[]): number {
   return new TextEncoder().encode(`${workHereBlock(lines)}\n\n`).length;
 }
+
+/**
+ * THE WAKE'S PROJECT LINE'S HEADING (wave 2 lane E, 2026-10-22; an
+ * experiment): what this folder's project is held to be, named, so its lines
+ * read as beliefs about the project and not as work done here.
+ */
+export function projectLineHeading(name: string): string {
+  const n = name.trim();
+  return n.length === 0 ? "This project, as I hold it:" : `This project (${n}), as I hold it:`;
+}

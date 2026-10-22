@@ -64,6 +64,7 @@ import {
   findIdentityCore,
   hintReading,
   identityCoreName,
+  openCarry,
   rankLanes,
   rankedAs,
   scanActive,
@@ -1050,6 +1051,8 @@ export class Self {
     ];
     const lanes: Lanes = {
       ...rankLanes(scanned, horizon, this.tunables, {
+        // Which open threads are still carried (2026-10-22, `openCarry`).
+        carry: openCarry(this.store, req.day, this.tunables.OPEN_CARRY_DAYS, this.tunables.OPEN_CARRY_GLIMPSE_TOUCH),
         settledOver: settledOver(this.store),
         // "Still open"'s unsettled ones rank after the rest (2026-10-18): one
         // read of the pairs, for the open candidates only.
@@ -1133,7 +1136,10 @@ export class Self {
     // Still open, from the open memories — and the core memories being
     // reconsidered, which wait on a decision (2026-10-11).
     const flagged = reconsideringIds(this.store);
-    const openIds = [...new Set([...this.store.openThreadIds(), ...flagged])];
+    // Only the threads still carried (2026-10-22, `openCarry`): one nobody
+    // touched in `OPEN_CARRY_DAYS` is in no lane here, as at the turn-end.
+    const carry = openCarry(this.store, day, this.tunables.OPEN_CARRY_DAYS, this.tunables.OPEN_CARRY_GLIMPSE_TOUCH);
+    const openIds = [...new Set([...this.store.openThreadIds().filter((id) => !carry.notCarried.has(id)), ...flagged])];
     const open: Scanned[] = [];
     for (const id of openIds) {
       const s = scanOne(this.store, id, day);
@@ -1142,6 +1148,7 @@ export class Self {
       else if (s.unresolved && s.band !== "identity") open.push(note(s));
     }
     const fresh = rankLanes(open, horizon, this.tunables, {
+      carry,
       settledOver: settled,
       unsettled: unsettledAmong(this.store, open.map((s) => s.id)),
       waiting: waitingIds(this.store, day),
@@ -1151,7 +1158,8 @@ export class Self {
       ...(coming.later.length === 0 ? {} : { later: coming.later }),
     });
     // The stateful lanes, as the published bundle showed them.
-    const opened = new Set(openIds);
+    // Every open memory, carried or not (2026-10-22): one not carried is in no lane.
+    const opened = new Set([...this.store.openThreadIds(), ...flagged]);
     // A later date counted under "Coming up" (2026-10-16) is no other lane's either.
     const arriving = new Set([...fresh.horizon.map((r) => r.id), ...coming.later]);
     const carried = (ids: readonly string[], lane: "identity" | "craft" | "hints"): Scanned[] => {

@@ -460,8 +460,11 @@ export function probeMemoryHits(rows: readonly ProbeRow[]): MemoryHitReport {
 
 // ── ratings (2026-10-14; Mike's call; counted as use since 2026-10-19, an experiment) ──
 
-/** The lanes a rating is filed under (`rated.ts#RatedLane`), in print order. */
-const RATING_LANES = ["loud", "footnotes", "pointers", "asked", "opened"] as const;
+/** The lanes a rating is filed under (`rated.ts#RatedLane`), in print order.
+ *  `beliefs` (lane E, 2026-10-22): the beliefs slot's lines, filed apart so
+ *  they never count as a footnote or an open; their showings are on the
+ *  decision rows (`beliefs.shown`), so here only what was rated is seen. */
+const RATING_LANES = ["loud", "footnotes", "pointers", "asked", "opened", "beliefs"] as const;
 type RatingLane = (typeof RATING_LANES)[number];
 type Scores = [number, number, number, number];
 

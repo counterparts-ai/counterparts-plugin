@@ -74,6 +74,7 @@ import { Lifecycle, codeOf, plainContextLine, plainLine } from "../lifecycle.js"
 import type { LifecycleOptions, PlainLines, SessionInput } from "../lifecycle.js";
 
 import { localDate } from "../../core/time.js";
+import { openThread } from "../../core/self/identity.js";
 import { TUNABLES } from "../config.js";
 import { TUNABLES as RECALL_TUNABLES } from "../../core/recall/tunables.js";
 import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessage, readCheckout } from "./doctor.js";
@@ -521,10 +522,52 @@ export const PAGE_WRITER_TOOL = "counterparts self_page";
  */
 export const RATE_CLAUSE = "`rated` 0–3 each footnote shown since you last wrote, and each `drewOn` id";
 
-export function stopAsk(sessionId: string, chapter: number): string {
+/**
+ * WHAT OPEN MEANS, IN THE ASK (2026-10-22, the open-threads brief): the same
+ * narrowing as the `unresolved` field's own text (`mcp/tools.ts#UNRESOLVED_PROPERTY`).
+ */
+export const OPEN_MEANS = "`unresolved` only when someone owes an answer (a question to them, a check with a date, a promise)";
+
+/** How long one open item's title may run in the ask's last line (2026-10-22). */
+const OPEN_TITLE_CHARS = 60;
+
+/**
+ * The most the ask's open line may run, whole (the review of #592, F5): a
+ * title is clipped at `OPEN_TITLE_CHARS` and an id is 16 characters, so five
+ * items fit; an item past it is left out, never cut. With the two lines'
+ * own pin (720) the whole ask stays under ~1,250 characters.
+ */
+export const OPEN_LINE_MAX_CHARS = 520;
+
+/**
+ * THE ASK NAMES THIS SESSION'S OWN OPEN ITEMS (2026-10-22, the open-threads
+ * brief): the open memories it wrote or touched (`Store#openThreadsOfSession`),
+ * at most `TUNABLES.STOP_OPEN_MAX`, by title and id — so closing one is an
+ * `updates` on a line it can see, not a search. A third line, unnumbered, and
+ * only when there is one: with none the ask is its two lines, as before.
+ */
+export function openHereLine(open: readonly { readonly id: string; readonly title: string }[]): string | null {
+  if (open.length === 0) return null;
+  const clip = (t: string): string => {
+    const one = t.replace(/\s+/g, " ").trim();
+    return one.length <= OPEN_TITLE_CHARS ? one : `${one.slice(0, OPEN_TITLE_CHARS - 1).trimEnd()}…`;
+  };
+  const head = "Still open from this session — close any now answered with `updates` and `unresolved: false`: ";
+  const items: string[] = [];
+  for (const o of open) {
+    const item = `"${clip(o.title)}" (${o.id})`;
+    if (items.length > 0 && head.length + [...items, item].join("; ").length + 1 > OPEN_LINE_MAX_CHARS) break;
+    items.push(item);
+  }
+  return `${head}${items.join("; ")}.`;
+}
+
+export function stopAsk(sessionId: string, chapter: number, open: readonly { readonly id: string; readonly title: string }[] = []): string {
+  const here = openHereLine(open);
   return [
-    `${STOP_ASK_OPENER} 1) hand back what caught your attention since you last wrote, one idea each — what you read, what they said, what happened — with the counterparts session_end tool, session: ${sessionId}. \`handoff\` only if work here is unfinished; \`retireHandoff\` any now done; \`updates\` anything dated or open now done; ${RATE_CLAUSE}. ${PRONOUN_RULE}`,
+    `${STOP_ASK_OPENER} 1) hand back what caught your attention since you last wrote, one idea each — what you read, what they said, what happened — with the counterparts session_end tool, session: ${sessionId}. \`handoff\` only if work here is unfinished; \`retireHandoff\` any now done; \`updates\` anything dated or open now done; ${OPEN_MEANS}; ${RATE_CLAUSE}. ${PRONOUN_RULE}`,
     `2) Write chapter ${String(chapter)} with the counterparts chapter tool, session: ${sessionId}.`,
+    ...(here === null ? [] : [here]),
   ].join("\n");
 }
 
@@ -1612,7 +1655,29 @@ export class ClaudeCodeAdapter extends Lifecycle {
     // server binds itself with, so an ask that omitted it would be an
     // invitation the model has no way to accept on this host — and the
     // chapter number is the STORE's, one past what was written.
-    return chapter === null ? null : stopAsk(input.sessionId, chapter);
+    return chapter === null ? null : stopAsk(input.sessionId, chapter, this.openHere(input.sessionId));
+  }
+
+  /**
+   * This session's own open items, for the ask's last line (2026-10-22,
+   * `openHereLine`): what the store says it wrote or touched, the flag
+   * confirmed on the prose. Never fails the Stop: none on any error.
+   */
+  private openHere(sessionId: string): { id: string; title: string }[] {
+    const max = TUNABLES.STOP_OPEN_MAX;
+    if (!(max > 0)) return [];
+    try {
+      const store = this.counterpart.store;
+      // What a thread is, the carry's own test (`openThread`: not dreamed, not
+      // settled over, the flag on the prose — the review of #592, F2), asked
+      // of a few more than the cap so one left out does not shorten the list.
+      return store
+        .openThreadsOfSession(sessionId, max * 4)
+        .filter((o) => openThread(store, o.id))
+        .slice(0, max);
+    } catch {
+      return [];
+    }
   }
 
   /**

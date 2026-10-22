@@ -56,7 +56,7 @@ import { fileURLToPath } from "node:url";
 import { NEW_INSTALL_DREAMING_LINE_PLUGIN } from "../core/onboarding.js";
 import { implicitConfigRefusal } from "./config-path.js";
 import type { ConfigChoice } from "./config-path.js";
-import { pluginInstall } from "./host-wiring.js";
+import { pluginInstall, sidebarPluginRecorded } from "./host-wiring.js";
 import type { NpmWiring } from "./host-wiring.js";
 import { BINARY, CLI_SCRIPT, parseScriptInvocation, scriptArgs, shellTokens } from "./runtime.js";
 import type { Binary } from "./runtime.js";
@@ -153,6 +153,9 @@ export interface PluginOrigin {
    *  read off the install cache's path (`cache/<marketplace>/<plugin>/<version>`)
    *  or `installed_plugins.json`'s record; absent when neither says. */
   readonly id?: string;
+  /** An installed copy beside a recorded `counterparts-sidebar@…` install,
+   *  which needs this plugin (`host-wiring.ts#sidebarPluginRecorded`). */
+  readonly sidebar?: boolean;
 }
 
 /** The plugin's id when nothing says which marketplace it came from: ours. */
@@ -171,14 +174,15 @@ export function pluginOrigin(input: {
   const configDir = moved.length > 0 ? moved : join(input.home, ".claude");
   const cacheRoot = (input.env["CLAUDE_CODE_PLUGIN_CACHE_DIR"] ?? "").trim();
   const pluginsRoot = realOrResolved(cacheRoot.length > 0 ? cacheRoot : join(configDir, "plugins")).replace(/\/+$/, "");
+  const sidebar = (): { sidebar?: true } => (sidebarPluginRecorded({ home: input.home, env: input.env, cwd: input.cwd ?? null }) ? { sidebar: true } : {});
   if (root === pluginsRoot || root.startsWith(`${pluginsRoot}/`)) {
     const parts = root.slice(pluginsRoot.length + 1).split("/");
     const id = parts[0] === "cache" && (parts[1] ?? "").length > 0 && (parts[2] ?? "").length > 0 ? `${parts[2] ?? ""}@${parts[1] ?? ""}` : null;
-    return id === null ? { installed: true, root } : { installed: true, root, id };
+    return id === null ? { installed: true, root, ...sidebar() } : { installed: true, root, id, ...sidebar() };
   }
   const record = pluginInstall({ home: input.home, env: input.env, cwd: input.cwd ?? null });
   const recorded = record?.installPath ?? null;
-  if (record !== null && recorded !== null && realOrResolved(recorded).replace(/\/+$/, "") === root) return { installed: true, root, id: record.id };
+  if (record !== null && recorded !== null && realOrResolved(recorded).replace(/\/+$/, "") === root) return { installed: true, root, id: record.id, ...sidebar() };
   return { installed: false, root };
 }
 
@@ -193,6 +197,16 @@ const INSTALLED: PluginOrigin = { installed: true, root: "" };
  */
 export function keepOne(origin: PluginOrigin, start: "upper" | "lower" = "upper"): string {
   const lead = start === "upper" ? "Keeping one install is simpler" : "keeping one install is simpler";
+  // THE SIDEBAR PLUGIN NEEDS THIS ONE (2026-10-20): uninstalling it would turn
+  // the sidebar off ("Dependency not installed"), so npm + both plugins is a
+  // setup to keep, not to slim down (2026-10-22, matching doctor's green).
+  if (origin.sidebar === true) {
+    return (
+      `${start === "upper" ? "Nothing" : "nothing"} needs to change: this plugin stays installed, standing down, because the counterparts-sidebar plugin needs it ` +
+      `(\`/plugin uninstall ${origin.id ?? DEFAULT_PLUGIN_ID}\` would turn the sidebar off too). To keep only the plugin instead, ` +
+      "run `counterparts disconnect` in a terminal and restart Claude Code."
+    );
+  }
   return (
     `${lead}, and nothing is lost either way: to keep only the plugin, run \`counterparts disconnect\` in a terminal ` +
     `and restart Claude Code; to keep only the npm install, run \`/plugin uninstall ${origin.id ?? DEFAULT_PLUGIN_ID}\`.`

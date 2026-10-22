@@ -74,6 +74,7 @@ import {
   NO_RATED_USE,
   RATED_SAME_TURN_ROWS,
   isBeliefRow,
+  beliefLine,
 } from "./recall/index.js";
 import { DREW_ON_MAX_PER_BOUNDARY, resolveReferences } from "./recall/reference.js";
 import type { ReferenceCandidate } from "./recall/reference.js";
@@ -165,6 +166,7 @@ import {
   rotateWork,
   workHere,
   workHereBlock,
+  projectLineHeading,
   workHereBytes,
   writerInstruction,
   fitNightWriter,
@@ -378,6 +380,11 @@ export { ROW_IDS_MAX, boundedIds } from "./types.js";
 // implements (`seat.ts`), here so a host reaches it through the package entry.
 export { SEAT_TOOLS, seatAsk } from "./seat.js";
 export type { Seat, SeatAct, SeatAnswer, SeatAsk, SeatTool } from "./seat.js";
+
+// The core from beliefs (wave 2 lane F, 2026-10-22, `self.CORE_FROM_BELIEFS`):
+// a reading, here so a host (the harness's compare) reaches it through the package entry.
+export { beliefCoreCandidates, coreBeliefFloors, coreBeliefMiss, coreFromBeliefs, livedSupportDays } from "./self/measures.js";
+export type { CoreBelief, CoreBeliefFloors, CoreFromBeliefs } from "./self/measures.js";
 
 const EVENT_RING = REMEMBER.CONSUMED_LEDGER_MAX;
 
@@ -816,6 +823,8 @@ export class Counterpart {
       lined = assembled?.lined ?? [];
       threads = assembled?.kept.threads ?? [];
       withPointer = delivery === undefined ? result : this.addHandoffPointer(result, here);
+      // THE PROJECT LINE (lane E, an experiment): last, in what room is left.
+      if (delivery !== undefined) withPointer = this.withProjectLine(withPointer, here);
       // ONE TAG (2026-10-20): the host's fields go into the head tag AFTER
       // the furniture is spliced, and only when the whole still fits the
       // ceiling; otherwise the head is left as it was and the host carries
@@ -1586,6 +1595,51 @@ export class Counterpart {
     if (block === null) return result;
     const s = spliceBeforeSentinel(result.text, block);
     return s.applied ? { ...result, text: s.text, bytes: s.bytes, sentinel: s.sentinel } : result;
+  }
+
+  /**
+   * THE WAKE'S PROJECT LINE (wave 2 lane E, 2026-10-22; design §7, an
+   * experiment — it has to earn its room; `self.WAKE_PROJECT_LINE`): in a
+   * folder that belongs to a project (lane G, `projectOf`) with beliefs above
+   * `WAKE_PROJECT_LINE_FLOOR`, its strongest (at most `WAKE_PROJECT_LINE_MAX`),
+   * each with its strength word, support count and id, under one heading
+   * naming the project. Spliced LAST, above the sentinel, in the room the
+   * delivery left: widest first, inside `WAKE_PROJECT_LINE_BYTES` and the
+   * reported ceiling; when not one line fits, the wake goes without it and a
+   * ring event says so (`counterpart.project.noroom`). Reads only; never throws.
+   */
+  private withProjectLine(result: WakeResult, here?: WakeHere): WakeResult {
+    const t = this.self.tunables;
+    const scope = here?.scope?.trim() ?? "";
+    if (!t.WAKE_PROJECT_LINE || !result.ok || scope.length === 0 || !isDirectoryScope(scope)) return result;
+    let name = "";
+    let lines: string[] = [];
+    try {
+      const project = projectsPart.projectOf(this.store, scope);
+      if (project === null) return result;
+      name = project.name;
+      const day = this.store.livedDay();
+      lines = this.schemas
+        .beliefStanding(project.id, day)
+        .filter((b) => b.strength > t.WAKE_PROJECT_LINE_FLOOR)
+        .slice(0, Math.max(0, Math.floor(t.WAKE_PROJECT_LINE_MAX)))
+        .map((b) => `- ${beliefLine({ ...b, subject: "" }, this.recall.tunables.BELIEF_LINE_BYTES)}`);
+    } catch {
+      return result;
+    }
+    if (lines.length === 0) return result;
+    const budget = this.reportedBudget;
+    for (let k = lines.length; k > 0; k--) {
+      const block = [projectLineHeading(name), ...lines.slice(0, k)].join("\n");
+      if (byteLength(block) > t.WAKE_PROJECT_LINE_BYTES) continue;
+      const s = spliceBeforeSentinel(result.text, block);
+      if (!s.applied) return result;
+      if (budget !== null && s.bytes > budget) continue;
+      this.emit("counterpart.project.shown", undefined, { lines: k, of: lines.length, bytes: s.bytes - result.bytes });
+      return { ...result, text: s.text, bytes: s.bytes, sentinel: s.sentinel };
+    }
+    this.emit("counterpart.project.noroom", undefined, { lines: lines.length, budget, was: result.bytes });
+    return result;
   }
 
   /**
@@ -2657,7 +2711,7 @@ export class Counterpart {
   }
 
   /** Retrospective reinforcement for ONE memory the reply actually used. */
-  resolveUse(sessionId: string, memoryId: string, tier: UseTier, opts: { cued?: boolean } = {}): CreditResult {
+  resolveUse(sessionId: string, memoryId: string, tier: UseTier, opts: { cued?: boolean; beliefSlot?: boolean } = {}): CreditResult {
     return this.recall.resolveUse(sessionId, memoryId, tier, opts);
   }
 
@@ -3126,7 +3180,8 @@ export class Counterpart {
     } catch {
       // An unreadable `asked` record narrows what may be rated; never wider.
     }
-    const shown = rateableSet(state.surfaced, asked, opts.opened ?? []);
+    // The beliefs slot's lines are rateable too (lane E), as their own lane.
+    const shown = rateableSet(state.surfaced, asked, opts.opened ?? [], state.beliefs ?? {});
     const drewOn = new Set([...(opts.drewOn ?? [])].map((id) => id.trim()).filter((id) => id.length > 0));
     for (const [id, c] of Object.entries(state.credited)) {
       if (c.tier === "engaged" && c.day === day && c.turn === state.turn) drewOn.add(id);
@@ -3280,8 +3335,17 @@ export class Counterpart {
         refuse(why);
         continue;
       }
+      // A LINE OF THE BELIEFS SLOT (lane E): a use of the belief, once a
+      // lived day, through the store's one door for it — never a support
+      // filing (nothing here files one) — and nothing at all for a belief
+      // about me or us.
+      const beliefSlot = shown.get(c.id)?.lane === "beliefs";
+      if (beliefSlot && this.schemas.aboutMeBelief(c.id)) {
+        refuse("belief-about-me");
+        continue;
+      }
       try {
-        const r = this.resolveUse(sessionId, c.id, c.tier);
+        const r = this.resolveUse(sessionId, c.id, c.tier, beliefSlot ? { beliefSlot: true } : {});
         if (r.credited || linksDespite(r)) linkable.add(c.id);
         if (r.credited && (c.tier === "shown" || c.tier === "ontopic" || c.tier === "useful" || c.tier === "referenced")) {
           credited[c.tier] += 1;

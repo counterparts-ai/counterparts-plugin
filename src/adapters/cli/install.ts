@@ -61,7 +61,7 @@ import type { EmbedderKind } from "../config.js";
 import { CONFIG_ENV, CONFIG_FLAG, defaultConfigPath } from "../config-path.js";
 import { entryScript, parseScriptInvocation, readsHostUserConfig, runtimeOf, runtimePresent, scriptArgs, shellTokens } from "../runtime.js";
 import type { RuntimeKind } from "../runtime.js";
-import { pluginInstall, readOurHook } from "../host-wiring.js";
+import { pluginInstall, readOurHook, sidebarPluginRecorded } from "../host-wiring.js";
 import type { PluginInstallRead } from "../host-wiring.js";
 // `preRowsMarkersIn` reads FILENAMES and opens nothing, which is the only
 // reason a module that promises never to open a parked store may call it —
@@ -586,6 +586,8 @@ export interface HostRead {
   /** The Counterparts Claude Code plugin, when Claude Code records it
    *  installed (`host-wiring.ts#pluginInstall`), else null. */
   readonly plugin: PluginInstallRead | null;
+  /** A recorded `counterparts-sidebar@…` install (`host-wiring.ts#sidebarPluginRecorded`). */
+  readonly sidebarPlugin: boolean;
 }
 
 /** Which of our host entries a runtime row came from: Claude Code's hooks, its
@@ -883,6 +885,7 @@ export function readHost(
       projectEnv: [...row.projectEnv].sort(),
     })),
     plugin: pluginInstall({ home, env, cwd }),
+    sidebarPlugin: sidebarPluginRecorded({ home, env, cwd }),
   };
 }
 

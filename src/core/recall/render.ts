@@ -71,16 +71,54 @@ export const FRAMING = {
    * reason as `journal`: a label, never a filter.
    */
   linked: "Linked:",
+  /**
+   * THE BELIEFS SLOT'S HEADER (wave 2 lane E, 2026-10-22; design §7): what
+   * the subjects this turn named are held to be, in a slot of their own, so
+   * a belief never reads as a footnote and a reader knows it may rate one.
+   */
+  beliefsHeader: "Held about what came up (beliefs; rate like footnotes):",
 } as const;
 
-export type Lane = "footnote" | "surfaced" | "affect";
+export type Lane = "belief" | "footnote" | "surfaced" | "affect";
 
 /**
- * The explicit trim order: cheapest-to-lose first. Footnotes are pointers and go
- * weakest-first; surfaced gists are rare and expensive to have earned; the affect
- * flag is one content-free line and is the last thing standing.
+ * The explicit trim order: cheapest-to-lose first. The beliefs slot is an
+ * experiment measured against the footnotes (wave 2 lane E), so it gives way
+ * first, weakest belief first, and never takes a footnote's room. Footnotes are
+ * pointers and go weakest-first; surfaced gists are rare and expensive to have
+ * earned; the affect flag is one content-free line and is the last thing standing.
  */
-export const TRIM_ORDER: readonly Lane[] = ["footnote", "surfaced", "affect"];
+export const TRIM_ORDER: readonly Lane[] = ["belief", "footnote", "surfaced", "affect"];
+
+/** One belief line of the slot, composed by the caller (`beliefLine`), strongest first. */
+export interface BeliefLine {
+  readonly id: string;
+  readonly text: string;
+}
+
+/**
+ * A belief's strength in one word (lane E, 2026-10-22): what the slot and the
+ * wake's project line say beside a statement. Contested says so first. The
+ * cuts are physics' strength on the support arm's scale (`BELIEF_SUPPORT_CAP`
+ * 0.9): about two well-spread supports pass 0.45, about four 0.65. CAL.
+ */
+export function strengthWord(strength: number, contested = false): string {
+  if (contested) return "contested";
+  if (strength > 0.65) return "firm";
+  if (strength > 0.45) return "fairly sure";
+  return "tentative";
+}
+
+/**
+ * One belief line's text, without the dash: `Subject: statement (word; N
+ * memories) [id]`. The statement alone is clipped; the subject, the word, the
+ * count and the id ride outside the clip, as a footnote's label does.
+ */
+export function beliefLine(b: { id: string; subject: string; statement: string; strength: number; support: number; contested?: boolean }, maxBytes: number): string {
+  const who = b.subject.trim().length === 0 ? "" : `${b.subject.trim()}: `;
+  const count = `${String(b.support)} ${b.support === 1 ? "memory" : "memories"}`;
+  return `${who}${clip(b.statement, maxBytes)} (${strengthWord(b.strength, b.contested === true)}; ${count}) [${b.id}]`;
+}
 
 export interface Resolved {
   readonly title: string;
@@ -110,6 +148,8 @@ export interface RenderInput {
   /** Ids, strongest first. */
   readonly surfaced: readonly string[];
   readonly footnotes: readonly string[];
+  /** The beliefs slot's lines, strongest first (lane E). Absent or empty: no slot, and the render is what it was. */
+  readonly beliefs?: readonly BeliefLine[];
   readonly budgetBytes: number;
   readonly gistBytes: number;
   readonly titleBytes: number;
@@ -127,6 +167,10 @@ export interface RenderResult {
   readonly budgetBytes: number;
   readonly surfaced: string[];
   readonly footnotes: string[];
+  /** The belief ids the render carried, in order (lane E); empty when none. */
+  readonly beliefs: string[];
+  /** What the beliefs slot cost: its header, lines and blank line, in bytes; 0 when none. */
+  readonly beliefBytes: number;
   readonly affectFlag: boolean;
   readonly trimmed: TrimEvent[];
   /** The tail line, or null on a quiet turn. */
@@ -181,14 +225,18 @@ function sentinelLine(
   footnotes: number,
   affect: boolean,
   bytes: number,
+  beliefs = 0,
 ): string {
-  return `<!-- counterparts:recall/end surfaced=${surfaced} footnotes=${footnotes} affect=${affect ? 1 : 0} bytes=${bytes} -->`;
+  // `beliefs=` only when the slot carried one (lane E): a turn without it ends
+  // on exactly the line it always did.
+  return `<!-- counterparts:recall/end surfaced=${surfaced} footnotes=${footnotes} affect=${affect ? 1 : 0}${beliefs > 0 ? ` beliefs=${beliefs}` : ""} bytes=${bytes} -->`;
 }
 
 interface Composition {
   text: string;
   bytes: number;
   sentinel: string;
+  beliefBytes: number;
 }
 
 function compose(
@@ -197,6 +245,7 @@ function compose(
   surfaced: readonly string[],
   footnotes: readonly string[],
   affect: boolean,
+  beliefs: readonly BeliefLine[] = [],
 ): Composition {
   const lines: string[] = [openMarker(input.turn)];
   if (affect) lines.push(FRAMING.affect);
@@ -215,19 +264,26 @@ function compose(
       lines.push(`- ${label(r)}${clip(r.title, input.titleBytes)} [${id}]${after(r)}`);
     }
   }
+  // THE BELIEFS SLOT (lane E), after the footnotes, in its own labelled block.
+  let beliefBytes = 0;
+  if (beliefs.length > 0) {
+    const block = ["", FRAMING.beliefsHeader, ...beliefs.map((b) => `- ${b.text}`)];
+    beliefBytes = byteLength(`\n${block.join("\n")}`);
+    lines.push(...block);
+  }
   const body = lines.join("\n");
   // Fixed point: the sentinel states the total byte count, and stating it changes
   // it. Two or three passes settle once the digit count stops moving.
   let total = byteLength(body) + 1;
-  let sentinel = sentinelLine(surfaced.length, footnotes.length, affect, total);
+  let sentinel = sentinelLine(surfaced.length, footnotes.length, affect, total, beliefs.length);
   for (let i = 0; i < 5; i++) {
     const next = byteLength(body) + 1 + byteLength(sentinel);
     if (next === total) break;
     total = next;
-    sentinel = sentinelLine(surfaced.length, footnotes.length, affect, total);
+    sentinel = sentinelLine(surfaced.length, footnotes.length, affect, total, beliefs.length);
   }
   const text = `${body}\n${sentinel}`;
-  return { text, bytes: byteLength(text), sentinel };
+  return { text, bytes: byteLength(text), sentinel, beliefBytes };
 }
 
 /**
@@ -239,16 +295,19 @@ function compose(
 export function render(input: RenderInput, resolve: Resolve): RenderResult {
   const surfaced = [...input.surfaced];
   const footnotes = [...input.footnotes];
+  const beliefs = [...(input.beliefs ?? [])];
   let affect = input.affectFlag;
   const trimmed: TrimEvent[] = [];
 
-  if (surfaced.length === 0 && footnotes.length === 0 && !affect) {
+  if (surfaced.length === 0 && footnotes.length === 0 && beliefs.length === 0 && !affect) {
     return {
       text: "",
       bytes: 0,
       budgetBytes: input.budgetBytes,
       surfaced: [],
       footnotes: [],
+      beliefs: [],
+      beliefBytes: 0,
       affectFlag: false,
       trimmed,
       sentinel: null,
@@ -257,7 +316,7 @@ export function render(input: RenderInput, resolve: Resolve): RenderResult {
   }
 
   for (;;) {
-    const c = compose(input, resolve, surfaced, footnotes, affect);
+    const c = compose(input, resolve, surfaced, footnotes, affect, beliefs);
     if (c.bytes <= input.budgetBytes) {
       return {
         text: c.text,
@@ -265,6 +324,8 @@ export function render(input: RenderInput, resolve: Resolve): RenderResult {
         budgetBytes: input.budgetBytes,
         surfaced,
         footnotes,
+        beliefs: beliefs.map((b) => b.id),
+        beliefBytes: c.beliefBytes,
         affectFlag: affect,
         trimmed,
         sentinel: c.sentinel,
@@ -273,6 +334,11 @@ export function render(input: RenderInput, resolve: Resolve): RenderResult {
     }
     let cut = false;
     for (const lane of TRIM_ORDER) {
+      if (lane === "belief" && beliefs.length > 0) {
+        trimmed.push({ lane, id: beliefs.pop()?.id ?? null });
+        cut = true;
+        break;
+      }
       if (lane === "footnote" && footnotes.length > 0) {
         trimmed.push({ lane, id: footnotes.pop() ?? null });
         cut = true;
@@ -298,6 +364,8 @@ export function render(input: RenderInput, resolve: Resolve): RenderResult {
         budgetBytes: input.budgetBytes,
         surfaced: [],
         footnotes: [],
+        beliefs: [],
+        beliefBytes: 0,
         affectFlag: false,
         trimmed,
         sentinel: null,

@@ -132,7 +132,10 @@ function payloadLine(src: DashboardSource, payload: string | null, style: Style)
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return truncate(String(parsed), 72);
   }
+  // The row's build stamp (2026-10-22) is not repeated on every line: doctor's
+  // Builds line names it, and the raw row keeps it (review of #591).
   return resolvePayload(src.store, parsed as Record<string, unknown>, 40)
+    .filter((p) => p.key !== "build")
     .map((p) => `${p.key} ${p.value}`)
     .join(" · ");
 }

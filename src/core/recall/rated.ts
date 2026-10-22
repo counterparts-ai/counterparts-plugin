@@ -35,8 +35,10 @@
  * gate state's `surfaced` (loud, footnotes, quiet pointers), a deliberate
  * question's answer (`asked` records), and what the session OPENED through
  * the tools (the adapter's per-session seen set: by-address opens, and the
- * neighbours a `remember` result named). An id in more than one is filed
- * under the first of: ambient lane, `asked`, `opened`.
+ * neighbours a `remember` result named), and since 2026-10-22 (wave 2 lane
+ * E) what the beliefs slot showed (`GateState.beliefs`, lane `beliefs`: a
+ * use, never support; no glimpse; never co-used). An id in more than one is
+ * filed under the first of: ambient lane, `beliefs`, `asked`, `opened`.
  *
  * This file is pure: the lanes, the validation, the row and the plan of what
  * a call credits and links. The reads and the writes are `Counterpart#rateShown`'s.
@@ -44,9 +46,17 @@
 import type { UseTier } from "../physics/index.js";
 
 /** The lane a rated memory reached the session through. */
-export type RatedLane = "loud" | "footnotes" | "pointers" | "asked" | "opened";
+export type RatedLane = "loud" | "footnotes" | "pointers" | "asked" | "opened" | "beliefs";
 
-export const RATED_LANES: readonly RatedLane[] = ["loud", "footnotes", "pointers", "asked", "opened"];
+/**
+ * `beliefs` (wave 2 lane E, 2026-10-22): a line of the beliefs slot. A rating
+ * of one is a USE at its tier — once a lived day, as any memory, through the
+ * one door the store opens for it (`Store#reinforce`'s `beliefSlot`) — and
+ * NEVER a support filing; for a belief about me or us it counts for nothing
+ * at all (`Counterpart#useRatings`). Being shown credits nothing (it is no
+ * glimpse lane), and a belief is never in the co-used or shown-together set.
+ */
+export const RATED_LANES: readonly RatedLane[] = ["loud", "footnotes", "pointers", "asked", "opened", "beliefs"];
 
 /** The scores, lowest first. */
 export const RATING_SCORES = [0, 1, 2, 3] as const;
@@ -147,20 +157,23 @@ export interface ShownEntry {
 }
 
 /**
- * The rateable set, with precedence: ambient first, then `asked`, then
- * `opened`. `surfaced` is the gate state's record (tier `surfaced` is loud;
- * a footnote with `via: "link"` is a quiet pointer).
+ * The rateable set, with precedence: ambient first, then the beliefs slot,
+ * then `asked`, then `opened`. `surfaced` is the gate state's record (tier
+ * `surfaced` is loud; a footnote with `via: "link"` is a quiet pointer);
+ * `beliefs` the slot's (`GateState.beliefs`, belief id → turn; lane E).
  */
 export function rateableSet(
   surfaced: Readonly<Record<string, { turn: number; tier: "surfaced" | "footnoted"; via?: "link" }>>,
   asked: Iterable<string>,
   opened: Iterable<string>,
+  beliefs: Readonly<Record<string, number>> = {},
 ): Map<string, ShownEntry> {
   const out = new Map<string, ShownEntry>();
   for (const [id, rec] of Object.entries(surfaced)) {
     const lane: RatedLane = rec.tier === "surfaced" ? "loud" : rec.via === "link" ? "pointers" : "footnotes";
     out.set(id, { lane, turn: rec.turn });
   }
+  for (const [id, turn] of Object.entries(beliefs)) if (!out.has(id)) out.set(id, { lane: "beliefs", turn });
   for (const id of asked) if (!out.has(id)) out.set(id, { lane: "asked", turn: null });
   for (const id of opened) if (!out.has(id)) out.set(id, { lane: "opened", turn: null });
   return out;
@@ -336,9 +349,11 @@ export function planRatedUse(input: {
   const add = (id: string): void => {
     if (!ordered.includes(id)) ordered.push(id);
   };
-  for (const r of input.rated) if (r.score === 3) add(r.id);
-  for (const id of input.otherwiseUsed) if (score.get(id) !== 0) add(id);
-  for (const r of input.rated) if (r.score >= CO_USE_MIN_SCORE) add(r.id);
+  // A belief is never co-used (lane E): its rating is a use of it alone.
+  const belief = (id: string): boolean => input.shown.get(id)?.lane === "beliefs";
+  for (const r of input.rated) if (r.score === 3 && !belief(r.id)) add(r.id);
+  for (const id of input.otherwiseUsed) if (score.get(id) !== 0 && !belief(id)) add(id);
+  for (const r of input.rated) if (r.score >= CO_USE_MIN_SCORE && !belief(r.id)) add(r.id);
   const max = Math.max(0, Math.floor(input.maxMembers));
   const together: [string, string][] = [];
   const seen = new Set<string>();

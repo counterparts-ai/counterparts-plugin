@@ -32,12 +32,18 @@
  *      The traversal's own account of itself — expanded, stop, depth — rides
  *      through to the turn's record.
  */
-import type { RecallResult, Turn } from "./recall/index.js";
+import type { BeliefsFn, RecallResult, TagPartnersFn, Turn } from "./recall/index.js";
 import type { Recall } from "./recall/index.js";
 
 /** Structural, not nominal: this file imports no neighbour's class. */
 export interface AliasSource {
   aliasMap(): ReadonlyMap<string, readonly string[]>;
+  /** Structurally `Schemas#beliefsNamedIn` (wave 2 lane E): the beliefs
+   *  slot's lookup. Optional: without it the slot is dark. */
+  beliefsNamedIn?(text: string, day: number): ReturnType<BeliefsFn>;
+  /** Structurally `Schemas#tagPartnersOf` (lane E): priming's tag partners.
+   *  Optional: without it no tag primes. */
+  tagPartnersOf?(ids: readonly string[], opts: { readonly maxTagMemories: number; readonly neighbours: number }): ReturnType<TagPartnersFn>;
 }
 
 /** `prospective.arrivals()`'s shape, structurally: `at` is a CALENDAR date and is
@@ -104,6 +110,18 @@ export function composeTurn(turn: Turn, sources: RetrievalSources): Turn {
   if (sources.associate?.partnersOf !== undefined && turn.prime !== undefined && turn.prime.partners === undefined) {
     const source = sources.associate;
     out.prime = { ...turn.prime, partners: (ids, day) => source.partnersOf?.(ids, day) ?? new Map() };
+  }
+  // WAVE 2 LANE E (2026-10-22): a source's tags as a second partner source
+  // (recall's `TAGS_PRIME` decides whether it is asked), and the beliefs
+  // slot's lookup. Both from `schemas/`, both reads; the switches are
+  // recall's, read at use, so binding them here changes nothing while off.
+  const tagSource = sources.schemas;
+  if (tagSource?.tagPartnersOf !== undefined && out.prime !== undefined && out.prime.tagPartners === undefined) {
+    out.prime = { ...out.prime, tagPartners: (ids, opts) => tagSource.tagPartnersOf?.(ids, opts) ?? new Map() };
+  }
+  if (sources.schemas?.beliefsNamedIn !== undefined && turn.beliefs === undefined) {
+    const schemas = sources.schemas;
+    out.beliefs = (text, day) => schemas.beliefsNamedIn?.(text, day) ?? [];
   }
   return out;
 }

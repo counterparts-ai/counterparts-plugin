@@ -51,7 +51,15 @@ export const GATE_STATE_VERSION = 1;
 
 /** The `gate_session.kind` vocabulary this module owns. `window` is
  *  `prospective/`'s (INTERFACE-GAPS.md §3) and is deliberately not read here. */
-export const GATE_KINDS = ["surfaced", "credited", "scalar", "semantic", "asked", "judged", "folded", "prime"] as const;
+export const GATE_KINDS = ["surfaced", "credited", "scalar", "semantic", "asked", "judged", "folded", "prime", "belief"] as const;
+/**
+ * `belief` (wave 2 lane E, 2026-10-22): a belief the beliefs slot showed this
+ * session — `ref` the belief, `turn` the turn. Its own kind, never `surfaced`:
+ * the footnote numbers (the credit pass, rating coverage, habituation) read
+ * `surfaced`, and a belief must not move them. Read into `GateState.beliefs`
+ * (the slot's session dedup) and by `rateShown` (a shown belief is rateable).
+ */
+export const BELIEF_KIND = "belief";
 /**
  * `prime` (2026-10-19, context priming — an experiment): the session's train
  * of thought and the open threads its wake listed (`prime.ts`). Its own kind,
@@ -157,6 +165,8 @@ export interface GateState {
   carriedFromTurn: number;
   /** Journal rows recall folded into a chapter it showed: row id → chapter id (2026-10-15). */
   folded?: Record<string, string>;
+  /** Beliefs the beliefs slot showed this session: belief id → turn (lane E, `BELIEF_KIND`). */
+  beliefs?: Record<string, number>;
 }
 
 export function freshGateState(sessionId: string): GateState {
@@ -220,8 +230,10 @@ export function loadGateState(store: Store, sessionId: string, max = Infinity): 
   const surfaced: Record<string, SurfaceRecord> = {};
   const credited: Record<string, CreditRecord> = {};
   const foldedRows: Record<string, string> = {};
+  const beliefRows: Record<string, { turn: number }> = {};
   for (const row of rows) {
     if (row.kind === FOLDED_KIND && typeof row.value === "string" && row.value.length > 0) foldedRows[row.ref] = row.value;
+    if (row.kind === BELIEF_KIND) beliefRows[row.ref] = { turn: row.turn };
     if (row.kind === "surfaced") {
       surfaced[row.ref] = {
         turn: row.turn,
@@ -237,6 +249,7 @@ export function loadGateState(store: Store, sessionId: string, max = Infinity): 
   const kept = bound(surfaced, max);
   // A fold is kept while the chapter it was folded into is: the same bound.
   const folded = Object.fromEntries(Object.entries(foldedRows).filter(([, chapter]) => kept[chapter] !== undefined));
+  const beliefs = Object.fromEntries(Object.entries(bound(beliefRows, max)).map(([id, r]) => [id, r.turn]));
   return {
     state: {
       v: GATE_STATE_VERSION,
@@ -249,6 +262,7 @@ export function loadGateState(store: Store, sessionId: string, max = Infinity): 
       carriedCues: scalar.carriedCues,
       carriedFromTurn: scalar.carriedFromTurn,
       ...(Object.keys(folded).length === 0 ? {} : { folded }),
+      ...(Object.keys(beliefs).length === 0 ? {} : { beliefs }),
     },
     status: "loaded",
   };
@@ -302,6 +316,11 @@ export function saveGateState(store: Store, state: GateState, max: number): void
     const at = keptSurfaced[chapter];
     if (at === undefined) continue;
     rows.push({ sessionId: state.sessionId, kind: FOLDED_KIND, ref: id, turn: at.turn, lastDay: state.lastDay, value: chapter });
+  }
+  // The beliefs slot's showings (lane E): their own kind, never `surfaced`.
+  const shownBeliefs = Object.fromEntries(Object.entries(state.beliefs ?? {}).map(([id, turn]) => [id, { turn }]));
+  for (const [id, rec] of Object.entries(bound(shownBeliefs, max))) {
+    rows.push({ sessionId: state.sessionId, kind: BELIEF_KIND, ref: id, turn: rec.turn, lastDay: state.lastDay });
   }
   for (const [id, rec] of Object.entries(bound(state.credited, max))) {
     rows.push({

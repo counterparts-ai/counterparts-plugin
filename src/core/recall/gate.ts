@@ -31,7 +31,7 @@
 import { emotionalIntensity } from "../physics/index.js";
 import { tokenize } from "../store/index.js";
 import type { Candidate } from "./activate.js";
-import { primeOf } from "./activate.js";
+import { primeChannel, primeOf } from "./activate.js";
 import { MIN_RARITY_STORE, informativeness } from "./cues.js";
 import type { GateState } from "./session.js";
 import { strongFloor } from "./tunables.js";
@@ -116,9 +116,20 @@ export interface CandidateVerdict {
    * (`train`), the kinds of source behind the link part (`from`), and
    * `lifted` when it was admitted only because of it — the cut without
    * priming left it out, or its activation without priming was under the bar
-   * it faced. Absent when nothing primed it.
+   * it faced. Absent when nothing primed it. Since lane E (2026-10-22):
+   * `tag`, the part of `link` a source's tags gave (`TAGS_PRIME`); `by`, the
+   * channel that gave most (`link`, `tag` or `train`); `top`, the source id
+   * that gave most along links or tags.
    */
-  readonly primed?: { readonly link: number; readonly train: number; readonly from: readonly string[]; readonly lifted?: true };
+  readonly primed?: {
+    readonly link: number;
+    readonly train: number;
+    readonly from: readonly string[];
+    readonly lifted?: true;
+    readonly tag?: number;
+    readonly by?: "link" | "tag" | "train";
+    readonly top?: string;
+  };
 }
 
 export interface Background {
@@ -402,7 +413,17 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
       ...(habituatedIds.has(c.id) ? { habituated: true as const } : {}),
       ...(c.prime === undefined
         ? {}
-        : { primed: { link: c.prime.link, train: c.prime.train, from: c.prime.from, ...(primeLifted.has(c.id) ? { lifted: true as const } : {}) } }),
+        : {
+            primed: {
+              link: c.prime.link,
+              train: c.prime.train,
+              from: c.prime.from,
+              ...(primeLifted.has(c.id) ? { lifted: true as const } : {}),
+              ...(c.prime.tag !== undefined && c.prime.tag > 0 ? { tag: c.prime.tag } : {}),
+              by: primeChannel(c.prime),
+              ...(c.prime.top === undefined ? {} : { top: c.prime.top }),
+            },
+          }),
     });
   };
 

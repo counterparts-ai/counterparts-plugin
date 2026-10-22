@@ -152,6 +152,13 @@ export const TUNABLES = {
    */
   WRITE_UP_ASKS_PER_DAY: 2,
   /**
+   * THE STOP ASK NAMES THIS SESSION'S OWN OPEN ITEMS (2026-10-22, the
+   * open-threads brief; a starting point, check 2026-11-05): at most this
+   * many, by title and id, the newest touched first, in one line under the
+   * ask (`claude-code/hooks.ts#openHereLine`); none, no line. Revert: 0.
+   */
+  STOP_OPEN_MAX: 5,
+  /**
    * A plain reminder's handle — the memory's title or first line — is clipped
    * to this many characters in the line a person reads (2026-09-26). One
    * glance's worth: a longer title is a paragraph, and the memory's id rides

@@ -771,6 +771,13 @@ export const NARRATORS = {
     const surfaced = idsIn(t, "surfaced");
     const footnotes = idsIn(t, "footnotes");
     const turn = n(t, "turn") ?? 0;
+    // The beliefs slot (lane E): what the turn's subjects are held to be, shown beside the memories.
+    const slot = t.p["beliefs"];
+    const held = slot !== null && typeof slot === "object" && Array.isArray((slot as { shown?: unknown }).shown) ? (slot as { shown: unknown[] }).shown.length : 0;
+    const heldTail = held === 0 ? "" : `, and I held up ${held === 1 ? "one belief" : `${String(held)} beliefs`} about what you named`;
+    if (surfaced.length === 0 && footnotes.length === 0 && held > 0) {
+      return calm(`On turn ${turn} no memory rose above the turn's own background, but you named something I hold beliefs about, so I showed ${held === 1 ? "one" : String(held)}.`);
+    }
     if (surfaced.length === 0 && footnotes.length === 0) {
       return calm(
         `On turn ${turn} nothing rose above the turn's own background, so I said nothing. Most turns end here, and that is the design.`,
@@ -778,10 +785,10 @@ export const NARRATORS = {
     }
     if (surfaced.length === 0) {
       return calm(
-        `On turn ${turn} I kept ${nameSome(t, footnotes)} as a footnote — near enough to mention, not near enough to say out loud.`,
+        `On turn ${turn} I kept ${nameSome(t, footnotes)} as a footnote — near enough to mention, not near enough to say out loud${heldTail}.`,
       );
     }
-    const tail = footnotes.length === 0 ? "" : `, with ${footnotes.length} more held back as footnotes`;
+    const tail = `${footnotes.length === 0 ? "" : `, with ${footnotes.length} more held back as footnotes`}${heldTail}`;
     return notable(`On turn ${turn} ${nameSome(t, surfaced)} came to mind${tail}.`);
   },
   "adapter.recall": (t) => {
@@ -791,6 +798,11 @@ export const NARRATORS = {
     }
     const count = n(t, "surfaced") ?? n(t, "count") ?? 0;
     const bytes = n(t, "bytes") ?? 0;
+    // A turn may hand over only the beliefs slot (lane E): its count and bytes say so.
+    const beliefs = n(t, "beliefs") ?? 0;
+    if (count === 0 && beliefs > 0 && bytes > 0) {
+      return calm(`A turn's recall was composed for the host: ${beliefs === 1 ? "one belief" : `${String(beliefs)} beliefs`} about what was named, ${bytes} bytes.`);
+    }
     return calm(
       count === 0
         ? `A turn's recall was composed and came to nothing — no bytes handed over.`

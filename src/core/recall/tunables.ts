@@ -298,6 +298,57 @@ export interface RecallTunables {
    *  Why 1: like `HOP_CEILING`, at most double what the conversation gave it;
    *  the dial to turn down first if the review sees tunnel vision. */
   PRIME_CEILING: number;
+  /**
+   * CONCEPT EDGES PRIME TOO (wave 2 lane E, 2026-10-22; an experiment, check
+   * 2026-10-29): a source's TAGS are a partner source beside its links
+   * (`prime.ts`, `PrimeInput.tagPartners`, bound from `schemas/tags.ts#tagPartners`)
+   * — memories carrying the same tag, and memories carrying a tag that keeps
+   * appearing with it (B's concept edges), at a modest weight through the same
+   * link channel, so `PRIME_LINK_UNITS`, `PRIME_CEILING` and every limit of
+   * priming hold. Off: the partner source is never asked, and priming is what
+   * it was. Read at use; `harness compare --set recall.TAGS_PRIME=false`.
+   */
+  TAGS_PRIME: boolean;
+  /** A tag partner's weight, in the units of a decayed link (`PartnersFn`).
+   *  Why 0.1: a modest weight — under one co-use link (associate
+   *  `CO_USE_DEPOSIT` 0.25), so a shared tag nudges a close call and a link
+   *  someone made by using the two together still counts for more. A partner
+   *  through a concept edge (a neighbouring tag) gets half. CAL. */
+  TAGS_PRIME_WEIGHT: number;
+  /** A tag on more live memories than this primes nothing: it is about
+   *  everything here, so it says nothing (as rarity weighs cues). Why 40: a
+   *  few weeks of a working topic; the live store's biggest tags (the
+   *  project's own name) are far past it. Also bounds the reads. CAL. */
+  TAGS_PRIME_MAX_TAG_MEMORIES: number;
+  /** How many concept-edge neighbours of a source's tags are followed (the
+   *  ones sharing the most memories). Why 2: bounded reads on the hot path. CAL. */
+  TAGS_PRIME_NEIGHBOURS: number;
+
+  // ── the beliefs slot (wave 2 lane E, 2026-10-22; design §7) ─────────────
+  /**
+   * BELIEFS IN THEIR OWN SLOT (an experiment, check 2026-10-29): when a
+   * turn's words name a subject — a card through the alias index, a topic
+   * through its tag — its strongest current beliefs are shown in a labelled
+   * slot of their own, IN ADDITION to the footnotes, which stay belief-free.
+   * Each line has a strength word, its support count and its id, rateable
+   * like a footnote (`rated.ts`, lane `beliefs`): a rating is a use, once a
+   * lived day, never support, and never anything for a belief about me or
+   * us; being shown credits nothing. Ambient only. Off: the lookup is never
+   * asked and the turn is byte for byte what it was. Read at use;
+   * `harness compare --set recall.BELIEFS_IN_RECALL=false`.
+   */
+  BELIEFS_IN_RECALL: boolean;
+  /** At most this many beliefs a turn, strongest first across the subjects
+   *  named. Why 3: the design's "2–3 strongest". CAL. */
+  BELIEFS_SLOT_MAX: number;
+  /** A belief is shown only ABOVE this strength (today's, physics). Why 0.3:
+   *  the brief's start — a belief is born at `BELIEF_BIRTH_CEILING` (0.3), so
+   *  only one life has backed shows. CAL. */
+  BELIEFS_SLOT_FLOOR: number;
+  /** A belief's statement is clipped to this many bytes on its line. Why 200:
+   *  a statement is one claim (`MAX_BELIEF_CHARS`); the line's word, count
+   *  and id ride outside the clip. CAL. */
+  BELIEF_LINE_BYTES: number;
 
   // ── affect ───────────────────────────────────────────────────────────────
   /** Emotional salience a candidate needs before it can raise the affect flag. [v1: 0.7] CAL. */
@@ -589,6 +640,15 @@ export const TUNABLES: RecallTunables = {
   PRIME_MAX_SOURCES: 24,
   PRIME_TRAIN_POOL: 72,
   PRIME_CEILING: 1,
+  TAGS_PRIME: true,
+  TAGS_PRIME_WEIGHT: 0.1,
+  TAGS_PRIME_MAX_TAG_MEMORIES: 40,
+  TAGS_PRIME_NEIGHBOURS: 2,
+
+  BELIEFS_IN_RECALL: true,
+  BELIEFS_SLOT_MAX: 3,
+  BELIEFS_SLOT_FLOOR: 0.3,
+  BELIEF_LINE_BYTES: 200,
 
   AFFECT_MIN_EMOTION: 0.7,
   AFFECT_REFRACTORY_TURNS: 2,

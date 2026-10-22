@@ -83,6 +83,9 @@ export interface HostReading {
   /** The Counterparts Claude Code plugin, when Claude Code records it
    *  installed (`host-wiring.ts#pluginInstall`); absent or null when not. */
   readonly plugin?: PluginInstallRead | null;
+  /** Claude Code records a `counterparts-sidebar@…` install, which needs the
+   *  plugin (`host-wiring.ts#sidebarPluginRecorded`); absent when not read. */
+  readonly sidebarPlugin?: boolean;
   /** The npm install's marker (`npm-live.ts`) as a directory-flavor plugin
    *  would read it: which halves it would stand down for. Null when there is
    *  none it would believe; absent when not read. */
@@ -340,10 +343,26 @@ export function hostFindings(reading: HostReading): Finding[] {
         : `ALSO installed as the Claude Code plugin (${plugin.id}), which stands down while this wiring is live`;
   // KEEP ONE (2026-10-15, as the plugin's own session-start line says it,
   // `plugin.ts#keepOne`): both ways out, the same memory either way.
+  // Beside the counterparts-sidebar plugin (2026-10-20), which needs this one,
+  // the plugin is no second install to remove: it is how the sidebar comes
+  // (docs/plugin.md "Two plugins"). Standing down, that is the setup we
+  // recommend to an npm user who wants the sidebar, so the line is green and
+  // asks nothing (2026-10-22, a coordinator call for Mike to review). Only when
+  // both really run is it amber, and then the fix never says to uninstall it.
+  const forSidebar = plugin !== null && reading.sidebarPlugin === true;
   const twiceFix =
     plugin === null
       ? ""
+      : forSidebar
+      ? bothRun
+        ? readsMarker
+          ? `Both run until this install's hooks have run in a session; then the plugin (${plugin.id}) stands down on its own and stays installed for the counterparts-sidebar plugin, which needs it. To keep only the plugin instead, run \`counterparts disconnect\` and restart Claude Code.`
+          : `Both run: this build of the plugin (${plugin.id}) does not check for the other install. Keep it installed (the counterparts-sidebar plugin needs it) and update it, \`claude plugin update ${plugin.id}\`, to a build that stands down beside this one; or keep only the plugin: run \`counterparts disconnect\` and restart Claude Code.`
+        : ""
       : `Installed twice; keeping one is simpler, and nothing is lost either way: to keep only the plugin, run \`counterparts disconnect\` and restart Claude Code; to keep only this install, run \`claude plugin uninstall ${plugin.id}\` (or \`/plugin uninstall ${plugin.id}\` inside Claude Code).`;
+  // Standing down for the sidebar: nothing to fix, said as it is.
+  const sidebarClause =
+    plugin === null ? "" : `the Claude Code plugin (${plugin.id}) is installed for the counterparts-sidebar plugin, which needs it, and stands down while this wiring is live`;
   const mcpClause = reading.mcpRead === false
     ? ""
     : reading.mcp
@@ -354,6 +373,9 @@ export function hostFindings(reading: HostReading): Finding[] {
 
   if (missing.length === 0 && stale.length === 0 && reading.mcp) {
     if (plugin !== null) {
+      if (forSidebar && !bothRun) {
+        return [finding("host", "green", "Claude Code", `connected: ${String(total)} hooks and the memory tools; ${sidebarClause}`, "", data)];
+      }
       return [finding("host", "amber", "Claude Code", `connected: ${String(total)} hooks and the memory tools; ${twiceClause}`, twiceFix, data)];
     }
     // THE ONE LINE THE PERSON CAME FOR: is my assistant joined up to this

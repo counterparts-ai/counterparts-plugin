@@ -1,21 +1,75 @@
 {
-  "description": "Counterparts: memory hooks on five Claude Code events (session start, each prompt, each reply, session end, before compaction), started from the plugin folder; and the sidebar mod (hooks/sidebar/).",
+  "description": "Counterparts: memory hooks on five Claude Code events (session start, each prompt, each reply, session end, before compaction), started from the plugin folder. The sidebar is the counterparts-sidebar plugin.",
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh",
+              "hook"
+            ]
+          }
+        ]
+      }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh",
+              "hook"
+            ]
+          }
+        ]
+      }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh",
+              "hook"
+            ]
+          }
+        ]
+      }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh",
+              "hook"
+            ]
+          }
+        ]
+      }
     ],
     "PreCompact": [
-      { "hooks": [{ "type": "command", "command": "sh", "args": ["${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh", "hook"] }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/src/adapters/plugin-run.sh",
+              "hook"
+            ]
+          }
+        ]
+      }
     ]
-  },
-  "modules": ["./sidebar/hooks/full.tsx"]
+  }
 }

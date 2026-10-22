@@ -90,6 +90,28 @@ export interface SelfTunables {
    *  the host lets be named elsewhere — taking turns by lived day among the
    *  newest. 0: craft from elsewhere is in no wake. CAL. */
   WORK_HERE_CRAFT_MAX: number;
+  /**
+   * THE WAKE'S PROJECT LINE (wave 2 lane E, 2026-10-22; design §7, AN
+   * EXPERIMENT — it has to earn its room; check 2026-10-29): in a folder whose
+   * project (lane G) has beliefs, a short block of its strongest, each with
+   * its strength word and support count. Composed at delivery, LAST — after
+   * the handoff, "Last here" and the work lines, before the head's fields —
+   * so it takes only the room everything else left, and it is the first thing
+   * a wake past its room goes without (a ring event says so). Off: the wake
+   * is byte for byte what it was. Read from the copy `withTunables` makes when
+   * `Self` opens; `harness compare --set self.WAKE_PROJECT_LINE=false`.
+   */
+  WAKE_PROJECT_LINE: boolean;
+  /** At most this many project beliefs on the line. Why 3: the design's "2–3 lines". CAL. */
+  WAKE_PROJECT_LINE_MAX: number;
+  /** The line's own byte budget, header included, under whatever room the
+   *  wake has left. Why 480: three one-claim lines (recall's
+   *  `BELIEF_LINE_BYTES` 200 clips each to fit) with their words and ids,
+   *  about a tenth of a typical page. CAL. */
+  WAKE_PROJECT_LINE_BYTES: number;
+  /** A project belief shows only ABOVE this strength, as recall's slot
+   *  (`BELIEFS_SLOT_FLOOR`). Why 0.3: born at 0.3, so only one life backed shows. CAL. */
+  WAKE_PROJECT_LINE_FLOOR: number;
   /** Most open threads considered. CAL. [v1 threads lane: count-capped at 12;
    *  5 since 2026-10-01, when a session could first set the flag — kept small] */
   THREADS_MAX: number;
@@ -111,6 +133,29 @@ export interface SelfTunables {
    * at most 5 a night, so it does not count what this counts. CAL.
    */
   STILL_OPEN_STALE_DAYS: number;
+  /**
+   * AN UNTOUCHED, OWNERLESS OPEN ITEM STOPS BEING CARRIED (2026-10-22, the
+   * open-threads brief; Mike agreed the shape, the number is a starting
+   * point, check 2026-11-05). An `unresolved` memory with no `eventDate`, not
+   * `asked`, untouched — not born, used beyond a glimpse, or revised; a
+   * footnote left unrated, a dream's or a reflection's return is not a touch
+   * (`Store#openThreadTouches`) — for this
+   * many lived days or more is not carried: it leaves "Still open" and its
+   * count, and the reflection's `staleOpen`. It is NOT closed: the flag stays,
+   * the memory stays in the store (in no lane of the wake), recall shows it, and any touch carries it
+   * again (`identity.ts#openCarry`, the one place the rule lives). Revert:
+   * very large (`Infinity` carries everything, as before). CAL.
+   */
+  OPEN_CARRY_DAYS: number;
+  /**
+   * DOES A GLIMPSE CARRY AN OPEN THREAD (2026-10-22, the coordinator's call
+   * on the review of #592, lightly held, for Mike): false — an ambient
+   * footnote left unrated (the store's glimpse, a use since 10-19 that
+   * restarts the memory's fade) is NOT a touch for the carry, since "shown
+   * again and again, never answered" is the loop the carry breaks. True is
+   * the revert: every credited use carries it (`Store#openThreadTouches`).
+   */
+  OPEN_CARRY_GLIMPSE_TOUCH: boolean;
   /** Most warm-shelf hints considered. CAL. */
   HINTS_MAX: number;
   /** Most arriving occasions considered. CAL. */
@@ -275,6 +320,45 @@ export interface SelfTunables {
    */
   WAKE_LINE_BYTES: number;
 
+  // ── the core from beliefs (wave 2 lane F, 2026-10-22; design §6) ─────────
+  /**
+   * THE SWITCH (lightly held; default off until a `harness compare` and
+   * Mike's read). On: the core the page rests on is the strongest current
+   * beliefs about me and us on the self subject that pass the floors below
+   * (`measures.ts#coreFromBeliefs`), at most `IDENTITY_MAX` of them — and
+   * the night's reflection is shown them as the page's SPINE: it may phrase
+   * and connect them, cite them on the page, and state as settled under
+   * "## Core" only what one of them says (`dream/reflect.ts`). The core lanes
+   * keep promoting memories alongside, unchanged; nothing is written for the
+   * switch, so off is exactly as before (`test/self-core-from-beliefs.test.ts`
+   * pins it byte for byte). Read at use from this object, never from a
+   * `withTunables` copy, so `harness compare --set
+   * self.CORE_FROM_BELIEFS=true` reaches every reader.
+   *
+   * ON A STORE WITH NO EARNED BELIEF THE SPINE IS EMPTY, and the reflection
+   * is told the core is still forming: it HOLLOWS OUT "## Core" (the lanes'
+   * core memories are said as lived or forming, not as who I am). On purpose,
+   * no fallback (review of #587): a fallback would read as off on exactly the
+   * young stores the compare needs. Turning it off writes nothing back: the
+   * page stays hollow until a reflection rewrites "## Core". With it on, the
+   * nightly page WRITER leaves "## Core" to the reflection (`writer.ts`).
+   */
+  CORE_FROM_BELIEFS: boolean;
+  /** On: a belief's strength (physics, on the day read) at least this. CAL. */
+  CORE_BELIEF_STRENGTH: number;
+  /** On: at least this many memories counted FOR it (`belief_support`, stance
+   *  support; another belief lent by `link` is not a memory). CAL. */
+  CORE_BELIEF_MEMORIES: number;
+  /**
+   * On: its support from at least this many LIVED days
+   * (`measures.ts#livedSupportDays`): the days its memories were born, over
+   * lived filings and the finds life has echoed. An un-echoed `found` filing
+   * adds no day — so one reflection's finds cannot put a belief in the core
+   * before life echoes them. (Not C's `supportDays`, which counts such a find's
+   * filing day, for resistance; review of #587.) CAL.
+   */
+  CORE_BELIEF_DAYS: number;
+
   // ── budget telemetry ──────────────────────────────────────────────────────
   /** Fraction of the budget at which the render reports pressure. A budget gets
    *  an event when APPROACHED and one when crossed (scar §2.4). [v1: 0.9] */
@@ -319,9 +403,15 @@ export const SELF_TUNABLES: SelfTunables = {
   WORK_HERE_EXCERPT: 60,
   PROJECTS_TRAVEL: true,
   WORK_HERE_CRAFT_MAX: 2,
+  WAKE_PROJECT_LINE: true,
+  WAKE_PROJECT_LINE_MAX: 3,
+  WAKE_PROJECT_LINE_BYTES: 480,
+  WAKE_PROJECT_LINE_FLOOR: 0.3,
   THREADS_MAX: 5,
   RECONSIDERING_MAX: 1,
   STILL_OPEN_STALE_DAYS: 14,
+  OPEN_CARRY_DAYS: 21,
+  OPEN_CARRY_GLIMPSE_TOUCH: false,
   HINTS_MAX: 8,
   HORIZON_MAX: 6,
   COMING_UP_TODAY_ONLY: true,
@@ -344,6 +434,11 @@ export const SELF_TUNABLES: SelfTunables = {
   PAGE_WRITER_ASKS_PER_DAY: 2,
 
   WAKE_LINE_BYTES: 240,
+
+  CORE_FROM_BELIEFS: false,
+  CORE_BELIEF_STRENGTH: 0.5,
+  CORE_BELIEF_MEMORIES: 3,
+  CORE_BELIEF_DAYS: 2,
 
   BUDGET_PRESSURE: 0.9,
 

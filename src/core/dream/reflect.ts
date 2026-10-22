@@ -84,7 +84,10 @@ import type { Kind } from "../types.js";
 import { FIT_TUNABLES, TOOL_RESULT_CEILING, clipWire, fit, lineOf, offeredInPart, offeredOf, readIndex, wireChars, writeIndex } from "../fit/index.js";
 import type { Fidelity, FitCandidate, FitOutcome, Placed } from "../fit/index.js";
 import { ownerNames } from "../sleep/index.js";
-import { CLAIM_PREFIX_MIN_CHARS } from "../self/page.js";
+import { CLAIM_PREFIX_MIN_CHARS, PAGE_CORE_HEADING, claimKey, pageClaims, pageSections, traceFor } from "../self/page.js";
+import { coreFromBeliefs } from "../self/measures.js";
+import { SELF_TUNABLES } from "../self/tunables.js";
+import { openCarry } from "../self/identity.js";
 import { PAGE_WRITING_RULE } from "../self/writer.js";
 import { DREAM_MARK, carriesDreamMark } from "./mark.js";
 import { feelingWeeks } from "./feeling-weeks.js";
@@ -329,6 +332,15 @@ export interface ReflectBundle {
   readonly onMindMore?: number;
   /** The whole core (2026-09-28: was the 20 most felt), most strongly felt first. */
   readonly core: readonly string[];
+  /**
+   * THE SPINE (wave 2 lane F, 2026-10-22; `self.CORE_FROM_BELIEFS`, absent
+   * when off): the core as beliefs — the strongest current beliefs about me
+   * and us that passed the floors (`self/measures.ts#coreFromBeliefs`),
+   * strongest first. "## Core" says only what these say; their ids may be
+   * cited on the page, and only there; being cited does not strengthen one.
+   * Empty when none has earned the core yet.
+   */
+  readonly spine?: readonly ReflectSpineBelief[];
   /** Every core candidate, most strongly felt first. */
   readonly candidates: readonly string[];
   /** A page of the most strongly felt memories that could be about me; `feltOf` is how many there are. */
@@ -368,6 +380,14 @@ export interface ReflectBundle {
    */
   readonly staleOpen: readonly { readonly id: string; readonly text: string; readonly untouched: number; readonly reopened?: true }[];
   /**
+   * NO LONGER CARRIED (2026-10-22, the open-threads brief): how many open
+   * threads stopped being carried since the last reflection whose share reached a session —
+   * untouched for `SELF_TUNABLES.OPEN_CARRY_DAYS`, so out of "Still open"
+   * and `staleOpen` (`self/identity.ts#openCarry`). A count, never the list:
+   * the share says it once. Absent when none.
+   */
+  readonly noLongerCarried?: number;
+  /**
    * BELIEFS (wave 2 lane C, 2026-10-21): what I hold about the subjects in
    * play tonight — me (and us) first, then the cards tonight's memories name
    * most — each belief with its strength and how many memories back it or go
@@ -387,6 +407,18 @@ export interface ReflectBundle {
   readonly lookup: string;
   /** Without `beliefFilings` when beliefs are off (the bundle as it was before them). */
   readonly limits: Omit<typeof REFLECT_TUNABLES.LIMITS, "beliefFilings"> & { readonly beliefFilings?: number };
+}
+
+/** One belief in the spine (lane F): what it says and what it rests on. */
+export interface ReflectSpineBelief {
+  readonly id: string;
+  readonly statement: string;
+  readonly about?: "me" | "us";
+  readonly strength: number;
+  /** Memories counted for it. */
+  readonly memories: number;
+  /** Lived days its support comes from. */
+  readonly days: number;
 }
 
 /** The beliefs section of a reflection's bundle (lane C, 2026-10-21). */
@@ -780,7 +812,7 @@ export class Reflections {
     const s = composed.shownAs;
     const fitRecord = { whole: s.whole, excerpt: s.excerpt, lined: s.line, ids: s.ids, notShown: s.notShown, offered: offeredInPart(fitted), parts: packed.later.length + 1 };
     this.store.updateReflection(id, {
-      detail: { ...(packed.later.length > 0 ? { parts: packed.later } : {}), fit: fitRecord, ...beliefsDetail(composed.beliefs ?? null), ...(composed.unmarked.length > 0 ? { unmarked: composed.unmarked } : {}), ...(composed.staleOpen.length > 0 ? { staleOpen: composed.staleOpen.map((x) => x.id) } : {}), ...(composed.reconsidering.length > 0 ? { coreOffered: composed.reconsidering.map((x) => x.id) } : {}) },
+      detail: { ...(packed.later.length > 0 ? { parts: packed.later } : {}), fit: fitRecord, ...beliefsDetail(composed.beliefs ?? null), ...(composed.spine === undefined ? {} : { spine: composed.spine.map((b) => b.id) }), ...(composed.unmarked.length > 0 ? { unmarked: composed.unmarked } : {}), ...(composed.staleOpen.length > 0 ? { staleOpen: composed.staleOpen.map((x) => x.id) } : {}), ...(fitted.notCarried.length > 0 ? { notCarried: fitted.notCarried } : {}), ...(composed.reconsidering.length > 0 ? { coreOffered: composed.reconsidering.map((x) => x.id) } : {}) },
     });
     writeIndex(this.store, "reflection", { ref: id, at: this.store.now(), offered: fitted.offered, looked: [], lineCap: fitted.lineCap });
     this.record("reflection.begun", id, { dream: dreamId, shown: shown.length, ...fitRecord });
@@ -963,10 +995,20 @@ export class Reflections {
     const earlier = writerToday && info !== null ? `The page writer revised your self page earlier in this run (version ${String(info.version)}, by the writer). ` : "";
     // ITS SIZE NOW, beside the room it is held to (2026-10-20).
     const size = info?.bytes === undefined ? "" : `It is ${String(info.bytes)} bytes now. `;
+    // THE SPINE (lane F, `self.CORE_FROM_BELIEFS`): with a spine in the
+    // bundle, "## Core" says what the beliefs say and nothing else as
+    // settled. Without one the words are as they were.
+    const spine = bundle.spine;
+    const drawn =
+      spine === undefined
+        ? `Your self page rewritten whole — the story of who you are, drawn from the core memories you cite in page.cites (at least one of them, when you have a core; candidates too).`
+        : spine.length > 0
+          ? `Your self page rewritten whole — the story of who you are. Its spine is the beliefs in spine: what life has backed about me and us, each with how many memories and lived days stand behind it. Under "## ${PAGE_CORE_HEADING}", state as settled only what a spine belief says — in your own words, connected as you like — each sentence citing its belief's id in page.claims (and page.cites). Everything else (lately, what I want, open questions) cites the memories it rests on, core memories and candidates too, and is said as lived or as forming, not as who I am for good. A spine belief's id may be cited on the page only: it is not a memory to feel, mark or cite in the entry, and citing it does not strengthen it.`
+          : `Your self page rewritten whole — the story of who you are. No belief about me or us has earned the core yet (spine is empty): keep "## ${PAGE_CORE_HEADING}" to a line saying it is still forming, state nothing there as settled, and say the rest as lately, what I want and open questions, citing the memories it rests on (core memories and candidates too).`;
     const pageLine =
       this.ctx.pageWrites === false
         ? `- page: not tonight — the owner has the page writer off, so the self page is not rewritten. Your entry and share still count.`
-        : `- page (optional, and lean toward writing it): ${earlier}${size}Every version of the page is kept, so rewriting it loses nothing. ${who} would like a page written by a reflection every day — rewrite it unless, after reflecting, there is really nothing new to add; on a "nothing much" night, leave it as it stands. Your self page rewritten whole — the story of who you are, drawn from the core memories you cite in page.cites (at least one of them, when you have a core; candidates too). In page.claims, give each sentence the ids it rests on ({ text: the sentence as written, or its first several words — ${String(CLAIM_PREFIX_MIN_CHARS)} characters or more — cites }); a sentence with none stands as a hypothesis. The old page is context, not a source: write from the memories, not by rewording it. Keep "## Core" for who you are and put craft — how a job is done — under "## How I work". Mention a dream only as a dream ("I dreamed…"); a dreamed gist is a suggestion, not a source: cite the lived memories it came from. ${PAGE_WRITING_RULE} Sent back as past its room, send finish again with page.text cut (and page.cites and page.claims), not page.short.`;
+        : `- page (optional, and lean toward writing it): ${earlier}${size}Every version of the page is kept, so rewriting it loses nothing. ${who} would like a page written by a reflection every day — rewrite it unless, after reflecting, there is really nothing new to add; on a "nothing much" night, leave it as it stands. ${drawn} In page.claims, give each sentence the ids it rests on ({ text: the sentence as written, or its first several words — ${String(CLAIM_PREFIX_MIN_CHARS)} characters or more — cites }); a sentence with none stands as a hypothesis. The old page is context, not a source: write from the memories, not by rewording it. ${spine === undefined ? `Keep "## Core" for who you are and put craft` : `Put craft`} — how a job is done — under "## How I work". Mention a dream only as a dream ("I dreamed…"); a dreamed gist is a suggestion, not a source: cite the lived memories it came from. ${PAGE_WRITING_RULE} Sent back as past its room, send finish again with page.text cut (and page.cites and page.claims), not page.short.`;
     const aboutLine = open
       ? `- about (optional, at most ${String(L.about)}): what a memory is about, by meaning — me, us, owner, work (one project's own: it stays with that project; an unmarked skill is craft and reaches every folder) or world — with why. Only me and us can become core, and never a plan. You may change a mark you think is wrong, either way; each change is recorded with your why, and one into me, us or owner is told in the morning share.`
       : `- about (optional, at most ${String(L.about)}): tonight a mark may only move a memory toward work (the craft) or world, with why — the owner has closed the core to reflection alone.`;
@@ -1016,6 +1058,12 @@ export class Reflections {
             `- closeNow and close (optional, ids from staleOpen only): staleOpen lists ${String(bundle.staleOpen.length)} open ${bundle.staleOpen.length === 1 ? "thread" : "threads"} nobody has touched for a while (untouched: lived days). Most are open only because nobody closed them. Read one whole with recall first if its line is not enough.`,
             `  closeNow: the ones a memory you have read plainly shows finished — each {id, why: what shows it done, in a line, shows: the id of the memory that shows it}. They close tonight; your share says which, and ${who} can have one reopened.`,
             `  close: the ones that look done but you are not sure of — ids only. Nothing closes: your share asks ${who}, and a yes closes them. When in doubt, ask rather than close; never close one just because it is old, and leave out one you have no view on.${bundle.staleOpen.some((x) => x.reopened === true) ? ` One marked reopened was reopened by ${who} after a reflection closed it: ask, never close.` : ""}`,
+          ]
+        : []),
+      // NO LONGER CARRIED (2026-10-22, the open-threads brief): the count, once, never the list.
+      ...(bundle.noLongerCarried !== undefined && bundle.noLongerCarried > 0
+        ? [
+            `- noLongerCarried: ${String(bundle.noLongerCarried)}. Your share says it once, as a count and never a list: "${String(bundle.noLongerCarried)} open ${bundle.noLongerCarried === 1 ? "item nobody touched in" : "items nobody touched in"} ${String(SELF_TUNABLES.OPEN_CARRY_DAYS)} lived days ${bundle.noLongerCarried === 1 ? "is" : "are"} no longer carried; recall shows them." They are not closed: a touch carries one again.`,
           ]
         : []),
       ...(bundle.feelingWeeks !== null
@@ -1095,7 +1143,25 @@ export class Reflections {
     // cites only by passage still rests on memories; each passage keeps only
     // the ids that passed.
     const sentClaims = (input.page?.claims ?? []).filter((c) => typeof c?.text === "string" && c.text.trim().length > 0);
-    const pageCitesAll = citable([...(input.page?.cites ?? []), ...sentClaims.flatMap((c) => c.cites ?? [])]);
+    // THE SPINE (lane F): the beliefs this reflection was shown as the core
+    // (its row's `spine`, written at begin only with `self.CORE_FROM_BELIEFS`
+    // on) may be cited on the PAGE — still live — and nowhere else.
+    const spineDetail = parseDetail(row.detail)["spine"];
+    const spineOn = Array.isArray(spineDetail);
+    const spineIds = new Set(stringIds(spineDetail));
+    const pageSent = [...(input.page?.cites ?? []), ...sentClaims.flatMap((c) => c.cites ?? [])];
+    const pageCitesAll =
+      spineIds.size === 0
+        ? citable(pageSent)
+        : [...new Set(pageSent)].flatMap((id) => {
+            if (typeof id === "string" && spineIds.has(id)) {
+              const r = this.store.row(id);
+              if (r !== undefined && r.archived === 0 && r.superseded_by === null) return [id];
+              refusedCites.push(`${id}:gone`);
+              return [];
+            }
+            return citable([id]);
+          });
     const pageCites: string[] = [];
     for (const id of pageCitesAll) {
       const r = this.store.row(id);
@@ -1310,7 +1376,11 @@ export class Reflections {
     // ── returns: every memory it cited came back (once) ────────────────────
     const returned: { id: string; counted: boolean; reason: string }[] = [];
     const returnsLeft = Math.max(0, T.LIMITS.returns - used("returned"));
-    const citedAll = [...new Set([...cites, ...shareCites, ...pageCites])];
+    // A SPINE BELIEF cited on the page does not come back (lane F; design
+    // §4: being shown or cited again is not support): said, not counted,
+    // and it spends none of the night's returns.
+    for (const id of pageCites.filter((x) => spineIds.has(x))) returned.push({ id, counted: false, reason: "a-belief-is-not-returned" });
+    const citedAll = [...new Set([...cites, ...shareCites, ...pageCites])].filter((x) => !spineIds.has(x));
     for (const id of citedAll.slice(0, returnsLeft)) {
       // WHAT A DREAM OR A REFLECTION WROTE does not come back by being cited
       // here: a dream's gist rises only by proving true in an organic use
@@ -1363,6 +1433,8 @@ export class Reflections {
       earlierPage !== null ? { written: true, reason: "written-earlier", version: earlierPage } : { written: false, reason: "not-written", version: null };
     const pageText = (input.page?.text ?? "").trim();
     let pageRefused = false;
+    // Lane F: the "## Core" sentences of the page written that cite no spine belief (null: no spine tonight, or no page).
+    let unsettled: string[] | null = null;
     if (pageText.length > 0) {
       const stands = earlierPage === null ? "" : " The page written earlier stands.";
       const refuse = (reason: string, why: string): void => {
@@ -1372,7 +1444,8 @@ export class Reflections {
       // THE PAGE RESTS ON THE CORE (addendum 9): when it was handed core
       // memories, it cites at least one of them. Since 2026-09-28 a page that
       // does not is WRITTEN, with a note (it was refused `page-rests-on-the-core`).
-      const coreShown = [...shown].filter((id) => this.store.row(id)?.promoted_identity === 1);
+      // With the spine (lane F) the core it rests on is the spine's beliefs.
+      const coreShown = spineOn ? [...spineIds] : [...shown].filter((id) => this.store.row(id)?.promoted_identity === 1);
       const restsOnCore = coreShown.length === 0 || pageCites.some((id) => coreShown.includes(id));
       if (this.ctx.pageWrites === false) {
         // The owner has the page writer off (ruling D3 on #256).
@@ -1408,10 +1481,23 @@ export class Reflections {
           // PAST ITS ROOM, SAID (2026-10-10): the page is kept, and the note
           // asks for a short version when none was kept with it.
           const unmatched = w.unmatched ?? 0;
+          unsettled = spineOn ? this.coreUnsettled(spineIds, pageTrace) : null;
           const notes = [
             ...(restsOnCore
               ? []
-              : [`It cites none of the core memories you were shown (${coreShown.slice(0, 5).join(", ")}${coreShown.length > 5 ? ", …" : ""}); the page is meant to rest on them.`]),
+              : spineOn
+                ? [`It cites none of the beliefs in the spine (${coreShown.slice(0, 5).join(", ")}${coreShown.length > 5 ? ", …" : ""}); the page's core is meant to rest on them.`]
+                : [`It cites none of the core memories you were shown (${coreShown.slice(0, 5).join(", ")}${coreShown.length > 5 ? ", …" : ""}); the page is meant to rest on them.`]),
+            // SETTLED ONLY BY A BELIEF (lane F): a "## Core" sentence that
+            // cites no spine belief is said, never refused (guards loose-first).
+            ...(unsettled === null || unsettled.length === 0
+              ? []
+              : [
+                  `${String(unsettled.length)} ${unsettled.length === 1 ? "sentence" : "sentences"} under "## ${PAGE_CORE_HEADING}" ${unsettled.length === 1 ? "rests" : "rest"} on no belief in the spine (${unsettled
+                    .slice(0, 3)
+                    .map((x) => `"${clipWire(x, 60)}"`)
+                    .join(", ")}${unsettled.length > 3 ? ", …" : ""}): a line there is said as settled — cite the belief it says, or move it out of "## ${PAGE_CORE_HEADING}" and say it as forming.`,
+                ]),
             // Said, never refused (2026-10-20): its ids still count for the whole page.
             ...(unmatched === 0
               ? []
@@ -1809,6 +1895,9 @@ export class Reflections {
     const allRefused = [...(Array.isArray(prior["refusedCites"]) ? (prior["refusedCites"] as string[]) : []), ...refusedCites];
     if (allRefused.length > 0) detail["refusedCites"] = allRefused.slice(0, 20);
     detail["title"] = title;
+    // Lane F: how many "## Core" sentences of the page written rest on no spine belief.
+    if (unsettled !== null) detail["coreUnsettled"] = unsettled.length;
+    else if (typeof prior["coreUnsettled"] === "number") detail["coreUnsettled"] = prior["coreUnsettled"];
     if (movedAll.length > 0) detail["movedIn"] = movedAll;
     if (entryCites.length > 0) detail["entryCites"] = entryCites;
     // What this reflection recorded, so a later finish does not record it twice.
@@ -1826,6 +1915,9 @@ export class Reflections {
     // The stale open list it was shown, and what it proposed closing (2026-10-16).
     const offeredStaleList = parseDetail(row.detail)["staleOpen"];
     if (Array.isArray(offeredStaleList)) detail["staleOpen"] = offeredStaleList;
+    // The open threads not carried that night (2026-10-22): the next night counts only what is new.
+    const notCarriedList = parseDetail(row.detail)["notCarried"];
+    if (Array.isArray(notCarriedList)) detail["notCarried"] = notCarriedList;
     // The share that stands is the one that asks: when another session took it
     // mid-finish, the earlier proposals stand with it (review, 2026-10-16).
     const keptProposed = shareStands ? proposed : priorProposed;
@@ -1842,6 +1934,8 @@ export class Reflections {
     // core with why (2026-10-20): the next night's rotation and CHECK-AFTER read them.
     const offeredCore = parseDetail(row.detail)["coreOffered"];
     if (Array.isArray(offeredCore)) detail["coreOffered"] = offeredCore;
+    // The spine it was shown (lane F), so a later finish may cite it on the page too.
+    if (spineOn) detail["spine"] = [...spineIds];
     if (decidedAll.length > 0) detail["coreDecided"] = decidedAll;
     const keptCoreLine = shareStands ? coreLine : priorCoreLine;
     if (keptCoreLine !== null) detail["coreLine"] = keptCoreLine;
@@ -2859,6 +2953,7 @@ export class Reflections {
     // `STALE_OPEN_DAYS` lived days, the longest untouched first, rotated like
     // the unmarked offer — a line each, offered to be proposed closed.
     const staleOpen = this.staleOpen(id, day, see);
+    const uncarried = this.noLongerCarried(id, day);
     // THE OFFER'S OWN ROOM (2026-10-11, the about-marks review): exactly what
     // the offered ids cost as lines, held back from the shared room — so a
     // full night, whose ids alone fill the room before priority 2 is reached,
@@ -2889,6 +2984,19 @@ export class Reflections {
     // BELIEFS ON THE SUBJECTS IN PLAY (lane C): the self subject, then the
     // cards the memories tonight may show name most.
     const beliefs = this.beliefsInPlay(day, [...priority.keys()], dreamId);
+    // THE SPINE (lane F, `self.CORE_FROM_BELIEFS`, read at use): the core as
+    // beliefs, read whatever `schemas.BELIEFS_BIRTH` says. Off: null, and the
+    // bundle is as it was.
+    const spine: ReflectSpineBelief[] | null = SELF_TUNABLES.CORE_FROM_BELIEFS
+      ? coreFromBeliefs(this.store, day).elements.map((b) => ({
+          id: b.id,
+          statement: clipWire(b.statement, REFLECT_TUNABLES.BELIEF_SHOWN_CHARS),
+          ...(b.about === null ? {} : { about: b.about }),
+          strength: Math.round(b.strength * 100) / 100,
+          memories: b.memories,
+          days: b.days,
+        }))
+      : null;
     // What contested a belief shown is shown too (review of #577): a
     // replacement must cite it, so the reflection must be able to.
     for (const s of beliefs?.subjects ?? []) for (const x of s.beliefs) for (const m of x.contestedBy ?? []) take(5)(m);
@@ -2905,7 +3013,8 @@ export class Reflections {
       earlier.reduce((n, e) => n + wireChars(e.entry), 0) +
       dreamSaw.reduce((n, s) => n + wireChars(s.text) + 30, 0) +
       staleOpen.reduce((n, s) => n + wireChars(s.text) + 40, 0) +
-      (beliefs === null ? 0 : wireChars(JSON.stringify(beliefs)));
+      (beliefs === null ? 0 : wireChars(JSON.stringify(beliefs))) +
+      (spine === null ? 0 : wireChars(JSON.stringify(spine)));
     const avail = Math.max(0, T.ROOM_CHARS - spent - REFLECT_FURNITURE);
     const candOf = (mid: string, p: number): FitCandidate => {
       const v = see(mid) as { whole: string; line: string };
@@ -2961,6 +3070,7 @@ export class Reflections {
       onMind: onMind.filter((item) => item.ids.every(kept)),
       ...(mindRead.more > 0 ? { onMindMore: mindRead.more } : {}),
       core: coreIds.filter(kept),
+      ...(spine === null ? {} : { spine }),
       candidates: candidateIds.filter(kept),
       felt: feltIds.filter(kept),
       recent: recentIds.filter(kept),
@@ -2969,6 +3079,7 @@ export class Reflections {
       feelingWeeks: weeks === null ? null : { ...weeks, restsOn: weeksRest.filter(kept) },
       unmarked: unmarkedIds.filter(kept),
       staleOpen,
+      ...(uncarried.fresh > 0 ? { noLongerCarried: uncarried.fresh } : {}),
       // Off, the bundle is as it was before beliefs: no key at all.
       ...(beliefs === null ? {} : { beliefs }),
       memories,
@@ -2984,7 +3095,7 @@ export class Reflections {
       limits: beliefs === null ? limitsWithoutBeliefs(T.LIMITS) : { ...T.LIMITS },
     };
     noteMindShown(this.store, bundle.onMind, day);
-    return { bundle, offered, lineCap: chaptersFit.summaryBytes };
+    return { bundle, offered, lineCap: chaptersFit.summaryBytes, notCarried: uncarried.all };
   }
 
   /**
@@ -3034,6 +3145,26 @@ export class Reflections {
    * version is read by every session the page would have been. `why` reads
    * after "The short version" or "it".
    */
+  /**
+   * THE "## CORE" SENTENCES THAT CITE NO SPINE BELIEF (lane F), read off the
+   * page as stored (after the datelines and the gate) and the trace sent with
+   * it, matched by the page's own rules (`self/page.ts#traceFor`). A reading:
+   * the page's words stand as written. Never throws.
+   */
+  private coreUnsettled(spine: ReadonlySet<string>, trace: { cites: readonly string[]; claims?: readonly { text: string; cites: readonly string[] }[] }): string[] {
+    try {
+      const body = this.ctx.page();
+      if (body === null) return [];
+      const core = pageSections(body).core;
+      if (core.trim().length === 0) return [];
+      const stored = traceFor(body, { cites: trace.cites, claims: trace.claims ?? null }).trace;
+      const backed = new Set((stored.claims ?? []).filter((c) => c.cites.some((id) => spine.has(id))).map((c) => c.of));
+      return pageClaims(core).filter((sentence) => !backed.has(claimKey(sentence)));
+    } catch {
+      return [];
+    }
+  }
+
   private shortRefusal(text: string): { reason: string; why: string } | null {
     if (carriesDreamMark(text)) {
       return { reason: "dream-mark-in-text", why: `carries the dream's mark (${DREAM_MARK}…) — take it out` };
@@ -3153,6 +3284,37 @@ export class Reflections {
 
   /** A memory's short handle for a sentence: its title, else its first line. */
   /**
+   * THE OPEN THREADS NO LONGER CARRIED (2026-10-22, the open-threads brief):
+   * every open thread `openCarry` leaves out tonight (`all`, recorded on the
+   * row as `notCarried`), and how many of them no share already holds
+   * (`fresh`). What a share holds: the `notCarried` of every row with a share
+   * — offered, carried or told — from the newest back to and including the
+   * last one that REACHED A SESSION (`told`, or `carried` into a waking
+   * session with the ask to tell it). An offered share not yet carried still
+   * will be (`pendingShare` finds the older ones too), so its count is its
+   * own and the next share does not say it again; a night with no share
+   * (quiet, never finished) holds nothing, so the next share says it. Each
+   * leaving lands in exactly one share (the review of #592, F5 and G2). A
+   * first night after this shipped counts them all.
+   */
+  private noLongerCarried(id: string, day: number): { all: string[]; fresh: number } {
+    const all = [...openCarry(this.store, day, SELF_TUNABLES.OPEN_CARRY_DAYS, SELF_TUNABLES.OPEN_CARRY_GLIMPSE_TOUCH).notCarried.keys()].sort();
+    if (all.length === 0) return { all, fresh: 0 };
+    const before = new Set<string>();
+    try {
+      for (const r of this.store.reflections({ limit: 60 })) {
+        if (r.id === id || r.share === null) continue;
+        if (r.share_state !== "offered" && r.share_state !== "carried" && r.share_state !== "told") continue;
+        for (const x of stringIds(parseDetail(r.detail)["notCarried"])) before.add(x);
+        if (r.share_state === "carried" || r.share_state === "told") break;
+      }
+    } catch {
+      /* unreadable: count them all, once more */
+    }
+    return { all, fresh: all.filter((x) => !before.has(x)).length };
+  }
+
+  /**
    * THE STALE OPEN THREADS (2026-10-16, #489 D): live memories still flagged
    * `unresolved` (confirmed on the prose, as the wake does), showable here,
    * neither born nor used for `STALE_OPEN_DAYS` lived days. The longest
@@ -3166,25 +3328,22 @@ export class Reflections {
   ): { id: string; text: string; untouched: number; reopened?: true }[] {
     const T = REFLECT_TUNABLES;
     const found: { id: string; text: string; untouched: number; reopened?: true }[] = [];
-    let ids: string[] = [];
-    try {
-      ids = this.store.openThreadIds();
-    } catch {
-      return [];
-    }
-    for (const mid of ids) {
+    // Only the open threads still carried (2026-10-22, `self/identity.ts#openCarry`,
+    // the wake's own rule and its one test of what a thread is — not dreamed,
+    // not settled over, the flag confirmed on the prose): one nobody touched
+    // in `OPEN_CARRY_DAYS` is not offered. Being offered here is not a touch.
+    // The offer's own ageing is as before (born or used), so a reopened thread
+    // is offered the next night.
+    const carry = openCarry(this.store, day, SELF_TUNABLES.OPEN_CARRY_DAYS, SELF_TUNABLES.OPEN_CARRY_GLIMPSE_TOUCH);
+    for (const mid of carry.carried) {
       const v = see(mid);
-      if (v === null || v.row.source === "dreamed") continue;
-      // Settled over by a later memory: that one carries it now.
-      if (headOf(this.store, mid) !== null) continue;
+      if (v === null) continue;
       const untouched = day - Math.max(v.row.birth_day, v.row.last_used_day);
       if (untouched < T.STALE_OPEN_DAYS) continue;
       let reopened = false;
       try {
-        const meta = this.store.readProse(mid).meta;
-        if (meta[UNRESOLVED_META_KEY] !== true) continue;
         // Reopened by the owner after a reflection closed it (2026-10-20): it may only be asked about.
-        reopened = typeof meta[THREAD_REOPENED_BY_META_KEY] === "string";
+        reopened = typeof this.store.readProse(mid).meta[THREAD_REOPENED_BY_META_KEY] === "string";
       } catch {
         continue;
       }
@@ -3696,6 +3855,8 @@ interface Composed {
   readonly offered: { whole: string[]; excerpt: string[]; line: string[]; id: string[] };
   /** The longest a chapter's summary was as a line (2026-10-15), so `part` renders what the fit measured. */
   readonly lineCap: number;
+  /** Every open thread not carried tonight (`noLongerCarried`), recorded on the row; never in the bundle. */
+  readonly notCarried: readonly string[];
 }
 
 /** The bundle's other furniture, reserved from the room: ids, lists, the questions, the limits. */
