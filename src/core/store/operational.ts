@@ -2001,15 +2001,38 @@ export function retireConfidentialColumn(db: Db, today: string | null): { confid
 
 /**
  * A CARD'S KIND OF SUBJECT WHERE IT IS NOT A JUDGEMENT (v14, 2026-10-21), or
- * null where it is (the night's, lane B). An entity card (`type = 'schema'`,
- * `meta.role` `entity`) of kind `person` is a person and of kind `place` a
- * place; the identity core (kind `self`, the one card install names after the
- * OWNER — `self/identity.ts#findIdentityCore`) is a person too. Kind `entity`
- * cards (projects, tools, topics, organisations) get null. One rule, read by
- * the upgrade's backfill and by every insert (`Store#insertOne`), so a card
- * born after v14 is marked as an upgraded one is.
+ * null where it is (the night's, lane B). Only the identity core (kind
+ * `self`, the one card install names after the OWNER —
+ * `self/identity.ts#findIdentityCore`) is a person without a judgement. One
+ * rule, read by the upgrade's backfill and by every insert
+ * (`Store#insertOne`), so a card born after v14 is marked as an upgraded one is.
+ *
+ * NOT A CARD'S BIRTH KIND (2026-10-22, wave 2 follow-ups): until then a card
+ * of kind `person` was a person and one of kind `place` a place. That kind is
+ * a vote at birth over the kinds of the memories whose titles carry the name
+ * (`schemas/index.ts#kindForName`), and a memory of kind `person` is about a
+ * person — usually the owner — not about the name in its title. One such
+ * title made "Anthropic" a person, and a tie made "Counterparts" a place.
+ * The night's kinds ask, which a model answers and which is shown the birth
+ * kind and the titles, sorts those cards now. The old rule is kept as
+ * `birthKindSubjectKind`, for the repair of the rows it wrote.
  */
 export function deterministicSubjectKind(
+  type: string,
+  kind: string,
+  meta: Readonly<Record<string, unknown>> | null,
+): SubjectKind | null {
+  if (type !== "schema" || meta === null || meta["role"] !== "entity") return null;
+  return kind === "self" ? "person" : null;
+}
+
+/**
+ * The rule the v14 upgrade and inserts read until 2026-10-22: a card's birth
+ * kind as its kind of subject (`person`/`self` a person, `place` a place).
+ * Nothing writes by it any more; `schemas/tags.ts#repairBirthKindSubjects`
+ * reads it to find the rows it wrote.
+ */
+export function birthKindSubjectKind(
   type: string,
   kind: string,
   meta: Readonly<Record<string, unknown>> | null,

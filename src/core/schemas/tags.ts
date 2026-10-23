@@ -12,9 +12,60 @@
  * root: a source's tags prime (`tagPartners`, recall `TAGS_PRIME`), and a
  * topic a turn names brings its beliefs to the slot (`topicsNamedIn`).
  */
-import { normalizeTag, stemTerm } from "../store/index.js";
-import type { Store } from "../store/index.js";
+import { birthKindSubjectKind, deterministicSubjectKind, normalizeTag, stemTerm } from "../store/index.js";
+import type { Store, SubjectKind } from "../store/index.js";
 import { TUNABLES } from "./tunables.js";
+
+/** Who set a card's subject kind, and when: `schemas.subjectKind.<id>` → `{by, at, run?}` (the night's ask writes it; `dream/tags.ts`). */
+export const SUBJECT_KIND_BY_PREFIX = "schemas.subjectKind.";
+
+/**
+ * THE REPAIR OF THE KINDS A CARD'S BIRTH KIND GAVE, once per store
+ * (2026-10-22, wave 2 follow-ups): `{at, date, ids: [{id, was}]}`, written
+ * when it ran — an empty list too, so it does not look again.
+ */
+export const KINDS_REPAIR_KEY = "schemas.kinds.repaired";
+
+/**
+ * Give back to the night the subject kinds the old rule wrote
+ * (`store/operational.ts#birthKindSubjectKind`: a card's birth kind read as
+ * its kind of subject, by the v14 upgrade and by inserts until 2026-10-22).
+ * A row is the rule's when its kind is what the rule gives its birth kind,
+ * nobody is recorded as setting it (`schemas.subjectKind.<id>`), and today's
+ * rule (`deterministicSubjectKind`) does not give it the same — so the
+ * identity core keeps `person`, and a project, topic or self subject (set
+ * by the code that made it, never by this rule) is not read at all. Those
+ * rows go back to NULL, which the night's kinds ask sorts with a model.
+ * Archived cards too, as the upgrade marked them. Once per store
+ * (`KINDS_REPAIR_KEY`, with each id and what it was). `apply` false (an
+ * observer) counts and writes nothing. Returns how many.
+ */
+export function repairBirthKindSubjects(store: Store, apply: boolean): number {
+  if (store.getMeta(KINDS_REPAIR_KEY) !== undefined) return 0;
+  const fixed: { id: string; was: SubjectKind }[] = [];
+  for (const kind of ["person", "place"] as const) {
+    for (const id of store.subjectsOfKind(kind, { archived: true })) {
+      if (store.getMeta(`${SUBJECT_KIND_BY_PREFIX}${id}`) !== undefined) continue;
+      const row = store.row(id);
+      if (row === undefined || row.subject_kind !== kind) continue;
+      let meta: Record<string, unknown> | null;
+      try {
+        meta = JSON.parse(row.meta) as Record<string, unknown> | null;
+      } catch {
+        meta = null;
+      }
+      if (birthKindSubjectKind(row.type, row.kind, meta) !== kind) continue;
+      if (deterministicSubjectKind(row.type, row.kind, meta) === kind) continue;
+      fixed.push({ id, was: kind });
+    }
+  }
+  if (!apply) return fixed.length;
+  // Recorded first, as the prune and the merge record theirs: a kind taken
+  // back that nobody could account for is worse than one a kill left as it was.
+  store.setMeta(KINDS_REPAIR_KEY, JSON.stringify({ at: store.now(), date: store.today(), ids: fixed }));
+  for (const f of fixed) store.setSubjectKind(f.id, null);
+  return fixed.length;
+}
 
 /** A tag's MERGE KEY: each word stemmed (`store/stem.ts`). Two tags with one key are one tag. */
 export function stemKey(tag: string): string {
@@ -228,6 +279,8 @@ export interface TagsNightOutcome {
   readonly stemMerged: number;
   /** Merges whose words no memory carries any more, let go. */
   readonly mergesPruned: number;
+  /** Subject kinds the old birth-kind rule wrote, given back to the night's ask (`repairBirthKindSubjects`, once per store). */
+  readonly kindsRepaired: number;
 }
 
 /**
@@ -237,10 +290,17 @@ export interface TagsNightOutcome {
  * stem keys match are merged into the one more memories carry (`via: stem`),
  * unless the alias is already merged somewhere; (3) a merge whose alias and
  * tag are both on no memory at all is let go (review of #569: a merge is
- * keyed by word and would outlive its memories). Off (`TAGS_NIGHT`): nothing.
+ * keyed by word and would outlive its memories). Before them, once per store,
+ * the kinds the old birth-kind rule wrote are given back to the night's ask
+ * (`repairBirthKindSubjects`). Off (`TAGS_NIGHT`): nothing.
  */
 export function nightTagWork(store: Store, input: TagsNightInput): TagsNightOutcome {
-  if (!TUNABLES.TAGS_NIGHT) return { on: false, cardOffered: 0, cardTagged: 0, skippedForLimit: 0, stemMerged: 0, mergesPruned: 0 };
+  if (!TUNABLES.TAGS_NIGHT) return { on: false, cardOffered: 0, cardTagged: 0, skippedForLimit: 0, stemMerged: 0, mergesPruned: 0, kindsRepaired: 0 };
+
+  // (0) once per store: the kinds a card's birth kind gave go back to the
+  // night's kinds ask (2026-10-22). Here, behind the same switch, because it
+  // hands the cards to that ask: with the switch off nobody would sort them.
+  const kindsRepaired = repairBirthKindSubjects(store, input.apply);
 
   // (1) card names. Every live memory's tags in ONE read, not one per link
   // (the corpus copy has 3,164 links).
@@ -297,6 +357,7 @@ export function nightTagWork(store: Store, input: TagsNightInput): TagsNightOutc
     skippedForLimit: Math.max(0, wanted.length - budget),
     stemMerged,
     mergesPruned,
+    kindsRepaired,
   };
 }
 

@@ -31,6 +31,8 @@ export interface TagsSweepOutcome {
   readonly skippedForLimit: number;
   readonly stemMerged: number;
   readonly mergesPruned: number;
+  /** Subject kinds the old birth-kind rule wrote, given back to the night's ask (once per store, 2026-10-22). */
+  readonly kindsRepaired?: number;
 }
 
 export type TagsFn = (input: TagsInput) => TagsSweepOutcome;
@@ -47,7 +49,7 @@ export function runTags(ctx: PhaseCtx, tags: TagsFn | undefined): PhaseOutcome {
     return out;
   }
   out.examined = r.cardOffered;
-  out.changed = r.cardTagged + r.stemMerged + r.mergesPruned;
+  out.changed = r.cardTagged + r.stemMerged + r.mergesPruned + (r.kindsRepaired ?? 0);
   out.budgetExhausted = r.skippedForLimit > 0;
   out.skippedForBudget = r.skippedForLimit;
   ctx.event("sleep.tags.sweep", undefined, {
@@ -56,6 +58,7 @@ export function runTags(ctx: PhaseCtx, tags: TagsFn | undefined): PhaseOutcome {
     cardTagged: r.cardTagged,
     stemMerged: r.stemMerged,
     mergesPruned: r.mergesPruned,
+    kindsRepaired: r.kindsRepaired ?? 0,
     skippedForLimit: r.skippedForLimit,
   });
   return out;

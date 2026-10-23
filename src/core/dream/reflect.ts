@@ -3749,7 +3749,7 @@ const NEGATIONS: ReadonlySet<string> = new Set(["not", "no", "never", "none", "n
  * and it is exactly what the contrary evidence says: a replacement, not the
  * claim again. Counts each negation word (and every `n't`) on both sides.
  */
-function negationDiffers(a: string, b: string): boolean {
+export function negationDiffers(a: string, b: string): boolean {
   const count = (text: string): Map<string, number> => {
     const m = new Map<string, number>();
     for (const raw of text.toLowerCase().replace(/[’']/g, "'").split(/[^a-z']+/)) {

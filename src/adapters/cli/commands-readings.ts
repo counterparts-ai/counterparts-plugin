@@ -37,7 +37,8 @@ import type { ConfigChoice } from "../config-path.js";
 import { STATE_MEANING, STATE_ORDER, firedReport } from "../fired.js";
 import type { FiredReport, FiredState } from "../fired.js";
 // The short view over the same reading: one line per memory mechanism.
-import { mechanismsLines, consoleVerdicts } from "./mechanisms.js";
+import { MEMORY_MECHANISMS, mechanismsLines, consoleVerdicts, plumbingLine, readMechanism, settledReading } from "./mechanisms.js";
+import type { SettledReading } from "./mechanisms.js";
 // The process log `log` prints (`adapters/log/`).
 import { LOG_DAYS, logDates, readLog } from "../log/index.js";
 import type { LogEntry } from "../log/index.js";
@@ -165,6 +166,7 @@ export function firedCommand(
   namedDir: boolean,
   now: () => number,
   all = false,
+  json = false,
 ): number {
   if (!storeExists(dir)) {
     io.err(`No store at ${dir}. Run 'counterparts init${namedDir ? ` --dir ${dir}` : ""}' to create one.`);
@@ -180,7 +182,29 @@ export function firedCommand(
   try {
     const today = localDate(now(), store.zone());
     const report = firedReport(store, today);
-    for (const line of all ? firedLines(report, true) : mechanismsLines(report, consoleVerdicts(store, today))) io.out(line);
+    // The settled-things measure (2026-10-22): its line under the short view,
+    // and its fields under --json. A read that fails costs the line, never the view.
+    let settled: SettledReading | undefined;
+    try {
+      settled = settledReading(store, today);
+    } catch {
+      settled = undefined;
+    }
+    if (json) {
+      const verdicts = consoleVerdicts(store, today);
+      const byId = new Map(report.rows.map((r) => [r.id, r]));
+      io.out(
+        JSON.stringify({
+          from: report.from,
+          today: report.today,
+          mechanisms: MEMORY_MECHANISMS.map((m) => ({ name: m.name, group: m.group, ...readMechanism(m, verdicts, (id) => byId.get(id)) })),
+          plumbing: plumbingLine(report),
+          settled: settled ?? null,
+        }),
+      );
+      return EXIT.ok;
+    }
+    for (const line of all ? firedLines(report, true) : mechanismsLines(report, consoleVerdicts(store, today), settled)) io.out(line);
     return EXIT.ok;
   } finally {
     store.close();

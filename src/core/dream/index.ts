@@ -104,8 +104,8 @@ export { CORE_MENTIONED_PREFIX, REFLECT_QUESTIONS, REFLECT_TUNABLES, Reflections
 export { coreAsks, coreWaiting } from "./core-ask.js";
 export type { CoreAsk, CoreDecided } from "./core-ask.js";
 // Wave 2 lane B (2026-10-21): the night's tagging ask, a child of its own.
-export { applyTagsAnswer, askTags, renderTagsBundle, tagsBundle, tagsPrompt, undoNightTags, NIGHT_CARD_KINDS, OWN_TAG_VIAS, SUBJECT_KIND_BY_PREFIX, TAGS_ASK_PREFIX, TAGS_NIGHT_PREFIX } from "./tags.js";
-export type { TagsAnswer, TagsApplied, TagsBundle } from "./tags.js";
+export { applyTagsAnswer, askTags, renderTagsBundle, tagNights, tagsBundle, tagsPrompt, undoNightTags, undoTagNight, NIGHT_CARD_KINDS, OWN_TAG_VIAS, SUBJECT_KIND_BY_PREFIX, TAGS_ASK_PREFIX, TAGS_NIGHT_PREFIX } from "./tags.js";
+export type { TagNight, TagsAnswer, TagsApplied, TagsBundle } from "./tags.js";
 export { FEELING_WEEKS_TUNABLES, awakeFeelingCounts, feelingWeeks } from "./feeling-weeks.js";
 export type { FeelingWeeks } from "./feeling-weeks.js";
 export type { ReflectBundle, ReflectContext, ReflectFinish, ReflectItem, ReflectOutcome, ReflectRefusal } from "./reflect.js";
@@ -542,6 +542,21 @@ export interface NightChildRun {
    * could not be started).
    */
   readonly skipped?: string;
+  /**
+   * THE CHILD'S OWN SESSION ID, as its host named it (2026-10-22, lane L):
+   * Claude Code's `--session-id`, chosen by the night before the child
+   * starts. What ties a child's transcript (or its output) to this row by
+   * name rather than by time. Absent when the host chose the id itself (a
+   * child retried without the flag), for a child not started, and on rows
+   * from before.
+   */
+  readonly hostSession?: string;
+}
+
+/** `dream:<id>,reflection:<id>`: the children that carry their own session id, for the event row; null when none does. */
+export function nightChildSessions(children: readonly NightChildRun[]): string | null {
+  const named = children.filter((c) => c.hostSession !== undefined && c.hostSession.length > 0);
+  return named.length === 0 ? null : named.map((c) => `${c.child}:${c.hostSession as string}`).join(",");
 }
 
 /** `dream:0,reflection:skipped-reflected-today` — a run's children in one line, for its event row. */
@@ -626,7 +641,9 @@ export function nightRunOf(store: Pick<Store, "getMeta">): NightRun | null {
 function childRunOf(raw: unknown): NightChildRun[] {
   if (raw === null || typeof raw !== "object") return [];
   const v = raw as Partial<Record<keyof NightChildRun, unknown>>;
-  if (v.child !== "dream" && v.child !== "reflection") return [];
+  // `tags` too (2026-10-22): the tagging child (10-21) was dropped here, so a
+  // row read back from meta lost it though the run and the event kept it.
+  if (v.child !== "dream" && v.child !== "reflection" && v.child !== "tags") return [];
   return [
     {
       child: v.child,
@@ -634,6 +651,7 @@ function childRunOf(raw: unknown): NightChildRun[] {
       ms: typeof v.ms === "number" ? v.ms : 0,
       ...(v.timedOut === true ? { timedOut: true as const } : {}),
       ...(typeof v.skipped === "string" ? { skipped: v.skipped } : {}),
+      ...(typeof v.hostSession === "string" && v.hostSession.length > 0 ? { hostSession: v.hostSession } : {}),
     },
   ];
 }
@@ -1007,6 +1025,7 @@ export class Dreams {
           reflection: run.reflection,
           parts: run.parts === undefined ? null : run.parts.join(","),
           ...(run.children === undefined ? {} : { children: nightChildrenWords(run.children) }),
+          ...(run.children === undefined || nightChildSessions(run.children) === null ? {} : { childSessions: nightChildSessions(run.children) }),
           ms: run.endedAt === null ? null : run.endedAt - run.startedAt,
           ...(run.transcript === undefined ? {} : { transcript: run.transcript }),
           ...(run.spills === undefined ? {} : { spills: run.spills }),

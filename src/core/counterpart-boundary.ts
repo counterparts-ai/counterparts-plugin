@@ -175,6 +175,9 @@ export async function sessionEnd(cp: Counterpart, input: SessionEndInput = {}): 
       // And where tags are (2026-10-21, wave 2 lane B): a tag that matters
       // becomes a topic card, `TOPIC_BIRTHS_PER_NIGHT` at most, beside the names.
       births: (b) => {
+        // The twin cards #578 stopped, merged once per store before the tally
+        // (2026-10-22): one name, one live card, so the tally reads it held.
+        cp.schemas.mergeTwinCards(b.day, { dryRun: !b.apply });
         const names = cp.schemas.birthsFromNames(b.day, { dryRun: !b.apply, limit: b.budget });
         const topics = cp.schemas.birthsFromTags(b.day, { dryRun: !b.apply, limit: SCHEMAS_TUNABLES.TOPIC_BIRTHS_PER_NIGHT });
         const refused = { ...names.refused };

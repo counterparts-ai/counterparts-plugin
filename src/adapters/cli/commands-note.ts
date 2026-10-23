@@ -13,6 +13,8 @@ import { deliberateRecall, embedQuestion } from "../mcp/deliberate.js";
 // when `--mode meaning` asks for it (2026-10-09).
 import { factsRecall, renderFacts } from "../mcp/facts.js";
 import { meaningRecall, renderMeaning } from "../mcp/meaning.js";
+// Tags read the way `remember` reads them (v14, lane B): one screen, one door.
+import { readTags } from "../mcp/server-args.js";
 // The ONE rule for "which host configuration": the console resolves it with the
 // same function the hook, the worker and the MCP server do.
 import { CONFIG_FLAG, implicitConfigRefusal, resolveConfigPath } from "../config-path.js";
@@ -115,11 +117,15 @@ export async function noteCommand(
     if (typeof parsed.flags["kind"] === "string") draft["kind"] = parsed.flags["kind"];
     if (typeof parsed.flags["title"] === "string") draft["title"] = parsed.flags["title"];
     if (claimed !== undefined) draft["claimed"] = claimed;
+    // `--tags a,b` (2026-10-22): the same read and the same write path as a
+    // session's `remember` — a tag the screen drops is said, the note lands.
+    const tags = typeof parsed.flags["tags"] === "string" ? readTags({ tags: parsed.flags["tags"] }) : { dropped: [] };
 
     const deposit = await counterpart.submitJot(draft, {
       session,
       scope,
       ...(ownSpanHash === null ? {} : { ownSpanHash }),
+      ...(tags.sent === undefined || tags.sent === null ? {} : { tags: tags.sent }),
     });
     if (!deposit.deposited) {
       io.err(
@@ -128,6 +134,9 @@ export async function noteCommand(
       return EXIT.refused;
     }
     io.out(`Remembered ${deposit.memoryId ?? "(no id)"} — ${deposit.reason}.`);
+    if (deposit.tags !== undefined && deposit.tags.tags.length > 0) io.out(`  Tags: ${deposit.tags.tags.join(", ")}.`);
+    const dropped = [...tags.dropped, ...(deposit.tags?.dropped ?? [])];
+    if (dropped.length > 0) io.out(`  Tags left off: ${dropped.join("; ")}.`);
     return EXIT.ok;
   } finally {
     counterpart.close();

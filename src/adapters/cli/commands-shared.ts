@@ -222,6 +222,12 @@ export function parse(argv: readonly string[]): Parsed {
       kind: { type: "string" },
       title: { type: "string" },
       salience: { type: "string" },
+      // `note`'s tags, comma-separated (2026-10-22).
+      tags: { type: "string" },
+      // `dream`'s: take a night's tagging back (2026-10-22); the run, if any, follows as a positional.
+      "undo-tags": { type: "boolean" },
+      // `dream`'s: put back the twin cards the night archived (2026-10-22); a card id, if any, follows.
+      "undo-twins": { type: "boolean" },
       id: { type: "string" },
       json: { type: "boolean" },
       full: { type: "boolean" },

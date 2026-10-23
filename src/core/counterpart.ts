@@ -3942,6 +3942,9 @@ export class Counterpart {
     return this.deposit(draft, "jot", {
       session: ctx.session,
       scope: ctx.scope,
+      // The door's own day (2026-10-22): what a `done` closes, when the
+      // server's clock and the store's disagree (`counterpart-deposit.ts#closeOccurrenceFor`).
+      ...(ctx.at === undefined ? {} : { at: ctx.at }),
       ...(ctx.ownSpanHash === undefined ? {} : { ownSpanHash: ctx.ownSpanHash }),
       ...(ctx.model === undefined ? {} : { model: ctx.model }),
       ...(ctx.facts === undefined ? {} : { facts: ctx.facts }),

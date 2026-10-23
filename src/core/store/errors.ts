@@ -132,6 +132,8 @@ export type StoreErrorCode =
    * revision chain, which is the state `resolve` exists to make impossible.
    */
   | "UNMERGE_SUPERSEDED"
+  /** The twin door's own refusal (2026-10-22): it un-archives only `archived_reason: "card-twin"`. */
+  | "UNTWIN_NOT_A_TWIN"
   | "VERSION_UNKNOWN"
   | "CLOCK_BACKWARDS"
   /** An instrument opened a store that does not exist yet, or is a schema behind:

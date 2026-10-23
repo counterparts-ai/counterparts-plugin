@@ -367,6 +367,8 @@ export {
   SUBJECT_KINDS,
   BIRTH_ROUTES,
   backfillSubjectKinds,
+  birthKindSubjectKind,
+  deterministicSubjectKind,
   retireConfidentialColumn,
   CLAIMS_ERA_CUTOFF_KEY,
   CLAIMS_ERA_RECORDED_KEY,
@@ -1174,7 +1176,7 @@ export class Store {
   /** `chaseRemoved` and `unarchiveMerged` are not Store methods — they are the
    *  owner-op seam's, and they cross the same stance check, which is why their
    *  site names are spelled here. */
-  private assertWritable(site: WriteMethod | "chaseRemoved" | "unarchiveMerged"): void {
+  private assertWritable(site: WriteMethod | "chaseRemoved" | "unarchiveMerged" | "unarchiveTwin"): void {
     if (this.observer) {
       // Telemetry is the deliberate exception: a stood-down instrument must be
       // distinguishable from a broken hook (observer-mode.md G5/G6, scar §2.4).

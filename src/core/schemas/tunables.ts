@@ -36,6 +36,18 @@ export const TUNABLES = {
   FADE_REASON: "faded-by-decay" as const,
 
   /**
+   * THE TWIN CARDS, MERGED ONCE (2026-10-22, wave 2 follow-ups): two live
+   * cards with one name, born together by the race #578 closed. The night's
+   * births phase archives the second-born of each pair under `TWIN_REASON`,
+   * once per store, recording the card it stands under; the owner's undo
+   * (`counterparts dream --undo-twins`) un-archives it. Off: no pass. Read at
+   * use, so `harness compare --set schemas.TWINS_MERGE=false` reaches it.
+   */
+  TWINS_MERGE: true as boolean,
+  /** The archive reason a merged twin carries — never the dedup pass's `merged`. `store/owner-op-seam.ts` spells it too (pinned equal by a test). */
+  TWIN_REASON: "card-twin" as const,
+
+  /**
    * How gently an entity card fades (owner, 2026-09-24: "don't fade people away
    * too quickly"). A card fades only when physics says the row is prunable AND
    * these floors have passed too. Experimental defaults, not measured; NOTES §14.

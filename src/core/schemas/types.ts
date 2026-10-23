@@ -448,6 +448,27 @@ export interface FadeReport {
   skippedForLimit: number;
 }
 
+/** One twin the pass archived (or, on a dry run, would): the card it stands under, and the name. */
+export interface TwinMerge {
+  readonly keep: string;
+  readonly gone: string;
+  readonly name: string;
+}
+
+/** What `Schemas#mergeTwinCards` did (2026-10-22). */
+export interface TwinMergeReport {
+  /** False when `TWINS_MERGE` is off, or the pass already ran on this store. */
+  readonly ran: boolean;
+  readonly dryRun: boolean;
+  /** Same-name groups of live cards found. */
+  readonly groups: number;
+  readonly merged: readonly TwinMerge[];
+  /** Groups left alone, by why (`not-a-pair`, `links-differ`, `aliases-differ`, `has-beliefs`, `has-folders`, `protected`, `kinds-differ`). */
+  readonly skipped: Readonly<Record<string, number>>;
+  /** Memories naming a keeper that it linked once its twin was gone (written while the twins lived, they were linked to neither). */
+  readonly linked: number;
+}
+
 export interface NameBirthOptions {
   /** Offer every name, write nothing. The observer's report. */
   dryRun?: boolean;

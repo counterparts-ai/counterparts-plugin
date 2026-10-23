@@ -1,5 +1,6 @@
 /** `doctor`'s findings on the store upgrades v8 to v11 and v14, read from what each upgrade recorded (moved out of `doctor.ts`, 2026-10-11). */
 import { CONFIDENTIAL_RETIRED_KEY, Store, V14_UPGRADE_KEY, rowTombstoned } from "../../core/store/index.js";
+import { KINDS_REPAIR_KEY, TWINS_MERGED_KEY } from "../../core/schemas/index.js";
 import { finding } from "./doctor-finding.js";
 import type { Finding } from "./doctor-finding.js";
 
@@ -253,7 +254,37 @@ export function upgradeV14Findings(store: Store): Finding[] {
   }
   const people = subjects["person"] ?? 0;
   const places = subjects["place"] ?? 0;
-  const given = `${String(people)} ${people === 1 ? "card" : "cards"} marked a person, ${String(places)} a place; the rest wait for the night`;
+  // THE KINDS GIVEN BACK (2026-10-22): a store upgraded before then had its
+  // cards' birth kinds read as kinds of subject, and the night's tags phase
+  // gives those back to its kinds question once (`schemas.kinds.repaired`).
+  // Said, so the line does not go on claiming kinds the store no longer holds.
+  const repair = metaJson(store, KINDS_REPAIR_KEY);
+  const back = { person: 0, place: 0 };
+  if (repair !== null && Array.isArray(repair["ids"])) {
+    for (const r of repair["ids"] as unknown[]) {
+      const was = (r as { was?: unknown } | null)?.was;
+      if (was === "person" || was === "place") back[was] += 1;
+    }
+  }
+  const repaired = back.person + back.place;
+  const tookBack =
+    repair === null
+      ? ""
+      : repaired === 0
+        ? ""
+        : `; on ${typeof repair["date"] === "string" ? repair["date"] : "a later night"} the night took back ${String(repaired)} ${repaired === 1 ? "kind" : "kinds"} a card's birth kind had given (${String(back.person)} ${back.person === 1 ? "person" : "people"}, ${String(back.place)} ${back.place === 1 ? "place" : "places"}) to sort ${repaired === 1 ? "it" : "them"} itself`;
+  const given = `${String(people)} ${people === 1 ? "card" : "cards"} marked a person, ${String(places)} a place${tookBack}; the rest wait for the night`;
+  // THE TWIN CARDS (2026-10-22): what the births phase's one twin pass came to
+  // (`Schemas#mergeTwinCards`, its plan record), and the way back.
+  const twins = metaJson(store, TWINS_MERGED_KEY);
+  const merged = twins === null ? 0 : metaNum(twins["archived"]);
+  const linkedBack = twins === null ? 0 : metaNum(twins["linked"]);
+  // Distinct live memories, not links (delta review of #593): one memory can name two keepers.
+  const linkedOn = twins === null ? 0 : metaNum(twins["linkedMemories"]);
+  const twinWords =
+    twins === null || merged === 0
+      ? ""
+      : ` On ${typeof twins["date"] === "string" ? twins["date"] : "a night since"} the night merged ${String(merged)} twin ${merged === 1 ? "card" : "cards"} (one name, two cards) into the older card of each pair, and those older cards gained ${String(linkedBack)} ${linkedBack === 1 ? "link" : "links"} on ${String(linkedOn)} ${linkedOn === 1 ? "memory" : "memories"} written while the twins lived; counterparts dream --undo-twins puts them back.`;
   const column = dropped
     ? `the retired confidential column dropped${counted === null ? "" : ` (${String(counted)} marked ${counted === 1 ? "memory" : "memories"} counted first)`}`
     : "no confidential column to drop";
@@ -262,9 +293,9 @@ export function upgradeV14Findings(store: Store): Finding[] {
       "upgrade-v14",
       "green",
       "Upgrade",
-      `Upgrade to v14: room for tags, beliefs and their support, projects and what recall showed (empty until they are used) — ${column}; ${given}`,
+      `Upgrade to v14: room for tags, beliefs and their support, projects and what recall showed (empty until they are used) — ${column}; ${given}.${twinWords}`,
       "",
-      { confidentialDropped: dropped, confidentialCounted: counted ?? -1, people, places },
+      { confidentialDropped: dropped, confidentialCounted: counted ?? -1, people, places, kindsTakenBack: repaired, twinsMerged: merged, twinLinks: linkedBack, twinLinkedMemories: linkedOn },
     ),
   ];
 }

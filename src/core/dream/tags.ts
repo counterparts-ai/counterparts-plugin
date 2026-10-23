@@ -21,7 +21,7 @@
  * Here and not in the reflection's finish: the asks are small work for a
  * small model, and a child of their own keeps the reflection's file to lane C.
  */
-import { lookAlikePairs, notSameKey, resolveTag, mergeMap, TUNABLES as SCHEMAS } from "../schemas/index.js";
+import { lookAlikePairs, notSameKey, resolveTag, mergeMap, SUBJECT_KIND_BY_PREFIX, TUNABLES as SCHEMAS } from "../schemas/index.js";
 import type { LookAlike } from "../schemas/index.js";
 import { normalizeTag, SUBJECT_KINDS } from "../store/index.js";
 import type { Store, SubjectKind } from "../store/index.js";
@@ -36,8 +36,8 @@ export const TAGS_VOCABULARY = 60;
 /** The kinds a card may be given at night. `self` is the one subject that is me, never asked. */
 export const NIGHT_CARD_KINDS: readonly SubjectKind[] = SUBJECT_KINDS.filter((k) => k !== "self");
 
-/** Who set a card's subject kind, and when: `schemas.subjectKind.<id>` → `{by, at, run?}`. */
-export const SUBJECT_KIND_BY_PREFIX = "schemas.subjectKind.";
+/** Who set a card's subject kind, and when: `schemas.subjectKind.<id>` → `{by, at, run?}`. Spelled in `schemas/tags.ts`, whose repair reads it too. */
+export { SUBJECT_KIND_BY_PREFIX };
 /** One night's tagging, recorded: `tags.night.<run>` → counts and when. */
 export const TAGS_NIGHT_PREFIX = "tags.night.";
 /** What one night's ask SHOWED (review of #576): `tags.ask.<run>` → the memory ids, pairs and card ids an answer may touch. */
@@ -270,7 +270,9 @@ export function applyTagsAnswer(store: Store, answer: TagsAnswer, ctx: { readonl
     kinds += 1;
   }
 
-  store.setMeta(`${TAGS_NIGHT_PREFIX}${ctx.run}`, JSON.stringify({ at: Date.now(), date: store.today(), memories, tags, merged, notSame, kinds, refused: refused.length }));
+  // `at` on the store's clock (2026-10-22), the one its tags' `created_at` is
+  // on: `undoTagNight` starts the next night's undo just after it.
+  store.setMeta(`${TAGS_NIGHT_PREFIX}${ctx.run}`, JSON.stringify({ at: store.now(), date: store.today(), memories, tags, merged, notSame, kinds, refused: refused.length }));
   return { on: true, memories, tags, merged, notSame, kinds, refused };
 }
 
@@ -279,10 +281,11 @@ export function applyTagsAnswer(store: Store, answer: TagsAnswer, ctx: { readonl
  * or after `sinceAt` (epoch ms) — and the same tag a revision carried on from
  * it (`via: carried`, followed through the revisions that declared it,
  * `meta.updates`; review of #576) — every merge it made since, and every card kind it set on or after
- * that day that still reads as it set it. Its "not the same" answers stay
- * (they only spare a question). Returns what went.
+ * that day that still reads as it set it — with `runs`, only the kinds those
+ * runs set. Its "not the same" answers stay (they only spare a question).
+ * Returns what went.
  */
-export function undoNightTags(store: Store, sinceAt: number): { tags: number; merges: number; kinds: number } {
+export function undoNightTags(store: Store, sinceAt: number, opts: { readonly runs?: readonly string[] } = {}): { tags: number; merges: number; kinds: number } {
   let tags = 0;
   const byMemory = new Map<string, string[]>();
   for (const r of store.tagsWrittenVia("night", sinceAt)) byMemory.set(r.memoryId, [...(byMemory.get(r.memoryId) ?? []), r.tag]);
@@ -312,9 +315,12 @@ export function undoNightTags(store: Store, sinceAt: number): { tags: number; me
   let kinds = 0;
   for (const [key, value] of store.metaWithPrefix(SUBJECT_KIND_BY_PREFIX)) {
     try {
-      const rec = JSON.parse(value) as { by?: unknown; at?: unknown; kind?: unknown };
+      const rec = JSON.parse(value) as { by?: unknown; at?: unknown; kind?: unknown; run?: unknown };
       const id = key.slice(SUBJECT_KIND_BY_PREFIX.length);
       if (rec.by !== "night" || typeof rec.at !== "string" || rec.at < localDate(sinceAt, store.zone())) continue;
+      // Named nights (`undoTagNight`): a kind records its run, so a night
+      // earlier on the same date keeps the kinds it set.
+      if (opts.runs !== undefined && !opts.runs.includes(String(rec.run))) continue;
       // Only a kind still as the night set it: one changed since is someone else's now.
       if (store.row(id) === undefined || store.row(id)?.subject_kind !== rec.kind) continue;
       store.setSubjectKind(id, null);
@@ -325,6 +331,71 @@ export function undoNightTags(store: Store, sinceAt: number): { tags: number; me
     }
   }
   return { tags, merges, kinds };
+}
+
+/** One night's tagging as its record says (`tags.night.<run>`): when it finished, and whether the owner took it back. */
+export interface TagNight {
+  readonly run: string;
+  /** Epoch ms the answer was applied (after its writes). */
+  readonly at: number;
+  readonly date: string | null;
+  readonly tags: number;
+  readonly merged: number;
+  readonly kinds: number;
+  /** The calendar date it was taken back, or null. */
+  readonly undone: string | null;
+}
+
+/** Every night's tagging on record, oldest first. A record that cannot be read is left out. Reads only. */
+export function tagNights(store: Store): TagNight[] {
+  const out: TagNight[] = [];
+  for (const [key, value] of store.metaWithPrefix(TAGS_NIGHT_PREFIX)) {
+    try {
+      const r = JSON.parse(value) as Record<string, unknown>;
+      if (typeof r["at"] !== "number") continue;
+      const n = (k: string): number => (typeof r[k] === "number" ? (r[k] as number) : 0);
+      out.push({
+        run: key.slice(TAGS_NIGHT_PREFIX.length),
+        at: r["at"],
+        date: typeof r["date"] === "string" ? r["date"] : null,
+        tags: n("tags"),
+        merged: n("merged"),
+        kinds: n("kinds"),
+        undone: typeof r["undone"] === "string" ? r["undone"] : null,
+      });
+    } catch {
+      /* unreadable: not a night anyone can take back by name */
+    }
+  }
+  return out.sort((a, b) => a.at - b.at || a.run.localeCompare(b.run));
+}
+
+/**
+ * THE OWNER TAKES A NIGHT'S TAGGING BACK (`counterparts dream --undo-tags`,
+ * 2026-10-22): `run`'s, or with none the newest not yet taken back, and —
+ * because `undoNightTags` reads by time — every night after it too. Its
+ * writes began after the night before it finished (a record is written once
+ * its answer is applied), so that is where the undo starts. Each night it
+ * reached is marked undone on its record. Null when there is no such night.
+ */
+export function undoTagNight(store: Store, run?: string): { readonly nights: readonly string[]; readonly tags: number; readonly merges: number; readonly kinds: number } | null {
+  const nights = tagNights(store);
+  const i = run === undefined ? nights.map((n) => n.undone === null).lastIndexOf(true) : nights.findIndex((n) => n.run === run);
+  if (i < 0) return null;
+  const sinceAt = i === 0 ? 0 : (nights[i - 1] as TagNight).at + 1;
+  const reached = nights.slice(i);
+  const out = undoNightTags(store, sinceAt, { runs: reached.map((n) => n.run) });
+  for (const n of reached) {
+    store.updateMeta(`${TAGS_NIGHT_PREFIX}${n.run}`, (cur) => {
+      if (cur === undefined) return undefined;
+      try {
+        return JSON.stringify({ ...(JSON.parse(cur) as Record<string, unknown>), undone: store.today() });
+      } catch {
+        return undefined;
+      }
+    });
+  }
+  return { nights: reached.map((n) => n.run), ...out };
 }
 
 /**

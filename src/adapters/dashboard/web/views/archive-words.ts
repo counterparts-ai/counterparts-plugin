@@ -54,6 +54,8 @@ export const ARCHIVE_WORDS: readonly ArchiveReasonWords[] = [
   { reason: "supersede", many: "replaced by a newer version", one: "replaced by a newer version", group: groupOf("supersede") },
   { reason: EPISODE_REGROWN_REASON, many: "rebuilt from the journal", one: "replaced by a newer version", group: groupOf(EPISODE_REGROWN_REASON) },
   { reason: SUMMARY_DUPLICATE_REASON, many: "second summaries of one chapter", one: "a second summary of the same chapter — the other stands", group: groupOf(SUMMARY_DUPLICATE_REASON) },
+  // A twin card (2026-10-22): the card of the same name stands for it; `dream --undo-twins` puts it back.
+  { reason: SCHEMA_TUNABLES.TWIN_REASON, many: "twin cards merged", one: "a second card for the same name — the older one stands for it", group: groupOf(SCHEMA_TUNABLES.TWIN_REASON) },
   { reason: SCHEMA_TUNABLES.FADE_REASON, many: "faded from use", one: "faded away — nothing mentions it any more", group: groupOf(SCHEMA_TUNABLES.FADE_REASON) },
   { reason: PRUNE_ARCHIVE_REASON, many: "let go at the floor", one: "let go at the floor — too weak for too long", group: groupOf(PRUNE_ARCHIVE_REASON) },
   { reason: MERGE_ARCHIVE_REASON, many: "merged duplicates", one: "merged into a near-duplicate", group: groupOf(MERGE_ARCHIVE_REASON) },

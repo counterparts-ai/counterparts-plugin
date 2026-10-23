@@ -84,10 +84,20 @@ export const DREAM_TUNABLES = {
   FRESH_SHARE: 0.5,
   /** The share for the journal's new entries. CAL. */
   CHAPTER_SHARE: 0.3,
-  /** The most tonight's fresh LIST (ids and neighbours, in part 1) may cost on the wire. CAL. */
-  FRESH_LIST_CHARS: 12_000,
-  /** Nearest OLDER neighbours shown beside each new memory (owner: 5–8). */
-  NEIGHBOURS: 6,
+  /**
+   * The most tonight's fresh LIST (ids and neighbours, in part 1) may cost on the wire. CAL.
+   * 16k since 2026-10-23 (was 12k, an experiment, Mike's go 10-22 for 24k): at 12k the list,
+   * not the fresh room, capped a night at ~44 new memories. Not 24k: a full 24k list with the
+   * wake and the page passes part 1's furniture line and drops the wake on a busy night
+   * (test/result-ceiling.test.ts); the 10-22 night used 14.5k of it. See
+   * docs/decisions.d/feat-dream-intake-1023.md.
+   */
+  FRESH_LIST_CHARS: 16_000,
+  /**
+   * Nearest OLDER neighbours shown beside each new memory (owner: 5–8; 4 since
+   * 2026-10-23, an experiment, his go 10-22, to fit more new memories in the list).
+   */
+  NEIGHBOURS: 4,
   /** Loosely related older memories shown for mixing (the REM half). CAL. */
   MIXING: 5,
   /** The loose band: neighbours ranked this far down are "loosely related". */

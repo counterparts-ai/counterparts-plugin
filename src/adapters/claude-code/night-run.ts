@@ -836,6 +836,8 @@ function catchUpOnlyEnd(
 export interface NightAnswer extends SeatAnswer {
   readonly spawnCode?: string;
   readonly spill?: ToolSpills | null;
+  /** The child's own session id, when the seat named it (`NightChildRun.hostSession`). */
+  readonly hostSession?: string;
 }
 
 /**
@@ -934,6 +936,7 @@ export function claudeCodeSeat(input: ClaudeCodeSeatInput): Seat<ClaudeCodeAnswe
         error: out.result.error,
         ms: out.ms,
         ...(out.result.spawnCode === undefined ? {} : { spawnCode: out.result.spawnCode }),
+        ...(out.hostSession === undefined ? {} : { hostSession: out.hostSession }),
         result: out.result,
         spill: out.spill,
       };
@@ -952,11 +955,19 @@ interface NightChildOutcome {
   readonly ms: number;
   readonly neverStarted: boolean;
   readonly spill: ToolSpills | null;
+  /** The session id it ran under, when it ran under the one chosen for it. */
+  readonly hostSession?: string;
 }
 
 /** The row's line for a child that ran. */
 function childRunOf(child: NightChild, out: NightAnswer): NightChildRun {
-  return { child, code: out.code, ms: out.ms, ...(out.timedOut ? { timedOut: true as const } : {}) };
+  return {
+    child,
+    code: out.code,
+    ms: out.ms,
+    ...(out.timedOut ? { timedOut: true as const } : {}),
+    ...(out.hostSession === undefined || out.hostSession.length === 0 ? {} : { hostSession: out.hostSession }),
+  };
 }
 
 /**
@@ -974,7 +985,9 @@ async function runNightChild(
   // THE CHILD'S OWN SESSION, CHOSEN HERE (2026-10-09). Its transcript was
   // once looked up by this name; since 2026-10-12 the cut is read from the
   // child's own output instead, since 2026-10-21 the host keeps no transcript
-  // of it at all, and the name only keeps the children apart.
+  // of it at all, and the name keeps the children apart. Since 2026-10-22 the
+  // row records it (`NightChildRun.hostSession`), so a child's output or a
+  // transcript kept some other way is matched to its row by name, not time.
   const hostSession = randomUUID();
   const plan = planNightChild({ ...childInput, hostSession, readOutput: true });
   const childAt = now();
@@ -1014,7 +1027,9 @@ async function runNightChild(
       data: { child: childInput.child ?? null, transcript: spill.reason, results: spill.results, spills: spill.spills.length, short: spill.short, corrupt: spill.corrupt, ...(named ? {} : { named: false }) },
     });
   }
-  return { result, ms, neverStarted, spill };
+  // Recorded only when the child that ran is the one named: a plain retry
+  // ran under an id its host chose, which this process never learns.
+  return { result, ms, neverStarted, spill, ...(named && !neverStarted ? { hostSession } : {}) };
 }
 
 /**

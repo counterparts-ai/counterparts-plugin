@@ -7,6 +7,8 @@ import { Counterpart } from "../../core/counterpart.js";
 import { NO_PAGE_VERSION } from "../../core/self/index.js";
 import { REFLECTED_FEELING_KEY } from "../../core/sleep/index.js";
 import { CLAIMS_ERA_CUTOFF_KEY, storeExists } from "../../core/store/index.js";
+// The twin cards' undo is an owner op (2026-10-22): the store has no general un-archive.
+import { TWIN_RECORD_PREFIX, unarchiveTwin } from "../../core/store/owner-op-seam.js";
 // The ONE rule for "which host configuration": the console resolves it with the
 // same function the hook, the worker and the MCP server do.
 import { CONFIG_FLAG, defaultConfigPath } from "../config-path.js";
@@ -18,7 +20,7 @@ import { bodyFrom, writeLines, versionLines, NO_PAGE_LINES, pageLines } from "./
 import { dreamingSettingWords, dreamShowLines, dreamListLines, coreListLines } from "./dream-core.js";
 import { settleListLines } from "./settle.js";
 import { reoweCommand, catchUpCommand } from "./catch-up.js";
-import { DREAMING_SETTINGS, NIGHT_RUN_FINISHES } from "../../core/dream/index.js";
+import { DREAMING_SETTINGS, NIGHT_RUN_FINISHES, undoTagNight } from "../../core/dream/index.js";
 import { EXIT, openCounterpart, openRefusalLine, hostConfigFor } from "./commands-shared.js";
 import type { Io, Parsed, RunOptions } from "./commands-shared.js";
 
@@ -40,6 +42,87 @@ export function dreamCommand(dir: string, io: Io, parsed: Parsed, observer: bool
   if (typeof show === "string" && undo) {
     io.err("refused: --show and --undo are two different things to do. Pass one.");
     return EXIT.usage;
+  }
+  if (parsed.flags["undo-twins"] !== undefined) {
+    // THE TWIN CARDS PUT BACK (2026-10-22): what `Schemas#mergeTwinCards`
+    // archived, through the one door that un-archives that reason.
+    if (typeof show === "string" || undo || setting !== undefined || parsed.flags["undo-tags"] !== undefined || parsed.flags["list"] === true || parsed.flags["all"] === true) {
+      io.err("refused: --undo-twins is one thing to do on its own. Pass it alone.");
+      return EXIT.usage;
+    }
+    if (observer) {
+      io.err("refused: this console is an observer; it reads and changes nothing. Nothing was put back.");
+      return EXIT.refused;
+    }
+    const named = typeof parsed.flags["undo-twins"] === "string" ? parsed.flags["undo-twins"] : parsed.positional[0];
+    const counterpart = openCounterpart(dir, observer);
+    try {
+      const records = [...counterpart.store.metaWithPrefix(TWIN_RECORD_PREFIX)].flatMap(([key, value]) => {
+        try {
+          const r = JSON.parse(value) as Record<string, unknown>;
+          return [{ id: key.slice(TWIN_RECORD_PREFIX.length), keep: typeof r["keep"] === "string" ? r["keep"] : null, undone: typeof r["undone"] === "string" }];
+        } catch {
+          return [];
+        }
+      });
+      const targets = records.filter((r) => (named === undefined ? !r.undone : r.id === named));
+      if (targets.length === 0) {
+        io.err(
+          named === undefined
+            ? "refused: no twin card the night archived is waiting to be put back. Nothing was put back."
+            : `refused: ${named} is not a twin card the night archived. Nothing was put back.`,
+        );
+        return EXIT.refused;
+      }
+      let back = 0;
+      for (const t of targets.sort((a, b) => a.id.localeCompare(b.id))) {
+        try {
+          const out = unarchiveTwin(counterpart.store, t.id);
+          if (!out.noop) back += 1;
+          io.out(`  ${t.id}${out.keep === null ? "" : ` (stood under ${out.keep})`}${out.noop ? " was already back" : " is back"}`);
+        } catch (err) {
+          io.err(`  ${t.id}: not put back (${String((err as { code?: unknown }).code ?? err)})`);
+        }
+      }
+      io.out(`Put back ${String(back)} twin ${back === 1 ? "card" : "cards"}; each record is kept, marked undone.`);
+      // The cost, said plainly (review of #593), and what stays.
+      io.out("  The cost: each name is held by two cards again, so a new memory naming it links to neither, and the night will not merge them again.");
+      io.out("  The links the night gave the older card (memories that named it while the twins lived) stay: they are true.");
+      return EXIT.ok;
+    } finally {
+      counterpart.close();
+    }
+  }
+  if (parsed.flags["undo-tags"] !== undefined) {
+    // A NIGHT'S TAGGING TAKEN BACK (2026-10-22): the night's tags, merges and
+    // card kinds (`dream/tags.ts#undoTagNight`), the newest night by default.
+    if (typeof show === "string" || undo || setting !== undefined || parsed.flags["list"] === true || parsed.flags["all"] === true) {
+      io.err("refused: --undo-tags is one thing to do on its own. Pass it alone.");
+      return EXIT.usage;
+    }
+    if (observer) {
+      io.err("refused: this console is an observer; it reads and changes nothing. Nothing was undone.");
+      return EXIT.refused;
+    }
+    const named = typeof parsed.flags["undo-tags"] === "string" ? parsed.flags["undo-tags"] : parsed.positional[0];
+    const counterpart = openCounterpart(dir, observer);
+    try {
+      const out = undoTagNight(counterpart.store, named);
+      if (out === null) {
+        io.err(
+          named === undefined
+            ? "refused: no night's tagging is on record that has not been taken back already. Nothing was undone."
+            : `refused: no night's tagging ${named} in this store. Nothing was undone.`,
+        );
+        return EXIT.refused;
+      }
+      const which = out.nights.length === 1 ? `night ${out.nights[0] as string}` : `${String(out.nights.length)} nights, from ${out.nights[0] as string} on`;
+      io.out(`Took back the tagging of ${which}: ${String(out.tags)} ${out.tags === 1 ? "tag" : "tags"}, ${String(out.merges)} ${out.merges === 1 ? "merge" : "merges"}, ${String(out.kinds)} card ${out.kinds === 1 ? "kind" : "kinds"}.`);
+      io.out("  Your own tags and kinds set since are untouched; its \"not the same\" answers stay, so those pairs are not asked again.");
+      return EXIT.ok;
+    } finally {
+      counterpart.close();
+    }
   }
   if (setting !== undefined) {
     // THE OWNER'S SETTING (2026-09-28): the same value the dream tool's

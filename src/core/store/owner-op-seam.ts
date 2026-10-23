@@ -88,7 +88,7 @@ export interface OwnerRemovalPort {
  * refuses to write one (observer-mode G3), and a chase that took the database
  * directly would be the one write in the system that skipped the stance check.
  */
-export type OwnerOpSite = "chaseRemoved" | "unarchiveMerged";
+export type OwnerOpSite = "chaseRemoved" | "unarchiveMerged" | "unarchiveTwin";
 
 export interface OwnerOpAccess {
   readonly dir: string;
@@ -779,4 +779,70 @@ function readMergePayload(raw: string | null): {
   } catch {
     return { originalId: null, usesDelta: null };
   }
+}
+
+// ── the twin cards' undo (2026-10-22) ───────────────────────────────────────
+
+/**
+ * The archive reason `schemas/`'s twin pass writes (`Schemas#mergeTwinCards`,
+ * `TUNABLES.TWIN_REASON`), spelled here because `store/` sits below
+ * `schemas/`; a test pins the two equal. Not the dedup pass's `merged`: the
+ * two doors each undo exactly one reason.
+ */
+export const CARD_TWIN_ARCHIVE_REASON = "card-twin";
+
+/** Where the twin pass records the card each twin stands under (`schemas/index.ts#TWIN_PREFIX`), pinned equal by the same test. */
+export const TWIN_RECORD_PREFIX = "schemas.twin.";
+
+export interface UntwinReport {
+  readonly id: string;
+  /** The card it stood under, from the pass's record; null when no record survives. */
+  readonly keep: string | null;
+  /** True when the card was already live: a repeated undo changes nothing. */
+  readonly noop: boolean;
+}
+
+/**
+ * Put back a card the twin pass archived — the owner's undo of a merge that
+ * only archived (`counterparts dream --undo-twins`). Beside `unarchiveMerged`
+ * for the same reason: the store has no general un-archive, and this door
+ * undoes ONE reason and refuses every other by name (`UNTWIN_NOT_A_TWIN`), a
+ * removed id first (`REMOVED`). In one transaction it brings the card back
+ * and marks its record `undone`; the record itself stays (constitution 7).
+ * Its tokens are re-indexed after the commit, as the merge door's are. A
+ * long-lived `Schemas` takes the card back in at its next `adopt`.
+ */
+export function unarchiveTwin(store: Store, id: string): UntwinReport {
+  const access = GRANTS.get(store);
+  if (access === undefined) throw new StoreError("OWNER_OP_UNGRANTED", { id, site: "unarchiveTwin" });
+  if (access.isDenied(id)) throw new StoreError("REMOVED", { id, by: "owner" });
+  const row = access.rawRow(id);
+  if (row === undefined) throw new StoreError("ID_UNKNOWN", { id });
+  const key = `${TWIN_RECORD_PREFIX}${id}`;
+  if (row.archived === 1 ? row.archived_reason !== CARD_TWIN_ARCHIVE_REASON : store.getMeta(key) === undefined) {
+    throw new StoreError("UNTWIN_NOT_A_TWIN", { id, reason: row.archived_reason });
+  }
+  const report = access.ownerMutate("unarchiveTwin", (db) => {
+    const raw = db.get<{ value: string }>("SELECT value FROM meta WHERE key = ?", key)?.value;
+    let rec: Record<string, unknown> = {};
+    try {
+      rec = raw === undefined ? {} : (JSON.parse(raw) as Record<string, unknown>);
+    } catch {
+      rec = {};
+    }
+    const keep = typeof rec["keep"] === "string" ? rec["keep"] : null;
+    // ALREADY LIVE: nothing to un-archive, but the owner's undo still stands
+    // on the record (review of #593), so the twin pass never archives it again.
+    if (row.archived === 0) {
+      if (raw !== undefined && typeof rec["undone"] !== "string") {
+        db.run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, JSON.stringify({ ...rec, undone: store.today() }));
+      }
+      return { id, keep, noop: true };
+    }
+    db.run("UPDATE memories SET archived = 0, archived_reason = NULL, updated_at = ? WHERE id = ?", store.now(), id);
+    db.run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, JSON.stringify({ ...rec, undone: store.today() }));
+    return { id, keep, noop: false };
+  });
+  if (!report.noop) access.reindexLexical(id);
+  return report;
 }

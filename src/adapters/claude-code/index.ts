@@ -74,6 +74,12 @@ export type {
   WakeOutcome,
 } from "./hooks.js";
 
+// WHAT GOES OUT ON A TURN (2026-10-22, lane L): the envelope a hook prints,
+// and the claims made only once it is certain to carry them — public, so a
+// second host (or the harness) delivers as this one does.
+export { HOST_SESSION_START, HOST_STOP, HOST_USER_PROMPT_SUBMIT, deliverTurn, envelopeJson, hostDelivery } from "./envelope.js";
+export type { Delivery, UpdateNoticeDoors } from "./envelope.js";
+
 export { openEmbedder } from "./embed-client.js";
 export type { ChunkFailure, EmbedderStats, LiveEmbedder } from "./embed-client.js";
 
@@ -129,6 +135,7 @@ export {
   WAKE_HEAD_MAX_LINES,
   attributePeers,
   classifyBlock,
+  expansionIdsOf,
   parseToolSpills,
   parseTranscript,
   readTranscript,

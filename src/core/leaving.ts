@@ -67,6 +67,8 @@ export const LEAVING: Readonly<Record<string, LeftAs>> = {
   // A second live summary of one chapter (2026-10-15): the one that stands carries it.
   [SUMMARY_DUPLICATE_REASON]: "replaced",
   [SCHEMA_TUNABLES.FADE_REASON]: "let-go",
+  // A twin card (2026-10-22): the card of the same name stands for it.
+  [SCHEMA_TUNABLES.TWIN_REASON]: "replaced",
   [PRUNE_ARCHIVE_REASON]: "let-go",
   [MERGE_ARCHIVE_REASON]: "replaced",
   [DREAM_MERGE_REASON]: "replaced",
