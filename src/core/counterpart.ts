@@ -391,7 +391,7 @@ const EVENT_RING = REMEMBER.CONSUMED_LEDGER_MAX;
 
 /**
  * A use whose STRENGTH credit was refused only for its day cadence — recall's
- * once-per-lived-day gate, or physics' birth-day / stale-day / already-today —
+ * once-per-lived-day gate, or physics' birth-day / own-write / stale-day / already-today —
  * still counts as co-activation for links (2026-09-28, associate NOTES §8).
  */
 /** An unordered pair's key (`rateShown`'s once-per-stretch co-use links). */
@@ -403,7 +403,7 @@ function linksDespite(r: CreditResult): boolean {
   if (r.reason === "already-credited-at-or-above") return true;
   if (r.reason !== "physics-refused") return false;
   const why = r.outcome?.reason;
-  return why === "birth-day" || why === "stale-day" || why === "already-credited-today";
+  return why === "birth-day" || why === "own-write" || why === "stale-day" || why === "already-credited-today";
 }
 
 export class Counterpart {
@@ -3061,8 +3061,10 @@ export class Counterpart {
       // record — it was drawn on, and nothing here revives it: the settle or
       // supersession that this session itself made still stands, and still
       // ranks the new one first. The OLD one is credited, not the head: the
-      // head was born today, and physics never credits a memory on its birth
-      // day (`creditUse`'s `birth-day`), so redirecting would credit nothing.
+      // head was written by this session (`creditUse`'s `own-write`, since
+      // 2026-10-24) or born today (`birth-day` when its writer is unknown),
+      // so redirecting would credit nothing, or credit a memory the session
+      // never saw.
       const replacedAs = row.superseded_by !== null ? "superseded" : fadeOf({ fade: row.fade }) < 1 ? "faded-under-newer" : null;
       if (replacedAs !== null) {
         const by = this.replacedHere(id, sessionId, day);

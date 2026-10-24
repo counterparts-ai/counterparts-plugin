@@ -625,6 +625,25 @@ export const TUNABLES = {
    *  (scar §2.4: "did not fire" and "was never asked" are different records). */
   SYMMETRY_MIN_SAMPLE: 20,
 
+  // --- §5.5 the writing session's own memory (2026-10-24, R2) ---
+  /**
+   * WHO MAY NOT CREDIT A MEMORY, by its cause [v1 §10 G9]: the session that
+   * WROTE it, whose boundary sees the new memory's words in the reply it just
+   * produced. On, `creditUse` and `creditReturn` take the caller's `ownWrite`
+   * (the crediting session is the memory's origin session): on the birth day
+   * true refuses `own-write` and false lets another session credit it; left
+   * out (no origin session, or no crediting session) keeps the old
+   * `birth-day` refusal. After the birth day nothing changes: the writing
+   * session credits its memory as before (a session can run for days — a
+   * resumed conversation, a Desktop chat — and its later uses are real). Off: the birth day refuses everyone, exactly as
+   * before.
+   * Decided by Mike, 2026-10-24, lightly held (R2).
+   * Why: the ping/pong memory was used by two other sessions within minutes of
+   * its birth and every credit was refused `birth-day`; the scar's cause is
+   * the session, not the day.
+   */
+  OWN_WRITE_GATE: true,
+
   // --- §5.12 a changed fact fades once (2026-09-29, contradictions) ---
   /**
    * What a memory's DECAY is multiplied by, once, when it is settled as
@@ -1779,6 +1798,8 @@ export type ReturnReason =
    *  prompted the use, and counting it is the rich-get-richer loop (#238). */
   | "on-display"
   | "birth-day"
+  /** The crediting session wrote the memory (`OWN_WRITE_GATE`, 2026-10-24): its boundary saw its own words. */
+  | "own-write"
   /** An awake credit below full weight (surfaced, not used): not a return. */
   | "not-referenced"
   /** An awake return already counted this lived day (or later); for a dream
@@ -1850,6 +1871,8 @@ export function creditReturn(
     /** v9: the last lived day a REFLECTION return was counted for this
      *  memory (the store reads it off the `returns` table). */
     lastReflectionDay?: number | null;
+    /** The crediting session wrote this memory (`OWN_WRITE_GATE`; see `creditUse`). */
+    ownWrite?: boolean;
   },
 ): ReturnOutcome {
   const unchanged = {
@@ -1884,6 +1907,11 @@ export function creditReturn(
   // A full awake return from `AWAKE_RETURN_MIN_WEIGHT` up (2026-10-19: a
   // rating of 2 is one; it was full weight only).
   if (opts.source === "awake" && tier < TUNABLES.AWAKE_RETURN_MIN_WEIGHT) return refuse("not-referenced");
+  // THE WRITING SESSION'S OWN MEMORY (2026-10-24, `OWN_WRITE_GATE`): named
+  // by its cause on the birth day. Any other session that day still comes
+  // back with no gap from birth (spacing, below, measures from it), so it
+  // stays refused `birth-day` here: a return is a coming back.
+  if (d === m.birthDay && TUNABLES.OWN_WRITE_GATE && opts.ownWrite === true) return refuse("own-write");
   if (d <= m.birthDay) return refuse("birth-day");
   if (opts.source === "awake" && opts.onDisplay === true) return refuse("on-display");
   // AN ENGAGED RETURN (2026-10-11, `drewOn`; ported from #371): half a
@@ -2189,6 +2217,8 @@ export type CreditReason =
   | "a-belief"
   | "ignorable-tier"
   | "birth-day"
+  /** The crediting session wrote the memory (`OWN_WRITE_GATE`, 2026-10-24). */
+  | "own-write"
   | "already-credited-today"
   | "stale-day";
 
@@ -2202,7 +2232,8 @@ export interface CreditOutcome {
 
 /**
  * Graded retrospective reinforcement (§5.5). At most ONE credited occasion per
- * memory per lived day, never on its birth day [v1 §10 G9], and the ignorable
+ * memory per lived day, never on its birth day by the session that wrote it
+ * [v1 §10 G9; by anyone when that session is unknown — `ownWrite`], and the ignorable
  * (footnoted) tier never trains. Credit is resolved at the boundary, when the
  * reply is known — this function is the arithmetic, not the trigger.
  *
@@ -2218,13 +2249,40 @@ export interface CreditOutcome {
  * `already-credited-today`. Lightly held. Why: review 05 C2 ("a referenced use
  * the same day supersedes it").
  */
-export function creditUse(m: MemoryPhysics, d: number, tier: UseTier, opts: { upgradeFrom?: UseTier } = {}): CreditOutcome {
+export function creditUse(
+  m: MemoryPhysics,
+  d: number,
+  tier: UseTier,
+  opts: {
+    upgradeFrom?: UseTier;
+    /**
+     * THE WRITING SESSION (2026-10-24, R2; `OWN_WRITE_GATE`): whether the
+     * crediting session is the one that wrote this memory — a fact only the
+     * caller holds (`Store#reinforce` reads the row's origin session). On
+     * the birth day — the day the writing session's boundary sees its own
+     * words — true is refused `own-write`, and false (another session) is
+     * creditable once like any other lived day. Later days: unchanged. Left out (the memory
+     * has no origin session, or the credit came with no session): the old
+     * birth-day refusal, as before.
+     */
+    ownWrite?: boolean;
+  } = {},
+): CreditOutcome {
   const w = USE_TIER_WEIGHT[tier];
   const days = reinforcedDays(m);
   const unchanged = { uses: m.uses, lastUsedDay: m.lastUsedDay, reinforcedDays: days };
   if (w <= 0) return { credited: false, reason: "ignorable-tier", w, next: unchanged };
-  if (d === m.birthDay) return { credited: false, reason: "birth-day", w, next: unchanged };
+  const gate = TUNABLES.OWN_WRITE_GATE && opts.ownWrite !== undefined;
+  if (gate && opts.ownWrite === true && d === m.birthDay) return { credited: false, reason: "own-write", w, next: unchanged };
+  if (!gate && d === m.birthDay) return { credited: false, reason: "birth-day", w, next: unchanged };
   if (d < m.lastUsedDay) return { credited: false, reason: "stale-day", w, next: unchanged };
+  // ANOTHER SESSION ON THE BIRTH DAY (R2): a new memory's `lastUsedDay` is
+  // its birth day, so its first credit that day is not "already today". It
+  // has never been credited while no reinforced day is counted; after this
+  // one the day reads as credited, and the once-a-day rule holds.
+  if (gate && opts.ownWrite === false && d === m.birthDay && d === m.lastUsedDay && days === 0) {
+    return { credited: true, reason: "credited", w, next: { uses: m.uses + w, lastUsedDay: d, reinforcedDays: 1 } };
+  }
   if (d === m.lastUsedDay) {
     const from = opts.upgradeFrom === undefined ? 0 : USE_TIER_WEIGHT[opts.upgradeFrom];
     if (from > 0 && from < w) {

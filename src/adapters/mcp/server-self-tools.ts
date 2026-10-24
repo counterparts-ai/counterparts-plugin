@@ -15,7 +15,7 @@ import {
   pageTooLargeDetail,
 } from "../../core/self/index.js";
 import type { TraceInput } from "../../core/self/page.js";
-import type { PageWriterMode } from "../../core/self/index.js";
+import type { PageWriterMode, PageWriterRun } from "../../core/self/index.js";
 import type { ToolResult } from "./server-options.js";
 import { dreamHow, PAGE_REFUSAL_DETAIL, pageLaneAnswer, pageRoomAnswer } from "./server-words.js";
 import type { McpServer } from "./server.js";
@@ -704,7 +704,13 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
   // over the page-writer ask, and it is a DATE: a session asked to write
   // about 09-19 writes `writer` for that run and nothing else, and a stale
   // mark cannot relabel a write made two days later (`adapters/sessions.ts`).
-  const writerFor = server["pageWriterMark"](claimedSession);
+  // DAY'S END TOLD THE DAY ALONE, THEN WROTE THE PAGE ANYWAY (the edge
+  // recorded at #606's merge): the alone call answered the night and closed
+  // the claim, so the mark is gone — but this is still day's end, and the
+  // night's row must say the page changed. Only a page, only the same
+  // session on the same day, only before the dream begins (`daysEndStood`).
+  const stood = typeof body === "string" ? daysEndStood(server, claimedSession) : null;
+  const writerFor = server["pageWriterMark"](claimedSession) ?? (stood === null ? null : { about: stood.about, mode: stood.mode });
   // THE PAGE WRITER'S OWN CHILD (2026-10-23, `self.PAGE_SPLIT`; review of
   // #603): every page write it makes is the writer's, held to the writer's
   // lane — its first write closes the night's claim, and a resend after it
@@ -786,11 +792,22 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
               ? `past-room: ${String(written.bytes)} bytes, ${String(written.bytes - written.overRoom)} over the ${String(written.overRoom)}-byte room`
               : written.reason,
         bytesAfter: written.written ? written.bytes : 0,
+        // After a summary sent alone, the page it stood on and what the claim was handed.
+        ...(stood === null ? {} : { bytesBefore: stood.bytesAfter, considered: stood.considered, omitted: stood.omitted }),
         // THE DAY SUMMARY rides on the night's own row (2026-10-23, lane D2),
         // with the session and run that told it, so the dream finds it.
         // Only on a page written (review of D2): a refused page's summary is
         // sent again with the page, and kept then.
-        ...(keep === null || !written.written ? {} : summaryRow(server, claimedSession, keep)),
+        // Sent alone earlier (`stood`), it is carried onto this row, so the
+        // night's answer and its summary stay one row; a summary sent again
+        // with this page is the later telling and stands instead.
+        ...(!written.written
+          ? {}
+          : keep !== null
+            ? summaryRow(server, claimedSession, keep, stood?.run)
+            : stood !== null
+              ? { summary: stood.summary, summaryCites: stood.summaryCites, session: stood.session, run: stood.run }
+              : {}),
       });
     } catch {
       /* the page is written; the bookkeeping is not worth the answer */
@@ -800,9 +817,11 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
   // Day's end's page written with no summary, while day summaries are on:
   // said, since the night is answered now and its dream opens without one.
   const notSent =
-    told === null && writerFor !== null && typeof body === "string" && written.written && SELF_TUNABLES.DAY_SUMMARY
-      ? { summaryNotSent: "No day summary came with this write, so tonight's dream opens without one." }
-      : {};
+    told === null && stood !== null && written.written
+      ? { summary: { kept: true, about: stood.about, chars: charCount(stood.summary), cites: stood.summaryCites.length, sentEarlier: true } }
+      : told === null && writerFor !== null && typeof body === "string" && written.written && SELF_TUNABLES.DAY_SUMMARY
+        ? { summaryNotSent: "No day summary came with this write, so tonight's dream opens without one." }
+        : {};
   const toldAnswer =
     told === null
       ? notSent
@@ -970,15 +989,47 @@ function daySummaryArgs(server: McpServer, sent: string, rawCites: unknown, from
 }
 
 /** The day summary's fields on the night's row: its words, cites, and the session and run that told it. */
-function summaryRow(server: McpServer, claimedSession: string | null, told: DaySummaryArgs): { summary: string; summaryCites: readonly string[]; session?: string; run?: string } {
+function summaryRow(server: McpServer, claimedSession: string | null, told: DaySummaryArgs, knownRun?: string): { summary: string; summaryCites: readonly string[]; session?: string; run?: string } {
   const session = claimedSession ?? server.session ?? "";
-  let run = "";
+  let run = knownRun ?? "";
   try {
-    run = session === "" ? "" : (server.counterpart.nightClaimFor(session)?.run ?? "");
+    if (run === "") run = session === "" ? "" : (server.counterpart.nightClaimFor(session)?.run ?? "");
   } catch {
     run = "";
   }
   return { summary: told.text, summaryCites: told.cites, ...(session === "" ? {} : { session }), ...(run === "" ? {} : { run }) };
+}
+
+/** What `daysEndAlone` writes as the row's detail, and how `daysEndStood` knows its row. */
+const DAYS_END_STOOD = "day's end left the page as it stands";
+
+/**
+ * DAY'S END'S SUMMARY SENT ALONE, STILL OPEN TO ITS PAGE (the edge recorded
+ * at #606's merge): the night's newest settled row is the one `daysEndAlone`
+ * wrote, today, for this call's session, on the nightly run's server, and
+ * no dream has begun since — so a page written now is the same day's end
+ * changing its mind, and the night's answer becomes the page written. The
+ * run moving on (the dream's `begin`) ends it, as the open claim's
+ * `closeNightWriter` does. Null otherwise. Never throws.
+ */
+function daysEndStood(server: McpServer, claimedSession: string | null): PageWriterRun | null {
+  try {
+    if (claimedSession === null || !server["nightRun"]()) return null;
+    const today = server.counterpart.self.calendarToday();
+    const alone = server.counterpart
+      .pageWriterRuns({})
+      .find((r) => r.outcome === "nothing-to-say" && r.detail === DAYS_END_STOOD && r.session === claimedSession && r.on === today && r.summary.trim().length > 0);
+    if (alone === undefined) return null;
+    const settled = server.counterpart
+      .pageWriterRuns({ about: alone.about })
+      .find((r) => r.outcome === "revised" || r.outcome === "nothing-to-say" || r.outcome === "failed");
+    if (settled === undefined || settled.at !== alone.at || settled.seq !== alone.seq) return null;
+    const dream = server.counterpart.dreams.lastDream();
+    if (dream !== null && dream.started_at >= alone.at) return null;
+    return alone;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -999,7 +1050,7 @@ function daysEndAlone(
       about: input.writerFor.about,
       mode: input.writerFor.mode,
       outcome: "nothing-to-say",
-      detail: "day's end left the page as it stands",
+      detail: DAYS_END_STOOD,
       bytesBefore: bytes,
       bytesAfter: bytes,
       ...(claim === null ? {} : { considered: claim.considered, omitted: claim.omitted }),

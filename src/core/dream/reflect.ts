@@ -154,13 +154,29 @@ export const REFLECT_TUNABLES = {
   /**
    * THE LISTS, FITTED (2026-09-28, build B; the research note's P6). The
    * whole core is handed — every core memory is the page's evidence, so the
-   * page can cite any of it — and so are every core candidate and everything
+   * page can cite any of it — and so are the core candidates (every one until
+   * R1, 2026-10-24: now `CANDIDATES`, below) and everything
    * lived in the last `CHAPTER_DAYS` days: a line each at least, the whole
    * text for the most strongly felt, ids alone when even the lines outgrow
    * the room. Was: core 20, candidates 12, recent 12, cut by count.
    */
   /** The most strongly felt memories that could be about me, marked or not — a whole-store list, so a page of it, with its full count said. */
   FELT: 10,
+  /**
+   * THE CORE CANDIDATES, CAPPED AND ROTATED (R1, 2026-10-24; switch
+   * `dream.REFLECT_CANDIDATES_CAP`). Every candidate was shown, a line each:
+   * on the live store about 130 a night, about 38k of the room, a backlog
+   * rather than a long view. Now at most `CANDIDATES`: the strongest felt and
+   * newest first, and `CANDIDATES_ROTATED` of those slots go to the rest, the
+   * least recently shown first (by the `shown` of the last
+   * `CANDIDATES_LOOKBACK` reflections; one none of them showed first) — the
+   * reflection's cites and feelings are the core lanes' strongest feed
+   * (`physics#ReturnSource`), so a candidate past the head still comes round.
+   * The rest are counted in one line, never listed. CAL.
+   */
+  CANDIDATES: 30,
+  CANDIDATES_ROTATED: 10,
+  CANDIDATES_LOOKBACK: 30,
   /** The room the memories' and chapters' words share, across the parts, in characters. CAL. */
   ROOM_CHARS: 80_000,
   /** The share of the room the chapters' new entries may take. CAL. */
@@ -358,8 +374,10 @@ export interface ReflectBundle {
    * Empty when none has earned the core yet.
    */
   readonly spine?: readonly ReflectSpineBelief[];
-  /** Every core candidate, most strongly felt first. */
+  /** The core candidates shown (at most `CANDIDATES`, part rotated; every one with the cap off), most strongly felt first. */
   readonly candidates: readonly string[];
+  /** The core candidates not shown tonight, counted (R1, 2026-10-24): absent when none. */
+  readonly candidatesMore?: number;
   /** A page of the most strongly felt memories that could be about me; `feltOf` is how many there are. */
   readonly felt: readonly string[];
   readonly feltOf: number;
@@ -487,6 +505,12 @@ export const REFLECT_LOOKUP_ORDER =
   'Chapters are the last few days\' journal, each entry by its summary ("chaptersAs": "summaries"); read one whole with the recall tool by its address, ids: ["<journal id>#<chapter>"]. ' +
   "dreamSaw is what the dream changed tonight and the older memories it was shown, a line each; tonight's new memories are under recent. " +
   'The rest as an excerpt, a line, or an id alone ("fidelity"; "chars" is the whole length). Read any you need whole with the recall tool, ids: [...] — several at once — before you cite, feel or mark it.';
+
+/** With the candidates' cap (R1, `dream.REFLECT_CANDIDATES_CAP`): the same, the candidates said as capped. */
+export const REFLECT_LOOKUP_ORDER_CAPPED = REFLECT_LOOKUP_ORDER.replace(
+  "every core candidate",
+  `the core candidates (at most ${String(REFLECT_TUNABLES.CANDIDATES)} a night, some of them rotated in; the rest counted, not shown)`,
+);
 
 /**
  * THE LAST FEW WEEKS, A LINE A DAY (2026-10-23, lane D2): each day's line is
@@ -861,8 +885,12 @@ export class Reflections {
     // what was offered only in part is the lookup's denominator.
     const s = composed.shownAs;
     const fitRecord = { whole: s.whole, excerpt: s.excerpt, lined: s.line, ids: s.ids, notShown: s.notShown, offered: offeredInPart(fitted), parts: packed.later.length + 1 };
+    // THE LANES SHOWN (2026-10-24, the D1 check): how many of the core, the
+    // candidates and the felt the bundle named, and the candidates the cap
+    // left out (R1) — kept beside `fit`, and carried through the finish.
+    const lanes = { core: composed.core.length, candidates: composed.candidates.length, felt: composed.felt.length, candidatesNotShown: composed.candidatesMore ?? 0, feltFromCut: fitted.feltFromCut };
     this.store.updateReflection(id, {
-      detail: { ...(packed.later.length > 0 ? { parts: packed.later } : {}), fit: fitRecord, ...(composed.chaptersAs === undefined ? {} : { chaptersAs: composed.chaptersAs }), ...beliefsDetail(composed.beliefs ?? null), ...(composed.spine === undefined ? {} : { spine: composed.spine.map((b) => b.id) }), ...(composed.unmarked.length > 0 ? { unmarked: composed.unmarked } : {}), ...(composed.staleOpen.length > 0 ? { staleOpen: composed.staleOpen.map((x) => x.id) } : {}), ...(fitted.notCarried.length > 0 ? { notCarried: fitted.notCarried } : {}), ...(composed.reconsidering.length > 0 ? { coreOffered: composed.reconsidering.map((x) => x.id) } : {}) },
+      detail: { ...(packed.later.length > 0 ? { parts: packed.later } : {}), fit: fitRecord, lanes, ...(composed.chaptersAs === undefined ? {} : { chaptersAs: composed.chaptersAs }), ...beliefsDetail(composed.beliefs ?? null), ...(composed.spine === undefined ? {} : { spine: composed.spine.map((b) => b.id) }), ...(composed.unmarked.length > 0 ? { unmarked: composed.unmarked } : {}), ...(composed.staleOpen.length > 0 ? { staleOpen: composed.staleOpen.map((x) => x.id) } : {}), ...(fitted.notCarried.length > 0 ? { notCarried: fitted.notCarried } : {}), ...(composed.reconsidering.length > 0 ? { coreOffered: composed.reconsidering.map((x) => x.id) } : {}) },
     });
     writeIndex(this.store, "reflection", { ref: id, at: this.store.now(), offered: fitted.offered, looked: [], lineCap: fitted.lineCap, ...(aliases === null ? {} : { aliases: aliases.toJSON() }) });
     this.record("reflection.begun", id, { dream: dreamId, shown: shown.length, ...fitRecord });
@@ -2028,6 +2056,12 @@ export class Reflections {
     // And how its room was spent (2026-09-28): doctor reads it.
     const fitRecord = parseDetail(row.detail)["fit"];
     if (isRecord(fitRecord)) detail["fit"] = fitRecord;
+    // The lanes it was shown and how its chapters came (2026-10-24): the D1
+    // check reads them on a finished row.
+    const lanesRecord = parseDetail(row.detail)["lanes"];
+    if (isRecord(lanesRecord)) detail["lanes"] = lanesRecord;
+    const chaptersAs = parseDetail(row.detail)["chaptersAs"];
+    if (typeof chaptersAs === "string") detail["chaptersAs"] = chaptersAs;
     // What it was offered to mark: the next nights' rotation reads it.
     const offeredUnmarked = parseDetail(row.detail)["unmarked"];
     if (Array.isArray(offeredUnmarked)) detail["unmarked"] = offeredUnmarked;
@@ -3016,11 +3050,15 @@ export class Reflections {
     }
     const byFelt = (a: { id: string; felt: number }, b: { id: string; felt: number }): number => b.felt - a.felt || (a.id < b.id ? -1 : 1);
     const coreIds = core.sort(byFelt).map((c) => c.id).filter(take(P.core));
-    const candidateIds = candidates
+    // Capped before `take` (R1, `dream.REFLECT_CANDIDATES_CAP`): a candidate
+    // past the cap gets no priority here, so it is not fitted in as a line
+    // either — it may still come in by another lane (felt, recent).
+    const candidatesAll = candidates
       .sort((a, b) => b.felt - a.felt || b.at - a.at || (a.id < b.id ? -1 : 1))
       .map((c) => c.id)
-      .filter((x) => !coreIds.includes(x))
-      .filter(take(P.candidates));
+      .filter((x) => !coreIds.includes(x) && see(x) !== null);
+    const candidateIds = (DREAM_TUNABLES.REFLECT_CANDIDATES_CAP ? this.capCandidates(id, candidatesAll) : candidatesAll).filter(take(P.candidates));
+    const candidatesMore = candidatesAll.length - candidateIds.length;
     const feltAll = felt
       .sort(byFelt)
       .map((c) => c.id)
@@ -3269,6 +3307,7 @@ export class Reflections {
       core: coreIds.filter(kept),
       ...(spine === null ? {} : { spine }),
       candidates: candidateIds.filter(kept),
+      ...(candidatesMore > 0 ? { candidatesMore } : {}),
       felt: feltIds.filter(kept),
       recent: recentIds.filter(kept),
       becameCore: becameCore.filter(kept),
@@ -3288,11 +3327,15 @@ export class Reflections {
         ids: fitted.report.ids,
         notShown: fitted.waiting.length + chaptersFit.notShown,
       },
-      lookup: order ? REFLECT_LOOKUP_ORDER : REFLECT_LOOKUP,
+      lookup: order ? (DREAM_TUNABLES.REFLECT_CANDIDATES_CAP ? REFLECT_LOOKUP_ORDER_CAPPED : REFLECT_LOOKUP_ORDER) : REFLECT_LOOKUP,
       limits: beliefs === null ? limitsWithoutBeliefs(T.LIMITS) : { ...T.LIMITS },
     };
     noteMindShown(this.store, bundle.onMind, day);
-    return { bundle, offered, lineCap: chaptersFit.summaryBytes, notCarried: uncarried.all };
+    // How many of the felt shown are candidates the cap cut (R1's check: do
+    // they crowd the felt lane's other memories out?).
+    const cut = new Set(candidatesAll.filter((x) => !candidateIds.includes(x)));
+    const feltFromCut = bundle.felt.filter((x) => cut.has(x)).length;
+    return { bundle, offered, lineCap: chaptersFit.summaryBytes, notCarried: uncarried.all, feltFromCut };
   }
 
   /**
@@ -3367,6 +3410,36 @@ export class Reflections {
       return { reason: "dream-mark-in-text", why: `carries the dream's mark (${DREAM_MARK}…) — take it out` };
     }
     return null;
+  }
+
+  /**
+   * THE CANDIDATES A NIGHT SHOWS (R1, 2026-10-24): the first `CANDIDATES −
+   * CANDIDATES_ROTATED` of the order (strongest felt, then newest), then
+   * `CANDIDATES_ROTATED` of the rest, the least recently shown first — one
+   * none of the last `CANDIDATES_LOOKBACK` reflections showed, in the order;
+   * then the one shown longest ago. Kept in the order. All of them when they
+   * fit.
+   */
+  private capCandidates(mine: string, ranked: readonly string[]): string[] {
+    const T = REFLECT_TUNABLES;
+    if (ranked.length <= T.CANDIDATES) return [...ranked];
+    const headN = T.CANDIDATES - T.CANDIDATES_ROTATED;
+    const tail = ranked.slice(headN);
+    // How many reflections back each was last shown (0 the newest); absent, not lately.
+    const ago = new Map<string, number>();
+    const earlier = this.store
+      .reflections({ limit: T.CANDIDATES_LOOKBACK + 1 })
+      .filter((r) => r.id !== mine)
+      .slice(0, T.CANDIDATES_LOOKBACK);
+    earlier.forEach((r, i) => {
+      for (const x of parseIds(r.shown)) if (!ago.has(x)) ago.set(x, i);
+    });
+    const rank = new Map(tail.map((x, i) => [x, i]));
+    const rotated = [...tail]
+      .sort((a, b) => (ago.get(b) ?? Infinity) - (ago.get(a) ?? Infinity) || (rank.get(a) ?? 0) - (rank.get(b) ?? 0))
+      .slice(0, T.CANDIDATES_ROTATED);
+    const chosen = new Set([...ranked.slice(0, headN), ...rotated]);
+    return ranked.filter((x) => chosen.has(x));
   }
 
   /**
@@ -4180,6 +4253,8 @@ interface Composed {
   readonly lineCap: number;
   /** Every open thread not carried tonight (`noLongerCarried`), recorded on the row; never in the bundle. */
   readonly notCarried: readonly string[];
+  /** The felt lane's memories the candidates' cap cut (R1's check): recorded on the row as `lanes.feltFromCut`; never in the bundle. */
+  readonly feltFromCut: number;
 }
 
 /** The bundle's other furniture, reserved from the room: ids, lists, the questions, the limits. */
@@ -4399,6 +4474,7 @@ function leanReflectLines(b: ReflectBundle, aliases: AliasMap): string[] {
     for (const x of b.spine) out.push(`- ${plainValue(x, aliases)}`);
   }
   out.push(`candidates: ${list(b.candidates)}`);
+  if ((b.candidatesMore ?? 0) > 0) out.push(`+${String(b.candidatesMore)} more candidates, not shown`);
   out.push(`felt (of ${String(b.feltOf)}): ${list(b.felt)}`);
   out.push(`recent: ${list(b.recent)}`);
   out.push(`becameCore: ${list(b.becameCore)}`);

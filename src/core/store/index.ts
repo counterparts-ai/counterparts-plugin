@@ -41,7 +41,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Band, Kind, MemoryPhysics, Salience } from "../types.js";
-import { isModelId } from "../types.js";
+import { WRITTEN_UP_BY_META_KEY, isKnownSession, isModelId } from "../types.js";
 import {
   daysBetween,
   isCalendarDate,
@@ -1651,7 +1651,7 @@ export class Store {
 
   /**
    * Persist one credited use. The crediting RULE is owned entirely by
-   * physics.creditUse (§5.5 tier weights, birth-day / stale-day / same-day
+   * physics.creditUse (§5.5 tier weights, own-write / birth-day / stale-day / same-day
    * refusals, distinct-day counting for §5.3 promotion) — the store applies the
    * verdict absolutely and adds no opinion of its own. One rule, one owner:
    * a second implementation of this arithmetic is exactly the divergence that
@@ -1715,7 +1715,17 @@ export class Store {
         return { credited: false, reason: "a-belief" as const, w: 0, next: unchanged, ret: null };
       }
       const upgradeFrom = opts.upgradeFrom ?? this.partialToday(id, day, row.last_used_day, tier);
-      const verdict = creditUse(physics, day, tier, upgradeFrom === undefined ? {} : { upgradeFrom });
+      // THE WRITING SESSION (2026-10-24, R2; physics `OWN_WRITE_GATE`): a fact
+      // only the row holds, handed to physics as the display is. The session
+      // that wrote it is its origin, or the writer of a write-up
+      // (`writtenUpBy`), whose reply carried the words. Unknown — the memory
+      // has no origin session, or the use came with no session (a schemas
+      // mention, a reminder's occurrence) — physics keeps the birth-day rule.
+      const ownWrite = this.ownWrite(row, opts.session ?? null);
+      const verdict = creditUse(physics, day, tier, {
+        ...(upgradeFrom === undefined ? {} : { upgradeFrom }),
+        ...(ownWrite === undefined ? {} : { ownWrite }),
+      });
       let ret: ReturnOutcome | null = null;
       if (verdict.credited) {
         this.ops.run(
@@ -1754,12 +1764,13 @@ export class Store {
         const partial = partialSourceOf(tier);
         ret =
           partial !== null
-            ? creditReturn(physics, day, { source: partial, since: this.spacingSince(id) })
+            ? creditReturn(physics, day, { source: partial, since: this.spacingSince(id), ...(ownWrite === undefined ? {} : { ownWrite }) })
             : creditReturn(physics, day, {
                 source: "awake",
                 tierWeight: verdict.w,
                 onDisplay: opts.cued !== true && this.shownInHints(id, day),
                 since: this.spacingSince(id),
+                ...(ownWrite === undefined ? {} : { ownWrite }),
               });
         if (ret.counted) this.writeReturn(id, day, ret, null, opts.session ?? null);
         // A PARTIAL CREDIT ON A DAY THAT ALREADY COUNTED A RETURN (a dream's
@@ -1769,7 +1780,10 @@ export class Store {
         // glimpse after the night's dream refused every later use that day.
         // Weight 0 adds nothing to `returns`; the lane columns read only
         // `awake` / `reflection`.
-        else if (partial !== null && ret.reason === "already-returned-today") {
+        // Since R2 (2026-10-24) the same holds for a partial credit another
+        // session earned on the memory's birth day (refused `birth-day` as a
+        // return: no gap from birth).
+        else if (partial !== null && (ret.reason === "already-returned-today" || ret.reason === "birth-day")) {
           this.writeReturn(id, day, { ...ret, weight: 0 }, null, opts.session ?? null);
         }
       }
@@ -1834,6 +1848,29 @@ export class Store {
     });
     this.emit("store.reflect", id, { counted: outcome.counted, reason: outcome.reason, day });
     return outcome;
+  }
+
+  /**
+   * Whether `session` wrote this memory (physics `OWN_WRITE_GATE`, R2,
+   * 2026-10-24): its origin session, or the writer of a write-up. Undefined
+   * when it cannot be told — no crediting session, or no origin session on
+   * the row — and physics then keeps the old birth-day refusal. The unbound
+   * server's shared id (`UNBOUND_SESSION`, "mcp") names no session, on either
+   * side: a memory an unbound server wrote may be the crediting session's own
+   * (its hooks know the real id), so it is unknown too (review of #610).
+   */
+  private ownWrite(row: { origin_session: string | null; meta: string | null }, session: string | null): boolean | undefined {
+    if (!isKnownSession(session) || !isKnownSession(row.origin_session)) return undefined;
+    if (row.origin_session === session) return true;
+    if (row.meta !== null && row.meta.includes(WRITTEN_UP_BY_META_KEY)) {
+      try {
+        const meta = JSON.parse(row.meta) as Record<string, unknown>;
+        if (meta[WRITTEN_UP_BY_META_KEY] === session) return true;
+      } catch {
+        // Unreadable meta says nothing about a write-up.
+      }
+    }
+    return false;
   }
 
   /**

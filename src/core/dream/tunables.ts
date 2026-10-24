@@ -121,6 +121,13 @@ export const DREAM_TUNABLES = {
    * shape it began with.
    */
   REFLECT_ROOM_ORDER: true as boolean,
+  /**
+   * THE REFLECTION'S CORE CANDIDATES, CAPPED (R1, 2026-10-24, lightly held):
+   * at most `REFLECT_TUNABLES.CANDIDATES` a night, part of them rotated
+   * through the rest, and the rest counted in one line. Off: every candidate,
+   * exactly as before. Read at use (`dream/reflect.ts#compose`).
+   */
+  REFLECT_CANDIDATES_CAP: true as boolean,
   /** With `REFLECT_ROOM_ORDER`: the most OLDER memories the dream saw (neighbours, mixing, lookback) the reflection is shown, a line each. CAL. */
   SAW_OLDER: 40,
   /**

@@ -90,7 +90,7 @@ export interface DrewOnResult {
   /** Refused by name, in the order given: `not-shown`, `unknown-id`,
    *  `archived`, `handoff`, `superseded`, `faded-under-newer`, or recall's or
    *  physics' own reason (`already-credited-at-or-above`,
-   *  `already-credited-today`, `birth-day`, `observer`, …). */
+   *  `already-credited-today`, `birth-day`, `own-write`, `observer`, …). */
   readonly refused: { id: string; reason: string }[];
   /** Past the boundary's cap (`DREW_ON_MAX_PER_BOUNDARY`), not attempted. */
   readonly capped: string[];
