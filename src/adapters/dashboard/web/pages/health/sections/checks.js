@@ -38,7 +38,7 @@ const NAMES = {
   journal: "Database journal",
   vectors: "Meaning vectors",
   retention: "Raw transcripts",
-  "page-writer": "Self-page writer",
+  "page-writer": "Day's end",
   "journal-copy": "Journal copy",
   fired: "Mechanisms",
   stance: "Mode",

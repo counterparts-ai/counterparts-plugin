@@ -11,9 +11,9 @@
  */
 import { FEELINGS_WHEEL } from "../feelings-wheel.js";
 import { clipBytes, fit, lineOf, offeredOf } from "../fit/index.js";
-import type { Fidelity, FitCandidate, FitReport, Placed } from "../fit/index.js";
+import type { AliasMap, Fidelity, FitCandidate, FitReport, Placed } from "../fit/index.js";
 import { readChapterLead } from "../self/episodes.js";
-import { chapterSummaries } from "../self/summaries.js";
+import { automaticSummaryText, chapterSummaries } from "../self/summaries.js";
 import type { ReadOnlyStore } from "../store/index.js";
 import { localDate, readableDate } from "../time.js";
 
@@ -25,6 +25,13 @@ export interface ShownEntry {
   readonly text: string;
   /** The whole entry's length in characters. */
   readonly chars: number;
+  /**
+   * THE CHAPTER'S SUMMARY MEMORY (2026-10-23, lean bundles): set only when
+   * the entry is shown as its summary (`fitEpisodes`' `summaries`), so a
+   * lean bundle that shows that memory too can point to it instead of
+   * saying it twice.
+   */
+  readonly summaryId?: string;
 }
 
 /** A session's journal as it is shown: its entries in view, sliced at the chapter headings. */
@@ -67,6 +74,8 @@ export interface ChapterEntry {
    * not attached — it IS the first words.
    */
   readonly summary?: string;
+  /** The chapter's summary memory's id, written or automatic, when it has a live one (2026-10-23). */
+  readonly summaryId?: string;
 }
 
 /**
@@ -83,6 +92,8 @@ export interface SummaryForLine {
   readonly kind: "written" | "automatic";
   readonly body: string;
   readonly writtenAt?: number;
+  /** The summary memory's id (2026-10-23). */
+  readonly id?: string;
 }
 
 /**
@@ -100,7 +111,11 @@ export function withSummaries(
   return entries.map((e) => {
     const s = e.chapter === null ? undefined : byChapter.get(e.chapter);
     if (s !== undefined && asOf !== undefined && (s.writtenAt ?? 0) > asOf) return e;
-    return s === undefined || s.kind !== "written" || s.body.trim().length === 0 ? e : { ...e, summary: s.body };
+    if (s === undefined || s.body.trim().length === 0) return e;
+    // Its memory's id, written or automatic (2026-10-23): a lean bundle that
+    // shows the summary memory points to it.
+    const withId = s.id === undefined ? e : { ...e, summaryId: s.id };
+    return s.kind !== "written" ? withId : { ...withId, summary: s.body };
   });
 }
 
@@ -132,6 +147,18 @@ export function entryLine(e: Pick<ChapterEntry, "text" | "summary">, lineBytes: 
     if (flat.length > 0) return clipBytes(flat, Math.max(lineBytes, summaryBytes));
   }
   return lineOf({ body: e.text }, lineBytes);
+}
+
+/**
+ * AN ENTRY AS ITS SUMMARY (2026-10-23, lean bundles): the summary the session
+ * wrote, whole and on one line, else the chapter's opening as an automatic
+ * summary keeps it (`self/summaries.ts#automaticSummaryText`) — or the whole
+ * entry, when it is no longer than that.
+ */
+export function entrySummary(e: Pick<ChapterEntry, "text" | "summary">): string {
+  const written = e.summary?.replace(/\s+/g, " ").trim() ?? "";
+  const s = written.length > 0 ? written : automaticSummaryText(e.text).replace(/\s+/g, " ").trim();
+  return s.length === 0 || s.length >= e.text.length ? e.text : s;
 }
 
 /** A line that opens a chapter (either written form, or a bare `## chapter N`). */
@@ -243,6 +270,15 @@ export function fitEpisodes(
     summaryBytes?: number;
     reads?: Readonly<Record<string, number>>;
     unread?: Readonly<Record<string, readonly number[]>>;
+    /**
+     * CHAPTERS BY THEIR SUMMARIES (2026-10-23, lean bundles; Mike's go 10-23:
+     * "summaries, with id in case dream wants to look up full chapter"): an
+     * entry's most is its summary (`entrySummary`), never its whole text —
+     * unless the whole entry is no longer than that — and the chapter's
+     * address reads the rest. Its fidelity is `line` unless the whole entry
+     * is shown.
+     */
+    summaries?: boolean;
   },
 ): EpisodesFit {
   const ordered = [...episodes].sort((a, b) => b.at - a.at);
@@ -257,11 +293,21 @@ export function fitEpisodes(
         priority: entryImportance(entry.text, opts.owner) - entry.index * 1e-6,
         // The chapter's own summary when the session wrote one (2026-10-15).
         line: entryLine(entry, opts.lineBytes, summaryBytes),
-        whole: entry.text,
+        whole: opts.summaries === true ? entrySummary(entry) : entry.text,
       });
     }
   }
-  const fitted = fit(cands, { room: opts.room, excerptChars: opts.entryChars, least: "line" });
+  const fitted0 = fit(cands, { room: opts.room, excerptChars: opts.entryChars, least: "line" });
+  // By summaries, "whole" is the summary's: only an entry shown entire counts whole.
+  const fitted =
+    opts.summaries !== true
+      ? fitted0
+      : (() => {
+          const textOf = new Map(ordered.flatMap((ep) => ep.fresh.map((e) => [entryKey(ep.row.id, e.index), e.text] as const)));
+          const placed = fitted0.placed.map((p) => (p.fidelity === "whole" && p.text !== textOf.get(p.id) ? { ...p, fidelity: "excerpt" as const } : p));
+          const whole = placed.filter((p) => p.fidelity === "whole").length;
+          return { ...fitted0, placed, report: { ...fitted0.report, whole, excerpt: 0, lined: fitted0.report.lined + fitted0.report.excerpt + (fitted0.report.whole - whole) } };
+        })();
   const placed = new Map(fitted.placed.map((p) => [p.id, p]));
   const o = offeredOf(fitted.placed);
   const offered = { whole: [...o.whole], excerpt: [...o.excerpt], line: [...o.line], id: [...o.id] };
@@ -285,7 +331,8 @@ export function fitEpisodes(
         continue;
       }
       entryIndex[`${ep.row.id}:${String(entries.length)}`] = entry.index;
-      entries.push(shownEntry(entry, p));
+      const shown = shownEntry(entry, p);
+      entries.push(opts.summaries === true && p.fidelity !== "whole" && entry.summaryId !== undefined ? { ...shown, summaryId: entry.summaryId } : shown);
     }
     if (entries.length === 0) continue;
     chapters.push({ id: ep.row.id, title: ep.row.title, entries, earlier: ep.earlier, ...(more > 0 ? { notShown: more } : {}) });
@@ -315,7 +362,8 @@ export interface DayJournal {
  * dream and the reflection get them (`fitEpisodes`): a line for every one —
  * its summary when the session wrote one — and the most important whole, in
  * `room`. An episode last written before the day holds none of it and is not
- * read. Never throws.
+ * read. With `summaries` (day's end, 2026-10-23), each entry by its
+ * summary, never whole (`fitEpisodes`' `summaries`). Never throws.
  */
 export function dayJournal(
   store: ReadOnlyStore,
@@ -327,6 +375,7 @@ export function dayJournal(
     lineBytes: number;
     entryChars: number;
     zone?: string;
+    summaries?: boolean;
   },
 ): DayJournal {
   const empty: DayJournal = { chapters: [], entries: 0, notShown: 0, used: 0 };
@@ -364,6 +413,7 @@ export function dayJournal(
     day: opts.day,
     lineBytes: opts.lineBytes,
     entryChars: opts.entryChars,
+    ...(opts.summaries === true ? { summaries: true } : {}),
   });
   return { chapters: fitted.chapters, entries, notShown: fitted.notShown, used: fitted.used };
 }
@@ -392,4 +442,38 @@ export function entryImportance(text: string, owner: readonly string[]): number 
   const names = owner.filter((n) => n.length > 1 && words.includes(n.toLowerCase())).length > 0 ? 1 : 0;
   const turns = (text.match(TURNS) ?? []).length;
   return Math.min(feelings, 5) * 0.2 + names * 0.5 + Math.min(turns, 5) * 0.3;
+}
+
+// ── journals as lean lines (2026-10-23, the dream's and the reflection's) ────
+
+/** A date as a lean line says it: `10-22` in the bundle's own year, else whole. */
+export function leanDate(date: string, year: string): string {
+  return date.startsWith(`${year}-`) ? date.slice(5) : date;
+}
+
+/** A journal's head line: its short id, its title, what of it is not here. */
+export function leanChapterHead(ch: Pick<ShownChapter, "id" | "title"> & Partial<Pick<ShownChapter, "earlier" | "notShown">>, aliases: AliasMap): string {
+  const f = [aliases.short(ch.id), ch.title ?? "(untitled)"];
+  if ((ch.earlier ?? 0) > 0) f.push(`${String(ch.earlier)} chapters read before`);
+  if ((ch.notShown ?? 0) > 0) f.push(`${String(ch.notShown)} not shown tonight`);
+  return f.join(" · ");
+}
+
+/**
+ * One chapter of a journal, indented under its head. `summaries` (the
+ * dream's): an excerpt IS the chapter's summary, on one line. `fit` (the
+ * reflection's): an excerpt is the chapter's opening, and its words keep
+ * their lines.
+ */
+export function leanEntry(e: ShownEntry, chapterId: string, aliases: AliasMap, mode: "summaries" | "fit" = "summaries"): string {
+  const c = aliases.short(chapterId);
+  // An entry gone since begin says only that (review of #602).
+  if (e.chars === 0 && e.text.startsWith("(gone")) return `  ${c} · ${e.text}`;
+  const f = [e.chapter === null ? `${c} (before its first chapter)` : `${c}#${String(e.chapter)}`];
+  if (e.day !== null) f.push(`d${String(e.day)}`);
+  if (e.summaryId !== undefined && aliases.has(e.summaryId)) f.push(`summary ${aliases.short(e.summaryId)}`);
+  const text = mode === "summaries" || e.fidelity === "line" ? e.text.replace(/\s*\n\s*/g, " ") : e.text;
+  const tail =
+    e.fidelity === "whole" ? "" : e.fidelity === "line" ? ` (line; ${String(e.chars)})` : mode === "summaries" ? ` (${String(e.chars)})` : ` (excerpt of ${String(e.chars)})`;
+  return `  ${f.join(" · ")} · ${text}${tail}`;
 }

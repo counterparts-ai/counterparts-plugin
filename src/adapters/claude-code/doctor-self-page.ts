@@ -12,8 +12,10 @@ import {
   nightRunLost,
   nightRunOf,
   nightRunWords,
+  nightTokenCount,
+  nightTokensWords,
 } from "../../core/dream/index.js";
-import type { DreamingSetting } from "../../core/dream/index.js";
+import type { DreamingSetting, NightChildRun } from "../../core/dream/index.js";
 // The page's own reader, so this line cannot drift from what the wake prints.
 import { clearedMarker, findPageRow, readSelfPage } from "../../core/self/page.js";
 import { coreBeliefFloors, coreFromBeliefs, coreSupport, pageTrace } from "../../core/self/measures.js";
@@ -24,6 +26,7 @@ import {
   lastPageWriterRun,
   pageWriterDue,
   pageWriterNight,
+  pageWriterRuns,
   pageWriterStatus,
 } from "../../core/self/writer.js";
 // The what-fired reading, shared with the console's `fired` command and the
@@ -90,6 +93,15 @@ export function dreamingFindings(input: DoctorInput, store: Store): Finding[] {
   ];
 }
 
+/** Did day's end leave a day summary during the run that started at `startedAt` (2026-10-23, lane D2)? Never throws. */
+function toldDuring(store: Store, startedAt: number): boolean {
+  try {
+    return pageWriterRuns(store, { limit: 50 }).some((r) => r.at >= startedAt && r.summary.trim().length > 0);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * THE NIGHTLY RUN, headless (2026-09-29): what became of the latest run the
  * host started itself (setting `auto`) — the store's one-row record
@@ -127,14 +139,33 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
     dream: run.dream,
     reflection: run.reflection,
     ...(cu === null ? {} : { catchUp: cu.state, writtenUp: cu.written, writeUpParts: cu.parts, leftOwed: cu.left }),
+    ...(run.usage?.total == null || !Number.isFinite(nightTokenCount(run.usage.total)) ? {} : { tokens: nightTokenCount(run.usage.total) }),
   };
   const mins = (ms: number): string => `${String(Math.max(1, Math.round(ms / 60_000)))} min`;
   const took = run.endedAt === null ? "" : ` after ${mins(run.endedAt - run.startedAt)}`;
   const skipped = dreamSkippedOf(run);
   const what = run.kind === "reflection" ? "the reflection alone" : skipped !== null ? `the catch-up alone; ${dreamSkippedWords(skipped)}` : "the whole night";
+  // THE PAGE WRITER'S OWN CHILD MISSED (2026-10-23, `self.PAGE_SPLIT`): its
+  // exit is never the run's, so a night can finish with the page unwritten
+  // by it; said here. A writer with nothing to do tonight is not missed.
+  const missed = writerMissed(run.children ?? []);
+  const writerNote = missed === null ? "" : `; day's end was missed (${missed})`;
+  // WHAT THE NIGHT COST (2026-10-23), one clause, when its children said.
+  const cost = nightTokensWords(run.usage);
+  // DAY'S END TOLD THE DAY (2026-10-23, lane D2): said when it did, nothing else.
+  const costNote = (cost === null ? "" : `; ${cost}`) + (toldDuring(store, run.startedAt) ? "; day summary: yes" : "");
   if (run.state === "done") {
     const ids = [run.dream, run.reflection].filter((x): x is string => x !== null).join(", ");
-    return [finding("night-run", "green", "Nightly run", `${setting}; last run ${run.date} (${what}) finished${took}${ids.length > 0 ? ` — ${ids}` : ""}${caught}`, "", data)];
+    return [
+      finding(
+        "night-run",
+        missed !== null && setting === "auto" ? "amber" : "green",
+        "Nightly run",
+        `${setting}; last run ${run.date} (${what}) finished${took}${ids.length > 0 ? ` — ${ids}` : ""}${costNote}${writerNote}${caught}`,
+        missed === null ? "" : "Nothing to do by hand: tomorrow's writer reads its own day. If it repeats, run claude -p once by hand in a terminal to see why it stops.",
+        { ...data, ...(missed === null ? {} : { writerMissed: missed }) },
+      ),
+    ];
   }
   if (run.state === "partial") {
     // PART OF THE RUN RAN (2026-09-29, owner): which parts, and — when the
@@ -145,7 +176,7 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
         "night-run",
         setting === "auto" ? "amber" : "green",
         "Nightly run",
-        `${setting}; the run of ${run.date} (${what}) was partial${took}: ${nightPartsWords(run)}${why}${caught}`,
+        `${setting}; the run of ${run.date} (${what}) was partial${took}: ${nightPartsWords(run)}${why}${costNote}${writerNote}${caught}`,
         "Nothing to do by hand: a later session picks up what did not run — a dream cut off is resumed, a reflection cut off runs alone.",
         { ...data, parts: (run.parts ?? []).join(",") },
       ),
@@ -176,7 +207,20 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
         : run.reason === "nothing-ran"
           ? "The headless run needs the counterparts MCP server registered for claude at user scope (claude mcp list shows it); the server's own mcp.session rows say whether it refused the session."
           : "A later session starts it again, or asks when it cannot. counterparts dream --setting ask stops the headless runs.";
-  return [finding("night-run", setting === "auto" ? "amber" : "green", "Nightly run", `${setting}; the run of ${run.date} (${what}) ${ended}${took}: ${words}${caught}`, fix, data)];
+  return [finding("night-run", setting === "auto" ? "amber" : "green", "Nightly run", `${setting}; the run of ${run.date} (${what}) ${ended}${took}: ${words}${costNote}${writerNote}${caught}`, fix, data)];
+}
+
+/** Why the night's page-writer child did not do its part, in a few words; null when it did, or had nothing to do. */
+export function writerMissed(children: readonly NightChildRun[]): string | null {
+  const w = children.find((c) => c.child === "writer");
+  if (w === undefined) return null;
+  if (w.timedOut === true) return "stopped by its watchdog";
+  // Every skip on the row is a child that could not run (a writer with
+  // nothing to do leaves no line): no claude, a spawn that failed, a store
+  // unread, or a seat that refused it.
+  if (w.skipped !== undefined) return `could not start: ${w.skipped}`;
+  if (w.code !== null && w.code !== 0) return `exited ${String(w.code)}`;
+  return null;
 }
 
 export function selfPageFindings(store: Store): Finding[] {
@@ -259,7 +303,7 @@ export function selfPageFindings(store: Store): Finding[] {
           "amber",
           "Self page",
           `${detail} — stale (over ${SELF_TUNABLES.PAGE_STALE_DAYS} days)`,
-          `Nothing has revised it lately: check the page writer, or amend it yourself with counterparts self-page --write.${fix === "" ? "" : ` ${fix}`}`,
+          `Nothing has revised it lately: check day's end, or amend it yourself with counterparts self-page --write.${fix === "" ? "" : ` ${fix}`}`,
           data,
         )
       : short
@@ -284,7 +328,7 @@ export function selfPageTraceFindings(store: Store): Finding[] {
   const cited =
     t.source === "none"
       ? `no cites kept with it (written by ${page.by ?? "an unrecorded door"})`
-      : `${t.source === "reflection" ? "its reflection's record cites" : "cites"} ${n(t.cites, "memory", "memories")}, ${String(t.live)} live, ${String(t.archivedOrMissing)} archived or missing`;
+      : `${t.source === "reflection" ? "its reflection's record cites" : "cites"} ${n(t.cites, "memory", "memories")}, ${String(t.live)} live${t.throughLater > 0 ? ` (${String(t.throughLater)} through a later memory)` : ""}, ${String(t.archivedOrMissing)} archived or missing`;
   const perClaim =
     t.uncited === null
       ? t.source === "none"
@@ -298,7 +342,7 @@ export function selfPageTraceFindings(store: Store): Finding[] {
       "Self page claims",
       `${n(t.claims, "claim", "claims")}; ${cited}${perClaim}`,
       "",
-      { claims: t.claims, source: t.source, cites: t.cites, live: t.live, archivedOrMissing: t.archivedOrMissing, uncited: t.uncited },
+      { claims: t.claims, source: t.source, cites: t.cites, live: t.live, archivedOrMissing: t.archivedOrMissing, throughLater: t.throughLater, uncited: t.uncited },
     ),
   ];
 }
@@ -458,7 +502,7 @@ export function pageWriterFindings(store: Store, config: AdapterConfig): Finding
       finding(
         "page-writer",
         "amber",
-        "Page writer",
+        "Day's end",
         `${mode} mode; ${ignored.join("; ")}`,
         "Fix the pageWriter block in claude-code.json. Nothing else in the file was affected, and memory is unaffected.",
         { ...data, ignored: ignored.join(" | ") },
@@ -474,7 +518,7 @@ export function pageWriterFindings(store: Store, config: AdapterConfig): Finding
       finding(
         "page-writer",
         "green",
-        "Page writer",
+        "Day's end",
         page === null
           ? "off — nothing writes the self page on its own, and nothing has been written by hand either"
           : "off — the page stands, and from here it changes only when somebody writes it",
@@ -492,7 +536,7 @@ export function pageWriterFindings(store: Store, config: AdapterConfig): Finding
       finding(
         "page-writer",
         "green",
-        "Page writer",
+        "Day's end",
         young
           ? `${mode} mode; never run — this store has no day before ${today} yet`
           : `${mode} mode; never run — it is the first part of the next nightly run, before the dream (${about})${dreamingSetting(store) === "off" ? "; dreaming is off, so the nightly run does not start" : ""}`,
@@ -538,10 +582,10 @@ export function pageWriterFindings(store: Store, config: AdapterConfig): Finding
     finding(
       "page-writer",
       bad || overdue ? "amber" : "green",
-      "Page writer",
+      "Day's end",
       detail,
       bad || overdue
-        ? "counterparts mechanisms --all --dir <store> --observer shows the run's own row. The page writer is the first part of the nightly run, before the dream: counterparts dream shows whether the runs are happening and how each ended. counterparts self-page --write amends the page by hand meanwhile."
+        ? "counterparts mechanisms --all --dir <store> --observer shows the run's own row. Day's end is the first part of the nightly run, before the dream: counterparts dream shows whether the runs are happening and how each ended. counterparts self-page --write amends the page by hand meanwhile."
         : "",
       {
         ...data,

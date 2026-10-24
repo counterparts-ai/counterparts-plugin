@@ -20,6 +20,9 @@
  * as lines, which whole — kept in one meta row per mechanism, so the recall
  * tool can count how often a receiver fetched what an index offered
  * (`noteLookups`). That count is the check against "just truncated again".
+ * The index also keeps a night run's SHORT IDS (2026-10-23, `AliasMap`): its
+ * lean bundle names memories `m1…` and journals `c1…`, and the doors read
+ * them back to real ids for the life of the run.
  *
  * Arithmetic and bookkeeping only; nothing here calls a model.
  */
@@ -423,6 +426,14 @@ export interface FitIndex {
    * the line the fit measured. Absent: an ordinary line.
    */
   readonly lineCap?: number;
+  /**
+   * THE RUN'S SHORT IDS (2026-10-23, lean night bundles): `m1…` for the
+   * memories its bundle names, `c1…` for the journals — position + 1 in each
+   * list. Append-only for the life of the run (a resume extends it), and a
+   * reflection's starts as its dream's, so one number means one memory all
+   * night. Absent: the run's bundle went out with real ids (`LEAN_BUNDLE` off).
+   */
+  readonly aliases?: NightAliases;
 }
 
 export function indexKey(mechanism: FitMechanism): string {
@@ -460,6 +471,13 @@ export function readIndex(store: Pick<Store, "getMeta">, mechanism: FitMechanism
         : {}),
       ...(v.unread !== undefined && v.unread !== null && typeof v.unread === "object"
         ? { unread: Object.fromEntries(Object.entries(v.unread).map(([k, x]) => [k, Array.isArray(x) ? x.filter((n): n is number => typeof n === "number") : []])) }
+        : {}),
+      // Kept through a lookup's rewrite (`noteLookups` writes back what this
+      // read): the summary line's length a later part renders, and the run's
+      // short ids — lost here, a recall would unmake them mid-night.
+      ...(typeof v.lineCap === "number" ? { lineCap: v.lineCap } : {}),
+      ...(v.aliases !== undefined && v.aliases !== null && typeof v.aliases === "object"
+        ? { aliases: { m: ids((v.aliases as unknown as Record<string, unknown>)["m"]), c: ids((v.aliases as unknown as Record<string, unknown>)["c"]) } }
         : {}),
     };
   } catch {
@@ -557,4 +575,148 @@ export function fidelityOf(index: FitIndex | null, ref: string, ids: readonly st
     else out[id] = "unseen";
   }
   return out;
+}
+
+// ── short ids for one night's bundle (2026-10-23, lean night bundles) ───────
+
+/**
+ * A RUN'S SHORT IDS, as its index keeps them: `m[i]` is `m{i+1}`, `c[i]` is
+ * `c{i+1}`. A journal (`epi_…`) is a `c`; anything else an `m`.
+ */
+export interface NightAliases {
+  readonly m: readonly string[];
+  readonly c: readonly string[];
+}
+
+/** A short id as a tool call may send it: `m14`, `c3`, or a chapter of one, `c3#2`. */
+const SHORT_ID = /^([mc])([1-9][0-9]*)(#[1-9][0-9]*)?$/;
+
+/** A real id in a line the code wrote (`mem_…`, `epi_…`) — never applied to a memory's own words. */
+const REAL_ID = /\b(?:mem|epi)_[0-9a-zA-Z]+\b/g;
+
+/**
+ * THE KEYS THAT CARRY MEMORY IDS in the night's tool calls (2026-10-23): the
+ * dream's changes (`ids`, `id`, `a`, `b`, `sources`, `holds`, `over`,
+ * `pair`), the reflection's finish and settle (`cites`, `id`, `shows`,
+ * `memory`, `close`, `holds`, `over`) and recall (`ids`, `handle`). Never a
+ * key that carries words.
+ */
+export const ID_KEYS: ReadonlySet<string> = new Set(["ids", "id", "a", "b", "sources", "holds", "over", "pair", "cites", "shows", "memory", "close", "reopen", "handle"]);
+
+/** Is this string shaped like a short id (whether or not a map holds it)? */
+export function isShortId(s: string): boolean {
+  return SHORT_ID.test(s.trim());
+}
+
+/**
+ * THE MAP, LOOKED UP BOTH WAYS. Built from the stored lists; `extend`
+ * appends ids it does not hold yet — it never renumbers.
+ */
+export class AliasMap {
+  private readonly m: string[];
+  private readonly c: string[];
+  private readonly back = new Map<string, string>();
+
+  constructor(from?: NightAliases | null) {
+    this.m = [...(from?.m ?? [])];
+    this.c = [...(from?.c ?? [])];
+    this.m.forEach((id, i) => this.back.set(id, `m${String(i + 1)}`));
+    this.c.forEach((id, i) => this.back.set(id, `c${String(i + 1)}`));
+  }
+
+  /** Give each id not yet held the next number of its kind, in the order given. */
+  extend(ids: Iterable<string>): this {
+    for (const id of ids) {
+      if (typeof id !== "string" || id.length === 0 || this.back.has(id) || SHORT_ID.test(id)) continue;
+      const chapter = id.startsWith("epi_");
+      const list = chapter ? this.c : this.m;
+      list.push(id);
+      this.back.set(id, `${chapter ? "c" : "m"}${String(list.length)}`);
+    }
+    return this;
+  }
+
+  /** The short id of a real one, or the real id itself when it has none. */
+  short(id: string): string {
+    return this.back.get(id) ?? id;
+  }
+
+  has(id: string): boolean {
+    return this.back.has(id);
+  }
+
+  /**
+   * The real id a short one stands for — a chapter address keeps its `#N`
+   * (`c3#2` → `epi_…#2`) — or null when this map does not hold it.
+   */
+  resolve(s: string): string | null {
+    const hit = SHORT_ID.exec(s.trim());
+    if (hit === null) return null;
+    if (hit[3] !== undefined && hit[1] !== "c") return null;
+    const real = (hit[1] === "c" ? this.c : this.m)[Number(hit[2]) - 1];
+    return real === undefined ? null : `${real}${hit[3] ?? ""}`;
+  }
+
+  /**
+   * A TOOL CALL'S ARGUMENTS WITH THEIR SHORT IDS READ BACK (2026-10-23): at
+   * any depth, the value of a key in `keys` — a string, or a list of strings —
+   * is resolved where this map holds it; lists and objects under other keys
+   * are walked; every other value (a text, a why, a title) is left exactly
+   * as it came. A short id this map does not hold is left as it came too, so
+   * the door that reads it refuses it by name.
+   */
+  resolveIn(value: unknown, keys: ReadonlySet<string>): unknown {
+    const one = (x: unknown): unknown => (typeof x === "string" ? (this.resolve(x) ?? x) : this.resolveIn(x, keys));
+    if (Array.isArray(value)) return value.map((x) => (x !== null && typeof x === "object" ? this.resolveIn(x, keys) : x));
+    if (value === null || typeof value !== "object") return value;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (keys.has(k)) out[k] = Array.isArray(v) ? v.map(one) : one(v);
+      else out[k] = v !== null && typeof v === "object" ? this.resolveIn(v, keys) : v;
+    }
+    return out;
+  }
+
+  /** Every real id this map holds, in a line the code wrote, put short. */
+  inText(text: string): string {
+    return text.replace(REAL_ID, (id) => this.back.get(id) ?? id);
+  }
+
+  toJSON(): NightAliases {
+    return { m: [...this.m], c: [...this.c] };
+  }
+
+  get size(): number {
+    return this.m.length + this.c.length;
+  }
+}
+
+/** A lean line's number: `.57`, `1`, `0` — two places at most, no leading zero. */
+export function leanNumber(n: number): string {
+  const r = Math.round(n * 100) / 100;
+  if (r === 0) return "0";
+  const s = String(r);
+  return s.startsWith("0.") ? s.slice(1) : s.startsWith("-0.") ? `-${s.slice(2)}` : s;
+}
+
+/**
+ * A SMALL SECTION AS PLAIN WORDS (2026-10-23): the bundle's furniture — the
+ * limits, a thing on my mind, a belief — as `key: value` with no quotes or
+ * braces, ids put short. A list of objects is an item in parentheses each; a
+ * nested object, its keys in parentheses. Every key and value the JSON
+ * carried is here.
+ */
+export function plainValue(v: unknown, map: AliasMap): string {
+  if (v === null || v === undefined) return "none";
+  if (typeof v === "string") return map.has(v) ? map.short(v) : v;
+  if (typeof v === "number") return leanNumber(v);
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "none";
+    return v.every((x) => x === null || typeof x !== "object") ? v.map((x) => plainValue(x, map)).join(" ") : v.map((x) => `(${plainValue(x, map)})`).join(" ");
+  }
+  return Object.entries(v as Record<string, unknown>)
+    .filter(([, x]) => x !== undefined)
+    .map(([k, x]) => `${k}: ${x !== null && typeof x === "object" && !Array.isArray(x) ? `(${plainValue(x, map)})` : plainValue(x, map)}`)
+    .join("; ");
 }

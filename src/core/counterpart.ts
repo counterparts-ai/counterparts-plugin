@@ -197,10 +197,11 @@ import type {
   WriterInput,
 } from "./self/index.js";
 import { acceptsReflectedFeeling, keepCore, ownerNames, retireCore } from "./sleep/index.js";
-import { WRITER_JOURNAL_CHARS, WRITER_JOURNAL_SHARE, journalBlockChars } from "./self/writer.js";
+import { DAYS_END_JOURNAL_SHARE, WRITER_JOURNAL_CHARS, WRITER_JOURNAL_SHARE, journalBlockChars } from "./self/writer.js";
 import type { WriterJournal } from "./self/writer.js";
 import { dayJournal } from "./dream/slices.js";
 import { DREAM_TUNABLES } from "./dream/tunables.js";
+import { SELF_TUNABLES } from "./self/tunables.js";
 import type { CoreDecision, CoreDecisionActor } from "./sleep/index.js";
 import type { CyclePartial, CycleReport } from "./sleep/index.js";
 import { ABOUT_MARKS, CORE_ABOUT_MARKS, Store, aboutMarkOf, assertSafeDataDir, rowTombstoned, hashText, indexTextOf } from "./store/index.js";
@@ -378,7 +379,7 @@ export { ROW_IDS_MAX, boundedIds } from "./types.js";
 
 // The seat (2026-10-20): the interface whoever answers the memory's own asks
 // implements (`seat.ts`), here so a host reaches it through the package entry.
-export { SEAT_TOOLS, seatAsk } from "./seat.js";
+export { SEAT_TOOLS, SPLIT_DREAM_TOOLS, SPLIT_REFLECTION_TOOLS, seatAsk, seatTools } from "./seat.js";
 export type { Seat, SeatAct, SeatAnswer, SeatAsk, SeatTool } from "./seat.js";
 
 // The core from beliefs (wave 2 lane F, 2026-10-22, `self.CORE_FROM_BELIEFS`):
@@ -704,11 +705,19 @@ export class Counterpart {
                 ...(o.short === undefined ? {} : { short: o.short }),
                 ...(o.trace === undefined ? {} : { trace: o.trace }),
               });
-        const note = pageRoomNote(
+        const roomNote = pageRoomNote(
           written,
           this.self.tunables.PAGE_ROOM_BYTES,
           "call finish again with page.short alone (the entry and the page stand)",
         );
+        // HELD TO ITS LANE, SAID (2026-10-23, `self.PAGE_SPLIT`): the sections
+        // it sent that the page writer's, kept as they stood.
+        const kept = written.laneKept ?? [];
+        const laneNote =
+          kept.length === 0
+            ? null
+            : `Kept as it stood: ${kept.map((h) => (h.startsWith("the words") ? h : `"## ${h}"`)).join(", ")} — tonight the reflection writes "## Core" alone, and day's end the rest.`;
+        const note = [roomNote, laneNote].filter((n): n is string => n !== null && n.length > 0).join(" ") || null;
         return written.written && written.version !== null
           ? { ok: true, version: written.version, note, ...(written.traced === undefined ? {} : { unmatched: written.traced.unmatched }) }
           : written.reason === "past-room"
@@ -4384,6 +4393,25 @@ export class Counterpart {
     omit?: (m: { id: string; protectedRow: boolean }) => boolean;
   }): WriterInput {
     const budget = opts.budgetBytes ?? this.self.tunables.PAGE_WRITER_MEMORY_BYTES;
+    // DAY'S END READS THE DAY AS TOLD (2026-10-23, `self.DAYS_END_INPUT`, read
+    // at use): every chapter of the day by its summary, a line each with its
+    // address, in most of the room, and the day's few strongest memories with
+    // their ids in the rest. Off: the ranked list and the fitted journal below.
+    if (SELF_TUNABLES.DAYS_END_INPUT) {
+      const told = this.writerJournal({
+        about: opts.about,
+        day: opts.day ?? this.store.livedDay(),
+        room: Math.floor(budget * DAYS_END_JOURNAL_SHARE),
+        summaries: true,
+      });
+      return this.self.pageWriterInput({
+        ...opts,
+        max: Math.min(opts.max ?? this.self.tunables.PAGE_WRITER_MEMORY_MAX, SELF_TUNABLES.DAYS_END_MEMORIES),
+        budgetBytes: Math.max(0, budget - (told?.chars ?? 0)),
+        ...(told === null ? {} : { journal: told }),
+        daysEnd: true,
+      });
+    }
     // THE DAY'S JOURNAL (2026-10-15), in a room of its own taken out of the
     // same budget: the chapters across sessions, a line each (its summary
     // when the session wrote one) and the most important whole. It used to
@@ -4401,7 +4429,7 @@ export class Counterpart {
   }
 
   /** The day's journal for the page writer (`dream/slices.ts#dayJournal`), or null when there is none or it will not read. Pure. */
-  private writerJournal(input: { about: string; day: number; room: number }): WriterJournal | null {
+  private writerJournal(input: { about: string; day: number; room: number; summaries?: boolean }): WriterJournal | null {
     try {
       const day = dayJournal(this.store, {
         about: input.about,
@@ -4410,13 +4438,14 @@ export class Counterpart {
         day: input.day,
         lineBytes: DREAM_TUNABLES.LINE_BYTES,
         entryChars: DREAM_TUNABLES.ENTRY_CHARS,
+        ...(input.summaries === true ? { summaries: true } : {}),
       });
       if (day.entries === 0) return null;
       const entries = day.chapters.flatMap((c) =>
         c.entries.map((e) => ({ episode: c.id, title: c.title, chapter: e.chapter, fidelity: e.fidelity, text: e.text, chars: e.chars })),
       );
       // What the block spends on them, measured as it renders (framing included).
-      const journal = { entries, total: day.entries, notShown: day.notShown };
+      const journal = { entries, total: day.entries, notShown: day.notShown, ...(input.summaries === true ? { summaries: true } : {}) };
       return { ...journal, chars: journalBlockChars(input.about, journal) };
     } catch {
       return null;
@@ -4435,6 +4464,10 @@ export class Counterpart {
     omitted?: number;
     day?: number;
     dedupKey?: string;
+    session?: string;
+    run?: string;
+    summary?: string;
+    summaryCites?: readonly string[];
   }): boolean {
     return this.self.recordPageWriterRun(run);
   }

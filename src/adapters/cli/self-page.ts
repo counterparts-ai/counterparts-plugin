@@ -28,7 +28,7 @@ export const NO_PAGE_LINES: readonly string[] = [
   "No page has been written here yet — still forming.",
   "",
   "A page is written by a woken session (the `self_page` tool), by the nightly",
-  "run (its page writer, then its reflection), or by you:",
+  "run (its day's end, then its reflection), or by you:",
   "",
   "  counterparts self-page --write --file <path> --reason \"why\"",
   "  … | counterparts self-page --write --stdin --reason \"why\"",

@@ -44,7 +44,7 @@ export function costWords(c) {
   if (c.handoffs > 0) out.push(c.handoffs + (c.handoffs === 1 ? " handoff" : " handoffs") + " had no room at a session start");
   if (c.lastHere > 0) out.push(c.lastHere + (c.lastHere === 1 ? " \"Last here\" line" : " \"Last here\" lines") + " had no room at a session start");
   if (c.work > 0) out.push("\"Work here\" lines did not all fit at a session start, in " + c.work + (c.work === 1 ? " project" : " projects"));
-  if (c.writerHeld) out.push("the page writer held back for lack of room");
+  if (c.writerHeld) out.push("day's end held back for lack of room");
   return out;
 }
 

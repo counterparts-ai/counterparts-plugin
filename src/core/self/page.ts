@@ -809,3 +809,181 @@ export function traceOf(meta: Record<string, unknown>, body: string): PageTrace 
   const byKey = new Map(stored.claims.map((c) => [c.of, c.cites]));
   return { cites: stored.cites, claims: pageClaims(body).map((text) => ({ text, cites: byKey.get(claimKey(text)) ?? [] })) };
 }
+
+// ── the page split by section (lane N1 part 2, 2026-10-23, `self.PAGE_SPLIT`) ──
+
+/** Who writes which part of the page on a split night: the writer all but "## Core", the reflection "## Core" alone. */
+export type PageLane = "writer" | "reflection";
+
+/** What a lane's write became: the page to store, and what was taken from the page as it stands. */
+export interface PageLaneSplice {
+  /** The page to store. */
+  readonly body: string;
+  /** Sections the write changed or dropped outside its lane, taken back from the page as it stands, by heading. */
+  readonly kept: readonly string[];
+  /** A reflection's write with headings but no "## Core": nothing in its lane. */
+  readonly empty: boolean;
+}
+
+interface LaneBlock {
+  /** "" for the words before the first heading. */
+  readonly heading: string;
+  readonly lines: readonly string[];
+}
+
+/**
+ * A page in blocks for the lanes: the words before the first heading, then
+ * one block per heading — "## Core" running to the next heading of its level
+ * or above, so a "###" inside it stays with it. A heading inside a code fence
+ * is words. Pure.
+ */
+function laneBlocks(body: string): LaneBlock[] {
+  const out: { heading: string; lines: string[] }[] = [{ heading: "", lines: [] }];
+  let fenced = false;
+  let inCore = 0;
+  for (const line of body.split("\n")) {
+    if (FENCE.test(line)) fenced = !fenced;
+    const m = fenced ? null : HEADING.exec(line.trimEnd());
+    const level = m === null ? 0 : (m[1] ?? "").length;
+    if (m !== null && (inCore === 0 || level <= inCore)) {
+      const heading = (m[2] ?? m[3] ?? "").trim();
+      // A "# Core" (or "#Core") ends at the next "##" too (review of #603):
+      // read to the next heading of its own level, it swallowed every
+      // section after it.
+      inCore = heading.toLowerCase() === PAGE_CORE_HEADING.toLowerCase() ? Math.max(2, level) : 0;
+      out.push({ heading, lines: [line] });
+      continue;
+    }
+    (out[out.length - 1] as { lines: string[] }).lines.push(line);
+  }
+  return out;
+}
+
+const isCoreBlock = (b: LaneBlock): boolean => b.heading.toLowerCase() === PAGE_CORE_HEADING.toLowerCase();
+const blockText = (b: LaneBlock | undefined): string => (b === undefined ? "" : b.lines.join("\n").trim());
+
+/**
+ * The page again from its blocks, line for line — so a page none of whose
+ * blocks moved comes back byte for byte (its trace and short version still
+ * name it). A block brought in from the other page ends in one blank line
+ * when another follows it.
+ */
+function joinBlocks(bs: readonly LaneBlock[], brought: LaneBlock | null): string {
+  const lines: string[] = [];
+  bs.forEach((b, i) => {
+    if (b !== brought) {
+      lines.push(...b.lines);
+      return;
+    }
+    const own = [...b.lines];
+    while (own.length > 0 && (own[own.length - 1] as string).trim().length === 0) own.pop();
+    if (lines.length > 0 && (lines[lines.length - 1] as string).trim().length > 0) lines.push("");
+    lines.push(...own);
+    if (i < bs.length - 1) lines.push("");
+  });
+  return lines.join("\n").trim();
+}
+
+/**
+ * ONE LANE'S WRITE, HELD TO ITS LANE (2026-10-23): what is outside the lane is
+ * taken from the page as it stands, never refused (guards loose-first), and
+ * named in `kept` when the write had changed or dropped it.
+ *   - writer: the page as sent, with "## Core" as it stands (put back first
+ *     when the write left it out). While the page has no "## Core", the
+ *     writer's stands.
+ *   - reflection: the page as it stands, with "## Core" as sent (added first
+ *     when the page had none). A write with no heading at all is read as
+ *     "## Core"'s words; one with headings but no "## Core" is `empty`.
+ * With no page yet, the write is the page, whole. Pure.
+ */
+export function splicePageLane(sent: string, current: string | null, lane: PageLane): PageLaneSplice {
+  if (current === null || current.trim().length === 0) return { body: sent, kept: [], empty: false };
+  const now = laneBlocks(current);
+  const got = laneBlocks(sent);
+  const nowCore = coreGroup(now);
+  if (lane === "writer") {
+    if (nowCore === null) return { body: sent, kept: [], empty: false };
+    // Every "## Core" the write carries, as one (review of #603: a second
+    // one further down slipped past when only the first was compared).
+    const gotCore = coreGroup(got);
+    if (gotCore !== null && blockText(gotCore) === blockText(nowCore)) return { body: sent, kept: [], empty: false };
+    return { body: joinBlocks(withCore(got, nowCore), nowCore), kept: [PAGE_CORE_HEADING], empty: false };
+  }
+  const headed = got.length > 1;
+  const sentCore = headed ? coreGroup(got) : { heading: PAGE_CORE_HEADING, lines: [`## ${PAGE_CORE_HEADING}`, "", sent.trim()] };
+  // Headings but no "## Core", or a "## Core" with nothing under it: nothing in its lane.
+  if (sentCore === null || sentCore.lines.slice(1).join("\n").trim().length === 0) return { body: current, kept: [], empty: true };
+  // Its heading as the page writes it (review of #603: a "#Core" sent once
+  // made a level-1 Core every night after).
+  const core: LaneBlock = { heading: PAGE_CORE_HEADING, lines: [`## ${PAGE_CORE_HEADING}`, ...sentCore.lines.slice(1)] };
+  // What the write changed outside its lane: a section sent with other words
+  // than the page has. One it left out is simply kept, and not named.
+  const kept: string[] = [];
+  if (headed) {
+    for (const b of got) {
+      if (isCoreBlock(b) || blockText(b).length === 0) continue;
+      const theirs = now.find((n) => n.heading.toLowerCase() === b.heading.toLowerCase());
+      if (blockText(b) !== blockText(theirs)) kept.push(b.heading === "" ? "the words before the first heading" : b.heading);
+    }
+  }
+  if (nowCore !== null && now.filter(isCoreBlock).length === 1 && blockText(nowCore) === blockText(core)) return { body: current, kept, empty: false };
+  return { body: joinBlocks(withCore(now, core), core), kept, empty: false };
+}
+
+/** Every Core block of a page, as one block in order (blank-line apart); null for none. */
+function coreGroup(bs: readonly LaneBlock[]): LaneBlock | null {
+  const cs = bs.filter(isCoreBlock);
+  if (cs.length === 0) return null;
+  const lines: string[] = [];
+  for (const b of cs) {
+    const own = [...b.lines];
+    while (own.length > 0 && (own[own.length - 1] as string).trim().length === 0) own.pop();
+    if (lines.length > 0) lines.push("");
+    lines.push(...own);
+  }
+  return { heading: PAGE_CORE_HEADING, lines };
+}
+
+/** The page's blocks with every Core block taken out and `core` put where the first one stood (after the words before the first heading, when it had none). */
+function withCore(bs: readonly LaneBlock[], core: LaneBlock): LaneBlock[] {
+  const first = bs.findIndex(isCoreBlock);
+  const rest = bs.filter((b) => !isCoreBlock(b));
+  const at = first < 0 ? 1 : bs.slice(0, first).filter((b) => !isCoreBlock(b)).length;
+  return [...rest.slice(0, at), core, ...rest.slice(at)];
+}
+
+/**
+ * A KEPT SENTENCE KEEPS WHAT IT RESTED ON (2026-10-23, `self.PAGE_SPLIT`):
+ * each sentence of the new page that the write's own trace leaves uncited,
+ * and that stood word for word (`claimKey`) on the page before with ids
+ * behind it, carries those ids forward — so a line the next writer kept does
+ * not decay into a hypothesis. `next`: the trace the write sent (null: none);
+ * `prev`: the one stored with the page before (null: none). `body` is the new
+ * text as stored. Pure.
+ */
+export function carryTrace(body: string, next: StoredTrace | null, prev: StoredTrace | null): { trace: StoredTrace | null; carried: number } {
+  if (prev === null || prev.claims === null || prev.claims.length === 0) return { trace: next, carried: 0 };
+  const before = new Map(prev.claims.map((c) => [c.of, c.cites]));
+  const own = new Map((next?.claims ?? []).map((c) => [c.of, c.cites]));
+  const claims: { of: string; cites: readonly string[] }[] = [];
+  const seen = new Set<string>();
+  let carried = 0;
+  for (const key of pageClaims(body).map(claimKey)) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const mine = own.get(key);
+    if (mine !== undefined && mine.length > 0) {
+      claims.push({ of: key, cites: mine });
+      continue;
+    }
+    const theirs = before.get(key);
+    if (theirs !== undefined && theirs.length > 0) {
+      claims.push({ of: key, cites: theirs });
+      carried += 1;
+    }
+  }
+  if (carried === 0) return { trace: next, carried: 0 };
+  const whole = [...(next?.cites ?? [])];
+  for (const c of claims) for (const id of c.cites) if (!whole.includes(id)) whole.push(id);
+  return { trace: { of: hashText(body), cites: whole, claims }, carried };
+}

@@ -104,7 +104,9 @@ import { pluginInstall } from "../host-wiring.js";
 import { pluginConsoleWords } from "../runtime.js";
 import type { PluginInstallRead } from "../host-wiring.js";
 import { SNAPSHOTS_DIR_NAME, resolveSnapshotsDir } from "../snapshots.js";
+import { NIGHT_DEBUG_DIR, onlyNightTranscripts } from "../config.js";
 import type { AdapterConfig } from "../config.js";
+import { DEFAULT_STORE_SUBDIR } from "../../core/store/paths.js";
 import type { Io } from "./commands.js";
 import { BIN, CONFIG_FILE, LEGACY_CREDENTIALS_FILE, MCP_SERVER_NAME, hostSettingsDir } from "./install.js";
 import {
@@ -299,13 +301,20 @@ export function ownedNames(
  * `<file>.counterparts-backup-<stamp>`. A directory holding only those is still
  * a directory holding only ours.
  */
-export function ownedKind(name: string, owned: OwnedNames): OwnedKind | null {
+export function ownedKind(name: string, owned: OwnedNames, configDir?: string): OwnedKind | null {
   if (name === owned.config) return "config";
   if (name === owned.scopes) return "scopes";
   if (owned.snapshots !== null && name === owned.snapshots) return "snapshots";
   if (owned.store !== null && name === owned.store) return "store";
   if (name === SIDEBAR_FILE_NAME || name === PLUGIN_PRESENCE_NAME || /^sidebar\.json\.\d+\.tmp$/.test(name)) return "sidecar";
   if (NPM_LIVE_NAME.test(name)) return "sidecar";
+  // A developer's night transcripts (2026-10-23, `debug.nightTranscripts`),
+  // beside a store this package laid out (`config.ts#nightDebugDir`) — ours
+  // only while it holds nothing else: a `debug` folder with anything of the
+  // owner's in it is the owner's, never deleted whole (review of C1).
+  if (name === NIGHT_DEBUG_DIR) {
+    return owned.store === DEFAULT_STORE_SUBDIR && configDir !== undefined && onlyNightTranscripts(join(configDir, name)) ? "sidecar" : null;
+  }
   const bases = [owned.config, owned.scopes, owned.snapshots, owned.store];
   for (const base of bases) {
     if (base === null || !name.startsWith(`${base}.`)) continue;
@@ -671,7 +680,7 @@ export function planUninstall(input: PlanInput): UninstallPlan {
     };
   }
   for (const name of names) {
-    const kind = ownedKind(name, owned);
+    const kind = ownedKind(name, owned, configDir);
     if (kind === null) {
       foreign.push(name);
       continue;

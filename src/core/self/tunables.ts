@@ -296,6 +296,34 @@ export interface SelfTunables {
    *  become a hundred bullets. CAL. */
   PAGE_WRITER_MEMORY_MAX: number;
   /**
+   * DAY'S END READS THE DAY AS TOLD (2026-10-23, lane D1; Mike's go, lightly
+   * held). On: the nightly writer (called day's end since that day) is handed
+   * every chapter of the day by its summary, a line each with its address
+   * (recall opens one whole), and the day's `DAYS_END_MEMORIES` strongest
+   * memories with their ids, so what it writes can cite them — the diary is
+   * written from the day as it was told, not from a ranked list. Off: the
+   * ranked list of the day's memories and the day's journal fitted as before,
+   * exactly. Read at use.
+   */
+  DAYS_END_INPUT: boolean;
+  /** With `DAYS_END_INPUT`: how many of the day's strongest memories day's end is handed, with their ids. CAL. */
+  DAYS_END_MEMORIES: number;
+  /**
+   * THE DAY SUMMARY (2026-10-23, lane D2; Mike's go 15:32, lightly held).
+   * Bedtime rehearsal shapes what sleep keeps: on, day's end also leaves a
+   * few lines, first person — what the day was about and what is in motion —
+   * with the memory ids they rest on, sent with its one closing `self_page`
+   * call (with the page, or alone when the page stands). Stored on that
+   * call's run row (`self.page.writer.ran`'s payload: no table, no
+   * migration). The dream reads it first, as a header over its bundle, and
+   * the reflection reads the last `dream.TIMELINE_DAYS` of them as a line a
+   * day. Off: no summary is asked for or kept, and the dream's and the
+   * reflection's bundles are exactly as before. Read at use.
+   */
+  DAY_SUMMARY: boolean;
+  /** With `DAY_SUMMARY`: the most a day summary may be, in characters (code points: an emoji is one). Past it the call is refused with the numbers, never cut. CAL. */
+  DAY_SUMMARY_CHARS: number;
+  /**
    * How many SESSIONS may be asked to do one day's writing, in session mode.
    *
    * Not a pacer — the scar this package carries about pacers is about the
@@ -344,6 +372,21 @@ export interface SelfTunables {
    * nightly page WRITER leaves "## Core" to the reflection (`writer.ts`).
    */
   CORE_FROM_BELIEFS: boolean;
+
+  // ── the page split by section (lane N1 part 2, 2026-10-23) ───────────────
+  /**
+   * THE SWITCH (an experiment, very lightly held; Mike, 10-23). On, the night
+   * writes the page in two lanes instead of two whole-page rewrites: the page
+   * WRITER, in a child of its own and first, amends every section but
+   * "## Core" from the day just lived; the REFLECTION writes "## Core" alone.
+   * Held at the door (`Self#revisePage`): a writer's write takes "## Core"
+   * from the page as it stands, a reflection's takes every other section from
+   * it, and the answer says what was kept. A sentence kept word for word keeps
+   * the ids it rested on. Off: exactly as before — the writer inside the
+   * dream's child, both rewriting the whole page, no carrying. Read at use.
+   * Not `pageWriter.mode: off`, which silences the reflection's page too.
+   */
+  PAGE_SPLIT: boolean;
   /** On: a belief's strength (physics, on the day read) at least this. CAL. */
   CORE_BELIEF_STRENGTH: number;
   /** On: at least this many memories counted FOR it (`belief_support`, stance
@@ -431,11 +474,16 @@ export const SELF_TUNABLES: SelfTunables = {
 
   PAGE_WRITER_MEMORY_BYTES: 8_192,
   PAGE_WRITER_MEMORY_MAX: 40,
+  DAYS_END_INPUT: true,
+  DAYS_END_MEMORIES: 12,
+  DAY_SUMMARY: true,
+  DAY_SUMMARY_CHARS: 600,
   PAGE_WRITER_ASKS_PER_DAY: 2,
 
   WAKE_LINE_BYTES: 240,
 
   CORE_FROM_BELIEFS: false,
+  PAGE_SPLIT: true,
   CORE_BELIEF_STRENGTH: 0.5,
   CORE_BELIEF_MEMORIES: 3,
   CORE_BELIEF_DAYS: 2,

@@ -19,7 +19,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.33";
+export const SERVER_VERSION = "0.3.34";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -170,7 +170,24 @@ export const PAGE_REFUSAL_DETAIL: Record<string, string> = {
     "You named a version and there is no page here at all — nobody wrote over you. Omit `ifVersion` to write the first page, or pass -1, which is the version a read of an empty store reports.",
   "page-appeared":
     "You wrote as if there were no page, and one has appeared since you looked. Nothing was written. `currentVersion` and `currentBody` are what is there: read it, fold your change into it, and send it back with that version.",
+  "lane-empty":
+    "Tonight the reflection writes `## Core` alone, and what was sent has headings but no `## Core`. Nothing was written. Send the `## Core` section (its heading and its words); every other section is kept as it stands.",
 };
+
+/**
+ * WHAT A NIGHTLY DOOR IS TOLD WHEN ITS WRITE WENT PAST ITS LANE (2026-10-23,
+ * `self.PAGE_SPLIT`): the sections taken from the page as it stood, by name.
+ * Nothing when none was.
+ */
+export function pageLaneAnswer(written: PageRevision): Record<string, unknown> {
+  const kept = written.laneKept ?? [];
+  if (kept.length === 0) return {};
+  const names = kept.map((h) => (h.startsWith("the words") ? h : `\`## ${h}\``)).join(", ");
+  return {
+    laneKept: [...kept],
+    laneNote: `Kept as it stood: ${names}. Tonight day's end amends every section but \`## Core\`, and the reflection writes \`## Core\` alone; the rest of what you sent was written.`,
+  };
+}
 
 /**
  * WHAT A WRITE PAST THE PAGE'S ROOM IS TOLD (2026-10-10): the room, what

@@ -405,7 +405,7 @@ export const COMMAND_DETAIL: Record<string, readonly string[]> = {
   ],
   dream: [
     "Once a day the first session starts the nightly run in the background —",
-    "the page writer, then a dream, then a reflection — and says so in one",
+    "day's end, then a dream, then a reflection — and says so in one",
     "line (--setting ask makes it ask you first; --setting off, or saying 'no",
     "dreams' in a session, turns it off). Every change a dream makes is",
     "recorded under its id, so --undo can reverse the whole batch. Its journal",

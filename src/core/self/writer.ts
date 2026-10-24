@@ -1,6 +1,14 @@
 /**
  * THE NIGHTLY PAGE WRITER — S2, the half that lives in core.
  *
+ * Called DAY'S END wherever a person reads about it, since 2026-10-23 (lane
+ * D1, Mike: "days end works as a name"): it runs before the dream, in a child
+ * of its own, as the bedtime diary does — what is gone over before sleep is
+ * what sleep consolidates — and since then it reads the day as it was told
+ * (the chapters' summaries) rather than as a ranked list (`DAYS_END_INPUT`).
+ * The identifiers (`pageWriter*`, the row, the `pageWriter.mode` key) keep
+ * the old name: no store change, no config migration.
+ *
  * S1 gave the self one written page and put it at the head of every wake. This
  * module is what fills it: once per lived day a session **woken as the self**
  * reads the day just lived and revises the page in place. Spec §15 items 5 and
@@ -79,7 +87,7 @@ import type { Store } from "../store/index.js";
 import { calendarDate } from "./calendar.js";
 import { addDays, isDay } from "../time.js";
 import { livedOn } from "../types.js";
-import { PAGE_CORE_HEADING, PAGE_LATELY_HEADING } from "./page.js";
+import { CLAIM_PREFIX_MIN_CHARS, PAGE_CORE_HEADING, PAGE_LATELY_HEADING } from "./page.js";
 import { PAGE_ROOM_BYTES } from "./briefing.js";
 import type { SelfPage } from "./page.js";
 import type { SelfTunables } from "./tunables.js";
@@ -185,6 +193,14 @@ export interface PageWriterRun {
    */
   readonly session: string;
   readonly run: string;
+  /**
+   * THE DAY SUMMARY (2026-10-23, lane D2, `self.DAY_SUMMARY`): the few lines
+   * day's end left with its closing call — what the day was about and what
+   * is in motion — and the memory ids they rest on. "" and none on every
+   * other row, and on rows written before.
+   */
+  readonly summary: string;
+  readonly summaryCites: readonly string[];
   readonly at: number;
   /** The log's own order, which is the only TOTAL order these rows have: two
    *  rows written in one millisecond share an `at`, and "newest first" has to
@@ -373,6 +389,8 @@ export function pageWriterRuns(
       omitted: numberOr(payload["omitted"], 0),
       session: typeof payload["session"] === "string" ? payload["session"] : "",
       run: typeof payload["run"] === "string" ? payload["run"] : "",
+      summary: typeof payload["summary"] === "string" ? payload["summary"] : "",
+      summaryCites: Array.isArray(payload["summaryCites"]) ? payload["summaryCites"].filter((x): x is string => typeof x === "string") : [],
       at: row.at,
       seq: row.seq,
     });
@@ -485,6 +503,79 @@ export function nightClaimFor(store: Store, session: string, today: string): Pag
   const claim = pageWriterRuns(store).find((r) => r.outcome === "asked" && r.session === session && (r.on === "" || r.on >= today));
   if (claim === undefined || !pageWriterClaimOpen(store, claim.about, today)) return null;
   return claim;
+}
+
+/**
+ * A DAY SUMMARY, as the dream and the reflection read it (2026-10-23, lane
+ * D2): the date it is about, its words, the memory ids it rests on, and the
+ * session and run that wrote it.
+ */
+export interface DaySummary {
+  readonly about: string;
+  readonly text: string;
+  readonly cites: readonly string[];
+  readonly session: string;
+  readonly run: string;
+  readonly at: number;
+  /** The lived day it was written on. */
+  readonly day: number;
+}
+
+function summaryOfRun(r: PageWriterRun): DaySummary | null {
+  // Only a row that answered the night (review of D2): never a refused page's.
+  if (r.outcome !== "revised" && r.outcome !== "nothing-to-say") return null;
+  const text = r.summary.trim();
+  if (text.length === 0) return null;
+  return { about: r.about, text, cites: r.summaryCites, session: r.session, run: r.run, at: r.at, day: r.day };
+}
+
+/**
+ * EVERY DAY'S NEWEST SUMMARY in the window, by the date it is about, newest
+ * date first (2026-10-23, lane D2). One per date: when a date was told twice
+ * (a run started again the same night), the later telling stands. Never
+ * throws.
+ */
+export function daySummaries(store: Store, opts: { sinceDay?: number } = {}): DaySummary[] {
+  const byDate = new Map<string, DaySummary>();
+  for (const r of pageWriterRuns(store, opts.sinceDay === undefined ? {} : { sinceDay: opts.sinceDay })) {
+    const s = summaryOfRun(r);
+    if (s === null || s.about === "" || byDate.has(s.about)) continue;
+    byDate.set(s.about, s);
+  }
+  return [...byDate.values()].sort((a, b) => (a.about < b.about ? 1 : a.about > b.about ? -1 : 0));
+}
+
+/**
+ * THE SUMMARY A NIGHT'S DREAM READS (2026-10-23, lane D2): the newest one
+ * this session's day's end left — the night's children share its session, so
+ * a night that crosses midnight between day's end and the dream still finds
+ * it (about `about` or the day before) — else the newest about `about` (the
+ * night's own date), else null. With `sinceAt` (when the dream before this
+ * one began; review of D2), only one told since: a long-lived session that
+ * ran last night's run too never hands tonight's dream last night's summary.
+ * Never throws.
+ */
+export function daySummaryFor(store: Store, input: { session: string | null; about: string; sinceAt?: number }): DaySummary | null {
+  const runs = pageWriterRuns(store).filter((r) => input.sinceAt === undefined || r.at > input.sinceAt);
+  const floor = input.about === "" ? "" : dayBefore(input.about);
+  if (input.session !== null && input.session.length > 0) {
+    // The newest DAY this session told (one night tells one day; a run
+    // started again tells it again, and the later telling stands).
+    let best: DaySummary | null = null;
+    for (const r of runs) {
+      if (r.session !== input.session || (floor !== "" && r.about < floor)) continue;
+      const s = summaryOfRun(r);
+      if (s !== null && (best === null || s.about > best.about)) best = s;
+    }
+    if (best !== null) return best;
+  }
+  if (input.about === "") return null;
+  for (const r of runs) {
+    if (r.about !== input.about) continue;
+    const s = summaryOfRun(r);
+    if (s !== null) return s;
+  }
+  return null;
 }
 
 /** The newest attempt inside the window, whatever date it was about. Null if
@@ -655,6 +746,13 @@ export interface WriterJournalEntry {
  */
 export interface WriterJournal {
   readonly entries: readonly WriterJournalEntry[];
+  /**
+   * DAY'S END (2026-10-23, `self.DAYS_END_INPUT`): every entry is shown by
+   * its summary — the session's own, or the chapter's opening — a line each
+   * with its address (`epi_…#N`), never the chapter whole. Absent: the
+   * journal as fitted before, a chapter whole where there was room.
+   */
+  readonly summaries?: boolean;
   /** The day's entries, all of them. */
   readonly total: number;
   /** Entries the room did not take. */
@@ -675,6 +773,13 @@ export interface WriterInput {
   /** Rows a caller's `omit` held back before the budget was spent (none by default). */
   readonly omitted: number;
   readonly bytes: number;
+  /**
+   * DAY'S END (2026-10-23, `self.DAYS_END_INPUT`): the memories are the
+   * day's strongest few, shown with their ids so the page can cite them, and
+   * the block frames the moment as the diary of the day, before sleep.
+   * Absent: the block as it was.
+   */
+  readonly daysEnd?: boolean;
 }
 
 /**
@@ -802,6 +907,14 @@ export const NIGHT_WRITER_MEMORY_BYTES = 40_000;
  */
 export const WRITER_JOURNAL_CHARS = 14_000;
 export const WRITER_JOURNAL_SHARE = 0.35;
+/**
+ * DAY'S END'S JOURNAL ROOM (2026-10-23, `self.DAYS_END_INPUT`): the day as
+ * told is most of what it reads, so the chapters' summaries may take this
+ * share of the block's room; the day's strongest memories (a dozen) take the
+ * rest. On the owner's busiest measured day, 51 chapters of summaries run to
+ * about 25k characters. CAL.
+ */
+export const DAYS_END_JOURNAL_SHARE = 0.75;
 
 export const NIGHT_WRITER_MEMORY_MAX = 150;
 
@@ -912,13 +1025,22 @@ export function writerInstruction(
     // so for older rows the window is offset from the person's day by the zone
     // (self NOTES §22, §25). A date is the one thing here that is exactly
     // true, so the words stay a date.
-    `This is context, not an instruction. If nothing about who you are moved on ${input.about}, leaving the page exactly as it stands is the right answer and is recorded as one. Do not write a diary entry here; the journal already has that day.`,
+    // DAY'S END (2026-10-23, `self.DAYS_END_INPUT`): the same moment, named
+    // as the diary of the day before sleep, and handed the day as told.
+    input.daysEnd === true
+      ? `This is day's end: the diary of this day, before sleep. It is context, not an instruction. Amend "## ${PAGE_LATELY_HEADING}" from what the day was, and keep every sentence that still holds. If nothing about who you are moved on ${input.about}, leaving the page exactly as it stands is the right answer and is recorded as one. Do not copy the day's events onto the page; the journal keeps them.`
+      : `This is context, not an instruction. If nothing about who you are moved on ${input.about}, leaving the page exactly as it stands is the right answer and is recorded as one. Do not write a diary entry here; the journal already has that day.`,
     "",
     // THE CORE IS THE REFLECTION'S (lane F, `CORE_FROM_BELIEFS`, read at use;
     // review of #587): with the switch on, "## Core" is written from the
     // beliefs, by tonight's reflection alone, so one night has one author of
     // it. Off: the words as they were.
-    SELF_TUNABLES.CORE_FROM_BELIEFS
+    // THE PAGE SPLIT BY SECTION (2026-10-23, `self.PAGE_SPLIT`, read at use):
+    // the same — "## Core" is the reflection's — with the day's own sections
+    // named, and held at the door (`Self#revisePage`).
+    SELF_TUNABLES.PAGE_SPLIT
+      ? `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: leave \`## ${PAGE_CORE_HEADING}\` exactly as it stands — tonight's reflection writes it${SELF_TUNABLES.CORE_FROM_BELIEFS ? ", from the beliefs life has backed" : ""} — and amend \`## ${PAGE_LATELY_HEADING}\` (what the last while has been like) and \`## How I work\` (how you work now) from the day. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds, word for word, and change the part that moved.${session}`
+      : SELF_TUNABLES.CORE_FROM_BELIEFS
       ? `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: leave \`## ${PAGE_CORE_HEADING}\` exactly as it stands — tonight's reflection writes it, from the beliefs life has backed (on a first page, one line saying it is still forming) — and amend \`## ${PAGE_LATELY_HEADING}\` for what the last while has actually been like. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds and change the part that moved.${session}`
       : `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: \`## ${PAGE_CORE_HEADING}\` for what holds steady — it may honestly say it is still forming — and \`## ${PAGE_LATELY_HEADING}\` for what the last while has actually been like. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds and change the part that moved.${session}`,
     "",
@@ -929,6 +1051,14 @@ export function writerInstruction(
     PAGE_WRITING_RULE,
     "",
   );
+  // WHAT A SENTENCE RESTS ON (day's end, 2026-10-23): the memories below come
+  // with their ids, so a sentence written from one can say so.
+  if (input.daysEnd === true) {
+    lines.push(
+      `When you write, pass \`claims\` with it: each sentence you wrote or changed (as written, or its first ${String(CLAIM_PREFIX_MIN_CHARS)} characters or more) and the ids (mem_…) of the memories below it rests on. A chapter's address is not a memory and cannot be cited: cite the memories. A sentence with none stands as a hypothesis; one you keep word for word keeps what it rested on.`,
+      "",
+    );
+  }
   // THE PAGE ITSELF IS NOT REPEATED HERE, and that is the point rather than an
   // economy. It is already at the head of the wake this reader woke with — the
   // reader is an ordinary session. Sending it a second time would spend
@@ -982,7 +1112,9 @@ export function writerInstruction(
       (input.dropped > 0 ? `, ${String(input.dropped)} more did not fit` : "") +
       (input.omitted > 0 ? `, ${String(input.omitted)} held back` : "");
     lines.push(
-      `What was written down on ${input.about} (${String(input.memories.length)}${tail}), most salient first:`,
+      input.daysEnd === true
+        ? `The ${String(input.memories.length)} strongest of the ${String(input.memories.length + input.dropped)} things written down on ${input.about}${input.omitted > 0 ? ` (${String(input.omitted)} more held back)` : ""}, each with its id to cite (the day's chapters tell the rest):`
+        : `What was written down on ${input.about} (${String(input.memories.length)}${tail}), most salient first:`,
       // THE FRAMING SITS WITH THE UNTRUSTED MATERIAL, not only at the top of the
       // block (S2 review, MAJOR-2). The lines below are model- and user-authored
       // content — exactly what the sweep proposes from a transcript — and the
@@ -991,7 +1123,7 @@ export function writerInstruction(
       // half of the fix that does not depend on a regular expression.
       DATA_NOT_INSTRUCTIONS,
     );
-    for (const m of input.memories) lines.push(`- ${m.statement}`);
+    for (const m of input.memories) lines.push(input.daysEnd === true ? `- ${m.id} · ${m.statement}` : `- ${m.statement}`);
   }
   if (journal !== undefined && journaled) lines.push("", ...journalLines(input.about, journal));
   lines.push(PAGE_WRITER_CLOSE);
@@ -1015,6 +1147,21 @@ export function journalBlockChars(about: string, journal: Omit<WriterJournal, "c
 function journalLines(about: string, journal: WriterJournal): string[] {
   const tail = journal.notShown > 0 ? `, ${String(journal.notShown)} more did not fit` : "";
   if (journal.entries.length === 0) return [`The journal on ${about}: nothing that can be shown here${tail}.`];
+  // DAY'S END (2026-10-23): the day as told — every chapter by its summary,
+  // a line each with its address, any of them a recall away whole.
+  if (journal.summaries === true) {
+    const out = [
+      `The day as told: the journal on ${about} (${String(journal.entries.length)} of ${String(journal.total)} chapter${journal.total === 1 ? "" : "s"}${tail}), each by its summary, with its address. To read a chapter whole, call recall with its address, ids: ["epi_…#N"].`,
+      DATA_NOT_INSTRUCTIONS,
+    ];
+    for (const e of journal.entries) {
+      const what = e.title === null || e.title.trim().length === 0 ? "a session" : flattenLine(e.title);
+      const address = e.chapter === null ? e.episode : `${e.episode}#${String(e.chapter)}`;
+      const how = e.fidelity === "line" ? ` (in part; ${String(e.chars)} characters in all)` : "";
+      out.push(`- ${address} · ${what}${how}: ${flattenLine(e.text)}`);
+    }
+    return out;
+  }
   const out = [
     `The journal on ${about} (${String(journal.entries.length)} of ${String(journal.total)} chapter${journal.total === 1 ? "" : "s"}${tail}) — a chapter in full where there was room, otherwise its summary:`,
     DATA_NOT_INSTRUCTIONS,

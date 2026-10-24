@@ -19,6 +19,7 @@
  */
 import { derivedFrom } from "../fit/index.js";
 import { strength } from "../physics/index.js";
+import { headOf } from "../recall/standing.js";
 import type { ReadOnlyStore } from "../store/index.js";
 import { pageClaims } from "./page.js";
 import type { SelfPage } from "./page.js";
@@ -38,8 +39,18 @@ export interface PageTraceReading {
   readonly source: "page" | "reflection" | "none";
   /** The distinct memories cited, and where each stands now. */
   readonly cites: number;
+  /** Live, or settled under a later memory that is (`throughLater`). */
   readonly live: number;
   readonly archivedOrMissing: number;
+  /**
+   * THROUGH A LATER MEMORY (2026-10-23, lane D1's check (d)): cites whose own
+   * memory a dream merged or a settle put under a newer one, read through to
+   * that one (`recall/standing.ts#headOf`) — the cite stays as written, and
+   * counts as live while what stands for it does. A merge's original stays
+   * live, faded, until its own curve archives it; without this the page's
+   * cite then read as archived though its merged memory stood.
+   */
+  readonly throughLater: number;
   /** Claims with no memory behind them; null when cites were not kept per claim for this text. */
   readonly uncited: number | null;
   /** Those claims' words, in page order (the hypotheses), or null with `uncited`. */
@@ -55,7 +66,7 @@ const REFLECTION_REF = /\breflection (rfl_[0-9a-f]+)/;
  * were kept with it (2026-10-20) falls back to its reflection's record, said
  * so in `source`, and reads `uncited: null` — never "all hypotheses".
  */
-export function pageTrace(store: Pick<ReadOnlyStore, "row" | "reflection">, page: SelfPage): PageTraceReading {
+export function pageTrace(store: Pick<ReadOnlyStore, "row" | "reflection" | "contradictionsOf">, page: SelfPage): PageTraceReading {
   const claims = pageClaims(page.body);
   let source: PageTraceReading["source"] = "none";
   let ids: string[] = [];
@@ -78,7 +89,20 @@ export function pageTrace(store: Pick<ReadOnlyStore, "row" | "reflection">, page
   }
   const distinct = [...new Set(ids)];
   let live = 0;
-  for (const id of distinct) if (citedState(store, id) === "live") live += 1;
+  let throughLater = 0;
+  for (const id of distinct) {
+    // Its own memory first; only one gone is read through what merged it
+    // (review of D1: not a correction's, which says the cite was wrong).
+    if (citedState(store, id) === "live") {
+      live += 1;
+      continue;
+    }
+    const later = laterHead(store, id);
+    if (later !== null && citedState(store, later) === "live" && mergedFrom(store, later, id)) {
+      live += 1;
+      throughLater += 1;
+    }
+  }
   const perClaim = page.trace?.claims ?? null;
   const hypotheses = perClaim === null ? null : perClaim.filter((c) => c.cites.length === 0).map((c) => c.text);
   return {
@@ -87,9 +111,31 @@ export function pageTrace(store: Pick<ReadOnlyStore, "row" | "reflection">, page
     cites: distinct.length,
     live,
     archivedOrMissing: distinct.length - live,
+    throughLater,
     uncited: hypotheses === null ? null : hypotheses.length,
     hypotheses,
   };
+}
+
+/** The later memory a cited one now stands under (a merge, a settle), or null. Never throws. */
+function laterHead(store: Pick<ReadOnlyStore, "row" | "contradictionsOf">, id: string): string | null {
+  try {
+    return headOf(store, id);
+  } catch {
+    return null;
+  }
+}
+
+/** Was `id` merged into `into`, through a few merges (`meta.mergedFrom`, as `writer.ts#isOfDay` follows it)? Never throws. */
+function mergedFrom(store: Pick<ReadOnlyStore, "row">, into: string, id: string, depth = 0): boolean {
+  if (depth >= 4) return false;
+  try {
+    const from = (JSON.parse(store.row(into)?.meta ?? "{}") as Record<string, unknown>)["mergedFrom"];
+    if (!Array.isArray(from)) return false;
+    return from.some((x) => typeof x === "string" && (x === id || mergedFrom(store, x, id, depth + 1)));
+  } catch {
+    return false;
+  }
 }
 
 /** Live, archived, or gone from the store (removed, or never there). Never throws. */

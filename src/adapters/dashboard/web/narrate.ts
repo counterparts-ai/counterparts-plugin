@@ -250,7 +250,7 @@ export const NARRATORS = {
       case "declined":
         return calm("You said not today to a dream.");
       case "launched":
-        return calm("I started the nightly run in the background: the page writer, a dream, a reflection.");
+        return calm("I started the nightly run in the background: day's end, a dream, a reflection.");
       case "relaunched":
         return calm("My last run was cut off, so I started it again.");
       case "setting":

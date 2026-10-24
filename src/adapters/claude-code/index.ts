@@ -94,6 +94,8 @@ export {
   NIGHT_MCP_SCRIPT,
   NIGHT_MCP_SERVER,
   NIGHT_RUN_ENV,
+  NIGHT_SERVED_TOOLS,
+  NIGHT_SYSTEM_PROMPT,
   NIGHT_TOOLS,
   claudeCodeSeat,
   hostToolName,
@@ -109,6 +111,11 @@ export {
   readKind,
   readNightSpills,
   runNight,
+  NIGHT_DEBUG_DIR,
+  NIGHT_TRANSCRIPT_DAYS,
+  nightDebugDir,
+  pruneNightTranscripts,
+  writeNightTranscript,
 } from "./night-run.js";
 export type { ClaudeCodeAnswer, ClaudeCodeSeatInput, NightAnswer, NightChild, NightChildPlan, NightKind, NightRunInput, NightRunnerPlan, NightStarter } from "./night-run.js";
 
@@ -135,6 +142,7 @@ export {
   WAKE_HEAD_MAX_LINES,
   attributePeers,
   classifyBlock,
+  childUsage,
   expansionIdsOf,
   parseToolSpills,
   parseTranscript,

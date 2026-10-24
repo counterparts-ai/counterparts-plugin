@@ -504,7 +504,7 @@ const WRITER_REASON: Record<string, WriterReasonWords> = {
     why: "the session start had no room left to ask (the old way)",
     next: () => "It runs inside the nightly run now, where there is room.",
     more: () =>
-      "Until 2026-09-28 the page writer was asked at the start of a session, beside the wake, and only when the ask fitted what the host lets a session start with. " +
+      "Until 2026-09-28 day's end was asked at the start of a session, beside the wake, and only when the ask fitted what the host lets a session start with. " +
       "This night it did not fit, so it was held back rather than cut short. The writer runs inside the nightly run now, handed its day in a tool result, with no such limit.",
   },
   "scope-question": {
@@ -551,7 +551,7 @@ function writerNext(detail: string, lastNight: boolean): string | null {
 }
 
 const WRITER_IS =
-  "The page writer reads the day just gone, once a night — the first part of the nightly run, before the dream and the reflection — and rewrites the page when something about who I am moved.";
+  "Day's end reads the day just gone, once a night — the first part of the nightly run, before the dream and the reflection — and rewrites the page when something about who I am moved.";
 const WRITER_ABOUT = `${WRITER_IS} This is its newest night.`;
 
 /** "2026-07-09" → "Jul 9th" (the dashboard's one date style); anything else as it came. */
@@ -815,6 +815,8 @@ export interface PageDay {
   readonly why: string | null;
   /** The longer story behind `why`, for its `?`. */
   readonly more: string | null;
+  /** The day summary day's end left that night (2026-10-23, lane D2): the date it told, and its words. Absent when none. */
+  readonly told?: { readonly about: string; readonly text: string };
 }
 
 /** How many lived days the strip carries at most, the newest kept. */
@@ -829,15 +831,15 @@ const WRITER_RUNS_READ = 500;
  */
 export function pageDayWords(w: Pick<WriterLine, "what" | "next">): string {
   const what = w.what;
-  const lead = /^(not |nothing )/.test(what) ? what.charAt(0).toUpperCase() + what.slice(1) : `The page writer ${what}`;
+  const lead = /^(not |nothing )/.test(what) ? what.charAt(0).toUpperCase() + what.slice(1) : `Day's end ${what}`;
   return `${lead}.` + (w.next === null ? "" : ` ${w.next}`);
 }
 
 /** The words for a lived day nothing in the record speaks for. Pure. */
 export function pageDayUnrecorded(today: boolean): { why: string; more: string } {
   return today
-    ? { why: "Not rewritten today; the page writer has not run yet.", more: `${WRITER_IS} It runs at most once a night, when a session starts.` }
-    : { why: "Not rewritten, and the page writer left no record that day.", more: `${WRITER_IS} Nothing in the record says it ran on this day of use.` };
+    ? { why: "Not rewritten today; day's end has not run yet.", more: `${WRITER_IS} It runs at most once a night, when a session starts.` }
+    : { why: "Not rewritten, and day's end left no record that day.", more: `${WRITER_IS} Nothing in the record says it ran on this day of use.` };
 }
 
 /**
@@ -883,6 +885,14 @@ function pageDays(src: DashboardSource, history: readonly PageStep[]): { pageDay
   }
   const newestRun = new Map<number, PageWriterRun>();
   for (const r of runs) if (!newestRun.has(r.day)) newestRun.set(r.day, r);
+  // THE DAY SUMMARY, under the night's dot (2026-10-23, lane D2): the newest
+  // one told on that day of use. Shown here, and only here, on the dashboard.
+  const toldOn = new Map<number, { about: string; text: string }>();
+  for (const r of runs) if (r.summary.trim().length > 0 && !toldOn.has(r.day)) toldOn.set(r.day, { about: r.about, text: r.summary.trim() });
+  const told = (d: number): { told?: { about: string; text: string } } => {
+    const t = toldOn.get(d);
+    return t === undefined ? {} : { told: t };
+  };
 
   const out: PageDay[] = [];
   for (let d = first; d <= Math.max(first, today); d += 1) {
@@ -901,6 +911,7 @@ function pageDays(src: DashboardSource, history: readonly PageStep[]): { pageDay
         reason: last.reason,
         why: null,
         more: null,
+        ...told(d),
       });
       continue;
     }
@@ -924,6 +935,7 @@ function pageDays(src: DashboardSource, history: readonly PageStep[]): { pageDay
       by: null,
       reason: null,
       ...words,
+      ...told(d),
     });
   }
   return { pageDays: out, pageDaysUndated: undated, pageDaysEarlier: first - Math.min(...dated.map((s) => s.day as number)) };

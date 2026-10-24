@@ -28,7 +28,7 @@ let days = [];
 let undated = 0;
 let earlier = 0;
 
-const WHO = { owner: "you, by hand", session: "a session", writer: "the page writer", reflection: "the reflection" };
+const WHO = { owner: "you, by hand", session: "a session", writer: "day's end", reflection: "the reflection" };
 export const who = (by) => (by ? WHO[by] || by : "someone unrecorded");
 
 /** An id as the record writes it: `rfl_…`, `drm_…`, `mem_…` (a prefix, then hex). */
@@ -83,7 +83,7 @@ export function paintBehind(d) {
   if (!b || d.pageAbsent) { el.innerHTML = ""; el.hidden = true; return; }
   el.hidden = false;
   el.innerHTML = esc(b.line) + " " +
-    q("behind", "The page is rewritten by the page writer, at most once a night, when something about who I am has moved. " +
+    q("behind", "The page is rewritten by day's end, at most once a night, when something about who I am has moved. " +
       "It was last rewritten on day " + b.writtenDay + " of use; today is day " + (b.writtenDay + b.livedDays) + " of use" +
       ". The strip beside the page says what happened on each day since.");
   wireTips(el);
@@ -110,6 +110,16 @@ export function dayWords(x) {
     return dayName(x) + " — rewritten " + times + "by " + w.who + (w.quote ? ": “" + w.quote + "”" : ".");
   }
   return dayName(x) + " — " + (x.why || "not rewritten.");
+}
+
+/**
+ * The picked day's summary (2026-10-23, lane D2): what day's end told of the
+ * day that night, under its caption — the one place the dashboard shows it.
+ * Empty when the day has none. Pure.
+ */
+export function toldWords(x) {
+  if (!x || !x.told || !x.told.text) return "";
+  return '<span class="ps-told"><br>Day\'s end told ' + esc(dateWords(x.told.about) || x.told.about) + ": " + esc(x.told.text) + "</span>";
 }
 
 /** The caption when no day is picked or hovered: how often, and the newest. */
@@ -152,7 +162,7 @@ export function paintHistory(d) {
   el.innerHTML =
     '<h3 class="sb-h">The page, day by day ' +
       q("history", "One dot per day of use since the page was first written. A filled dot is a day it was rewritten: click it to see what changed. " +
-        "A hollow dot is a day it was not: hover or tap it for why, from the page writer's own record." +
+        "A hollow dot is a day it was not: hover or tap it for why, from day's end's own record." +
         (undated > 0 ? " " + undated + (undated === 1 ? " older version carries" : " older versions carry") + " no day of use, so no dot shows it." : "")) + "</h3>" +
     '<div class="ps-strip" role="group" aria-label="The page\'s history, one dot per day of use">' + dots + "</div>" +
     ends +
@@ -193,7 +203,7 @@ function say(hover) {
     return;
   }
   box.className = "ps-say" + (x === picked ? " picked" : "");
-  box.innerHTML = esc(dayWords(x)) + (x === picked && x.more ? " " + q("pageday", x.more) : "");
+  box.innerHTML = esc(dayWords(x)) + (x === picked && x.more ? " " + q("pageday", x.more) : "") + toldWords(x === picked ? x : null);
   wireTips(box);
 }
 

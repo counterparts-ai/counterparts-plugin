@@ -1503,7 +1503,31 @@ const SELF_PAGE: ToolSpec = {
       session: {
         type: "string",
         description:
-          "Only when the nightly page-writer block (the dream tool's `writer` phase, in the nightly run) asked you to write, and only the id IT named. It is how the write is recorded as that night's work rather than as an ordinary amendment. Omit it every other time; the page is never refused for lack of it.",
+          "Only when the nightly day's end block (the dream tool's `writer` phase, in the nightly run) asked you to write, and only the id IT named. It is how the write is recorded as that night's work rather than as an ordinary amendment. Omit it every other time; the page is never refused for lack of it.",
+      },
+      cites: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional, with `body`: the ids of the memories the page rests on. An id that names no memory is left out and named back.",
+      },
+      claims: {
+        type: "array",
+        description: `Optional, with \`body\`: each sentence (as written, or its first several words: ${String(CLAIM_PREFIX_MIN_CHARS)} characters or more) and the memory ids it rests on. A sentence with none stands as a hypothesis; one kept word for word keeps what it rested on.`,
+        items: {
+          type: "object",
+          properties: { text: { type: "string" }, cites: { type: "array", items: { type: "string" } } },
+          required: ["text", "cites"],
+          additionalProperties: false,
+        },
+      },
+      summary: {
+        type: "string",
+        description: "Only day's end's, with `session`, as its block asks: a few lines about the day it read, with the page or alone when the page stands. Past its cap it is refused, never cut.",
+      },
+      summaryCites: {
+        type: "array",
+        items: { type: "string" },
+        description: "With `summary`: the ids of the memories it rests on. An id that names no memory is left out and named back.",
       },
     },
     required: [],
@@ -1523,7 +1547,7 @@ const DREAM: ToolSpec = {
   name: "dream",
   annotations: annotate("Dream", { readOnly: false, destructive: true }),
   summary:
-    "Dreaming, in the nightly run: a few minutes of replay over what was lived since the last dream — merging near-copies, linking what belongs together, replaying what matters, writing a pattern you notice, flagging a contradiction, recording how an old feeling sits now — kept in a dream journal and reversible as a whole — with the page writer before it and a reflection after it, in one background run. Phases: `launch` (the prompt for the background run), `begin` / `propose` / `journal` (the dreamer's), `writer` (the night's page writer: the day to read), `decline` (not today), `setting` (auto, ask or off — 'no dreams' is off).",
+    "Dreaming, in the nightly run: a few minutes of replay over what was lived since the last dream — merging near-copies, linking what belongs together, replaying what matters, writing a pattern you notice, flagging a contradiction, recording how an old feeling sits now — kept in a dream journal and reversible as a whole — with day's end before it and a reflection after it, in one background run. Phases: `launch` (the prompt for the background run), `begin` / `propose` / `journal` (the dreamer's), `writer` (the night's day's end: the day to read), `decline` (not today), `setting` (auto, ask or off — 'no dreams' is off).",
   admission:
     "Call `launch` only after the owner said \"dream\" (or yes, or \"dream on your own\") to the day's dream line, and hand the prompt it returns to a background agent unchanged. With the owner's setting `auto` the host runs the night itself, in a separate session: this session launches nothing. Call `setting` with value `auto` when the owner says \"dream on your own\" or turns it on, `off` when they say 'no dreams', `ask` when they want to be asked; `decline` when they say not today. `begin`, `propose`, `journal` and `writer` are the background run's, following that prompt.",
   negativeExamples: [

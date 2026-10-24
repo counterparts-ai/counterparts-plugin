@@ -3,16 +3,21 @@ import { NIGHT_CHILD_ENV, NIGHT_RUN_ENV } from "../spawn.js";
 import { readSession } from "../sessions.js";
 import { joinStillStands } from "../../core/dream/project-ask.js";
 import { RECALL_MAX_IDS } from "./deliberate.js";
+import { ID_KEYS } from "../../core/fit/index.js";
+import type { AliasMap } from "../../core/fit/index.js";
 import { DREAMING_SETTINGS, NIGHT_RUN_FINISHES, applyTagsAnswer, askTags, nightNext, nightOrder, renderTagsBundle } from "../../core/dream/index.js";
 import type { DreamingSetting, NightPart } from "../../core/dream/index.js";
 import {
   NIGHT_WRITER_TOOL,
   NO_PAGE_VERSION,
+  SELF_TUNABLES,
   pageSections,
   pageTooLargeDetail,
 } from "../../core/self/index.js";
+import type { TraceInput } from "../../core/self/page.js";
+import type { PageWriterMode } from "../../core/self/index.js";
 import type { ToolResult } from "./server-options.js";
-import { dreamHow, PAGE_REFUSAL_DETAIL, pageRoomAnswer } from "./server-words.js";
+import { dreamHow, PAGE_REFUSAL_DETAIL, pageLaneAnswer, pageRoomAnswer } from "./server-words.js";
 import type { McpServer } from "./server.js";
 
 /**
@@ -43,10 +48,19 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
   const tagsChild = (server["env"][NIGHT_CHILD_ENV] ?? "").trim() === "tags";
   if (tagsChild && phase !== "tags") return refused("tags-child", "This is the nightly run's tagging child: only phase \"tags\" is served here.");
   if (!tagsChild && phase === "tags") return refused("night-run-only", "The tags phase is the nightly run's tagging child's alone.");
+  // THE PAGE WRITER'S OWN CHILD (2026-10-23, `self.PAGE_SPLIT`), fenced as the
+  // tagging child is: it holds the dream tool for its `writer` phase alone,
+  // and must not begin the dream. While the page is split the dream's child
+  // is not served the writer's phase: it ran first, in its own child.
+  const writerChild = (server["env"][NIGHT_CHILD_ENV] ?? "").trim() === "writer";
+  if (writerChild && phase !== "writer") return refused("writer-child", "This is the nightly run's day's end child: only phase \"writer\" is served here.");
+  if (dreamChild && phase === "writer" && SELF_TUNABLES.PAGE_SPLIT) return refused("writer-child-only", "Tonight day's end runs in a child of its own, before the dream: go on with the dream.");
   const nextAfter = (part: NightPart, dream: string | null): string | null => {
     const next = nightNext(part);
+    if (writerChild) return null;
     if (dreamChild && next === "reflection") return null;
-    if (next === "writer") return `Next, the page writer: call the dream tool with phase "writer", session: ${session}${dream === null ? "" : `, dream: ${dream}`}.`;
+    if (dreamChild && next === "writer" && SELF_TUNABLES.PAGE_SPLIT) return null;
+    if (next === "writer") return `Next, day's end: call the dream tool with phase "writer", session: ${session}${dream === null ? "" : `, dream: ${dream}`}.`;
     if (next === "reflection") return `Now wake and reflect: call the reflect tool with phase "begin", session: ${session}, dream: ${dream ?? "<the dream id>"}. Your final message is the text its "finish" call returns.`;
     if (next === "dream") return `Next, the dream: call the dream tool with phase "begin", session: ${session}.`;
     return null;
@@ -193,22 +207,21 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
         if (typeof dream !== "string" || !Array.isArray(changes)) {
           return refused("dream-and-changes-required", "Pass `dream` (the id `begin` returned) and `changes`, an array.");
         }
-        const out = dreams.propose({ dream, session, changes: changes as never });
+        // SHORT IDS READ BACK (2026-10-23): a lean dream's m1… are its own,
+        // for its life; real ids pass as they came.
+        const aliases = dreams.aliasesOf(dream);
+        const sent = aliases === null ? changes : (aliases.resolveIn(changes, ID_KEYS) as unknown[]);
+        const out = dreams.propose({ dream, session, changes: sent as never });
         if (!out.ok) return refused(out.reason, "That dream is not open for this session.");
         server["emit"]("mcp.dream", dream, { phase: "propose", applied: out.results.filter((r) => r.ok).length });
         const refusedN = out.results.filter((r) => !r.ok).length;
-        return server["result"](
-          {
-            phase,
-            dream,
-            results: out.results,
-            // Each refusal names what tripped it (`detail`); 2026-09-28.
-            ...(refusedN === 0
-              ? {}
-              : { again: `${String(refusedN)} change${refusedN === 1 ? " was" : "s were"} not applied (see each result's reason and detail). Fix those and propose just them again; the rest already landed.` }),
-          },
-          false,
-        );
+        // Each refusal names what tripped it (`detail`); 2026-09-28.
+        const again = refusedN === 0 ? {} : { again: `${String(refusedN)} change${refusedN === 1 ? " was" : "s were"} not applied (see each one's reason and detail). Fix those and propose just them again; the rest already landed.` };
+        // A SHORT ANSWER (2026-10-23, lean): counts of what landed, the
+        // memories it made, what was said about a landed one, and every
+        // refusal whole — the per-change "ok" lines carried nothing else.
+        if (aliases !== null) return server["result"]({ phase, dream, ...briefChanges(out.results, aliases), ...again }, false);
+        return server["result"]({ phase, dream, results: out.results, ...again }, false);
       }
       case "journal": {
         const dream = args["dream"];
@@ -246,7 +259,7 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
         if (!out.ok) {
           server["emit"]("mcp.dream", dreamArg ?? undefined, { phase: "writer", writer: claim.reason });
           const why: Record<string, string> = {
-            off: "the owner has the page writer off",
+            off: "the owner has day's end off",
             "no-previous-day": "this store has no day before today yet",
             "no-memories": `nothing was written down on ${claim.about}`,
             "already-claimed": `${claim.about} was already written or answered`,
@@ -275,7 +288,10 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
             // retry here, and 2026-10-10 a short version in the same call):
             // the room in bytes, said plainly; a page past it is sent back
             // once, with how far over, to be cut and sent again.
-            how: `Read the block. If something about who you are moved on ${out.about}, call the self_page tool with the WHOLE page, reason, ifVersion: ${String(out.version ?? NO_PAGE_VERSION)} and session: ${session}; if nothing moved, write nothing — that is an answer too. The whole page has ${String(server.counterpart.self.tunables.PAGE_ROOM_BYTES)} bytes of room (UTF-8), and should stay thin. If self_page answers past-room, cut by \`over\` bytes or more and send the whole page again — cut, don't add a short version. If the answer has a roomNote, do what it says before you go on.`,
+            how:
+              `Read the block. If something about who you are moved on ${out.about}, call the self_page tool with the WHOLE page, reason, ifVersion: ${String(out.version ?? NO_PAGE_VERSION)} and session: ${session}; if nothing moved, write nothing — that is an answer too. The whole page has ${String(server.counterpart.self.tunables.PAGE_ROOM_BYTES)} bytes of room (UTF-8), and should stay thin. If self_page answers past-room, cut by \`over\` bytes or more and send the whole page again — cut, don't add a short version. If the answer has a roomNote, do what it says before you go on.` +
+              // THE DAY SUMMARY (2026-10-23, lane D2, `self.DAY_SUMMARY`, read at use).
+              (SELF_TUNABLES.DAY_SUMMARY ? ` ${daySummaryHow(out.about, session)}` : ""),
             ...(next === null ? {} : { next: `Then: ${next}` }),
           },
           false,
@@ -330,14 +346,21 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
  * `reflect` — the waking self (`core/dream/reflect.ts`, 2026-09-27). Every
  * phase binds the session, as `dream` does; `launch` writes nothing.
  */
-export function reflectTool(server: McpServer, args: Record<string, unknown>): ToolResult {
-  const phase = args["phase"];
+export function reflectTool(server: McpServer, sent: Record<string, unknown>): ToolResult {
+  const phase = sent["phase"];
   if (server.observer) return server["standDown"]("reflect");
-  const bound = server["requireBoundSession"](args["session"], "reflect");
+  const bound = server["requireBoundSession"](sent["session"], "reflect");
   if (bound !== null) return bound;
   const session = server.session as string;
   const reflections = server.counterpart.reflections;
   const refused = (reason: string, detail: string): ToolResult => server["refuse"]("reflect", reason, { phase, detail });
+  // SHORT IDS READ BACK (2026-10-23): a lean reflection's m1… — its dream's
+  // numbers, then its own — for its life, in what it writes; real ids pass
+  // as they came, and words are never touched.
+  const aliases = typeof sent["reflection"] === "string" && (phase === "finish" || phase === "settle") ? reflections.aliasesOf(sent["reflection"]) : null;
+  const args = aliases === null ? sent : (aliases.resolveIn(sent, ID_KEYS) as Record<string, unknown>);
+  // …and the answer names them short, as the reflection knows them (review of #602).
+  const asShort = <T>(v: T): T => (aliases === null ? v : (JSON.parse(aliases.inText(JSON.stringify(v))) as T));
   const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   const part = (v: unknown): { text?: string; cites?: string[]; short?: string; claims?: { text: string; cites: string[] }[] } | null => {
     if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
@@ -483,15 +506,28 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
             entryNote: o.entry,
             page: o.page,
             share: o.share,
-            returned: o.returned,
-            feelings: o.feelings,
-            about: o.about,
-            ...(o.traits.length > 0 ? { traits: o.traits } : {}),
-            ...(o.beliefs.births.length + o.beliefs.filings.length + o.beliefs.retire.length > 0 ? { beliefs: o.beliefs } : {}),
-            ...(o.refusedCites.length > 0 ? { refusedCites: o.refusedCites } : {}),
-            ...(o.close.proposed.length > 0 || o.close.closed.length > 0 || o.close.refused.length > 0 ? { close: o.close } : {}),
+            // A SHORT ANSWER (2026-10-23, lean): counts, notes and what was not written, part by part.
+            ...(aliases === null
+              ? {
+                  returned: o.returned,
+                  feelings: o.feelings,
+                  about: o.about,
+                  ...(o.traits.length > 0 ? { traits: o.traits } : {}),
+                  ...(o.beliefs.births.length + o.beliefs.filings.length + o.beliefs.retire.length > 0 ? { beliefs: o.beliefs } : {}),
+                }
+              : {
+                  returned: briefParts(o.returned.map((r) => ({ id: r.id, ok: r.counted, reason: r.reason })), aliases),
+                  feelings: briefParts(o.feelings, aliases),
+                  about: briefParts(o.about, aliases),
+                  ...(o.traits.length > 0 ? { traits: briefParts(o.traits, aliases) } : {}),
+                  ...(o.beliefs.births.length + o.beliefs.filings.length + o.beliefs.retire.length + o.beliefs.adopt.length > 0
+                    ? { beliefs: { births: briefParts(o.beliefs.births, aliases), filings: briefParts(o.beliefs.filings, aliases), retire: briefParts(o.beliefs.retire, aliases), adopt: briefParts(o.beliefs.adopt, aliases) } }
+                    : {}),
+                }),
+            ...(o.refusedCites.length > 0 ? { refusedCites: asShort(o.refusedCites) } : {}),
+            ...(o.close.proposed.length > 0 || o.close.closed.length > 0 || o.close.refused.length > 0 ? { close: asShort(o.close) } : {}),
             // WHAT WAS NOT WRITTEN, and that it can be sent again (2026-09-28).
-            ...(o.retry === null ? {} : { again: o.retry }),
+            ...(o.retry === null ? {} : { again: asShort(o.retry) }),
             say:
               o.retry === null
                 ? "Return `handBack` as your final message, unchanged."
@@ -520,7 +556,7 @@ export function reflectTool(server: McpServer, args: Record<string, unknown>): T
           why: typeof args["why"] === "string" ? args["why"] : "",
         });
         server["emit"]("mcp.reflect", reflection, { phase: "settle", ok: out.ok });
-        return server["result"]({ phase, reflection, settle: { ...out } }, !out.ok);
+        return server["result"]({ phase, reflection, settle: asShort({ ...out }) }, !out.ok);
       }
       case "told": {
         const reflection = args["reflection"];
@@ -614,8 +650,17 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
       detail: "`short` is the short version of the page, as text — or leave it out.",
     });
   }
-  if (body === undefined && short === undefined) return server["selfPageRead"]();
+  // THE DAY SUMMARY (2026-10-23, lane D2, `self.DAY_SUMMARY`): day's end's
+  // few lines about the day, with its closing call — beside the page, or
+  // alone when the page stands. Alone, it is not a read.
+  const summaryArg = args["summary"];
+  if (body === undefined && short === undefined && summaryArg === undefined) return server["selfPageRead"]();
   if (server.observer) return server["standDown"]("self_page");
+  if (summaryArg !== undefined && typeof summaryArg !== "string") {
+    return server["refuse"]("self_page", "summary-not-text", {
+      detail: "`summary` is day's end's few lines about the day, as text — or leave it out. Nothing was written.",
+    });
+  }
   // A NON-STRING body is a malformed call and stops here; an EMPTY one goes
   // THROUGH the seam, because the seam is what writes the durable refusal row
   // this tool's own description promises. The short-circuit that used to catch
@@ -660,11 +705,44 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
   // about 09-19 writes `writer` for that run and nothing else, and a stale
   // mark cannot relabel a write made two days later (`adapters/sessions.ts`).
   const writerFor = server["pageWriterMark"](claimedSession);
+  // THE PAGE WRITER'S OWN CHILD (2026-10-23, `self.PAGE_SPLIT`; review of
+  // #603): every page write it makes is the writer's, held to the writer's
+  // lane — its first write closes the night's claim, and a resend after it
+  // was labelled the session's and wrote the whole page.
+  const writerChild = (server["env"][NIGHT_CHILD_ENV] ?? "").trim() === "writer";
   const model = server["sessionModel"]();
   const said = typeof reason === "string" && reason.trim().length > 0 ? reason.trim() : null;
+  // WHAT IT RESTS ON (2026-10-23, day's end): the memory ids the page, or
+  // each sentence of it, rests on — the trace the reflection's finish already
+  // sends. Only ids of memories in this store are kept; the rest are named
+  // back. None sent: the trace already there is kept for the same text, as
+  // before.
+  const cited = pageTraceArgs(server, args);
+  // THE DAY SUMMARY, AT THE DOOR (2026-10-23, lane D2): read before anything
+  // is written, so a summary past its cap leaves nothing half done — the
+  // page and the summary are sent again together. Kept only from day's end
+  // (this session's open night claim) with the switch on; otherwise said
+  // back, never dropped unsaid.
+  const told = typeof summaryArg === "string" ? daySummaryArgs(server, summaryArg, args["summaryCites"], writerFor !== null) : null;
+  if (told !== null && told.refusal !== null) {
+    return server["refuse"]("self_page", told.refusal.reason, { ...told.refusal.numbers, detail: told.refusal.detail });
+  }
+  const alone = body === undefined && short === undefined;
+  // With a short version alone it is not the night's answer (that row is
+  // written with the page), so it is not kept there either.
+  const notKept =
+    told === null ? null : told.notKept ?? (typeof body !== "string" && !alone ? "A day summary goes with day's end's page, or alone when the page stands — not with a short version on its own." : null);
+  if (alone && told !== null && notKept !== null) {
+    return server["refuse"]("self_page", told.notKept === null ? "summary-not-kept" : told.notKeptReason, { detail: `${notKept} Nothing was written.` });
+  }
+  const keep = told !== null && notKept === null ? told : null;
+  if (alone && keep !== null && writerFor !== null) {
+    // ALONE: the night answered as the page standing, with the day told.
+    return daysEndAlone(server, { writerFor, claimedSession, told: keep });
+  }
   const common = {
     ...(model === undefined ? {} : { model }),
-    by: writerFor === null ? ("session" as const) : ("writer" as const),
+    by: writerFor === null && !writerChild ? ("session" as const) : ("writer" as const),
     // WHICH SESSION, when this server has one. `remember` resolves it the same
     // way; null is recorded rather than a guess (adversarial review M3).
     session: server.session,
@@ -674,7 +752,7 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
   // added to the page as it stands, as a revision of the same text.
   const written =
     typeof body === "string"
-      ? server.counterpart.revisePage(body, { ...common, reason: said ?? "amended", ...(short === undefined ? {} : { short }) })
+      ? server.counterpart.revisePage(body, { ...common, reason: said ?? "amended", ...(short === undefined ? {} : { short }), ...(cited.trace === null ? {} : { trace: cited.trace }) })
       : server.counterpart.addPageShort(short ?? "", { ...common, ...(said === null ? {} : { reason: said }) });
   server["emit"]("mcp.self_page", written.id ?? undefined, {
     stored: written.written,
@@ -708,11 +786,31 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
               ? `past-room: ${String(written.bytes)} bytes, ${String(written.bytes - written.overRoom)} over the ${String(written.overRoom)}-byte room`
               : written.reason,
         bytesAfter: written.written ? written.bytes : 0,
+        // THE DAY SUMMARY rides on the night's own row (2026-10-23, lane D2),
+        // with the session and run that told it, so the dream finds it.
+        // Only on a page written (review of D2): a refused page's summary is
+        // sent again with the page, and kept then.
+        ...(keep === null || !written.written ? {} : summaryRow(server, claimedSession, keep)),
       });
     } catch {
       /* the page is written; the bookkeeping is not worth the answer */
     }
   }
+  // What became of a summary sent with this call, said (lane D2).
+  // Day's end's page written with no summary, while day summaries are on:
+  // said, since the night is answered now and its dream opens without one.
+  const notSent =
+    told === null && writerFor !== null && typeof body === "string" && written.written && SELF_TUNABLES.DAY_SUMMARY
+      ? { summaryNotSent: "No day summary came with this write, so tonight's dream opens without one." }
+      : {};
+  const toldAnswer =
+    told === null
+      ? notSent
+      : keep === null || writerFor === null || typeof body !== "string"
+        ? { summaryNotKept: notKept ?? "A day summary is kept with day's end's write only." }
+        : !written.written
+          ? { summaryNotKept: "The page was not written, so neither was the summary: send it again with the page." }
+          : { summary: { kept: true, about: writerFor.about, chars: charCount(keep.text), cites: keep.cites.length }, ...(keep.refused.length === 0 ? {} : { refusedSummaryCites: keep.refused }) };
   if (!written.written) {
     // THE CEILING, IN NUMBERS (2026-10-09): a writer told only "past the
     // limit" guesses how much to take out; told both numbers, it tightens
@@ -732,6 +830,7 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
       ...(written.current === null
         ? {}
         : { currentVersion: written.current.version, currentBody: written.current.body }),
+      ...toldAnswer,
       detail: PAGE_REFUSAL_DETAIL[written.reason] ?? "The page was not written.",
     });
   }
@@ -756,12 +855,171 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
       // on a day the wake cannot hold it — its short version, or, without
       // one, its outline, with the way to add one.
       ...pageRoomAnswer(written, server.counterpart.self.tunables.PAGE_ROOM_BYTES),
+      // HELD TO ITS LANE, SAID (2026-10-23, `self.PAGE_SPLIT`).
+      ...pageLaneAnswer(written),
+      // WHAT IT RESTS ON, SAID (2026-10-23): how the claims sent landed, and
+      // the ids that name no memory here.
+      ...(written.traced === undefined ? {} : { traced: written.traced }),
+      ...(cited.refused.length === 0 ? {} : { refusedCites: cited.refused }),
+      ...toldAnswer,
       // WHEN IT WILL BE READ, precisely. The bundle every session wakes with
       // is composed by a worker and served unchanged until the next render,
       // so "it is live now" would be false for as long as this session lasts.
       // Since 2026-09-30 the write marks the wake behind and the next turn's
       // end re-renders it (`self/behind.ts`).
       appearsAtWake: "the next session's wake, once a turn has ended — the worker a turn's end starts re-renders it",
+    },
+    false,
+  );
+}
+
+/**
+ * WHAT DAY'S END IS ASKED FOR, beside the page (2026-10-23, lane D2): the
+ * day summary, on its one closing call — with the page, or alone when the
+ * page stands. Bedtime rehearsal: the dream reads it first.
+ */
+export function daySummaryHow(about: string, session: string): string {
+  return (
+    `Then tell the day: in that same self_page call — or, only if you leave the page as it stands, in a self_page call with session: ${session} and no body, which answers the night — send \`summary\`: a few lines, first person, at most ${String(SELF_TUNABLES.DAY_SUMMARY_CHARS)} characters, about what ${about} was about and what is in motion, and \`summaryCites\`: the ids (mem_…) of the memories it rests on. ` +
+    "Tonight's dream reads it first, and later reflections read it as that day's line. It is sent once, with the night's answer: a page written without one closes the night without one."
+  );
+}
+
+/** Characters as a reader counts them: code points, so an emoji is one (review of D2). */
+function charCount(text: string): number {
+  return [...text].length;
+}
+
+/** A day summary as the door read it (2026-10-23, lane D2). */
+interface DaySummaryArgs {
+  readonly text: string;
+  /** The memory ids it rests on that name a memory here. */
+  readonly cites: readonly string[];
+  /** What was sent as a cite and names no memory here, named back. */
+  readonly refused: readonly string[];
+  /** Why it is not kept (the switch off, not day's end), or null. */
+  readonly notKept: string | null;
+  readonly notKeptReason: string;
+  /** Refused outright, with nothing written: empty, or past its cap. */
+  readonly refusal: { readonly reason: string; readonly numbers: Record<string, number>; readonly detail: string } | null;
+}
+
+/**
+ * THE DAY SUMMARY, READ AT THE DOOR (2026-10-23, lane D2). Kept only from
+ * day's end — this session's open night claim — with `self.DAY_SUMMARY` on;
+ * otherwise named as not kept. Past `DAY_SUMMARY_CHARS` (characters as a
+ * reader counts them: code points, so an emoji is one; review of D2) it is refused with the numbers, never cut. Its
+ * cites are resolved as the page's are: a night's short id read back where
+ * this session holds the night's map, an id kept when it names a memory
+ * here, the rest named back. Never throws.
+ */
+function daySummaryArgs(server: McpServer, sent: string, rawCites: unknown, fromDaysEnd: boolean): DaySummaryArgs {
+  const text = sent.trim();
+  const none = { text, cites: [], refused: [], refusal: null };
+  if (!SELF_TUNABLES.DAY_SUMMARY) return { ...none, notKept: "Day summaries are switched off (self.DAY_SUMMARY), so it was not kept.", notKeptReason: "day-summary-off" };
+  if (!fromDaysEnd) {
+    return { ...none, notKept: "A day summary is day's end's, sent with its closing call in the nightly run (with session: the id its block named); this call is not that, so it was not kept.", notKeptReason: "summary-not-days-end" };
+  }
+  const cap = SELF_TUNABLES.DAY_SUMMARY_CHARS;
+  if (text.length === 0) {
+    return { ...none, notKept: null, notKeptReason: "", refusal: { reason: "summary-empty", numbers: {}, detail: "The day summary was empty. Send a few lines — what the day was about and what is in motion — or leave `summary` out. Nothing was written." } };
+  }
+  const chars = charCount(text);
+  if (chars > cap) {
+    return {
+      ...none,
+      notKept: null,
+      notKeptReason: "",
+      refusal: {
+        reason: "summary-too-long",
+        numbers: { chars, cap, over: chars - cap },
+        detail: `The day summary is ${String(chars)} characters, ${String(chars - cap)} over its ${String(cap)}. Cut it by that much or more and send the call again, the page with it if you sent one. Nothing was written.`,
+      },
+    };
+  }
+  let aliases: AliasMap | null = null;
+  try {
+    aliases = server["nightAliases"]();
+  } catch {
+    aliases = null;
+  }
+  const cites: string[] = [];
+  const refused: string[] = [];
+  const name = (x: unknown): void => {
+    const s = typeof x === "string" ? x : JSON.stringify(x) ?? String(x);
+    if (!refused.includes(s)) refused.push(s);
+  };
+  if (rawCites !== undefined && !Array.isArray(rawCites)) name(rawCites);
+  for (const x of Array.isArray(rawCites) ? (rawCites as unknown[]) : []) {
+    if (typeof x !== "string" || x.trim().length === 0) {
+      name(x);
+      continue;
+    }
+    const id = aliases?.resolve(x) ?? x.trim();
+    let known = false;
+    try {
+      known = server.counterpart.store.row(id)?.type === "memory";
+    } catch {
+      known = false;
+    }
+    if (known) {
+      if (!cites.includes(id)) cites.push(id);
+    } else name(x);
+  }
+  return { text, cites, refused, notKept: null, notKeptReason: "", refusal: null };
+}
+
+/** The day summary's fields on the night's row: its words, cites, and the session and run that told it. */
+function summaryRow(server: McpServer, claimedSession: string | null, told: DaySummaryArgs): { summary: string; summaryCites: readonly string[]; session?: string; run?: string } {
+  const session = claimedSession ?? server.session ?? "";
+  let run = "";
+  try {
+    run = session === "" ? "" : (server.counterpart.nightClaimFor(session)?.run ?? "");
+  } catch {
+    run = "";
+  }
+  return { summary: told.text, summaryCites: told.cites, ...(session === "" ? {} : { session }), ...(run === "" ? {} : { run }) };
+}
+
+/**
+ * DAY'S END, THE PAGE STANDING (2026-10-23, lane D2): a summary sent alone
+ * answers the night as `nothing-to-say` — the page left as it stands, which
+ * is an answer — on a row carrying the summary. Never throws.
+ */
+function daysEndAlone(
+  server: McpServer,
+  input: { writerFor: { about: string; mode: PageWriterMode }; claimedSession: string | null; told: DaySummaryArgs },
+): ToolResult {
+  let ok = false;
+  try {
+    const page = server.counterpart.selfPage();
+    const bytes = page === null ? 0 : Buffer.byteLength(page.body, "utf8");
+    const claim = input.claimedSession === null ? null : server.counterpart.nightClaimFor(input.claimedSession);
+    ok = server.counterpart.recordPageWriterRun({
+      about: input.writerFor.about,
+      mode: input.writerFor.mode,
+      outcome: "nothing-to-say",
+      detail: "day's end left the page as it stands",
+      bytesBefore: bytes,
+      bytesAfter: bytes,
+      ...(claim === null ? {} : { considered: claim.considered, omitted: claim.omitted }),
+      ...summaryRow(server, input.claimedSession, input.told),
+    });
+  } catch {
+    ok = false;
+  }
+  server["emit"]("mcp.self_page", undefined, { stored: false, reason: "days-end-summary", summary: ok, writerFor: input.writerFor.about, writerMode: input.writerFor.mode });
+  if (!ok) {
+    return server["refuse"]("self_page", "unrecorded", { detail: "The day summary could not be recorded. The page stands as it is." });
+  }
+  return server["result"](
+    {
+      stored: false,
+      answered: "nothing-to-say",
+      about: input.writerFor.about,
+      summary: { kept: true, about: input.writerFor.about, chars: charCount(input.told.text), cites: input.told.cites.length },
+      ...(input.told.refused.length === 0 ? {} : { refusedSummaryCites: input.told.refused }),
+      said: `The page stands as it is, and ${input.writerFor.about} is told.`,
     },
     false,
   );
@@ -873,4 +1131,111 @@ export function bindForPageWriter(server: McpServer, claimed: unknown): string |
     return null;
   }
   return claimed;
+}
+
+/**
+ * THE DREAM'S SHORT ANSWER TO `propose` (2026-10-23, lean bundles): what
+ * landed, counted by what happened to it (`linked`, `replayed`,
+ * `replayed-not-counted:…`); the memories a merge or a gist made; a note said
+ * about one that landed; and every refusal whole, with its place in the list.
+ * Ids the code wrote in a refusal or a note are put short, as the dream knows
+ * them.
+ */
+export function briefChanges(
+  results: readonly { readonly index: number; readonly action: string; readonly ok: boolean; readonly reason: string; readonly id?: string; readonly detail?: string; readonly note?: string }[],
+  aliases: AliasMap,
+): Record<string, unknown> {
+  const landed: Record<string, number> = {};
+  const made: { index: number; action: string; id: string }[] = [];
+  const notes: { index: number; action: string; note: string }[] = [];
+  const refused: { index: number; action: string; reason: string; detail?: string }[] = [];
+  for (const r of results) {
+    if (!r.ok) {
+      refused.push({ index: r.index, action: r.action, reason: r.reason, ...(r.detail === undefined ? {} : { detail: aliases.inText(r.detail) }) });
+      continue;
+    }
+    landed[r.reason] = (landed[r.reason] ?? 0) + 1;
+    if ((r.reason === "merged" || r.reason === "dreamed" || r.reason === "folded") && r.id !== undefined) made.push({ index: r.index, action: r.action, id: r.id });
+    if (r.note !== undefined) notes.push({ index: r.index, action: r.action, note: aliases.inText(r.note) });
+  }
+  return {
+    landed,
+    ...(made.length > 0 ? { made } : {}),
+    ...(notes.length > 0 ? { notes } : {}),
+    ...(refused.length > 0 ? { refused } : {}),
+  };
+}
+
+/**
+ * THE REFLECTION'S SHORT ANSWER, part by part (2026-10-23, lean bundles):
+ * how many were written, a note said about one that was, and every one not
+ * written whole. Ids the code wrote are put short.
+ */
+export function briefParts(results: readonly { readonly id: string | null; readonly ok: boolean; readonly reason: string; readonly detail?: string; readonly note?: string }[], aliases: AliasMap): Record<string, unknown> {
+  const short = (id: string | null): string | null => (id === null ? null : aliases.short(id));
+  const notes = results.filter((r) => r.ok && r.note !== undefined).map((r) => ({ id: short(r.id), note: aliases.inText(r.note as string) }));
+  const notWritten = results.filter((r) => !r.ok).map((r) => ({ id: short(r.id), reason: r.reason, ...(r.detail === undefined ? {} : { detail: aliases.inText(r.detail) }) }));
+  return { written: results.filter((r) => r.ok).length, ...(notes.length > 0 ? { notes } : {}), ...(notWritten.length > 0 ? { notWritten } : {}) };
+}
+
+/**
+ * `self_page`'s `cites` and `claims` (2026-10-23, day's end): the trace the
+ * page's door stores (`self/page.ts#traceFor`), the shape the reflection's
+ * finish sends. An id is kept when it names a memory in this store (live or
+ * not: a cite is what the sentence rested on when written); the rest come
+ * back in `refused`. Null trace when neither was sent. Never throws.
+ */
+function pageTraceArgs(server: McpServer, args: Record<string, unknown>): { trace: TraceInput | null; refused: string[] } {
+  const rawCites = args["cites"];
+  const rawClaims = args["claims"];
+  if (rawCites === undefined && rawClaims === undefined) return { trace: null, refused: [] };
+  const refused: string[] = [];
+  const known = (id: string): boolean => {
+    try {
+      return server.counterpart.store.row(id)?.type === "memory";
+    } catch {
+      return false;
+    }
+  };
+  // What is not an id is named back too (review of D1), never dropped unsaid.
+  const named = (x: unknown): void => {
+    const s = typeof x === "string" ? x : JSON.stringify(x) ?? String(x);
+    if (!refused.includes(s)) refused.push(s);
+  };
+  const ids = (v: unknown): string[] => {
+    if (v === undefined) return [];
+    if (!Array.isArray(v)) {
+      named(v);
+      return [];
+    }
+    const out: string[] = [];
+    for (const x of v) {
+      if (typeof x !== "string" || x.trim().length === 0) {
+        named(x);
+        continue;
+      }
+      const id = x.trim();
+      if (known(id)) {
+        if (!out.includes(id)) out.push(id);
+      } else if (!refused.includes(id)) refused.push(id);
+    }
+    return out;
+  };
+  const cites = ids(rawCites);
+  if (rawClaims !== undefined && !Array.isArray(rawClaims)) named(rawClaims);
+  const claims = Array.isArray(rawClaims)
+    ? rawClaims.flatMap((c): { text: string; cites: string[] }[] => {
+        const r = typeof c === "object" && c !== null ? (c as Record<string, unknown>) : null;
+        const text = r?.["text"];
+        if (r === null || typeof text !== "string" || text.trim().length === 0) {
+          named(c);
+          return [];
+        }
+        return [{ text, cites: ids(r["cites"]) }];
+      })
+    : null;
+  // Nothing usable sent: the trace already there stands, as with none sent.
+  if (rawCites !== undefined && !Array.isArray(rawCites) && claims === null) return { trace: null, refused };
+  if (rawCites === undefined && claims === null) return { trace: null, refused };
+  return { trace: { cites, claims }, refused };
 }

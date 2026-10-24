@@ -96,6 +96,7 @@ import {
 } from "node:fs";
 
 import { carriesDreamMark } from "../../core/dream/mark.js";
+import type { NightTokens } from "../../core/dream/index.js";
 import type { Turn, TurnSource } from "../../core/remember/index.js";
 
 /**
@@ -1232,3 +1233,36 @@ export function parseToolSpills(raw: string, opts: { readonly tool?: RegExp } = 
 // `hostTranscriptPath`, 2026-10-09). Removed 2026-10-12: the run reads the
 // child's own `stream-json` output instead (`night-run.ts#readNightSpills`),
 // so nothing under `~/.claude/projects` is listed or opened by this package.
+
+/**
+ * WHAT ONE CHILD SPENT (2026-10-21 in `tools/harness/usage.ts`; here since
+ * 2026-10-23, where the night reads its children's `stream-json`): the last
+ * `result` line's `usage` and `total_cost_usd`. Null when it said none — no
+ * result line (a child stopped mid-stream, one retried without the stream), or
+ * one without `usage`. A field it left out counts 0. Pure; never throws.
+ */
+export function childUsage(output: string | undefined): NightTokens | null {
+  const n = (x: unknown): number => (typeof x === "number" && Number.isFinite(x) && x >= 0 ? x : 0);
+  for (const line of (output ?? "").split("\n").reverse()) {
+    if (!line.includes('"result"')) continue;
+    try {
+      const o = JSON.parse(line) as { type?: unknown; usage?: unknown; total_cost_usd?: unknown };
+      if (o === null || typeof o !== "object" || o.type !== "result") continue;
+      if (o.usage === null || typeof o.usage !== "object" || Array.isArray(o.usage)) continue;
+      const u = o.usage as Record<string, unknown>;
+      // Usage with no count in it said nothing: null, never "0 tokens" (review of C1).
+      const counts = ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"];
+      if (!counts.some((k) => typeof u[k] === "number" && Number.isFinite(u[k]) && (u[k] as number) >= 0)) continue;
+      return {
+        input: n(u["input_tokens"]),
+        output: n(u["output_tokens"]),
+        cacheRead: n(u["cache_read_input_tokens"]),
+        cacheCreate: n(u["cache_creation_input_tokens"]),
+        costUsd: n(o.total_cost_usd),
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}

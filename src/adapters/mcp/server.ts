@@ -164,8 +164,11 @@ import {
   success,
 } from "./protocol.js";
 import type { Id, Request, Response } from "./protocol.js";
-import { TOOL_RESULT_CEILING, clipWire, lineOf, noteLookups, wireChars } from "../../core/fit/index.js";
-import type { FitMechanism } from "../../core/fit/index.js";
+import { AliasMap, TOOL_RESULT_CEILING, clipWire, lineOf, noteLookups, readIndex, wireChars } from "../../core/fit/index.js";
+import type { FitIndex, FitMechanism } from "../../core/fit/index.js";
+
+/** Recall's keys a night run's short ids may stand in (2026-10-23). */
+const RECALL_ID_KEYS: ReadonlySet<string> = new Set(["ids", "handle"]);
 import { WAKE_BUILD_KEY } from "../../core/self/index.js";
 import type { PageWriterMode } from "../../core/self/index.js";
 import { canonicalToolName, toolDefinitions, toolSpec } from "./tools.js";
@@ -2121,12 +2124,43 @@ export class McpServer {
    * boundary as quoting a loud surfacing does; and one durable `mcp.recall`
    * row (`noteRecall`).
    */
+  /**
+   * THE SHORT IDS THIS SESSION'S NIGHT RUN HANDED OUT (2026-10-23): the
+   * reflection's when this session holds the newest reflection's index (its
+   * map starts as its dream's), else the dream's — the night child's own kind
+   * first. Null for a session that is not the run's, or a run that went out
+   * with real ids.
+   */
+  private nightAliases(): AliasMap | null {
+    const session = this.session;
+    if (session === null) return null;
+    const store = this.counterpart.store;
+    const mine = (m: "dream" | "reflection"): FitIndex | null => {
+      const index = readIndex(store, m);
+      if (index === null || index.aliases === undefined) return null;
+      const row = m === "dream" ? store.dream(index.ref) : store.reflection(index.ref);
+      return row !== undefined && row.session === session ? index : null;
+    };
+    const dream = mine("dream");
+    const reflection = mine("reflection");
+    // The newer of the two (review of #602: not the child's kind — a dream
+    // child that went on to reflect holds the newer map, and the dream's is
+    // a prefix of it).
+    const pick = reflection !== null && (dream === null || reflection.at >= dream.at) ? reflection : dream;
+    return pick === null || pick.aliases === undefined ? null : new AliasMap(pick.aliases);
+  }
+
   private async recallTool(sent: Record<string, unknown>): Promise<ToolResult> {
     if (this.observer) return this.standDown("recall");
     // `query` IS `question` (2026-10-14, lightly held): the model sent `query`
     // about twice a day and was refused `no-argument`. Read at the root rather
     // than refused; `question` wins when both are sent. A mode is still required.
-    const args = sent["question"] === undefined && sent["query"] !== undefined ? { ...sent, question: sent["query"] } : sent;
+    const asSent = sent["question"] === undefined && sent["query"] !== undefined ? { ...sent, question: sent["query"] } : sent;
+    // A NIGHT RUN'S SHORT IDS (2026-10-23, lean bundles): `ids` and `handle`
+    // from this session's dream or reflection — m14, c2, c2#3 — read back to
+    // the real ones before anything else looks at them.
+    const night = this.nightAliases();
+    const args = night === null ? asSent : (night.resolveIn(asSent, RECALL_ID_KEYS) as Record<string, unknown>);
     const handle = args["handle"];
     // THE LAST EXCHANGE (2026-10-11): a read of this directory's span buffer.
     // It stands down under observer like the rest of recall (G5, review of #392).

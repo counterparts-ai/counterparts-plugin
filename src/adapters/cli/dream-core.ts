@@ -9,10 +9,11 @@
  * tests can check the words without a store.
  */
 import type { Counterpart } from "../../core/counterpart.js";
-import { dreamSkippedOf, nightPartsWords, nightRunWords } from "../../core/dream/index.js";
+import { dreamSkippedOf, nightPartsWords, nightRunWords, nightTokensWords } from "../../core/dream/index.js";
 import type { DreamingSetting, NightRun } from "../../core/dream/index.js";
 import { acceptsReflectedFeeling, reconsiderWords } from "../../core/sleep/index.js";
 import { coreSupport } from "../../core/self/measures.js";
+import { daySummaries } from "../../core/self/writer.js";
 import type { DreamChangeRow, ReflectionRow, Store } from "../../core/store/index.js";
 
 /** How a memory id reads in a list: its first line, or why it is not shown.
@@ -38,7 +39,7 @@ function countsLine(counts: Readonly<Record<string, number>>): string {
 export function dreamingSettingWords(setting: DreamingSetting): string {
   switch (setting) {
     case "auto":
-      return "Once a day, the first session starts the nightly run by itself — the page writer, then a dream, then a reflection — in a separate, windowless claude -p in the background, and says so in one line; if it cannot start, the next prompt asks instead and says why. Say 'no dreams' in a session, or counterparts dream --setting off, to turn it off.";
+      return "Once a day, the first session starts the nightly run by itself — day's end, then a dream, then a reflection — in a separate, windowless claude -p in the background, and says so in one line; if it cannot start, the next prompt asks instead and says why. Say 'no dreams' in a session, or counterparts dream --setting off, to turn it off.";
     case "ask":
       return "Once a day, the first session shows you the question in the terminal before it starts the nightly run; say 'dream' to start it, 'dream on your own' to let it start by itself each day, or nothing and it waits. (A memory with no setting reads as this; a new install starts on auto.)";
     case "off":
@@ -55,7 +56,9 @@ export function nightRunLine(run: NightRun): string {
   const what = run.kind === "reflection" ? "the reflection alone" : dreamSkippedOf(run) !== null ? "the catch-up alone" : "the whole night";
   const parts = run.state === "done" || run.state === "partial" ? ` — ${nightPartsWords(run)}` : "";
   const why = run.state === "done" || run.state === "started" || (run.state === "partial" && run.reason === "unfinished") ? "" : `: ${nightRunWords(run)}`;
-  return `Latest headless run: ${run.run}  ${run.date}  ${run.state} (${what})${parts}${why}`;
+  // WHAT IT COST (2026-10-23): the children's tokens together, when they said.
+  const cost = nightTokensWords(run.usage);
+  return `Latest headless run: ${run.run}  ${run.date}  ${run.state} (${what})${parts}${why}${cost === null ? "" : `; ${cost}`}`;
 }
 
 /** How many dreams `dream --list` prints without `--all`. */
@@ -210,6 +213,21 @@ export function dreamShowLines(counterpart: Counterpart, id: string): string[] |
     ...((): string[] => {
       const night = counterpart.dreams.nightRun();
       return night !== null && night.dream === dream.id ? [`  ${nightRunLine(night)}`] : [];
+    })(),
+    // WHAT IT OPENED WITH (2026-10-23, lane D2): the day, as day's end told it.
+    ...((): string[] => {
+      try {
+        // The date its `dream.begun` row says it opened with (review of D2:
+        // never another night's), that date's telling as it stands.
+        const begun = counterpart.store.eventLog({ name: "dream.begun", order: "desc", limit: 500 }).find((r) => r.ref === dream.id);
+        const opened = (JSON.parse(begun?.payload ?? "{}") as Record<string, unknown>)["daysEnd"];
+        if (typeof opened !== "string") return [];
+        const told = daySummaries(counterpart.store).find((s) => s.about === opened) ?? null;
+        if (told === null) return [];
+        return ["", `Day's end told ${told.about}${told.cites.length === 0 ? "" : ` (resting on ${told.cites.join(", ")})`}:`, ...told.text.split("\n").map((l) => `  ${l}`)];
+      } catch {
+        return [];
+      }
     })(),
     "",
     dream.title === null ? "Journal: (not written)" : `Journal: "${dream.title}"`,

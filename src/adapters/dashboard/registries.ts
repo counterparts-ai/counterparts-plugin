@@ -325,7 +325,7 @@ export const DURABLE_EVENTS = {
   // the night ran at all, in which mode, and what it came to — including the
   // day it read and had nothing to say about, which is an answer and not a
   // silence.
-  "self.page.writer.ran": "the nightly page writer ran (which day it read, in which mode, how many memories it was handed, and whether it revised the page, had nothing to say, was refused or failed)",
+  "self.page.writer.ran": "day's end ran — the night's page update, before the dream (which day it read, in which mode, how many memories it was handed, and whether it revised the page, had nothing to say, was refused or failed)",
   // The handoff's four (2026-09-20, E1). Written and shown are separate rows
   // for scar §2.3's reason, one lane along: "we wrote one" is not "a session
   // was handed one", and a pointer that stops being delivered is exactly the
@@ -382,7 +382,7 @@ export const DURABLE_EVENTS = {
   "physics.upgrade.census": "after the v8 upgrade, every memory was measured by the old arithmetic and the new (how many moved a band, down or up, and how many would be let go sooner or later)",
   // Contradictions (2026-09-29). Ids and counts only; the why is on the pair's trail.
   "contradiction.flagged": "two memories that disagree were flagged as a pair, unsettled (by a dream, today)",
-  "contradiction.settled": "a pair of memories that disagree was settled — changed, corrected or open — and by whom (a session, a dream, a reflection, the page writer or you)",
+  "contradiction.settled": "a pair of memories that disagree was settled — changed, corrected or open — and by whom (a session, a dream, a reflection, day's end or you)",
   "contradiction.undone": "a settle was undone: strength put back, a corrected memory back in recall, the pair unsettled again",
   // The update guard (2026-10-09). Ids, the reading and its numbers; no text.
   "contradiction.held": "a new memory said it changed or corrected one that looked unrelated to it, so the old one was left as it was and the two were not linked (the writer was shown it and asked to settle it if it meant to)",

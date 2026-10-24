@@ -23,8 +23,9 @@
  * And one from observer-mode G5: an unreadable configuration resolves to
  * OBSERVER, never to "encode anyway". `loadConfig` never throws.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { DEFAULT_STORE_SUBDIR } from "../core/store/paths.js";
 
 import { isZone } from "../core/time.js";
 
@@ -87,6 +88,13 @@ export const TUNABLES = {
   NIGHT_TAGS_MODEL: "haiku",
   NIGHT_TAGS_MAX_TURNS: 8,
   NIGHT_TAGS_MS: 5 * 60_000,
+  /**
+   * THE PAGE WRITER'S OWN CHILD (2026-10-23, `self.PAGE_SPLIT`): first in the
+   * night, on the night's model. One read and one write, a resend past the
+   * room and a short version at most; the ceilings are generous for that.
+   */
+  NIGHT_WRITER_MAX_TURNS: 12,
+  NIGHT_WRITER_MS: 10 * 60_000,
   /**
    * THE CATCH-UP (2026-10-01, build 3; unbounded 2026-10-11): before the page
    * writer, the nightly run writes up EVERYTHING owed in any directory, and
@@ -374,6 +382,15 @@ export interface AdapterConfig {
     readonly ignored?: readonly string[];
   };
   /**
+   * DEVELOPER SWITCHES (2026-10-23), off by default and documented only in
+   * docs/DEVELOPING.md. `nightTranscripts`: each night child's raw
+   * `stream-json` output kept beside the store for a week
+   * (`night-run.ts#nightDebugDir`). Read leniently and quietly: only `true`
+   * switches one on; any other key or value is ignored, never refused, never
+   * an old setting.
+   */
+  readonly debug?: { readonly nightTranscripts?: boolean };
+  /**
    * SETTINGS THIS BUILD NO LONGER READS, phrased for a person — e.g.
    * `"credentialsFile" is no longer used …`. Present only when the file named
    * one. A REPORT, not a stance: the setting was ignored and nothing else
@@ -438,6 +455,7 @@ export function loadConfig(raw: unknown): LoadedConfig {
     pageWriter?: { mode: PageWriterMode; ignored?: string[] };
     dreaming?: { model?: string; timeoutMs?: number; maxTurns?: number; ignored?: string[] };
     retention?: { afterWriteUpDays?: number; maxDays?: number; ignored?: string[] };
+    debug?: { nightTranscripts?: boolean };
     retired?: string[];
     timeZone?: string;
     timeZoneUnknown?: string;
@@ -586,10 +604,10 @@ export function loadConfig(raw: unknown): LoadedConfig {
     const w = pageWriter as Record<string, unknown> | null;
     if (typeof w === "object" && w !== null && !Array.isArray(w)) {
       if (w["command"] !== undefined) {
-        retired.push(`"pageWriter.command" is no longer used — the page writer runs inside the nightly run`);
+        retired.push(`"pageWriter.command" is no longer used — day's end runs inside the nightly run`);
       }
       if (w["mode"] === "host") {
-        retired.push(`"pageWriter.mode" "host" is no longer used — the page writer runs inside the nightly run (mode session)`);
+        retired.push(`"pageWriter.mode" "host" is no longer used — day's end runs inside the nightly run (mode session)`);
       }
       if (w["timeoutMs"] !== undefined) {
         retired.push(`"pageWriter.timeoutMs" is no longer used — the nightly run's watchdog is "dreaming.timeoutMs"`);
@@ -614,6 +632,12 @@ export function loadConfig(raw: unknown): LoadedConfig {
   const retention = rec["retention"];
   if (retention !== undefined) {
     out.retention = readRetention(retention);
+  }
+  // THE DEVELOPER BLOCK (2026-10-23): quiet as well as lenient — a switch
+  // only a developer sets, so nothing in it is reported, refused or retired.
+  const debug = rec["debug"];
+  if (typeof debug === "object" && debug !== null && !Array.isArray(debug)) {
+    out.debug = (debug as Record<string, unknown>)["nightTranscripts"] === true ? { nightTranscripts: true } : {};
   }
   const identity = rec["identity"];
   if (identity !== undefined) {
@@ -645,6 +669,50 @@ export function loadConfig(raw: unknown): LoadedConfig {
   // own words plus, at most, the one path the owner wrote.
   if (retired.length > 0) out.retired = tidy(retired, RETIRED_LINE_CHARS);
   return { config: out, ok: true, reason: "loaded" };
+}
+
+/**
+ * WHERE A NIGHT CHILD'S RAW OUTPUT IS KEPT when a developer asks for it
+ * (`debug.nightTranscripts`, 2026-10-23): `<base>/debug/<date>/<child>-<run>.jsonl`,
+ * beside the store rather than in it, so a snapshot (which copies the store's
+ * own backup set) never carries it. Only in the layout `install` creates —
+ * the store is `<base>/store` AND the configuration sits in that same `<base>` —
+ * so uninstall, which reads the configuration's directory, always finds it,
+ * and nothing is written or pruned in a parent nobody chose. Null otherwise.
+ * Dev only: these files hold the night's words (the memories it read, what it
+ * wrote), which nothing else keeps.
+ */
+export const NIGHT_DEBUG_DIR = "debug";
+/** The only names the switch writes, and so the only ones anything deletes. */
+export const NIGHT_TRANSCRIPT_NAME = /^(writer|dream|reflection|tags)-nrn_[A-Za-z0-9_-]+\.jsonl$/;
+
+export function nightDebugDir(dataDir: string | undefined, configPath: string | undefined): string | null {
+  if (dataDir === undefined || dataDir.trim().length === 0 || !isAbsolute(dataDir)) return null;
+  if (configPath === undefined || configPath.trim().length === 0 || !isAbsolute(configPath)) return null;
+  const store = resolve(dataDir);
+  if (basename(store) !== DEFAULT_STORE_SUBDIR || dirname(store) !== dirname(resolve(configPath))) return null;
+  return join(dirname(store), NIGHT_DEBUG_DIR);
+}
+
+/**
+ * Is `path` a debug folder holding only what the switch writes — a real
+ * directory (not a link) of date folders, each of only regular files with its
+ * names? What uninstall may take as ours; anything else in it makes it the
+ * owner's. Never throws (an unreadable folder is not ours).
+ */
+export function onlyNightTranscripts(path: string): boolean {
+  try {
+    if (!lstatSync(path).isDirectory()) return false;
+    for (const day of readdirSync(path, { withFileTypes: true })) {
+      if (!day.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(day.name)) return false;
+      for (const f of readdirSync(join(path, day.name), { withFileTypes: true })) {
+        if (!f.isFile() || !NIGHT_TRANSCRIPT_NAME.test(f.name)) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
