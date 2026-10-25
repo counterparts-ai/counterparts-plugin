@@ -51,7 +51,28 @@ export const GATE_STATE_VERSION = 1;
 
 /** The `gate_session.kind` vocabulary this module owns. `window` is
  *  `prospective/`'s (INTERFACE-GAPS.md §3) and is deliberately not read here. */
-export const GATE_KINDS = ["surfaced", "credited", "scalar", "semantic", "asked", "judged", "folded", "prime", "belief"] as const;
+export const GATE_KINDS = ["surfaced", "credited", "scalar", "semantic", "asked", "judged", "folded", "prime", "belief", "cues", "cuetrain"] as const;
+/**
+ * `cues` (2026-10-24, R3 cue learning — an experiment): ONE TURN'S CUE WORDS,
+ * kept beside what it showed, so a later credited use of a shown memory can
+ * wire those words to it. `ref` `t<turn>` for an ambient turn (its `turn` the
+ * turn), `a<seconds>` for a deliberate question (its `turn` the moment, as an
+ * `asked` record's). `value` holds index terms and their weights only — no
+ * order, no prompt text — and only words the word index already held (df > 0:
+ * `buildCues` drops any other), never a carried or ambiguous one. It has its
+ * own lifetime inside the session's: the newest `MAX_SESSION_RECORDS` turns,
+ * and `clearIdleCarries` drops it on the 14-day clock with the carried words.
+ * Never read by `loadGateState`.
+ */
+export const CUES_KIND = "cues";
+/**
+ * `cuetrain` (R3): what each showing of a memory has already trained, so a
+ * second credit of the same showing (an open, then a rating) trains only the
+ * difference. `ref` the memory (so the owner's removal takes it with the
+ * memory's other gate rows), `value` `{ <cue ref>: factor }`. Never read by
+ * `loadGateState`.
+ */
+export const CUE_TRAINED_KIND = "cuetrain";
 /**
  * `belief` (wave 2 lane E, 2026-10-22): a belief the beliefs slot showed this
  * session — `ref` the belief, `turn` the turn. Its own kind, never `surfaced`:
@@ -206,7 +227,10 @@ export function loadGateState(store: Store, sessionId: string, max = Infinity): 
   // must read `absent`, not `unreadable`. The credit pass's `judged` mark
   // (2026-10-09) is not the gate's either.
   // Priming's rows (2026-10-19) are not the gate's either.
-  const rows = store.gateRecords(sessionId).filter((r) => r.kind !== ASKED_KIND && r.kind !== JUDGED_KIND && r.kind !== PRIME_KIND);
+  // Cue learning's rows (R3) are not the gate's either.
+  const rows = store
+    .gateRecords(sessionId)
+    .filter((r) => r.kind !== ASKED_KIND && r.kind !== JUDGED_KIND && r.kind !== PRIME_KIND && r.kind !== CUES_KIND && r.kind !== CUE_TRAINED_KIND);
   if (rows.length === 0) return { state: freshGateState(sessionId), status: "absent" };
 
   const scalarRow = rows.find((r) => r.kind === "scalar" && r.ref === SCALAR_REF);
@@ -282,7 +306,7 @@ function bound<T extends { turn: number }>(rows: Record<string, T>, max: number)
  * that case, and if a future caller does, the refusal is inherited rather than
  * remembered.
  */
-export function saveGateState(store: Store, state: GateState, max: number): void {
+export function saveGateState(store: Store, state: GateState, max: number, extra: readonly GateRecordInput[] = []): void {
   const rows: GateRecordInput[] = [
     {
       sessionId: state.sessionId,
@@ -333,6 +357,9 @@ export function saveGateState(store: Store, state: GateState, max: number): void
       tier: rec.tier,
     });
   }
+  // Rows another record rides with in the same transaction (R3: the turn's
+  // cue words), so the record step stays one write on the hook path.
+  rows.push(...extra);
   store.setGateRecords(rows);
 }
 
@@ -355,6 +382,14 @@ export function saveGateState(store: Store, state: GateState, max: number): void
  */
 export function clearIdleCarries(store: Store, maxMs: number): number {
   const cutoff = store.now() - maxMs;
+  // A turn's cue words (R3) are what the person typed, reduced to index
+  // terms: they leave on the same clock, row and all.
+  let cues = 0;
+  try {
+    cues = store.dropGateRecords(CUES_KIND, (r) => !(cueRecordAt(r.value) > cutoff));
+  } catch {
+    cues = 0;
+  }
   // The train of thought (context priming, 2026-10-19) is a running vector of
   // what the person typed, so it leaves a quiet session on the same clock.
   const trains = store.rewriteGateValues(PRIME_KIND, TRAIN_REF, '"vec":[', (value) => {
@@ -371,7 +406,7 @@ export function clearIdleCarries(store: Store, maxMs: number): number {
     if (typeof parsed.at === "number" && parsed.at > cutoff) return null;
     return JSON.stringify({ ...parsed, vec: [], last: [], mass: 0 });
   });
-  return trains + store.rewriteGateValues("scalar", SCALAR_REF, '"carriedCues":["', (value) => {
+  return cues + trains + store.rewriteGateValues("scalar", SCALAR_REF, '"carriedCues":["', (value) => {
     let parsed: Partial<ScalarPayload>;
     try {
       parsed = JSON.parse(value) as Partial<ScalarPayload>;
@@ -654,3 +689,112 @@ export function inLineSemantic(
 /** Head, not tail, as the worker clips (`vectors.ts#LAG_PROMPT_BYTES`, the same
  *  2000): a prompt states its subject first. */
 const IN_LINE_TEXT_CHARS = 2000;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A TURN'S CUE WORDS (2026-10-24, R3 cue learning — an experiment)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const CUE_RECORD_VERSION = 1;
+
+/** One recorded cue word: its index term and its weight in the turn. */
+export type CueWord = readonly [term: string, weight: number];
+
+interface CueRecordPayload {
+  v: number;
+  /** Wall-clock ms it was saved, for `clearIdleCarries`. */
+  at: number;
+  c: [string, number][];
+}
+
+/** The cue ref of an ambient turn. */
+export function turnCueRef(turn: number): string {
+  return `t${turn}`;
+}
+
+/** The cue ref of a deliberate question asked at `askedTurn` (seconds). */
+export function askedCueRef(turn: number): string {
+  return `a${turn}`;
+}
+
+/** The moment a cue record was saved; 0 when it cannot be read (so it reads as old). */
+function cueRecordAt(value: string | null): number {
+  if (value === null) return 0;
+  try {
+    const p = JSON.parse(value) as Partial<CueRecordPayload> | null;
+    return p !== null && typeof p.at === "number" && Number.isFinite(p.at) ? p.at : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** One turn's (or question's) cue words as a gate record, for the caller to write. */
+export function turnCueRecord(
+  store: Store,
+  input: { sessionId: string; ref: string; turn: number; day: number; words: readonly CueWord[] },
+): GateRecordInput {
+  const payload: CueRecordPayload = {
+    v: CUE_RECORD_VERSION,
+    at: store.now(),
+    c: input.words.map(([term, weight]) => [term, Math.round(weight * 10_000) / 10_000]),
+  };
+  return { sessionId: input.sessionId, kind: CUES_KIND, ref: input.ref, turn: input.turn, lastDay: input.day, value: JSON.stringify(payload) };
+}
+
+/** How often (in turns) an ambient turn's record step also drops the session's turn records past `keepTurns`. */
+export const CUE_RECORD_SWEEP_TURNS = 50;
+
+/**
+ * Bound one session's ambient cue records to the newest `keepTurns` turns.
+ * Asked every `CUE_RECORD_SWEEP_TURNS` turns, not every turn, so the record
+ * step stays one write on the hook path (I38). Returns how many went.
+ */
+export function boundTurnCues(store: Store, sessionId: string, turn: number, keepTurns: number): number {
+  if (turn <= keepTurns || turn % CUE_RECORD_SWEEP_TURNS !== 0) return 0;
+  const floor = turn - keepTurns;
+  return store.dropGateRecords(CUES_KIND, (r) => r.ref.startsWith("t") && r.turn <= floor, sessionId);
+}
+
+/** Save one question's cue words (the deliberate path). Nothing for an empty list. A gate write: an observer's store refuses it. */
+export function saveTurnCues(store: Store, input: { sessionId: string; ref: string; turn: number; day: number; words: readonly CueWord[] }): void {
+  if (input.words.length === 0) return;
+  store.setGateRecords([turnCueRecord(store, input)]);
+}
+
+/** One recorded turn's cue words, or null when none were kept (or the row will not read). */
+export function loadTurnCues(store: Store, sessionId: string, ref: string): CueWord[] | null {
+  const row = store.gateRecords(sessionId, CUES_KIND).find((r) => r.ref === ref);
+  if (row === undefined || row.value === null) return null;
+  try {
+    const p = JSON.parse(row.value) as Partial<CueRecordPayload> | null;
+    if (p === null || p.v !== CUE_RECORD_VERSION || !Array.isArray(p.c)) return null;
+    const words: CueWord[] = [];
+    for (const item of p.c) {
+      if (!Array.isArray(item) || typeof item[0] !== "string" || typeof item[1] !== "number") continue;
+      if (item[0].length === 0 || !(item[1] > 0) || !Number.isFinite(item[1])) continue;
+      words.push([item[0], item[1]]);
+    }
+    return words.length === 0 ? null : words;
+  } catch {
+    return null;
+  }
+}
+
+/** What each showing of `memoryId` has trained this session (`CUE_TRAINED_KIND`): cue ref → factor. */
+export function loadCueTrained(store: Store, sessionId: string, memoryId: string): Record<string, number> {
+  const row = store.gateRecords(sessionId, CUE_TRAINED_KIND).find((r) => r.ref === memoryId);
+  if (row === undefined || row.value === null) return {};
+  try {
+    const p = JSON.parse(row.value) as unknown;
+    if (p === null || typeof p !== "object" || Array.isArray(p)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(p as Record<string, unknown>)) if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Record what a showing of `memoryId` has now trained. */
+export function saveCueTrained(store: Store, sessionId: string, memoryId: string, trained: Record<string, number>, day: number): void {
+  store.setGateRecords([{ sessionId, kind: CUE_TRAINED_KIND, ref: memoryId, turn: 0, lastDay: day, value: JSON.stringify(trained) }]);
+}

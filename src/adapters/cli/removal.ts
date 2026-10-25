@@ -66,7 +66,7 @@ import { strikeSpans } from "../../core/remember/owner-strike-seam.js";
 // directory belongs to `self/`, and the invariant it keeps ("a file exists
 // exactly when a live episode row does") is what makes the chase provable.
 import { journalFilesFor, syncJournalCopy } from "../../core/self/journal-file.js";
-import { paths, rowTombstoned } from "../../core/store/index.js";
+import { indexTerms, paths, rowTombstoned } from "../../core/store/index.js";
 import { isLocked, openDb } from "../../core/store/db.js";
 import type {
   OwnerRemovalOutcome,
@@ -905,8 +905,12 @@ export function ownerRemoval(
   // there is nothing left to match on. It never enters the plan, the report or
   // any record — the seam receives a FUNCTION, not a string (§16 G15).
   let doomedBody = "";
+  /** Its title, for the cue words' chase after the cache rebuild (R3). Never recorded. */
+  let doomedTitle = "";
   try {
-    doomedBody = store.readProse(request.targetId).body.trim();
+    const doomed = store.readProse(request.targetId);
+    doomedBody = doomed.body.trim();
+    doomedTitle = doomed.title ?? "";
   } catch {
     /* already gone; the hashes are the chase then, or nothing is */
   }
@@ -1039,6 +1043,20 @@ export function ownerRemoval(
   try {
     store.rebuildCache();
     chased.push("cache");
+    // ITS WORDS AS LEARNED CUES (review of #613, R3 cue learning): a word of
+    // this memory's that no memory holds any more must not live on as a cue
+    // to another memory (`cue_edges` keeps index terms, and only ones the
+    // index held: kept true after the removal). Asked after the rebuild,
+    // which is what says the index no longer holds them.
+    const terms = indexTerms(`${doomedTitle}\n${doomedBody}`);
+    if (terms.length > 0) {
+      try {
+        const gone = store.sweepCueEdges({ staleOnOrBefore: -1, terms }, () => false);
+        if (gone > 0) chased.push(`operational.cue_edges(${gone} more: words no memory holds now)`);
+      } catch {
+        unchased.push("operational.cue_edges (words no memory holds now may still be wired to other memories)");
+      }
+    }
   } catch {
     unchased.push("cache");
   }

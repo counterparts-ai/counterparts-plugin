@@ -364,6 +364,30 @@ const DATED_HEADING = /^## chapter \d+ — (?:([A-Za-z]{3} \d{1,2} [A-Za-z]{3} \
  * row's first and latest write. Bounded to the episodes born inside
  * `fromDay`. A removed or superseded row is not read. Never throws.
  */
+/**
+ * HOW MANY OF AN EPISODE'S CHAPTERS WERE WRITTEN ON `date` (`YYYY-MM-DD`, in
+ * `zone`), read off their headings — `chaptersOn`'s rule, and the W1 privacy
+ * gate's (`Counterpart#daySummaryShown`, which reads archived and merged
+ * episodes too). Pure.
+ */
+export function chaptersWrittenOn(row: { body: string; created_at: number | null }, date: string, zone: string): number {
+  const said = readableDate(date);
+  if (said.length === 0) return 0;
+  let dated = 0;
+  let that = 0;
+  for (const m of row.body.matchAll(DATED_HEADING)) {
+    if (m[1] === undefined) continue;
+    dated += 1;
+    if (m[1] === said) that += 1;
+  }
+  // THE HEADING'S DATE ONLY (second review of #308): a row's own write
+  // times move for a retitle or a revision too, so they would list a day
+  // no chapter was written on. An episode from before headings carried a
+  // date (2026-09-24) is read by the day it was born, and only then.
+  if (dated === 0 && localDate(row.created_at ?? 0, zone) === date) that = 1;
+  return that;
+}
+
 export function chaptersOn(store: Store, date: string, opts: { fromDay?: number } = {}): ChaptersOnDate[] {
   const out: ChaptersOnDate[] = [];
   const said = readableDate(date);
@@ -389,18 +413,7 @@ export function chaptersOn(store: Store, date: string, opts: { fromDay?: number 
     try {
       const row = store.row(id);
       if (row === undefined || row.superseded_by !== null || row.body.length === 0) continue;
-      let dated = 0;
-      let that = 0;
-      for (const m of row.body.matchAll(DATED_HEADING)) {
-        if (m[1] === undefined) continue;
-        dated += 1;
-        if (m[1] === said) that += 1;
-      }
-      // THE HEADING'S DATE ONLY (second review of #308): a row's own write
-      // times move for a retitle or a revision too, so they would list a day
-      // no chapter was written on. An episode from before headings carried a
-      // date (2026-09-24) is read by the day it was born, and only then.
-      if (dated === 0 && localDate(row.created_at ?? 0, zone) === date) that = 1;
+      const that = chaptersWrittenOn(row, date, zone);
       if (that === 0) continue;
       out.push({
         id,
@@ -465,11 +478,16 @@ export function yesterdayLine(
   dated = true,
 ): string | null {
   const head = dated ? `Yesterday, ${stampWords(date.slice(5))}:` : "Yesterday:";
+  const body = yesterdayBody(day, titles, places);
+  return body === null ? null : flatten(`${head} ${body}.`);
+}
+
+/** What the Yesterday line says after its head, without the full stop, or
+ *  null when there is nothing (`yesterdayLine`; the summary-led form's
+ *  chapter list, `yesterdaySummaryForms`). */
+function yesterdayBody(day: readonly ChaptersOnDate[], titles: number, places: readonly YesterdayPlace[]): string | null {
   const where = placesWords(places);
-  if (day.length === 0) {
-    if (where === null) return null;
-    return flatten(`${head} ${where}.`);
-  }
+  if (day.length === 0) return where;
   // NO BARE IDS AS ITEMS (2026-10-20, Mike's go, lightly held): the first
   // `titles` chapters that HAVE a title are named, by title and id (at most
   // `YESTERDAY_SHOWN`); every other one — untitled, or with no room for its
@@ -482,9 +500,9 @@ export function yesterdayLine(
     .map((c) => `"${excerpt(c.title ?? "", YESTERDAY_TITLE_BYTES)}" (${c.id})`);
   const rest = day.length - shown.length;
   const elsewhere = where === null ? "" : rest > 0 || shown.length === 0 ? `; ${where}` : `; and ${where}`;
-  if (shown.length === 0) return flatten(`${head} ${String(rest)} ${rest === 1 ? "session" : "sessions"}${elsewhere}.`);
+  if (shown.length === 0) return `${String(rest)} ${rest === 1 ? "session" : "sessions"}${elsewhere}`;
   const more = rest > 0 ? `; and ${String(rest)} more` : "";
-  return flatten(`${head} ${shown.join("; ")}${more}${elsewhere}.`);
+  return `${shown.join("; ")}${more}${elsewhere}`;
 }
 
 /**
@@ -522,6 +540,146 @@ export function yesterdayShorter(day: readonly ChaptersOnDate[], date: string, p
     last = line;
   }
   return out;
+}
+
+/**
+ * THE YESTERDAY LINE LED BY DAY'S END'S SUMMARY (2026-10-24, lane W1; Mike's
+ * go, lightly held; `self.YESTERDAY_FROM_SUMMARY`). Day's end leaves a few
+ * first-person lines about the day it closed (`self/writer.ts#daySummaries`,
+ * lane D2); when the caller's privacy gate lets one through
+ * (`Counterpart#daySummaryShown`), the line leads with it, word for word and
+ * labelled as day's end's, and lists that day's chapters after it — by title
+ * and id, so each can be opened — as `yesterdayLine` lists them.
+ *
+ * Its forms, widest first, each strictly narrower: the summary with up to
+ * `YESTERDAY_SHOWN` titles, one fewer at a time, then the summary with the
+ * chapters by count alone, then those of the plain line's own forms
+ * (`yesterdayLine`, `yesterdayShorter`) narrower still — beside a short
+ * summary the plain widest form may not be, and is skipped. The summary is never cut: under pressure the line
+ * goes back to the list of titles rather than print half of what day's end
+ * said. Pure.
+ */
+export const YESTERDAY_SUMMARY_WORDS = "in day's end's words:";
+export const YESTERDAY_SUMMARY_CHAPTERS = "Chapters:";
+
+export function yesterdaySummaryForms(
+  summary: string,
+  day: readonly ChaptersOnDate[],
+  date: string,
+  places: readonly YesterdayPlace[] = [],
+  dated = true,
+): string[] {
+  const text = flatten(summary);
+  const plain = yesterdayLine(day, date, YESTERDAY_SHOWN, places, dated);
+  const plainForms = plain === null ? [] : [plain, ...yesterdayShorter(day, date, places, dated)];
+  if (text.length === 0) return plainForms;
+  const head = dated ? `Yesterday, ${stampWords(date.slice(5))}, ${YESTERDAY_SUMMARY_WORDS}` : `Yesterday, ${YESTERDAY_SUMMARY_WORDS}`;
+  const lead = `${head} ${text}`;
+  const candidates: string[] = [];
+  const titled = day.filter((c) => c.title !== null).length;
+  for (let n = Math.min(YESTERDAY_SHOWN, titled); n >= 0; n--) {
+    const body = yesterdayBody(day, n, places);
+    candidates.push(flatten(body === null ? lead : `${lead} ${YESTERDAY_SUMMARY_CHAPTERS} ${body}.`));
+  }
+  return narrowing([...candidates, ...plainForms]);
+}
+
+/** Each kept form strictly narrower, in bytes, than the one before it. */
+function narrowing(forms: readonly string[]): string[] {
+  const out: string[] = [];
+  let last = Number.POSITIVE_INFINITY;
+  for (const f of forms) {
+    const size = Buffer.byteLength(f, "utf8");
+    if (f.length === 0 || size >= last) continue;
+    out.push(f);
+    last = size;
+  }
+  return out;
+}
+
+/** One of today's chapters as "Today so far" names it (`todaySoFarLine`). */
+export interface TodayChapter {
+  /** The episode row (`epi_…`). */
+  readonly id: string;
+  readonly title: string | null;
+  /** `HH:MM` the episode was last written, in the store's zone; "" unknown. */
+  readonly time: string;
+  /** Its newest session-written summary (`self/summaries.ts`), "" none. */
+  readonly summary: string;
+}
+
+/** The "Today so far" line's head. */
+export const TODAY_SO_FAR_HEAD = "Today so far here:";
+/** How many of today's chapters the line names; the older rest are counted. */
+export const TODAY_SO_FAR_SHOWN = 4;
+/** A summary's widest cut in the line, then its narrower one; the id opens the rest. */
+export const TODAY_SO_FAR_SUMMARY_BYTES = 120;
+export const TODAY_SO_FAR_SUMMARY_NARROW_BYTES = 60;
+
+/**
+ * "TODAY SO FAR" (2026-10-24, lane W1; Mike's go 17:45, lightly held;
+ * `self.TODAY_SO_FAR`): today's chapters written in this folder before the
+ * one "Last here" names, oldest first — the newest `TODAY_SO_FAR_SHOWN` by
+ * time, title, id and the start of their own summary, the older rest
+ * counted:
+ *
+ *   Today so far here: 09:12 "Reading the night" (epi_…) — I read the
+ *   numbers and…; 11:40 "Cutting 0.3.35" (epi_…) — Merged #608…; and 1 earlier.
+ *
+ * `titles` names fewer (the rest counted); `summaryBytes` 0 leaves the
+ * summaries off. A chapter with neither a title nor (in this form) a summary
+ * is only counted. Null when there is nothing to name. Pure.
+ */
+export function todaySoFarLine(
+  chapters: readonly TodayChapter[],
+  titles = TODAY_SO_FAR_SHOWN,
+  summaryBytes = TODAY_SO_FAR_SUMMARY_BYTES,
+): string | null {
+  const said = (c: TodayChapter): boolean => summaryBytes > 0 && c.summary.trim().length > 0;
+  const nameable = chapters.filter((c) => c.title !== null || said(c));
+  const keep = Math.max(0, Math.min(titles, TODAY_SO_FAR_SHOWN));
+  const shown = keep === 0 ? [] : nameable.slice(-keep);
+  if (shown.length === 0) return null;
+  const rest = chapters.length - shown.length;
+  const items = shown.map((c) => {
+    const when = c.time.length > 0 ? `${c.time} ` : "";
+    const name = c.title === null ? `(${c.id})` : `"${excerpt(c.title, YESTERDAY_TITLE_BYTES)}" (${c.id})`;
+    // The summary's first sentence, its own full stop left to the line's.
+    return `${when}${name}${said(c) ? ` — ${excerpt(c.summary, summaryBytes).replace(/\.$/u, "")}` : ""}`;
+  });
+  const more = rest > 0 ? `; and ${String(rest)} earlier` : "";
+  return flatten(`${TODAY_SO_FAR_HEAD} ${items.join("; ")}${more}.`);
+}
+
+/**
+ * "Today so far" and its shorter forms, widest first, each strictly
+ * narrower: shorter summaries, then none, then one title fewer at a time
+ * down to one. Empty when there is no line. The forms with summaries give
+ * way before "Still open"'s items (`self/briefing.ts#ROOM_ORDER`'s
+ * `todaySoFarSummaries`, W1b); the title forms step down before the
+ * Yesterday line's (`todaySoFar`), and past the narrowest the line drops
+ * whole. Pure.
+ */
+export function todaySoFarForms(chapters: readonly TodayChapter[]): string[] {
+  const forms: (string | null)[] = [
+    todaySoFarLine(chapters, TODAY_SO_FAR_SHOWN, TODAY_SO_FAR_SUMMARY_BYTES),
+    todaySoFarLine(chapters, TODAY_SO_FAR_SHOWN, TODAY_SO_FAR_SUMMARY_NARROW_BYTES),
+  ];
+  for (let n = TODAY_SO_FAR_SHOWN; n >= 1; n--) forms.push(todaySoFarLine(chapters, n, 0));
+  return narrowing(forms.filter((f): f is string => f !== null));
+}
+
+/**
+ * WHICH OF `forms` (`todaySoFarForms(chapters)`) CARRY SUMMARIES (2026-10-24,
+ * W1b): every form wider than the titles-only line naming as many chapters.
+ * These give way before "Still open"'s items; the rest stay where
+ * "Today so far" sat (`self/briefing.ts#ROOM_ORDER`). Pure.
+ */
+export function todaySoFarSummaryForms(chapters: readonly TodayChapter[], forms: readonly string[]): string[] {
+  const titles = todaySoFarLine(chapters, TODAY_SO_FAR_SHOWN, 0);
+  if (titles === null) return [];
+  const bytes = Buffer.byteLength(titles, "utf8");
+  return forms.filter((f) => Buffer.byteLength(f, "utf8") > bytes);
 }
 
 /**

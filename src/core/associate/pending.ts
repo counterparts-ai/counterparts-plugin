@@ -60,7 +60,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
-import type { PairDelta } from "./edges.js";
+import type { CueDelta, PairDelta } from "./edges.js";
 
 /** The registry directory core spells for itself — see the header. */
 const SESSIONS_DIR = "sessions";
@@ -144,6 +144,8 @@ interface PendingLine {
   readonly at: number;
   readonly day: number;
   readonly pairs: PairDelta[];
+  /** Cue deltas (R3, 2026-10-24): `c` on the line. A reader that predates them ignores the key. */
+  readonly cues: CueDelta[];
   readonly dropped: number;
 }
 
@@ -153,6 +155,8 @@ export interface PendingClaim {
   /** Lines carried — passes, or the fragments of a large pass. */
   readonly passes: number;
   readonly deltas: PairDelta[];
+  /** Cue deltas carried (R3): applied after the claim's pairs land, in the same unit of work. */
+  readonly cues: CueDelta[];
   /** The newest lived day any carried line named; the day the apply stamps. */
   readonly day: number | null;
   /** The oldest carried line's timestamp, for "how old was this work". */
@@ -230,6 +234,45 @@ export function appendPendingDeltas(
   }
 }
 
+/**
+ * Append word-to-memory deltas a credit pass buffered (R3 cue learning,
+ * 2026-10-24) — the same file, the same cap and rules as pairs, one `c` array
+ * per line: `[token, memoryId, delta]`, SIGNED (a rating of 0 depresses). A
+ * reader that predates them parses the line, finds no `p`, and applies
+ * nothing: the loss is one-directional and re-earnable. Never throws.
+ */
+export function appendPendingCues(
+  dataDir: string,
+  deltas: readonly CueDelta[],
+  opts: { day: number; at: number },
+): PendingAppend {
+  const usable = deltas.filter((d) => Number.isFinite(d.delta) && d.delta !== 0 && d.token.length > 0 && d.id.length > 0);
+  if (usable.length === 0) return { ok: true, lines: 0, pairs: 0, droppedPairs: 0, code: null };
+  const path = pendingPath(dataDir);
+  try {
+    mkdirSync(associationDir(dataDir), { recursive: true });
+    const size = sizeOf(path);
+    if (size >= PENDING_MAX_BYTES) {
+      if (size >= PENDING_MAX_BYTES + PENDING_MARKER_SLACK_BYTES) {
+        return { ok: false, lines: 0, pairs: 0, droppedPairs: usable.length, code: "PENDING_FULL" };
+      }
+      const marker = JSON.stringify({ at: opts.at, day: opts.day, dropped: usable.length });
+      appendFileSync(path, `${marker}\n`, { encoding: "utf8", mode: 0o600 });
+      return { ok: true, lines: 1, pairs: 0, droppedPairs: usable.length, code: "PENDING_FULL" };
+    }
+    let lines = 0;
+    for (let i = 0; i < usable.length; i += PENDING_PAIRS_PER_LINE) {
+      const chunk = usable.slice(i, i + PENDING_PAIRS_PER_LINE);
+      const line = JSON.stringify({ at: opts.at, day: opts.day, c: chunk.map((d) => [d.token, d.id, d.delta]) });
+      appendFileSync(path, `${line}\n`, { encoding: "utf8", mode: 0o600 });
+      lines += 1;
+    }
+    return { ok: true, lines, pairs: usable.length, droppedPairs: 0, code: null };
+  } catch (err) {
+    return { ok: false, lines: 0, pairs: 0, droppedPairs: usable.length, code: codeOf(err) };
+  }
+}
+
 function parseLine(raw: string): PendingLine | null {
   let entry: unknown;
   try {
@@ -255,7 +298,18 @@ function parseLine(raw: string): PendingLine | null {
       else pairs.push({ a, b, delta });
     }
   }
-  return { at, day, pairs, dropped };
+  const cues: CueDelta[] = [];
+  const c = rec["c"];
+  if (Array.isArray(c)) {
+    for (const item of c) {
+      if (!Array.isArray(item) || item.length < 3) continue;
+      const [token, id, delta] = item as [unknown, unknown, unknown];
+      if (typeof token !== "string" || typeof id !== "string" || typeof delta !== "number") continue;
+      if (token.length === 0 || id.length === 0 || !Number.isFinite(delta) || delta === 0) continue;
+      cues.push({ token, id, delta });
+    }
+  }
+  return { at, day, pairs, cues, dropped };
 }
 
 function readClaim(path: string): PendingClaim {
@@ -263,9 +317,10 @@ function readClaim(path: string): PendingClaim {
   try {
     text = readFileSync(path, "utf8");
   } catch {
-    return { path, passes: 0, deltas: [], day: null, oldestAt: null, droppedPairs: 0, corrupt: 0 };
+    return { path, passes: 0, deltas: [], cues: [], day: null, oldestAt: null, droppedPairs: 0, corrupt: 0 };
   }
   const deltas: PairDelta[] = [];
+  const cues: CueDelta[] = [];
   let passes = 0;
   let corrupt = 0;
   let droppedPairs = 0;
@@ -281,10 +336,11 @@ function readClaim(path: string): PendingClaim {
     passes += 1;
     droppedPairs += line.dropped;
     for (const d of line.pairs) deltas.push(d);
+    for (const d of line.cues) cues.push(d);
     day = day === null ? line.day : Math.max(day, line.day);
     oldestAt = oldestAt === null ? line.at : Math.min(oldestAt, line.at);
   }
-  return { path, passes, deltas, day, oldestAt, droppedPairs, corrupt };
+  return { path, passes, deltas, cues, day, oldestAt, droppedPairs, corrupt };
 }
 
 /** A claim's age is measured from the moment it was taken (see

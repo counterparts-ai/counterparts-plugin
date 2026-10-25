@@ -378,3 +378,107 @@ export function recallTurns(store: Store, opts: { sessionId?: string; sinceDay?:
     ...args,
   );
 }
+
+// ── cue edges (v15, 2026-10-24, R3 cue learning — an experiment) ────────────
+
+/** One learned pair as stored (`cue_edges`): an index term wired to a memory. */
+export interface CueEdgeRow {
+  readonly token: string;
+  readonly memory_id: string;
+  readonly weight: number;
+  readonly last_day: number;
+}
+
+/** One pair to write, absolute (never a delta): the flush plans, the store applies. */
+export interface CueEdgeWrite {
+  readonly token: string;
+  readonly memoryId: string;
+  /** At or below 0 the row is deleted. */
+  readonly weight: number;
+  readonly lastDay: number;
+  readonly source: string;
+}
+
+/** The stored pairs out of each of `tokens` (index terms). Empty for a store without the table. */
+export function cueEdgesFor(store: Store, tokens: readonly string[]): CueEdgeRow[] {
+  if (tokens.length === 0 || !has(store, "cue_edges")) return [];
+  const out: CueEdgeRow[] = [];
+  const unique = [...new Set(tokens)];
+  // Bound the statement's variable count, as `cache.ts#termCounts` does.
+  for (let i = 0; i < unique.length; i += 400) {
+    const slice = unique.slice(i, i + 400);
+    out.push(
+      ...ops(store).all<CueEdgeRow>(
+        `SELECT token, memory_id, weight, last_day FROM cue_edges WHERE token IN (${slice.map(() => "?").join(",")}) ORDER BY token, memory_id`,
+        ...slice,
+      ),
+    );
+  }
+  return out;
+}
+
+/** The stored pairs INTO one memory, strongest first: what it is "filed under". */
+export function cueEdgesOf(store: Store, memoryId: string): CueEdgeRow[] {
+  if (!has(store, "cue_edges")) return [];
+  return ops(store).all<CueEdgeRow>(
+    "SELECT token, memory_id, weight, last_day FROM cue_edges WHERE memory_id = ? ORDER BY weight DESC, token",
+    memoryId,
+  );
+}
+
+/** Write absolute pairs (inside the caller's transaction); a weight at or below 0 deletes its row. Returns the rows handled. */
+export function writeCueEdges(store: Store, rows: readonly CueEdgeWrite[], at: number): number {
+  if (rows.length === 0 || !has(store, "cue_edges")) return 0;
+  const upsert = ops(store).prepare(
+    `INSERT INTO cue_edges (token, memory_id, weight, last_day, created_at, updated_at, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (token, memory_id) DO UPDATE SET weight = excluded.weight, last_day = excluded.last_day,
+       updated_at = excluded.updated_at, source = excluded.source`,
+  );
+  const drop = ops(store).prepare("DELETE FROM cue_edges WHERE token = ? AND memory_id = ?");
+  for (const r of rows) {
+    if (!(r.weight > 0)) drop.run(r.token, r.memoryId);
+    else upsert.run(r.token, r.memoryId, r.weight, r.lastDay, at, at, r.source);
+  }
+  return rows.length;
+}
+
+/**
+ * The pairs that carry nothing any more, removed (inside the caller's
+ * transaction): a pair into a memory that is no longer live (archived —
+ * pruned, merged — superseded, or gone from `memories`) or taken dark by the
+ * owner (`denied`), and a pair `dead` says has faded below the floor (asked
+ * only of rows last touched on or before `staleOnOrBefore`). Returns how many
+ * went.
+ */
+export function sweepCueEdges(
+  store: Store,
+  opts: { staleOnOrBefore: number; denied: readonly string[]; unheld?: readonly string[] },
+  dead: (row: CueEdgeRow) => boolean,
+): number {
+  if (!has(store, "cue_edges")) return 0;
+  const db = ops(store);
+  const changes = (): number => db.get<{ n: number }>("SELECT changes() AS n")?.n ?? 0;
+  db.run("DELETE FROM cue_edges WHERE memory_id NOT IN (SELECT id FROM memories WHERE archived = 0 AND superseded_by IS NULL)");
+  let n = changes();
+  // Words the index no longer holds (the caller measured them): no pair keeps one.
+  for (const token of new Set(opts.unheld ?? [])) {
+    db.run("DELETE FROM cue_edges WHERE token = ?", token);
+    n += changes();
+  }
+  for (const id of new Set(opts.denied)) {
+    db.run("DELETE FROM cue_edges WHERE memory_id = ?", id);
+    n += changes();
+  }
+  const stale = db.all<CueEdgeRow>(
+    "SELECT token, memory_id, weight, last_day FROM cue_edges WHERE last_day <= ?",
+    opts.staleOnOrBefore,
+  );
+  const drop = db.prepare("DELETE FROM cue_edges WHERE token = ? AND memory_id = ?");
+  for (const r of stale) {
+    if (!dead(r)) continue;
+    drop.run(r.token, r.memory_id);
+    n += 1;
+  }
+  return n;
+}

@@ -177,7 +177,17 @@ import type { ProseType } from "./prose.js";
  * a build that knows only v13 refuses the file `SCHEMA_AHEAD`, and the way back
  * is that copy (`store/NOTES.md` 2026-10-21).
  */
-export const SCHEMA_VERSION = 14;
+/*
+ * Bumped to 15 (2026-10-24, R3 cue learning — an experiment): additive only —
+ * one table, `cue_edges` (+ an index on `memory_id`): the cue words a credited
+ * use wired to a memory. Nothing is dropped or rewritten. A lone bump, by
+ * Mike's call (2026-10-24: R3 ships on its own, not batched with R4's
+ * spacing column). The copy is taken before migrating (`copyBeforeMigrating`);
+ * a build that knows only v14 refuses the file `SCHEMA_AHEAD`, and the way
+ * back is that copy. The read floor is not raised: every reader of the table
+ * asks for it first (`wave2.ts#has`), so a v14 file reads as "nothing learned".
+ */
+export const SCHEMA_VERSION = 15;
 /**
  * The oldest schema an OBSERVER may open without a migration having run.
  *
@@ -234,6 +244,11 @@ export const SCHEMA_VERSION = 14;
  * named it was rewritten with the drop). The five new tables are empty until
  * lanes B–G write them, and every reader asks `hasTable` first, so a v13 file
  * reads as "none yet" — which is what it holds.
+ */
+/*
+ * NOT raised with v15 (2026-10-24, R3 cue learning), for v14's reason: the one
+ * new table, `cue_edges`, is read `hasTable` first (`wave2.ts#has`), so an
+ * instrument reading a v14 file sees "nothing learned" — which is what it holds.
  */
 export const OBSERVER_READ_FLOOR = 11;
 /** Retention for superseded-version rows, in LIVED days. TUNABLE (module-map ruling 2).
@@ -743,6 +758,26 @@ export const DDL: readonly string[] = [
      PRIMARY KEY (session_id, turn)
    )`,
   `CREATE INDEX IF NOT EXISTS recall_turns_day ON recall_turns (day)`,
+  // v15 (2026-10-24, R3 cue learning, an experiment): A WORD WIRED TO A
+  // MEMORY — the cue words of a turn that showed a memory the session then
+  // used. `token` is the INDEX TERM (`stem.ts#stemTerm`, what `doc_tokens`
+  // holds), never a word the word index does not already hold (recall's
+  // privacy guard: only df > 0 tokens are ever recorded). `weight` in
+  // [0, CUE_W_CAP], realized at `last_day` (exponential fade, so writing the
+  // decayed weight is exact, as for `edges`). `source`: `use` (a credited
+  // use) for now. Not foreign-keyed: the owner's removal deletes a removed
+  // memory's rows, and the cue flush sweeps an archived one's.
+  `CREATE TABLE IF NOT EXISTS cue_edges (
+     token      TEXT NOT NULL,
+     memory_id  TEXT NOT NULL,
+     weight     REAL NOT NULL,
+     last_day   INTEGER NOT NULL,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL,
+     source     TEXT NOT NULL,
+     PRIMARY KEY (token, memory_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS cue_edges_memory ON cue_edges (memory_id)`,
   `CREATE INDEX IF NOT EXISTS core_events_memory ON core_events (memory_id)`,
   `CREATE INDEX IF NOT EXISTS core_events_at ON core_events (at)`,
   `CREATE INDEX IF NOT EXISTS feelings_whose_core ON feelings (whose, core)`,
@@ -2721,9 +2756,10 @@ export const BUILD_LOG_PREFIX = "build.";
 export interface SettingInForce {
   readonly module: string;
   readonly key: string;
-  readonly value: number | boolean;
+  /** A number, a boolean, or one of a setting's named values (`physics.CORE_DOOR_SUPPORT`, 2026-10-24). */
+  readonly value: number | boolean | string;
   /** The build's own value. */
-  readonly was: number | boolean;
+  readonly was: number | boolean | string;
 }
 
 /** The version a `package.json` at `path` names, or `BUILD_UNKNOWN`. Never throws. */

@@ -333,6 +333,17 @@ export const RECALL_RATED_EVENT = "recall.rated";
 export const ASSOCIATE_FLUSH_EVENT = "associate.flush";
 
 /**
+ * AN AWAKE REPEAT, COUNTED OR HELD (B1, 2026-10-24): one row each time a
+ * session's belief says what an existing belief says and
+ * `schemas.AWAKE_SUPPORT_ON_DUPLICATE` is on — `ref` the belief, the
+ * memory, its session (null when unknown or unbound), and `filed` with its
+ * route and weight, or `filed: false` with why (`already-counted`,
+ * `counted-this-session`, `counted-today`, or fileSupport's refusal). For
+ * the check after (docs/CHECK-AFTER.md).
+ */
+export const AWAKE_SUPPORT_EVENT = "belief.support.awake";
+
+/**
  * Where temporal contiguity has got to (2026-09-28): the newest `created_at`
  * its last pass read, and the ids written at exactly that moment, as JSON in
  * the `meta` table. A moment rather than a rowid, so a table rebuild by a
@@ -911,6 +922,10 @@ export const RECALL_DECISION_FIELDS = [
   "projectSkipped",
   // Mike's "slightly higher bar" (2026-10-21): what only the cross-project lift kept back.
   "crossProjectLifted",
+  // An unsettled pair competes (E3, 2026-10-24, an experiment): how many olders
+  // counted at a weight. Undefined, so left out of the written row, while
+  // `UNSETTLED_COMPETES` is off: an off turn's row is byte-identical.
+  "pairsCompeted",
   // Context priming (2026-10-19, an experiment): what primed, and what it
   // changed of what was shown — counts; the ids are `primed` on the tier rows.
   "primed",
@@ -939,6 +954,7 @@ function tierRows(
   activation: number | null;
   via?: "link";
   habituated?: true;
+  competed?: { readonly with: string; readonly factor: number };
   primed?: { link: number; train: number; from: readonly string[]; lifted?: true; tag?: number; by?: "link" | "tag" | "train"; top?: string };
 }[] {
   return ids.map((id) => {
@@ -953,6 +969,9 @@ function tierRows(
       activation: v?.activation ?? null,
       ...(v?.via === undefined ? {} : { via: v.via }),
       ...(v?.habituated === true ? { habituated: true as const } : {}),
+      // And the older of an unsettled pair shown although it competed (E3,
+      // 2026-10-24): which newer, and the weight its activation counted at.
+      ...(v?.competed === undefined ? {} : { competed: v.competed }),
       // And a primed one (2026-10-19): by how much, through which channel, from
       // which kinds of source, and whether only because of it — the row the
       // review compares footnote ratings on, primed against unprimed.
@@ -1053,6 +1072,8 @@ export function recallDecisionRecord(
     // PROJECTS (2026-10-21): another project's work turned away; 0 while off.
     projectSkipped: d.projectSkipped,
     crossProjectLifted: d.crossProjectLifted,
+    // AN UNSETTLED PAIR COMPETES (E3): undefined while off, so not written.
+    pairsCompeted: d.pairsCompeted,
     // CONTEXT PRIMING (2026-10-19, an experiment): null on a turn it did not run.
     primed: d.primed,
     // THE BELIEFS SLOT (lane E): null when it did not run.

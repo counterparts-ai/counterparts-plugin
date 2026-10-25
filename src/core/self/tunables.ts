@@ -335,6 +335,28 @@ export interface SelfTunables {
    * and small enough that a page nobody wants is not asked for all day. CAL.
    */
   PAGE_WRITER_ASKS_PER_DAY: number;
+  /**
+   * "TODAY SO FAR" IN THE WAKE (2026-10-24, lane W1; Mike's go 17:45, lightly
+   * held). On: a session start's wake carries one more line under the
+   * Yesterday line — today's chapters written in this folder before the one
+   * "Last here" names, each by time, title, id and the start of its
+   * session-written summary (`handoff/last-here.ts#todaySoFarLine`). Other
+   * folders stay with "Today, elsewhere". It gives way before the Yesterday
+   * line (`ROOM_ORDER`'s `todaySoFar`). Off: no line, the wake exactly as
+   * before. Read at use.
+   */
+  TODAY_SO_FAR: boolean;
+  /**
+   * YESTERDAY READS DAY'S END'S SUMMARY (2026-10-24, lane W1; Mike's go
+   * 17:45, lightly held). On: at a session start, when day's end left a
+   * summary about yesterday (`writer.ts#daySummaries`) and the privacy gate
+   * lets it through (`Counterpart#daySummaryShown`: every memory it cites
+   * nameable in this wake, and every chapter and memory of that day from this
+   * folder or one whose scope setting is on), the Yesterday line leads with it and
+   * lists the chapters after it, fewer as room asks. Otherwise, and off, the
+   * chapter list exactly as before. Read at use.
+   */
+  YESTERDAY_FROM_SUMMARY: boolean;
 
   // ── list items as a line (#489 C, 2026-10-16) ───────────────────────────
   /**
@@ -479,6 +501,8 @@ export const SELF_TUNABLES: SelfTunables = {
   DAY_SUMMARY: true,
   DAY_SUMMARY_CHARS: 600,
   PAGE_WRITER_ASKS_PER_DAY: 2,
+  TODAY_SO_FAR: true,
+  YESTERDAY_FROM_SUMMARY: true,
 
   WAKE_LINE_BYTES: 240,
 

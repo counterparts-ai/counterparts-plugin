@@ -345,7 +345,7 @@ export function wakeShown(store: Pick<Store, "getMeta">): WakeShown | null {
 export interface AssembleRequest
   extends Pick<
     BriefingRequest,
-    "day" | "yesterday" | "yesterdayShorter" | "elsewhere" | "elsewhereShorter"
+    "day" | "yesterday" | "yesterdayShorter" | "todaySoFarSummaries" | "elsewhere" | "elsewhereShorter"
   > {
   readonly ceilingBytes: number;
   /** The session's calendar date (`BoundaryRequest.at`). */
@@ -1219,6 +1219,7 @@ export class Self {
       ...(req.horizonMoreItems === undefined ? {} : { horizonMoreItems: req.horizonMoreItems }),
       ...(req.yesterday === undefined ? {} : { yesterday: req.yesterday }),
       ...(req.yesterdayShorter === undefined ? {} : { yesterdayShorter: req.yesterdayShorter }),
+      ...(req.todaySoFarSummaries === undefined ? {} : { todaySoFarSummaries: req.todaySoFarSummaries }),
       ...(req.elsewhere === undefined ? {} : { elsewhere: req.elsewhere }),
       ...(req.elsewhereShorter === undefined ? {} : { elsewhereShorter: req.elsewhereShorter }),
       ...(shown.lend > 0 ? { lendBytes: shown.lend } : {}),
@@ -1350,6 +1351,10 @@ export class Self {
           ...(req.yesterdayShorter === undefined || req.yesterday === undefined || req.omit !== undefined
             ? {}
             : { yesterdayShorter: req.yesterdayShorter }),
+          // Which of them still carry "Today so far"'s summaries (W1b).
+          ...(req.todaySoFarSummaries === undefined || req.yesterday === undefined || req.omit !== undefined
+            ? {}
+            : { todaySoFarSummaries: req.todaySoFarSummaries }),
           // The delivery's rooms, lent to the lanes above them in
           // `ROOM_ORDER` (review of #350; 2026-10-10): the owner's wake only,
           // which is the one delivered with work lines and handoffs.

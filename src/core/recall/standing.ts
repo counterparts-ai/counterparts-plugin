@@ -12,8 +12,13 @@
  * (Since 2026-10-11, Group 2, ambient recall hides a settled-over memory
  * behind its head: `recall/index.ts#headsWin` and the gate, reading `headOf`
  * below. The label is what it carries wherever it still shows.)
+ * (Since 2026-10-24, E3, the older of an unsettled pair COMPETES with the
+ * newer when both are a turn's candidates: `unsettledCompetition` below hands
+ * the gate a weight on its activation. A weight, never a filter: it still
+ * shows, with this label, whenever it clears its bar, and alone it is
+ * untouched.)
  *
- *   | the pair                         | this memory is… | shown as                                   |
+ *   | the pair                       | this memory is… | shown as                                   |
  *   |----------------------------------|-----------------|--------------------------------------------|
  *   | settled `changed`                | over            | `Earlier (now [head]):` in front (headOf)  |
  *   |                                  | holds           | `(earlier: [over])` after                  |
@@ -26,6 +31,7 @@
  * A pair closed through another (`via`) and a withdrawn one say nothing: the
  * pair that closed it speaks for it.
  */
+import { cosine } from "../physics/index.js";
 import type { ContradictionRow, Store } from "../store/index.js";
 
 /** At most this many pointers of one kind on one memory. */
@@ -72,6 +78,81 @@ export function unsettledAmong(store: StandingStore, ids: readonly string[]): Se
     }
   } catch {
     return new Set();
+  }
+  return out;
+}
+
+/** What the newer of an unsettled pair does to the older in one turn (`unsettledCompetition`). */
+export interface Competition {
+  /** The newer, the one it competes with. */
+  readonly with: string;
+  /** Its activation counts at this share in the gate: `1 − k · sim · fresh`, in (0, 1). */
+  readonly factor: number;
+  /** The pair's closeness above the floor, 0..1. */
+  readonly sim: number;
+  /** How recent the newer is, 0..1. */
+  readonly fresh: number;
+}
+
+/** The knobs `unsettledCompetition` reads (`RecallTunables`' `UNSETTLED_COMPETE_*`). */
+export interface CompetitionTuning {
+  readonly k: number;
+  readonly simFloor: number;
+  readonly windowDays: number;
+}
+
+type CompetitionStore = Pick<Store, "row" | "contradictionsOf" | "vectorOf">;
+
+/**
+ * THE UNSETTLED PAIRS THAT COMPETE THIS TURN (2026-10-24, E3: retroactive
+ * interference). Of `candidates`, the ones the turn's words or meaning
+ * reached (`cue + semantic > 0`, not a link-only pointer): each that is the
+ * OLDER of a standing unsettled pair — the rule the label uses
+ * (`unsettledIn`), so what competes is exactly what reads "Unsettled — may be
+ * out of date" — whose NEWER is reached too, mapped to the weight its
+ * activation counts at: `1 − k · sim · fresh`. `sim`: the two stored vectors'
+ * cosine above `simFloor`, over what is left to 1; `fresh`: 1 − the newer's
+ * age in lived days over `windowDays`. An older in several such pairs takes
+ * the strongest press (the smallest factor), never the product. Nothing
+ * pressing (no vectors, an old pair, a factor of 1) is left out. One read of
+ * the pairs, two vectors per pair; never throws (a store that will not answer
+ * competes nothing).
+ */
+export function unsettledCompetition(
+  store: CompetitionStore,
+  candidates: readonly { readonly id: string; readonly cue: number; readonly semantic: number; readonly linkOnly?: true }[],
+  day: number,
+  tune: CompetitionTuning,
+): Map<string, Competition> {
+  const out = new Map<string, Competition>();
+  const reached = new Set(candidates.filter((c) => c.linkOnly !== true && c.cue + c.semantic > 0).map((c) => c.id));
+  if (reached.size < 2 || !(tune.k > 0)) return out;
+  try {
+    const all = store.contradictionsOf([...reached]);
+    const vectors = new Map<string, number[] | null>();
+    const vec = (id: string): number[] | null => {
+      if (!vectors.has(id)) vectors.set(id, store.vectorOf(id));
+      return vectors.get(id) ?? null;
+    };
+    const room = 1 - tune.simFloor;
+    for (const id of reached) {
+      for (const p of all.get(id) ?? []) {
+        if (!reached.has(p.b) || !unsettledIn(store, id, [p])) continue;
+        const va = vec(p.a);
+        const vb = vec(p.b);
+        if (va === null || vb === null || va.length !== vb.length) continue;
+        const sim = room > 0 ? Math.min(1, Math.max(0, (cosine(va, vb) - tune.simFloor) / room)) : 0;
+        const born = store.row(p.b)?.birth_day;
+        const age = typeof born === "number" ? Math.max(0, day - born) : Number.POSITIVE_INFINITY;
+        const fresh = tune.windowDays > 0 ? Math.max(0, 1 - age / tune.windowDays) : 0;
+        const factor = 1 - Math.min(1, tune.k) * sim * fresh;
+        if (!(factor < 1)) continue;
+        const prev = out.get(id);
+        if (prev === undefined || factor < prev.factor) out.set(id, { with: p.b, factor, sim, fresh });
+      }
+    }
+  } catch {
+    return new Map();
   }
   return out;
 }

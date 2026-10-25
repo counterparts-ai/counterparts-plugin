@@ -260,6 +260,8 @@ export interface PendingApplyReport {
   readonly stuck: number;
   /** How old the oldest carried work was when it was applied. */
   readonly oldestMs: number;
+  /** Cue learning (R3): word-to-memory deltas carried, and the pair rows they wrote. Absent when none were carried. */
+  readonly cues?: { readonly deltas: number; readonly rows: number; readonly dropped: number };
 }
 
 /** Telemetry: ids, counts, bytes, reasons, flags. NEVER body text (store §5 G10). */

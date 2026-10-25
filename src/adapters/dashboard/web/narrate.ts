@@ -115,6 +115,13 @@ function n(t: Told, key: string): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+/** A support crossing's lived days (`payload.support.days`, 2026-10-24), else `fallback`. */
+function supportDays(t: Told, fallback: number): number {
+  const sup = t.p["support"];
+  const v = typeof sup === "object" && sup !== null ? (sup as Record<string, unknown>)["days"] : undefined;
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
 function s(t: Told, key: string): string | null {
   const v = t.p[key];
   return typeof v === "string" && v.length > 0 ? v : null;
@@ -187,7 +194,10 @@ export const NARRATORS = {
         ? `${subject(t)} became core — it was strongly felt, and it came back after a gap.`
         : lane === "slow"
           ? `${subject(t)} became core — it kept coming back, on ${days} separate days over weeks.`
-          : `${subject(t)} crossed into identity — it had been in real use on ${days} separate days.`,
+          : lane === "support"
+            ? // The support door (2026-10-24, E2): one arc, its lived days on the record.
+              `${subject(t)} became core — it kept coming back, from separate moments, on ${supportDays(t, days)} lived ${supportDays(t, days) === 1 ? "day" : "days"}.`
+            : `${subject(t)} crossed into identity — it had been in real use on ${days} separate days.`,
     );
   },
   "band.demoted": (t) =>

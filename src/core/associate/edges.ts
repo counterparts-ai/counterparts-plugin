@@ -297,3 +297,106 @@ function plan(
   }
   return { rows, evictions, renormalized, nodesTouched: nodes.size };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CUE PAIRS (2026-10-24, R3 cue learning — an experiment)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The missing node in "fire together, wire together": the CUE WORD. A pair is
+// (index term → memory), earned when a turn whose words held the term showed
+// the memory and the session then used it. Signed: a rating of 0 depresses
+// the pairs its turn made (cue-specific habituation), and a weight floors at 0.
+// Bounded the way edges are — homeostasis, not a calendar: a saturating update
+// per pair, synaptic scaling per token (`CUE_MAX_OUT`), and exponential fading
+// with lived days (`S_CUE`), realized at the flush as edges' decay is.
+
+/** One word-to-memory delta. `token` is an index term (`stemTerm`). Signed. */
+export interface CueDelta {
+  readonly token: string;
+  readonly id: string;
+  readonly delta: number;
+}
+
+/** A stored pair, as the planner reads it. */
+export interface CueState {
+  readonly token: string;
+  readonly id: string;
+  readonly weight: number;
+  readonly lastDay: number;
+}
+
+/** A pair's weight at a lived day: the edges' curve at `S_CUE`. */
+export function cueWeightAt(e: { weight: number; lastDay: number }, day: number, t: AssociateTunables): number {
+  const elapsed = day - e.lastDay;
+  if (elapsed <= 0) return e.weight;
+  return e.weight * decayCurve(elapsed, t.S_CUE, t.EDGE_DECAY_SHAPE);
+}
+
+/** One pair, updated: saturating toward `CUE_W_CAP` when positive, floored at 0 when negative. */
+export function cueStrengthen(current: number, delta: number, t: AssociateTunables): number {
+  if (delta >= 0) {
+    const cap = t.CUE_W_CAP > 0 ? t.CUE_W_CAP : 1;
+    return current + delta * Math.max(0, 1 - current / cap);
+  }
+  return Math.max(0, current + delta);
+}
+
+export interface CuePlan {
+  /** Absolute rows to write; a weight of 0 deletes. Every pair of a touched token is realized at `day`. */
+  readonly rows: readonly CueState[];
+  /** Tokens whose total was scaled back to `CUE_MAX_OUT`. */
+  readonly scaled: readonly string[];
+  readonly tokens: number;
+}
+
+/**
+ * Plan one cue flush: per token, its pairs decayed to `day`, the deltas
+ * applied ONE AT A TIME in arrival order (`cueStrengthen`; the buffer keeps
+ * them apart, so a batch trains as its uses would one by one and a pair stays
+ * under `CUE_W_CAP`), then synaptic scaling — a token sending out more
+ * than `CUE_MAX_OUT` scales all its pairs down in proportion — then anything
+ * at or below `CUE_FLOOR` written as 0 (deleted). A negative delta on a pair
+ * that does not exist creates nothing. Pure.
+ */
+export function planCueFlush(
+  deltas: readonly CueDelta[],
+  day: number,
+  pairsOf: (tokens: readonly string[]) => readonly CueState[],
+  t: AssociateTunables,
+): CuePlan {
+  const touched = [...new Set(deltas.map((d) => d.token))].sort();
+  if (touched.length === 0) return { rows: [], scaled: [], tokens: 0 };
+  const byToken = new Map<string, Map<string, number>>();
+  const stored = new Map<string, CueState>();
+  for (const tok of touched) byToken.set(tok, new Map());
+  for (const e of pairsOf(touched)) {
+    const m = byToken.get(e.token);
+    if (m === undefined) continue;
+    m.set(e.id, cueWeightAt(e, day, t));
+    stored.set(`${e.token}\u0000${e.id}`, e);
+  }
+  for (const d of deltas) {
+    if (!Number.isFinite(d.delta) || d.delta === 0) continue;
+    const m = byToken.get(d.token) as Map<string, number>;
+    const current = m.get(d.id);
+    if (current === undefined && d.delta < 0) continue;
+    m.set(d.id, cueStrengthen(current ?? 0, d.delta, t));
+  }
+  const rows: CueState[] = [];
+  const scaled: string[] = [];
+  for (const tok of touched) {
+    const m = byToken.get(tok) as Map<string, number>;
+    const total = [...m.values()].reduce((s, w) => s + w, 0);
+    const factor = t.CUE_MAX_OUT > 0 && total > t.CUE_MAX_OUT ? t.CUE_MAX_OUT / total : 1;
+    if (factor < 1) scaled.push(tok);
+    for (const [id, w0] of [...m].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
+      const w = w0 * factor;
+      const weight = w > t.CUE_FLOOR ? w : 0;
+      const before = stored.get(`${tok}\u0000${id}`);
+      if (before === undefined && weight === 0) continue;
+      if (before !== undefined && before.weight === weight && before.lastDay === day) continue;
+      rows.push({ token: tok, id, weight, lastDay: day });
+    }
+  }
+  return { rows, scaled, tokens: touched.length };
+}

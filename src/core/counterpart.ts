@@ -37,8 +37,8 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { Associate, appendPendingDeltas, claimPending, releasePending } from "./associate/index.js";
-import type { CoactivateResult, Credited, FlushReport, PairDelta, PendingClaim } from "./associate/index.js";
+import { Associate, appendPendingCues, appendPendingDeltas, claimPending, releasePending } from "./associate/index.js";
+import type { CoactivateResult, CueDelta, CueFlushReport, Credited, FlushReport, PairDelta, PendingClaim } from "./associate/index.js";
 import { READ_TODAY_AT_START, horizonFor } from "./briefing.js";
 import { episodeGate } from "./bridge.js";
 import { Dreams, Reflections } from "./dream/index.js";
@@ -124,7 +124,7 @@ import {
   writeNeighbours,
 } from "./reconsolidation.js";
 import type { HeldUpdate, Neighbour, SettleInput, SettleOutcome, SlotOutcome, UndoOutcome } from "./reconsolidation.js";
-import { Schemas } from "./schemas/index.js";
+import { Schemas, supportWeightText } from "./schemas/index.js";
 import {
   HANDOFF_CLEARED_EVENT,
   HANDOFF_SHOWN_EVENT,
@@ -138,7 +138,8 @@ import {
 } from "./handoff/index.js";
 import type { Handoff, HandoffRefusal, HandoffWrite, PointerSince } from "./handoff/index.js";
 import { CLAIM_CHAPTER, askFromStretch, chapterClaims, claimUnwritten, sessionStretch, sessionsHere } from "./coverage/index.js";
-import { ELSEWHERE_TITLES_MAX, elsewhereNamedIn, LAST_HERE_LIFE_DAYS, LAST_HERE_NOROOM_EVENT, chaptersBySession, chaptersHere, chaptersOn, elsewhereLine, lastHereLadder, sinceElsewhereLines, stampWords, todayElsewhereLines, YESTERDAY_UNDATED_AT_START, yesterdayLine, yesterdayShorter } from "./handoff/last-here.js";
+import { ELSEWHERE_TITLES_MAX, elsewhereNamedIn, LAST_HERE_LIFE_DAYS, LAST_HERE_NOROOM_EVENT, chaptersBySession, chaptersHere, chaptersOn, chaptersWrittenOn, elsewhereLine, lastHereLadder, sinceElsewhereLines, stampWords, todayElsewhereLines, todaySoFarForms, todaySoFarSummaryForms, YESTERDAY_UNDATED_AT_START, yesterdayLine, yesterdayShorter, yesterdaySummaryForms } from "./handoff/last-here.js";
+import type { ChaptersOnDate, TodayChapter } from "./handoff/last-here.js";
 import type { ChapterHere, HereSession, LastHere, MemoryHere, SinceElsewhere, TodayElsewhere } from "./handoff/last-here.js";
 import { LAST_EXCHANGE_LINE_MAX_BYTES, exchangeLikely, lastExchange, lastExchangeLine, withExchange } from "./handoff/last-exchange.js";
 import type { LastExchange } from "./handoff/last-exchange.js";
@@ -197,7 +198,9 @@ import type {
   WriterInput,
 } from "./self/index.js";
 import { acceptsReflectedFeeling, keepCore, ownerNames, retireCore } from "./sleep/index.js";
-import { DAYS_END_JOURNAL_SHARE, WRITER_JOURNAL_CHARS, WRITER_JOURNAL_SHARE, journalBlockChars } from "./self/writer.js";
+import { DAYS_END_JOURNAL_SHARE, WRITER_JOURNAL_CHARS, WRITER_JOURNAL_SHARE, daySummaries, journalBlockChars } from "./self/writer.js";
+import { chapterSummaries } from "./self/summaries.js";
+import { withTodaySoFar } from "./self/briefing.js";
 import type { WriterJournal } from "./self/writer.js";
 import { dayJournal } from "./dream/slices.js";
 import { DREAM_TUNABLES } from "./dream/tunables.js";
@@ -218,7 +221,7 @@ import type {
 import { TUNABLES as PHYSICS, band as bandOf, fadeOf } from "./physics/index.js";
 import type { UseTier } from "./physics/index.js";
 import type { Kind } from "./types.js";
-import { isKnownSession } from "./types.js";
+import { isKnownSession, livedOn } from "./types.js";
 import {
   SELF_BRIEFING_EVENT,
   CAPTURE_FAILED_EVENT,
@@ -227,6 +230,7 @@ import {
   RECALL_RATED_EVENT,
   recallDecisionRecord,
   ASSOCIATE_FLUSH_EVENT,
+  AWAKE_SUPPORT_EVENT,
   SUBJECTS_BACKFILL_META,
   REGROWN_RELINK_META,
   CORRECTED_RELINK_META,
@@ -918,7 +922,7 @@ export class Counterpart {
         ...(asked.more.length === 0
           ? {}
           : { horizonMore: asked.more, horizonMoreItems: asked.moreItems.map((i) => (nearDue(i.due, at) ? { ...i, near: true } : i)) }),
-        ...this.yesterdayFor(at, { here }),
+        ...this.dayLinesFor(at, here),
         ...this.elsewhereFor(at, here),
       });
       if (out === null) return null;
@@ -1834,12 +1838,189 @@ export class Counterpart {
       const elsewhere = [...places].map(([scope, sessions]) => ({ scope, sessions }));
       // Undated at a session start, read under its `Now:` line (2026-10-16).
       const dated = reader === undefined || !YESTERDAY_UNDATED_AT_START;
+      // DAY'S END'S SUMMARY LEADS (2026-10-24, lane W1, `self.YESTERDAY_FROM_SUMMARY`,
+      // read at use): at a session start only, and only past the privacy
+      // gate (`daySummaryShown`). Otherwise the chapter list, as before.
+      const told = reader === undefined || !SELF_TUNABLES.YESTERDAY_FROM_SUMMARY ? null : this.daySummaryShown(date, reader.here);
+      if (told !== null) {
+        const [widest, ...narrower] = yesterdaySummaryForms(told, day, date, elsewhere, dated);
+        if (widest === undefined) return {};
+        return narrower.length === 0 ? { yesterday: widest } : { yesterday: widest, yesterdayShorter: narrower };
+      }
       const line = yesterdayLine(day, date, undefined, elsewhere, dated);
       if (line === null) return {};
       const shorter = yesterdayShorter(day, date, elsewhere, dated);
       return shorter.length === 0 ? { yesterday: line } : { yesterday: line, yesterdayShorter: shorter };
     } catch {
       return {};
+    }
+  }
+
+  /**
+   * THE LINES UNDER THE FRAMING AT A SESSION START (2026-10-24, lane W1):
+   * the Yesterday line (`yesterdayFor`) and, under it, "Today so far here"
+   * (`todaySoFarFor`), as one piece of furniture with one ladder of forms
+   * (`self/briefing.ts#withTodaySoFar`). With no "Today so far" line this is
+   * the Yesterday line exactly. Never throws.
+   */
+  private dayLinesFor(at: string, here: WakeHere | undefined): { yesterday?: string; yesterdayShorter?: string[]; todaySoFarSummaries?: string[] } {
+    const y = this.yesterdayFor(at, { here });
+    const today = this.todaySoFarFor(at, here, y.yesterday ?? "");
+    return withTodaySoFar(y, today.forms, today.summaries);
+  }
+
+  /**
+   * "TODAY SO FAR HERE" (2026-10-24, lane W1; Mike's go 17:45, lightly held;
+   * `self.TODAY_SO_FAR`, read at use): for a session starting on `at` in
+   * `here.scope`, today's chapters written in THIS folder — the row's own
+   * directory, the same rule as the Yesterday line's own-folder chapters
+   * (`nameableHere`) — each by time, title, id and the start of its
+   * session-written summary (`self/summaries.ts`). The line's forms, widest
+   * first (`handoff/last-here.ts#todaySoFarForms`), or none.
+   *
+   * EACH EPISODE ONCE, as the Yesterday line: the episode "Last here" names
+   * first is that line's (`lastHereNewest`, unless this delivery found no room
+   * for it — `yesterdayKeepsNewest`), and one the Yesterday line names by id
+   * (an episode written on both days) is that line's. Not the reader's own
+   * session's. "Last here"'s "Before it" and "+N more here" leave out what this
+   * line names (they skip any id the wake already carries).
+   *
+   * Other folders are not this line's: "Today, elsewhere" says them, under its
+   * own gate, and the "About me, from another directory" line names an
+   * about-me chapter from there — so no chapter is named by both.
+   *
+   * Reads only: the walk the wake already made, one chapter read for the date
+   * (`chaptersOn`) and one grouped read of the summaries. Never throws.
+   */
+  private todaySoFarFor(at: string, here: WakeHere | undefined, yesterday: string): { forms: string[]; summaries: string[] } {
+    const none = { forms: [], summaries: [] };
+    if (!SELF_TUNABLES.TODAY_SO_FAR || here === undefined || (here.scope ?? "").trim().length === 0) return none;
+    try {
+      const day = this.store.livedDay();
+      const fromDay = Math.max(0, day - LAST_HERE_LIFE_DAYS + 1);
+      const newest = this.yesterdayKeepsNewest ? null : this.lastHereNewest(here);
+      const named = new Set([...yesterday.matchAll(/\((epi_[0-9a-f]+)\)/g)].map((m) => m[1]));
+      const walk = new Map([...this.chaptersInWindow(day).values()].map((c) => [c.id, c] as const));
+      const reader = here.session ?? null;
+      const mine = chaptersOn(this.store, at, { fromDay }).filter(
+        (c) => this.nameableHere(c.scope ?? null, false, here) && !named.has(c.id) && !(reader !== null && walk.get(c.id)?.session === reader),
+      );
+      const listed = mine.filter((c) => c.id !== newest);
+      if (listed.length === 0) return none;
+      if (listed.length < mine.length && newest !== null) this.yesterdayLeftOut = newest;
+      const zone = this.store.zone();
+      const summaries = chapterSummaries(this.store, listed.map((c) => c.id));
+      const written = (c: ChaptersOnDate): number => walk.get(c.id)?.writtenAt ?? c.createdAt;
+      const chapters: TodayChapter[] = [...listed]
+        .sort((a, b) => written(a) - written(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map((c) => {
+          const held = summaries.get(c.id);
+          const last = held === undefined ? undefined : held.get(Math.max(...held.keys()));
+          const at = walk.get(c.id)?.writtenAt;
+          return {
+            id: c.id,
+            title: c.title,
+            time: at === undefined ? "" : (localStamp(at, zone).split(" ")[1] ?? ""),
+            summary: last?.body ?? "",
+          };
+        });
+      const forms = todaySoFarForms(chapters);
+      return { forms, summaries: todaySoFarSummaryForms(chapters, forms) };
+    } catch {
+      return none;
+    }
+  }
+
+  /**
+   * MAY DAY'S END'S SUMMARY OF `date` BE SHOWN IN A WAKE FOR `here`? Its text
+   * when so, else null (2026-10-24, lane W1; the brief's privacy gate, held
+   * firmly). Day's end reads the WHOLE day — every chapter of it, store-wide,
+   * and the day's strongest memories, whatever folder wrote them and whatever
+   * that folder's scope setting (`dream/slices.ts#dayJournal`,
+   * `pageWriterInput`; its recall reaches the store too) — so what it cites
+   * does not bound what its words drew on. It is shown only when ALL of:
+   *
+   *   - every memory it cites is nameable in this wake (`nameableHere`): this
+   *     folder's own, or marked about me, us or the owner from a folder whose
+   *     scope setting is on. A cite that no longer reads (removed, forgotten)
+   *     or is not a memory fails it;
+   *   - every chapter written that day (`chaptersWrittenOn`, unbounded by
+   *     birth day, archived and merged episodes included) comes from this
+   *     folder or one whose scope setting is on, and records its folder;
+   *   - every memory of that day — lived that day as day's end picks them
+   *     (a second-hand write-up the next morning included), or written inside
+   *     it (backdated included) — archived and merged rows included, the
+   *     night's own merges and reflections left to their originals, comes from
+   *     this folder or one whose scope setting is on, and records its folder.
+   *
+   * The store is read as day's end SAW it, not as the night left it: the
+   * dream archives and merges after day's end has read the day (review of
+   * #614). What it cannot see: a memory erased since (its row is gone), and
+   * whatever day's end's recall reached on other days — a summary's cites are
+   * the only bound on that.
+   *
+   * No way to ask the scope setting (`exportsFrom` absent) and nothing from
+   * another folder passes. Stricter than the brief's floor (cites, plus
+   * chapters only when nothing is cited) because the prose can carry a private
+   * folder's day without citing it. Never throws: a store that will not
+   * answer shows no summary.
+   */
+  private daySummaryShown(date: string, here: WakeHere | undefined): string | null {
+    try {
+      const told = daySummaries(this.store, { sinceDay: Math.max(0, this.store.livedDay() - LAST_HERE_LIFE_DAYS) }).find((s) => s.about === date);
+      if (told === undefined || told.text.trim().length === 0) return null;
+      const norm = (s: string): string => s.trim().replace(/\/+$/, "");
+      const own = norm(here?.scope ?? "");
+      const exportsFrom = here?.exportsFrom;
+      const open = (scope: string | null): boolean => {
+        if (scope === null || norm(scope).length === 0) return false;
+        if (own.length > 0 && norm(scope) === own) return true;
+        if (exportsFrom === undefined) return false;
+        try {
+          return exportsFrom(scope) === true;
+        } catch {
+          return false;
+        }
+      };
+      const zone = this.store.zone();
+      const from = startOfLocalDay(date, zone);
+      const to = startOfLocalDay(addDays(date, 1), zone);
+      // THE STORE AS DAY'S END SAW IT, NOT AS THE NIGHT LEFT IT (review of
+      // #614): archived and merged rows count too — the night's dream archives
+      // and merges after day's end has read them — and a chapter or memory
+      // with no folder recorded fails, as it does in `nameableHere`.
+      for (const id of this.store.list({ type: "episode" })) {
+        const row = this.store.row(id);
+        if (row !== undefined && chaptersWrittenOn(row, date, zone) > 0 && !open(row.origin_scope)) return null;
+      }
+      // The day's memories as day's end picks them (`writer.ts#dayMemories`:
+      // the day LIVED, so a second-hand write-up the next morning is that
+      // day's), and every one written inside the day. The night's own rows
+      // (a merge, a reflection) are filed under the dreaming folder; the
+      // originals they came from are read here with their own.
+      for (const id of this.store.list({ type: "memory", learnedOnFrom: date })) {
+        const row = this.store.row(id);
+        if (row === undefined) continue;
+        const ref = row.origin_ref ?? "";
+        if (row.source === "dreamed" || row.source === "reflection" || ref.startsWith("dream:") || ref.startsWith("reflection:")) continue;
+        const inDay = row.created_at !== null && row.created_at >= from && row.created_at < to;
+        if ((inDay || livedOn(row) === date) && !open(row.origin_scope)) return null;
+      }
+      // Backdated rows written inside the day (learned on an earlier date).
+      const before = new Map(this.store.memoryCountsByScopeSince(from).map((r) => [r.scope, r.count] as const));
+      for (const r of this.store.memoryCountsByScopeSince(to)) before.set(r.scope, (before.get(r.scope) ?? 0) - r.count);
+      for (const [scope, n] of before) if (n > 0 && !open(scope)) return null;
+      const denied = new Set(this.store.deniedIds());
+      for (const id of told.cites) {
+        if (denied.has(id)) return null;
+        const row = this.store.row(id);
+        if (row === undefined || row.type !== "memory") return null;
+        const aboutMe = row.about !== null && row.about !== undefined && (CORE_ABOUT_MARKS as readonly string[]).includes(row.about);
+        if (!this.nameableHere(row.origin_scope, aboutMe, here)) return null;
+      }
+      return told.text;
+    } catch {
+      return null;
     }
   }
 
@@ -2721,7 +2902,50 @@ export class Counterpart {
 
   /** Retrospective reinforcement for ONE memory the reply actually used. */
   resolveUse(sessionId: string, memoryId: string, tier: UseTier, opts: { cued?: boolean; beliefSlot?: boolean } = {}): CreditResult {
-    return this.recall.resolveUse(sessionId, memoryId, tier, opts);
+    const r = this.recall.resolveUse(sessionId, memoryId, tier, opts);
+    // CUE LEARNING (R3): what the use earned for the words of the turn that
+    // showed it, to the pending file the worker applies (`publishCues`).
+    if (r.cues !== undefined && r.cues.length > 0) this.publishCues(r.cues);
+    return r;
+  }
+
+  /**
+   * CUE LEARNING'S HALF OF THE CREDIT PASS (R3, 2026-10-24 — an experiment):
+   * word-to-memory deltas, buffered and drained to the pending file exactly
+   * as `publishCoactivation` drains pairs — no database lock for association
+   * on the hook path (I38). The worker applies them at its next boundary
+   * (`applyPendingAssociations`), so the next turn in any session after that
+   * sees the learning. An observer writes nothing. Never throws. Returns how
+   * many deltas reached the file.
+   */
+  private publishCues(deltas: readonly CueDelta[]): number {
+    if (this.observer) {
+      this.emit("counterpart.associate.standdown", undefined, { site: "cues" });
+      return 0;
+    }
+    const started = this.store.now();
+    let drained: CueDelta[] = [];
+    let day = 0;
+    try {
+      day = this.store.livedDay();
+      this.associate.depositCues(deltas);
+      drained = this.associate.drainCues();
+    } catch (err) {
+      this.emit("counterpart.associate.cues.failed", undefined, { code: errCode(err) });
+      return 0;
+    }
+    if (drained.length === 0) return 0;
+    const append = appendPendingCues(this.store.dir, drained, { day, at: started });
+    this.emit("counterpart.associate.pending", undefined, {
+      day,
+      site: "cues",
+      pairs: drained.length,
+      written: append.pairs,
+      dropped: append.droppedPairs + (append.ok ? 0 : drained.length - append.pairs),
+      code: append.code,
+      elapsedMs: this.store.now() - started,
+    });
+    return append.pairs;
   }
 
   /**
@@ -2732,13 +2956,17 @@ export class Counterpart {
    * through the store's gate-record door, so an observer's store refuses it
    * (the caller swallows that, as it does every telemetry write).
    */
-  noteAsked(sessionId: string, ids: readonly string[]): void {
+  noteAsked(sessionId: string, ids: readonly string[], opts: { question?: string } = {}): void {
     if (ids.length === 0) return;
     const day = this.store.livedDay();
     const at = askedTurn(this.store.now());
     this.store.setGateRecords(
       [...new Set(ids)].map((id) => ({ sessionId, kind: ASKED_KIND, ref: id, turn: at, lastDay: day, tier: "asked", trains: true })),
     );
+    // THE QUESTION'S WORDS (R3 cue learning): kept beside what its answer
+    // showed, so opening one later wires them to it. The search itself
+    // trains nothing (recall CONTRACT item 8); the open after it does.
+    if (opts.question !== undefined) this.recall.noteQuestionCues(sessionId, opts.question, at);
   }
 
   /**
@@ -3367,6 +3595,17 @@ export class Counterpart {
         refuse(errCode(err));
       }
     }
+    // A RATING OF 0 depresses the cue pairs of the turn that showed it (R3):
+    // cue-specific habituation, through the same pending file.
+    for (const r of rated) {
+      if (r.score !== 0 || rowRefusal(r.id) !== null) continue;
+      try {
+        const down = this.recall.cueDepress(sessionId, r.id);
+        if (down.length > 0) this.publishCues(down);
+      } catch (err) {
+        this.emit("counterpart.associate.cues.failed", r.id, { code: errCode(err) });
+      }
+    }
     // What the stretch otherwise used was credited when it was used; it links if its row still may.
     for (const id of plan.coUse) {
       if (!linkable.has(id) && rowRefusal(id) === null && state.surfaced[id]?.trains !== false) linkable.add(id);
@@ -3629,6 +3868,7 @@ export class Counterpart {
     };
     let failure: string | null = null;
     const linked: string[] = [];
+    const cueOut = { deltas: 0, rows: 0, dropped: 0 };
     for (const claim of claims) {
       out.passes += claim.passes;
       out.pairs += claim.deltas.length;
@@ -3663,6 +3903,27 @@ export class Counterpart {
         out.dropped += threw === null ? 0 : claim.deltas.length;
         continue;
       }
+      // CUE PAIRS (R3), in the same unit of work and AFTER the claim's pairs
+      // landed: a claim whose pairs failed stays on disk with its cue deltas
+      // unapplied (nothing absorbed), and a cue write that fails here is
+      // dropped and counted rather than keeping the claim — keeping it would
+      // apply its pairs twice. At most once for both halves (G4).
+      if (claim.cues.length > 0) {
+        cueOut.deltas += claim.cues.length;
+        let cueReport: CueFlushReport | null = null;
+        try {
+          this.associate.absorbCues(claim.cues);
+          cueReport = this.associate.flushCues(claim.day ?? this.store.livedDay());
+        } catch (err) {
+          this.emit("counterpart.associate.cues.failed", undefined, { code: errCode(err), site: "apply" });
+        }
+        if (cueReport !== null && cueReport.reason === "flushed") cueOut.rows += cueReport.rows;
+        else {
+          cueOut.dropped += claim.cues.length;
+          // A busy flush left them buffered; this process ends soon, and the claim goes: drop them, counted.
+          this.associate.drainCues();
+        }
+      }
       const released = releasePending(claim);
       if (released.stuck) {
         // A claim that cannot be removed will be applied again by a later run:
@@ -3673,7 +3934,7 @@ export class Counterpart {
       }
     }
     if (failure !== null) out.reason = "failed";
-    else if (out.pairs === 0) out.reason = "nothing-buffered";
+    else if (out.pairs === 0 && cueOut.deltas === 0) out.reason = "nothing-buffered";
 
     // The lived day is a database read; a busy database must not lose the row
     // over it (second review, 2026-09-17), so the newest day a claim carried
@@ -3704,6 +3965,8 @@ export class Counterpart {
       // not `rows`, which counts both directions and every sibling a touched
       // node's decay rewrote. What the dashboard's "links made" sums.
       deposited: Math.max(0, out.pairs - out.blocked - out.dropped),
+      // CUE LEARNING (R3): word-to-memory deltas carried, pair rows written, deltas lost.
+      ...(cueOut.deltas === 0 ? {} : { cueDeltas: cueOut.deltas, cueRows: cueOut.rows, cueDropped: cueOut.dropped }),
       ...rowIds(linked),
       // The APPLYING session (2026-10-11): the boundary whose worker carried
       // these claims. A claim may hold lines several sessions credited.
@@ -3727,7 +3990,7 @@ export class Counterpart {
     } catch (err) {
       this.emit("counterpart.associate.flush.unrecorded", undefined, { code: errCode(err) });
     }
-    return out;
+    return cueOut.deltas === 0 ? out : { ...out, cues: cueOut };
   }
 
   /**
@@ -3860,16 +4123,22 @@ export class Counterpart {
    * weak (route `session`), that memory its first support; at most
    * `BELIEF_SESSION_BIRTHS_PER_DAY` a lived day; the statement kept to
    * `MAX_BELIEF_CHARS`. One that says what a belief already says is refused
-   * with that belief's id and NOTHING is filed (review of #583: eight repeats
-   * from eight memories had pumped a belief's support to 8 in one session) —
-   * the reflection files what fits, spread and counted once. Off with
-   * `schemas.BELIEFS_BIRTH`.
+   * with that belief's id (review of #583: eight repeats from eight memories
+   * had pumped a belief's support to 8 in one session), and — #583 → B1,
+   * 2026-10-24 — its memory is filed as support for that belief, AT MOST ONCE
+   * PER BELIEF PER SESSION (the memory's `origin_session`, the same session
+   * physics' spread reads; any support row from that session counts, the
+   * belief's own birth row included). An unknown or unbound session (`mcp`)
+   * falls back to once per belief per lived day. The outcome rides beside the
+   * refusal as `support`. Off with `schemas.AWAKE_SUPPORT_ON_DUPLICATE`
+   * (nothing filed, as before). All of it off with `schemas.BELIEFS_BIRTH`.
    */
   sessionBelief(input: { memoryId: string; statement: string; about?: "me" | "us" }): {
     ok: boolean;
     reason: "born" | "near-duplicate" | "beliefs-off" | "observer" | "memory-unknown" | "not-testimony-choice-or-vivid" | "statement-required" | "limit-reached" | string;
     id: string | null;
     note?: string;
+    support?: { filed: true; route: string | null; weight: number } | { filed: false; reason: string };
   } {
     if (this.observer) return { ok: false, reason: "observer", id: null };
     if (!SCHEMAS_TUNABLES.BELIEFS_BIRTH) return { ok: false, reason: "beliefs-off", id: null, note: "Beliefs are off: none was written." };
@@ -3891,7 +4160,10 @@ export class Counterpart {
     const me = this.schemas.ensureSelfSubject();
     const near = this.schemas.nearestBelief(me, statement);
     if (near !== null) {
-      return { ok: false, reason: "near-duplicate", id: near.id, note: `It says what ${near.id} says. The memory stands; tonight's reflection may count it for that belief.` };
+      if (!SCHEMAS_TUNABLES.AWAKE_SUPPORT_ON_DUPLICATE) {
+        return { ok: false, reason: "near-duplicate", id: near.id, note: `It says what ${near.id} says. The memory stands; tonight's reflection may count it for that belief.` };
+      }
+      return { ok: false, reason: "near-duplicate", id: near.id, ...this.awakeSupport(near.id, input.memoryId, row.origin_session, day) };
     }
     const today = this.store
       .list({ type: "schema", archived: false })
@@ -3915,6 +4187,59 @@ export class Counterpart {
     const filed = this.schemas.fileSupport({ beliefId: made.id, memoryId: input.memoryId, stance: "support", day });
     const cut = statement.length < flat.length ? ` The statement was kept to its first ${String(max)} characters.` : "";
     return { ok: true, reason: "born", id: made.id, note: `Born weak, backed by this memory (${String(filed.route)}).${cut}` };
+  }
+
+  /**
+   * `sessionBelief`'s near-duplicate, counted (B1, 2026-10-24): the memory
+   * filed as support for the belief it repeats, unless this memory already
+   * counts for it, or a support row from the same session (unknown or
+   * unbound: from the same lived day) already does — the #583 cap.
+   */
+  private awakeSupport(beliefId: string, memoryId: string, session: string | null, day: number): {
+    note: string;
+    support: { filed: true; route: string | null; weight: number } | { filed: false; reason: string };
+  } {
+    const out = this.awakeSupportOutcome(beliefId, memoryId, session, day);
+    // Kept for the check after (docs/CHECK-AFTER.md, B1): the schemas' own
+    // events live in the ring and the process log, not the store.
+    try {
+      this.store.appendEvent({
+        name: AWAKE_SUPPORT_EVENT,
+        day,
+        ref: beliefId,
+        payload: {
+          memoryId,
+          session: isKnownSession(session) ? session : null,
+          ...(out.support.filed ? { filed: true, route: out.support.route, weight: out.support.weight } : { filed: false, reason: out.support.reason }),
+        },
+      });
+    } catch (err) {
+      this.emit("counterpart.belief.awake-support.unrecorded", beliefId, { code: errCode(err) });
+    }
+    return out;
+  }
+
+  private awakeSupportOutcome(beliefId: string, memoryId: string, session: string | null, day: number): {
+    note: string;
+    support: { filed: true; route: string | null; weight: number } | { filed: false; reason: string };
+  } {
+    const later = "the reflection may count it later.";
+    const rows = this.store.supportOf(beliefId).filter((r) => r.stance === "support");
+    if (rows.some((r) => r.memoryId === memoryId)) {
+      return { note: `It says what ${beliefId} says; this memory already counts for it.`, support: { filed: false, reason: "already-counted" } };
+    }
+    const known = isKnownSession(session);
+    const counted = known ? rows.some((r) => r.session === session) : rows.some((r) => r.bornDay === day || r.day === day);
+    if (counted) {
+      return known
+        ? { note: `It says what ${beliefId} says; already counted from this session; ${later}`, support: { filed: false, reason: "counted-this-session" } }
+        : { note: `It says what ${beliefId} says; already counted today (this session is not known, so once a day); ${later}`, support: { filed: false, reason: "counted-today" } };
+    }
+    const filed = this.schemas.fileSupport({ beliefId, memoryId, stance: "support", day, via: "awake-duplicate" });
+    if (!filed.ok) {
+      return { note: `It says what ${beliefId} says. The memory stands; it was not counted (${filed.reason}); ${later}`, support: { filed: false, reason: filed.reason } };
+    }
+    return { note: `It says what ${beliefId} says; this memory now counts for it (${String(filed.route)}, ${supportWeightText(filed.weight)}).`, support: { filed: true, route: filed.route, weight: filed.weight } };
   }
 
   /**

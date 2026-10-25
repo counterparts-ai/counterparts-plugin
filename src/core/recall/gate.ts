@@ -110,6 +110,12 @@ export interface CandidateVerdict {
   /** HABITUATED (2026-10-19, `habituation.ts`): rated 0 in enough recent
    *  sessions that the bar it faced (`bar`) was raised. Absent otherwise. */
   readonly habituated?: true;
+  /** COMPETED (2026-10-24, E3): the older of an unsettled pair whose newer
+   *  (`with`) was a candidate too, so once admitted its activation counted
+   *  at `factor` — `activation` above is the scaled number the loud tier and
+   *  the rankings saw; it cleared `bar` at `activation / factor`. Absent
+   *  otherwise. */
+  readonly competed?: { readonly with: string; readonly factor: number };
   /**
    * PRIMED (context priming, an experiment, 2026-10-19; `prime.ts`): the head
    * start in `activation` from links (`link`) and the train of thought
@@ -165,6 +171,10 @@ export interface GateInput {
   readonly crossing?: (id: string) => boolean;
   /** Memories habituated this turn (`habituation.ts#habituatedIds`, 2026-10-19). Absent: none. */
   readonly habituated?: ReadonlyMap<string, number>;
+  /** The olders of standing unsettled pairs whose newer is a candidate too, and
+   *  the weight each counts at after the floor (`standing.ts#unsettledCompetition`,
+   *  E3, 2026-10-24). Absent: none compete. */
+  readonly competing?: ReadonlyMap<string, { readonly with: string; readonly factor: number }>;
 }
 
 export interface GateResult {
@@ -180,6 +190,8 @@ export interface GateResult {
   readonly affectReason: "fired" | "no-feeling-in-turn" | "refractory" | "nothing-charged";
   /** Ids only `CROSS_PROJECT_BAR_LIFT` kept below their bar (2026-10-21). */
   readonly crossLifted: readonly string[];
+  /** Olders of an unsettled pair that counted at a weight this turn (`GateInput.competing`, E3). Empty: none. */
+  readonly competed: readonly string[];
 }
 
 /** Jaccard over indexed tokens — the similarity the cache itself would compute. */
@@ -388,6 +400,8 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   const faced = new Map<string, number>();
   /** Candidates whose bar habituation raised (marked on their verdicts). */
   const habituatedIds = new Set<string>();
+  /** Olders of an unsettled pair whose activation counted at a weight (E3; marked on their verdicts). */
+  const competedIds = new Map<string, { with: string; factor: number }>();
   /** Admitted primed candidates priming alone put over their bar or into the cut. */
   const primeLifted = new Set<string>();
   const record = (c: Candidate, verdict: Verdict): void => {
@@ -411,6 +425,7 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
       ...(blocked !== undefined ? { loudBlockedBy: blocked } : {}),
       ...(c.linkOnly === true ? { via: "link" as const } : {}),
       ...(habituatedIds.has(c.id) ? { habituated: true as const } : {}),
+      ...(competedIds.has(c.id) ? { competed: competedIds.get(c.id) as { with: string; factor: number } } : {}),
       ...(c.prime === undefined
         ? {}
         : {
@@ -453,7 +468,7 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
    *  tier. */
   let charged = false;
 
-  for (const c of input.candidates) {
+  for (let c of input.candidates) {
     // Hard gate (a) — uncued is dark. Salience is never evaluated below here
     // for such a candidate, which is the guarantee, not an optimization.
     // ONE LANE IS NAMED (2026-09-28, association build 2): a QUIET POINTER —
@@ -539,6 +554,24 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
       record(c, "project-skipped");
       continue;
     }
+    // AN UNSETTLED PAIR COMPETES (2026-10-24, E3, an experiment): the older,
+    // with its newer a candidate too, counts from here on at its weight
+    // (`standing.ts#unsettledCompetition`) — the loud tier's checks and both
+    // rankings see the scaled number, so the newer wins a close race and the
+    // older can lose the loud slot or a capped one. Here, once it has cleared
+    // the floor and its admission bar at its own reach: a weight, never a
+    // filter — it is admitted, labelled, as before, and shows whenever there
+    // is room (a wrong pair costs a place in the order, not the memory). Two
+    // members that read as near-duplicates are not each other's copy while
+    // they compete (below): both show.
+    // Only a newer the turn really reached presses: one past the same
+    // absolute floor (a stray common word reaches nearly everything).
+    const competing = input.competing?.get(c.id);
+    const rival = competing === undefined ? undefined : byId.get(competing.with);
+    if (competing !== undefined && rival !== undefined && rival.activation - primeOf(rival) >= bg.floor) {
+      c = { ...c, activation: c.activation * competing.factor };
+      competedIds.set(c.id, { with: competing.with, factor: Math.round(competing.factor * 10_000) / 10_000 });
+    }
     // Loud-tier eligibility. Hard gate (c) first: arrival makes a memory warm,
     // only relevance makes it loud.
     let loud = true;
@@ -602,7 +635,14 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
       record(a.c, "inhibited");
       continue;
     }
-    const dup = kept.some((k) => similarity(k.c, a.c) >= t.NEAR_DUPLICATE);
+    // The two members of a COMPETING unsettled pair (E3) are never each
+    // other's copy: the night has not said whether they are one thing or
+    // two, so both show, the newer first and the older labelled. Otherwise
+    // a wrong pair that reads alike word for word (two people, one name
+    // apart) would hide the older, the memory the turn asked about, behind
+    // the weight — a filter. Only while competing, so off is as before.
+    const paired = (x: string, y: string): boolean => competedIds.get(x)?.with === y || competedIds.get(y)?.with === x;
+    const dup = kept.some((k) => similarity(k.c, a.c) >= t.NEAR_DUPLICATE && !paired(k.c.id, a.c.id));
     if (dup) {
       record(a.c, "inhibited");
       continue;
@@ -691,5 +731,5 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
     affectReason = "fired";
   }
 
-  return { background: bg, verdicts, surfaced, footnotes, affectFlag, affectReason, crossLifted: [...crossLifted] };
+  return { background: bg, verdicts, surfaced, footnotes, affectFlag, affectReason, crossLifted: [...crossLifted], competed: [...competedIds.keys()] };
 }

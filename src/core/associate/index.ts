@@ -34,11 +34,12 @@
  * `associate.flush.done` event is emitted after `linkMany` returns, never before,
  * and the failure arm emits `associate.flush.failed` with the dropped count.
  */
-import type { EdgeInput, EdgeRow, MemoryRow } from "../store/index.js";
+import type { CueEdgeRow, CueEdgeWrite, EdgeInput, EdgeRow, MemoryRow } from "../store/index.js";
 import type { UseTier } from "../physics/index.js";
-import { DeltaBuffer } from "./buffer.js";
-import { conducts, edgeWeightAt, isDead, planFlush, planProposal } from "./edges.js";
-import type { EdgeState, Eviction, PairDelta } from "./edges.js";
+import { TUNABLES as PHYSICS } from "../physics/index.js";
+import { CueBuffer, DeltaBuffer } from "./buffer.js";
+import { conducts, cueWeightAt, edgeWeightAt, isDead, planCueFlush, planFlush, planProposal } from "./edges.js";
+import type { CueDelta, EdgeState, Eviction, PairDelta } from "./edges.js";
 import { spread } from "./spread.js";
 import type { Seed, SpreadResult } from "./spread.js";
 import { pairCredit, tierFactor, withTunables } from "./tunables.js";
@@ -83,6 +84,31 @@ export interface AssociateStore {
   sweepArchivedEdges?(reasons: readonly string[], graceMs?: number): number;
   /** Read a latch (`TERMINAL_ARCHIVE_LATCHES`). Optional: a store without it never sweeps a latched reason. */
   getMeta?(key: string): string | undefined;
+  /**
+   * CUE PAIRS (2026-10-24, R3 cue learning): the learned word-to-memory
+   * pairs out of some index terms, their absolute write, and the sweep of
+   * the ones that carry nothing. Optional on the seam: a store without them
+   * learns nothing and fetches nothing by them.
+   */
+  cueEdgesFor?(tokens: readonly string[]): CueEdgeRow[];
+  writeCueEdges?(rows: readonly CueEdgeWrite[]): number;
+  sweepCueEdges?(opts: { staleOnOrBefore: number }, dead: (row: CueEdgeRow) => boolean): number;
+}
+
+/** What one cue flush did (R3). Counts only. */
+export interface CueFlushReport {
+  readonly reason: FlushReason;
+  readonly day: number;
+  /** Deltas taken from the buffer. */
+  readonly deltas: number;
+  /** Deltas refused at the flush: the memory no longer live, or pinned (G9). */
+  readonly blocked: number;
+  readonly rows: number;
+  readonly tokens: number;
+  /** Tokens synaptic scaling brought back to `CUE_MAX_OUT`. */
+  readonly scaled: number;
+  readonly swept: number;
+  readonly code?: string;
 }
 
 /**
@@ -274,10 +300,20 @@ export function fadeHorizon(t: AssociateTunables): number {
   return 100_000;
 }
 
+/** The lived days after which a cue pair at its cap has faded to the floor (R3): rows untouched longer are the sweep's to ask. */
+export function cueFadeHorizon(t: AssociateTunables): number {
+  for (let h = 1; h < 100_000; h++) {
+    if (!(cueWeightAt({ weight: t.CUE_W_CAP, lastDay: 0 }, h, t) > t.CUE_FLOOR)) return h;
+  }
+  return 100_000;
+}
+
 export class Associate {
   readonly tunables: AssociateTunables;
   private readonly store: AssociateStore;
   private readonly buffer = new DeltaBuffer();
+  /** Cue deltas (R3), the same declared exemption (`buffer.ts#CueBuffer`). */
+  private readonly cueBuffer = new CueBuffer();
   private readonly onEvent: ((e: AssociateEvent) => void) | undefined;
   private readonly ring: AssociateEvent[] = [];
   private flushing = false;
@@ -726,6 +762,164 @@ export class Associate {
     };
   }
 
+
+  // ── cue pairs (2026-10-24, R3 cue learning — an experiment) ────────────────
+
+  /** Cue deltas waiting in this process. */
+  get pendingCues(): number {
+    return this.cueBuffer.size;
+  }
+
+  /**
+   * Buffer word-to-memory deltas a credited use earned (`Recall#resolveUse`
+   * computes them from the turn that showed the memory). The memory must be
+   * live and not pinned (G9: frozen both ways) — checked here and again at
+   * the flush. An observer buffers nothing, checked first (G7); nor does a
+   * build with `CUE_LEARNING` off.
+   */
+  depositCues(deltas: readonly CueDelta[]): { deltas: number; blocked: number } {
+    if (this.observer) {
+      this.emit("associate.observer.skip", undefined, { site: "cues", deltas: deltas.length });
+      return { deltas: 0, blocked: 0 };
+    }
+    if (!PHYSICS.CUE_LEARNING) return { deltas: 0, blocked: 0 };
+    const conductor = this.conductor();
+    let taken = 0;
+    let blocked = 0;
+    for (const d of deltas) {
+      if (!Number.isFinite(d.delta) || d.delta === 0 || d.token.length === 0) continue;
+      if (!conductor(d.id) || this.store.row(d.id)?.protected === 1) {
+        blocked += 1;
+        continue;
+      }
+      this.cueBuffer.add(d.token, d.id, d.delta);
+      taken += 1;
+    }
+    return { deltas: taken, blocked };
+  }
+
+  /** Take the cue buffer (the credit pass drains it to the pending file, as it does pairs). */
+  drainCues(): CueDelta[] {
+    return this.cueBuffer.drain();
+  }
+
+  /** Take cue deltas another process buffered (the worker's half of the pending file). An observer absorbs nothing. */
+  absorbCues(deltas: readonly CueDelta[]): number {
+    if (this.observer) {
+      this.emit("associate.observer.skip", undefined, { site: "absorbCues", deltas: deltas.length });
+      return 0;
+    }
+    let added = 0;
+    for (const d of deltas) {
+      if (!Number.isFinite(d.delta) || d.delta === 0) continue;
+      this.cueBuffer.add(d.token, d.id, d.delta);
+      added += 1;
+    }
+    return added;
+  }
+
+  /**
+   * Publish the buffered cue deltas — the edges' flush, for cue pairs: busy is
+   * checked BEFORE the drain (a contended flush stays buffered, G5), the drain
+   * precedes the write and a failed write is NOT restored (at most once, G4),
+   * and a failure emits no success event (G6). Each delta's memory is
+   * re-checked live and unpinned. Then the sweep: pairs into a memory that is
+   * no longer live, and pairs faded below `CUE_FLOOR`.
+   */
+  flushCues(day?: number): CueFlushReport {
+    const d = day ?? this.store.livedDay();
+    const empty: CueFlushReport = { reason: "nothing-buffered", day: d, deltas: 0, blocked: 0, rows: 0, tokens: 0, scaled: 0, swept: 0 };
+    if (this.observer) {
+      this.emit("associate.observer.skip", undefined, { site: "flushCues", buffered: this.cueBuffer.size });
+      return { ...empty, reason: "observer" };
+    }
+    if (this.flushing) return { ...empty, reason: "busy", deltas: this.cueBuffer.size };
+    const read = this.store.cueEdgesFor;
+    const write = this.store.writeCueEdges;
+    if (read === undefined || write === undefined) {
+      // A store that cannot hold pairs: the deltas are dropped, counted (re-earnable).
+      const gone = this.cueBuffer.drain().length;
+      return gone === 0 ? empty : { ...empty, reason: "failed", deltas: gone, code: "NO_CUE_TABLE" };
+    }
+    this.flushing = true;
+    try {
+      const deltas = this.cueBuffer.drain();
+      if (deltas.length === 0) return empty;
+      const conductor = this.conductor();
+      const live = deltas.filter((x) => conductor(x.id) && this.store.row(x.id)?.protected !== 1);
+      const blocked = deltas.length - live.length;
+      const plan = planCueFlush(
+        live,
+        d,
+        (tokens) => read.call(this.store, tokens).map((r) => ({ token: r.token, id: r.memory_id, weight: r.weight, lastDay: r.last_day })),
+        this.tunables,
+      );
+      try {
+        if (plan.rows.length > 0) {
+          write.call(
+            this.store,
+            plan.rows.map((r) => ({ token: r.token, memoryId: r.id, weight: r.weight, lastDay: r.lastDay, source: "use" })),
+          );
+        }
+      } catch (err) {
+        this.emit("associate.cues.failed", undefined, { day: d, deltas: deltas.length, rows: plan.rows.length, error: codeOf(err) });
+        return { ...empty, reason: "failed", deltas: deltas.length, blocked, code: codeOf(err) };
+      }
+      let swept = 0;
+      if (this.store.sweepCueEdges !== undefined) {
+        try {
+          swept = this.store.sweepCueEdges(
+            { staleOnOrBefore: d - cueFadeHorizon(this.tunables) },
+            (r) => !(cueWeightAt({ weight: r.weight, lastDay: r.last_day }, d, this.tunables) > this.tunables.CUE_FLOOR),
+          );
+        } catch (err) {
+          this.emit("associate.sweep.failed", undefined, { day: d, error: codeOf(err), cues: true });
+        }
+      }
+      this.emit("associate.cues.done", undefined, {
+        day: d,
+        deltas: deltas.length,
+        blocked,
+        rows: plan.rows.length,
+        tokens: plan.tokens,
+        scaled: plan.scaled.length,
+        swept,
+      });
+      return { reason: "flushed", day: d, deltas: deltas.length, blocked, rows: plan.rows.length, tokens: plan.tokens, scaled: plan.scaled.length, swept };
+    } finally {
+      this.flushing = false;
+    }
+  }
+
+  /**
+   * THE READ: the learned pairs out of these index terms at a lived day — each
+   * pair's FADED weight, live memories only, above `CUE_FLOOR`. Recall binds
+   * it into a turn (`retrieval.ts`) and reads a pair as one more cue. Nothing
+   * for an observer (R3: an instrument neither writes nor reads cue pairs) or
+   * with `CUE_LEARNING` off. Never throws: an unreadable table fetches nothing.
+   */
+  learnedCues(tokens: readonly string[], day?: number): Map<string, { id: string; weight: number }[]> {
+    const out = new Map<string, { id: string; weight: number }[]>();
+    if (this.observer || !PHYSICS.CUE_LEARNING || tokens.length === 0 || this.store.cueEdgesFor === undefined) return out;
+    let rows: CueEdgeRow[] = [];
+    let d: number;
+    try {
+      d = day ?? this.store.livedDay();
+      rows = this.store.cueEdgesFor(tokens);
+    } catch {
+      return out;
+    }
+    if (rows.length === 0) return out;
+    const conductor = this.conductor();
+    for (const r of rows) {
+      const weight = cueWeightAt({ weight: r.weight, lastDay: r.last_day }, d, this.tunables);
+      if (!(weight > this.tunables.CUE_FLOOR) || !conductor(r.memory_id)) continue;
+      const list = out.get(r.token) ?? [];
+      list.push({ id: r.memory_id, weight });
+      out.set(r.token, list);
+    }
+    return out;
+  }
 
   // ── spreading activation ───────────────────────────────────────────────────
 

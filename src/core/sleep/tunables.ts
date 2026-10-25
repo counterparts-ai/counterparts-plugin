@@ -12,13 +12,11 @@ import type { MemorySource } from "../types.js";
 import type { Phase } from "./types.js";
 
 export const TUNABLES = {
-  /** Auto-consolidation cadence, in LIVED days [v0: every 3 days]. */
-  CONSOLIDATION_EVERY_DAYS: 3,
-
   /**
    * At most this many memories become core in one sleep, strongest first
    * (owner decision 2026-09-26: "~3 per sleep"). The rest stay eligible and
-   * wait for the next consolidation, counted as `promotion:cap` — a rail so a
+   * wait for the next consolidation (the next lived day, since consolidation
+   * runs every lived day, 2026-10-24), counted as `promotion:cap` — a rail so a
    * store that has just grown a lane of eligible memories does not rewrite
    * who it is overnight. CAL.
    */
@@ -100,7 +98,10 @@ export const TUNABLES = {
   CADENCE: {
     clock: 1,
     decay: 1,
-    consolidate: 3,
+    /** Every lived day (2026-10-24; was 3, from v0's "every 3 days", with no
+     *  other reason given). Eligibility is arithmetic over rows written in real
+     *  time, so waiting gains nothing; `CORE_MAX_PER_SLEEP` is now per night. */
+    consolidate: 1,
     prune: 1,
     /** Every third lived day: the fade floors are months long, so a card that
      *  fades a day or two late costs nothing, and the sweep reads every card. */

@@ -338,7 +338,7 @@ export {
 export type { RollbackHold } from "./rollback-hold.js";
 export { normalizeTag } from "./wave2.js";
 export type { CardLink, TagUse, UnkindedCard, UntaggedMemory } from "./tag-reads.js";
-export type { RecallTurnInput, SupportInput, SupportRead } from "./wave2.js";
+export type { CueEdgeRow, CueEdgeWrite, RecallTurnInput, SupportInput, SupportRead } from "./wave2.js";
 export type { BuildLogLine, ChapterSummaryKind, SettingInForce } from "./operational.js";
 export {
   PRE_MIGRATION_NAME_RE,
@@ -568,6 +568,10 @@ export const WRITE_METHODS = [
   "setFolderProject",
   "clearFolderProject",
   "recordRecallTurn",
+  // v15 (2026-10-24, R3 cue learning): the cue flush's writes and sweep, and a gate kind's own lifetime.
+  "writeCueEdges",
+  "sweepCueEdges",
+  "dropGateRecords",
 ] as const;
 
 export type WriteMethod = (typeof WRITE_METHODS)[number];
@@ -4987,6 +4991,66 @@ export class Store {
   /** Recorded recall turns, oldest first — one session's, or every one since a lived day. */
   recallTurns(opts?: { sessionId?: string; sinceDay?: number }): RecallTurnRow[] {
     return wave2.recallTurns(this, opts);
+  }
+
+  // ── v15: cue edges (2026-10-24, R3 cue learning — an experiment) ─────────
+
+  /** The learned pairs out of these index terms, as stored (weights not faded: `associate/` reads them at a day). */
+  cueEdgesFor(tokens: readonly string[]): wave2.CueEdgeRow[] {
+    return wave2.cueEdgesFor(this, tokens);
+  }
+
+  /** The learned pairs into one memory, strongest first. */
+  cueEdgesOf(memoryId: string): wave2.CueEdgeRow[] {
+    return wave2.cueEdgesOf(this, memoryId);
+  }
+
+  /** Write absolute pairs in ONE transaction (`associate`'s cue flush plans them); a weight at or below 0 deletes the row. */
+  writeCueEdges(rows: readonly wave2.CueEdgeWrite[]): number {
+    return this.mutate("writeCueEdges", () => wave2.writeCueEdges(this, rows, this.nowFn()));
+  }
+
+  /**
+   * Remove pairs into a memory that is not live any more, and pairs `dead`
+   * says faded below the floor (`wave2.ts#sweepCueEdges`). With `terms`
+   * (review of #613, the owner's removal): every pair out of any of those
+   * index terms the word index no longer holds — the privacy guard (df > 0)
+   * kept true after the fact, so a word whose only memory was removed does
+   * not live on as a cue to another memory. Ask it after the cache rebuild.
+   */
+  sweepCueEdges(opts: { staleOnOrBefore: number; terms?: readonly string[] }, dead: (row: wave2.CueEdgeRow) => boolean): number {
+    const asked = [...new Set(opts.terms ?? [])].filter((t) => t.length > 0);
+    const held = asked.length === 0 ? new Map<string, number>() : docFrequency(this.cache, asked);
+    const unheld = asked.filter((t) => !((held.get(t) ?? 0) > 0));
+    return this.mutate("sweepCueEdges", () =>
+      wave2.sweepCueEdges(this, { staleOnOrBefore: opts.staleOnOrBefore, denied: this.deniedIds(), unheld }, dead),
+    );
+  }
+
+  /**
+   * Delete gate records of one `kind` that `drop` picks, across every session
+   * (or one), in one transaction — for records with their own lifetime inside
+   * the session's (recall's per-turn cue words, R3: bounded per session and
+   * emptied on the 14-day clock). Returns how many went.
+   */
+  dropGateRecords(kind: string, drop: (row: { session_id: string; ref: string; turn: number; value: string | null }) => boolean, sessionId?: string): number {
+    const n = this.mutate("dropGateRecords", () => {
+      const rows = this.ops.all<{ session_id: string; ref: string; turn: number; value: string | null }>(
+        `SELECT session_id, ref, turn, value FROM gate_session WHERE kind = ?${sessionId === undefined ? "" : " AND session_id = ?"}`,
+        kind,
+        ...(sessionId === undefined ? [] : [sessionId]),
+      );
+      const st = this.ops.prepare("DELETE FROM gate_session WHERE session_id = ? AND kind = ? AND ref = ?");
+      let gone = 0;
+      for (const r of rows) {
+        if (!drop(r)) continue;
+        st.run(r.session_id, kind, r.ref);
+        gone += 1;
+      }
+      return gone;
+    });
+    if (n > 0) this.emit("store.gate.dropped", undefined, { kind, count: n });
+    return n;
   }
 
   /**

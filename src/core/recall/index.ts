@@ -29,25 +29,27 @@
  * to lexical-only rather than failing (contract §5 G1).
  */
 import type { Kind } from "../types.js";
-import { USE_TIER_WEIGHT, strength } from "../physics/index.js";
+import { TUNABLES as PHYSICS, USE_TIER_WEIGHT, strength } from "../physics/index.js";
 import type { CreditOutcome, UseTier } from "../physics/index.js";
 import type { ProseDoc, Store } from "../store/index.js";
-import { isChapterSummary } from "../store/index.js";
+import { isChapterSummary, stemTerm, tokenize } from "../store/index.js";
 import { activate, isBeliefRow, primeOf } from "./activate.js";
-import type { Candidate, SpreadFn, SpreadStats } from "./activate.js";
+import type { Candidate, LearnedCuesFn, SpreadFn, SpreadStats } from "./activate.js";
 import type { FeelingAskInput } from "./feeling-ask.js";
-import { detectAffect, stripBoilerplate } from "./cues.js";
+import { buildCues, detectAffect, stripBoilerplate } from "./cues.js";
+import type { Cue } from "./cues.js";
 import { floorUnit, gate } from "./gate.js";
 import { habituatedIds } from "./habituation.js";
 import { planPrime, saveTrain } from "./prime.js";
 import type { PrimeInput, PrimePlan, TrainState } from "./prime.js";
 import type { Background, CandidateVerdict, Verdict } from "./gate.js";
 import { NO_MOOD, currentMood } from "./mood.js";
-import { loadGateState, saveGateState } from "./session.js";
-import type { GateState, SemanticSource } from "./session.js";
+import { ASKED_KIND, askedCueRef, boundTurnCues, loadCueTrained, loadGateState, loadTurnCues, saveCueTrained, saveGateState, saveTurnCues, turnCueRecord, turnCueRef } from "./session.js";
+import type { GateRecordInput } from "../store/index.js";
+import type { CueWord, GateState, SemanticSource } from "./session.js";
 import { beliefLine, render } from "./render.js";
 import type { BeliefLine } from "./render.js";
-import { headOf, standingOf } from "./standing.js";
+import { headOf, standingOf, unsettledCompetition } from "./standing.js";
 import type { RenderResult, Resolve, Resolved } from "./render.js";
 import { withTunables } from "./tunables.js";
 import type { RecallTunables } from "./tunables.js";
@@ -85,7 +87,7 @@ export * from "./recency-ask.js";
 export * from "./time-ask.js";
 export * from "./tunables.js";
 export { activate, isBeliefRow, isHandoff, isSelfPage, gatedSal, primeChannel, primeOf, recordedIdentity, salienceRank } from "./activate.js";
-export type { CandidatePrime, FeelingLane, PrimeStats, SpreadFn, SpreadStats } from "./activate.js";
+export type { CandidatePrime, FeelingLane, LearnedCuesFn, PrimeStats, SpreadFn, SpreadStats } from "./activate.js";
 export type { Candidate, ActivationResult } from "./activate.js";
 import type { ActivationResult } from "./activate.js";
 
@@ -145,6 +147,14 @@ export interface Turn {
    *  few QUIET POINTERS — memories only links reached, footnote tier only
    *  (2026-09-28; the gate's one named lane past hard gate (a)). */
   spread?: SpreadFn;
+  /**
+   * CUE LEARNING'S READ (2026-10-24, R3 — an experiment): the learned
+   * word-to-memory pairs out of some index terms, faded to a lived day,
+   * injected at the composition root (`retrieval.ts`, from `associate/`)
+   * only while `physics.CUE_LEARNING` is on. A learned pair is one more cue
+   * (`activate.ts`). Absent: nothing learned is read.
+   */
+  learned?: LearnedCuesFn;
   /** Lived day. Defaults to the store's clock (scar E8 — lived, not calendar). */
   day?: number;
   budgetBytes?: number;
@@ -338,6 +348,11 @@ export interface RecallDecision {
   /** How many only `CROSS_PROJECT_BAR_LIFT` kept below their bar this turn —
    *  another project's work that would otherwise have shown (2026-10-21). */
   readonly crossProjectLifted: number;
+  /** How many olders of an unsettled pair counted at a weight this turn, their
+   *  newer a candidate too (E3, 2026-10-24; which ones: `competed` on their
+   *  verdicts and shown tier rows). Absent when `UNSETTLED_COMPETES` is off or
+   *  the turn never reached the gate, so an off turn's row is as before. */
+  readonly pairsCompeted?: number;
   /** What context priming did this turn (2026-10-19, `PrimeSummary`); null when it did not run. */
   readonly primed: PrimeSummary | null;
   /** What the beliefs slot did this turn (lane E, `BeliefSlotSummary`); null when it did not run. */
@@ -380,6 +395,57 @@ export interface CreditResult {
   readonly w: number;
   /** Physics' own verdict, when it was consulted. */
   readonly outcome: CreditOutcome | null;
+  /**
+   * CUE LEARNING (2026-10-24, R3): the word-to-memory deltas this use earned
+   * from the turn that showed the memory — for the caller to hand to
+   * `associate/` (recall does not import it). Absent when nothing trains.
+   */
+  readonly cues?: readonly LearnedCueDelta[];
+}
+
+/** One word-to-memory delta (R3), structurally `associate`'s `CueDelta`. `token` is an index term; signed. */
+export interface LearnedCueDelta {
+  readonly token: string;
+  readonly id: string;
+  readonly delta: number;
+}
+
+/**
+ * How much of a full use a credit at this tier trains the cue pairs of the
+ * turn that showed the memory (R3): opened, quoted (`referenced`), drawn on
+ * (`engaged`) and rated 2–3 (`useful`, `referenced`) fully; rated 1
+ * (`ontopic`) a small share; shown and unrated (`shown`), and the display
+ * tiers, nothing — training on mere showing would feed the loop (surfaced →
+ * wired → surfaced more).
+ */
+export function cueTrainShare(tier: UseTier, t: RecallTunables): number {
+  switch (tier) {
+    case "referenced":
+    case "engaged":
+    case "useful":
+      return 1;
+    case "ontopic":
+      return t.CUE_TRAIN_RATED_ONE;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * The cue words worth keeping from a turn's cues (R3): this turn's own words
+ * (never carried), unambiguous, with weight — every one already a word the
+ * index holds (`buildCues` drops a df-0 word: the privacy guard) — as index
+ * terms, one entry per term, strongest first.
+ */
+export function cueWordsOf(cues: readonly Cue[]): CueWord[] {
+  const byTerm = new Map<string, number>();
+  for (const c of cues) {
+    if (c.carried || c.ambiguous || !(c.weight > 0)) continue;
+    const term = stemTerm(c.token);
+    if (term.length === 0) continue;
+    byTerm.set(term, Math.max(byTerm.get(term) ?? 0, c.weight));
+  }
+  return [...byTerm].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
 }
 
 interface BuildOutput {
@@ -407,6 +473,8 @@ interface BuildOutput {
   gateStatus: "loaded" | "absent" | "unreadable";
   /** The train of thought to save at the record step (priming, 2026-10-19). Absent: none to save. */
   train?: TrainState;
+  /** This turn's cue words, kept at the record step beside what it showed (R3). Absent: none. */
+  cueWords?: CueWord[];
 }
 
 export class Recall {
@@ -587,6 +655,7 @@ export class Recall {
         aliases: turn.aliases,
         temporal: turn.temporal,
         spread: turn.spread,
+        ...(turn.learned === undefined || !PHYSICS.CUE_LEARNING ? {} : { learned: turn.learned }),
         day,
         selfFelt: affect.selfFelt,
         mood,
@@ -622,6 +691,16 @@ export class Recall {
     // HABITUATION (an experiment, 2026-10-19, light): who was rated 0 in enough
     // recent sessions. Ambient turns only: a deliberate feeling ask is untouched.
     const habituated = turn.feeling === undefined ? habituatedIds(this.store, day, this.tunables) : new Map<string, number>();
+    // AN UNSETTLED PAIR COMPETES (2026-10-24, E3, an experiment): the older of
+    // a standing unsettled pair, its newer reached this turn too, counts at a
+    // weight in the gate. Off: nothing is read.
+    const competing = this.tunables.UNSETTLED_COMPETES
+      ? unsettledCompetition(this.store, candidates, day, {
+          k: this.tunables.UNSETTLED_COMPETE_K,
+          simFloor: this.tunables.UNSETTLED_COMPETE_SIM_FLOOR,
+          windowDays: this.tunables.UNSETTLED_COMPETE_WINDOW_DAYS,
+        })
+      : null;
 
     const gated = gate(
       {
@@ -634,6 +713,7 @@ export class Recall {
         ...(turn.elsewhere !== undefined && this.tunables.RECALL_BY_PROJECT ? { elsewhere: turn.elsewhere } : {}),
         ...(turn.elsewhere !== undefined && !this.tunables.RECALL_BY_PROJECT && this.tunables.CROSS_PROJECT_BAR_LIFT > 1 ? { crossing: turn.elsewhere } : {}),
         ...(habituated.size === 0 ? {} : { habituated }),
+        ...(competing === null || competing.size === 0 ? {} : { competing }),
       },
       this.tunables,
     );
@@ -748,6 +828,7 @@ export class Recall {
       echoSkipped: gated.verdicts.filter((v) => v.verdict === "echo-skipped").length,
       projectSkipped: gated.verdicts.filter((v) => v.verdict === "project-skipped").length,
       crossProjectLifted: gated.crossLifted.length,
+      ...(competing === null ? {} : { pairsCompeted: gated.competed.length }),
       primed,
       beliefs: beliefPicks === null ? null : { offered: beliefPicks.offered, shown: rendered.beliefs, bytes: rendered.beliefBytes },
       // What the gate SHOWED of the pointers activation handed it, after the
@@ -780,6 +861,7 @@ export class Recall {
       folded: act.folded,
       ...(act.feeling === null ? {} : { feeling: act.feeling }),
       ...(plan === null ? {} : { train: plan.next }),
+      ...(PHYSICS.CUE_LEARNING ? { cueWords: cueWordsOf(act.cues) } : {}),
     };
   }
 
@@ -840,7 +922,21 @@ export class Recall {
       for (const id of [...d.surfaced, ...d.footnotes]) for (const row of built.folded.get(id) ?? []) folded[row] = id;
       next.folded = folded;
     }
-    this.persist(next, "recall");
+    // THE TURN'S CUE WORDS, beside what it showed (R3 cue learning): only on
+    // a turn that showed a memory, never under observer — in the same write
+    // as the gate state, so the record step stays one transaction.
+    const cueRow: GateRecordInput[] =
+      PHYSICS.CUE_LEARNING && !this.observer && built.cueWords !== undefined && built.cueWords.length > 0 && d.surfaced.length + d.footnotes.length > 0
+        ? [turnCueRecord(this.store, { sessionId: turn.sessionId, ref: turnCueRef(d.turn), turn: d.turn, day: d.day, words: built.cueWords })]
+        : [];
+    this.persist(next, "recall", cueRow);
+    if (cueRow.length > 0) {
+      try {
+        boundTurnCues(this.store, turn.sessionId, d.turn, this.tunables.MAX_SESSION_RECORDS);
+      } catch (err) {
+        this.emit("recall.cues.bound.failed", turn.sessionId, { code: err instanceof Error ? err.name : "unknown" });
+      }
+    }
     // The train of thought moves on with this turn (priming, 2026-10-19). An
     // observer keeps none (an instrument deposits nothing); a lost write costs
     // the train one turn, never the recall.
@@ -990,7 +1086,10 @@ export class Recall {
         tier,
         prior: prior.tier,
       });
-      return { credited: false, reason: "already-credited-at-or-above", tier, w, outcome: null };
+      // A cadence refusal still trains the cue pairs (R3: no once-a-day rule):
+      // the showing's own record keeps it from training twice.
+      const cues = this.cueTraining(sessionId, state, memoryId, cueTrainShare(tier, this.tunables), today);
+      return { credited: false, reason: "already-credited-at-or-above", tier, w, outcome: null, ...(cues.length === 0 ? {} : { cues }) };
     }
 
     // THE CUED EXCEPTION, TIGHTENED (working default 2026-09-26, review of
@@ -1030,13 +1129,135 @@ export class Recall {
       credited: outcome.credited,
       reason: outcome.reason,
     });
+    // CUE LEARNING (R3): a credited use trains, and so does one physics
+    // refused only for its day cadence (five pings in five sessions train
+    // five times). Never the writing session on the birth day (`own-write`,
+    // physics' gate, not re-derived), nor an unknown writer on it
+    // (`birth-day`), nor a belief, a display tier, or a stale day.
+    const cues =
+      outcome.credited || outcome.reason === "already-credited-today"
+        ? this.cueTraining(sessionId, state, memoryId, cueTrainShare(tier, this.tunables), today)
+        : [];
     return {
       credited: outcome.credited,
       reason: outcome.credited ? "credited" : "physics-refused",
       tier,
       w,
       outcome,
+      ...(cues.length === 0 ? {} : { cues }),
     };
+  }
+
+  /**
+   * A RATING OF 0 (R3): the pairs the turn that showed `memoryId` made are
+   * depressed by `CUE_TRAIN_RATED_ZERO` of a full use — cue-specific
+   * habituation. Returns the (negative) deltas for the caller to hand to
+   * `associate/`; nothing under observer, with the switch off, or for a
+   * memory this session never showed. Ratings of 0 never reach `resolveUse`
+   * (`RATING_TIER[0]` is null), so the rating pass calls this.
+   */
+  cueDepress(sessionId: string, memoryId: string): LearnedCueDelta[] {
+    if (this.observer || !PHYSICS.CUE_LEARNING) return [];
+    const { state } = loadGateState(this.store, sessionId, this.tunables.MAX_SESSION_RECORDS);
+    if (state.surfaced[memoryId]?.trains === false) return [];
+    return this.cueTraining(sessionId, state, memoryId, -this.tunables.CUE_TRAIN_RATED_ZERO, this.store.livedDay());
+  }
+
+  /**
+   * A DELIBERATE QUESTION'S CUE WORDS (R3): the words of a question whose
+   * answer showed memories, kept as an `asked` showing's cue record
+   * (`askedCueRef`), so opening one of them later trains the question's words
+   * to it. The same cue rules as a turn's (`buildCues` on the question,
+   * rarity measured against the index: df > 0 only), carried words none.
+   * Nothing under observer or with the switch off. Never throws.
+   */
+  noteQuestionCues(sessionId: string, question: string, askedAt: number): number {
+    if (this.observer || !PHYSICS.CUE_LEARNING) return 0;
+    try {
+      const { text } = stripBoilerplate(question);
+      const words = this.questionCueWords(text);
+      if (words.length === 0) return 0;
+      saveTurnCues(this.store, { sessionId, ref: askedCueRef(askedAt), turn: askedAt, day: this.store.livedDay(), words });
+      return words.length;
+    } catch (err) {
+      this.emit("recall.cues.save.failed", sessionId, { code: err instanceof Error ? err.name : "unknown", site: "asked" });
+      return 0;
+    }
+  }
+
+  /** The cue words of a text, as an ambient turn would build them (no carry, no aliases). */
+  private questionCueWords(text: string): CueWord[] {
+    const forms = new Map<string, string[]>();
+    for (const tok of tokenize(text)) {
+      if (tok.length < this.tunables.MIN_CUE_LENGTH) continue;
+      const key = stemTerm(tok);
+      const f = forms.get(key) ?? [];
+      if (!f.includes(tok)) f.push(tok);
+      forms.set(key, f);
+    }
+    if (forms.size === 0) return [];
+    const byForms = this.store.docFrequency([...forms.values()].map((f) => f.join(" ")));
+    const df = new Map<string, number>();
+    for (const [key, f] of forms) {
+      const n = byForms.get(f.join(" "));
+      if (n !== undefined) df.set(key, n);
+    }
+    const storeSize = this.store.countMemories({ archived: false });
+    const cues = buildCues(
+      { text, carried: [], storeSize, df, term: stemTerm, wordNorm: (w: string) => this.store.wordNorm?.(w) ?? null },
+      this.tunables,
+    );
+    return cueWordsOf(cues);
+  }
+
+  /**
+   * THE TRAINING (R3): `share` of a full use (negative for a 0 rating) from
+   * the showing of `memoryId` this session — the ambient turn that showed it
+   * (`state.surfaced`), else the newest deliberate question whose answer did
+   * (`asked`) — split over that showing's cue words in proportion to their
+   * weights, `CUE_TRAIN_RATE` per full use. Each showing trains a memory at
+   * most up to its best share: a second credit of the same showing (an open
+   * then a 3) trains only the difference, a 0 after a 3 takes the 3 back and
+   * depresses. The record of what trained is written here; the deltas go back
+   * to the caller. Nothing when no showing has cue words. Never throws.
+   */
+  private cueTraining(sessionId: string, state: GateState, memoryId: string, share: number, day: number): LearnedCueDelta[] {
+    if (this.observer || !PHYSICS.CUE_LEARNING || share === 0 || !(this.tunables.CUE_TRAIN_RATE > 0)) return [];
+    try {
+      let ref: string | null = null;
+      const shown = state.surfaced[memoryId];
+      if (shown !== undefined) {
+        if (!shown.trains) return [];
+        ref = turnCueRef(shown.turn);
+      } else {
+        const asked = this.store
+          .gateRecords(sessionId, ASKED_KIND)
+          .filter((r) => r.ref === memoryId)
+          .sort((a, b) => b.turn - a.turn)[0];
+        if (asked !== undefined) ref = askedCueRef(asked.turn);
+      }
+      if (ref === null) return [];
+      const words = loadTurnCues(this.store, sessionId, ref);
+      if (words === null) return [];
+      const trained = loadCueTrained(this.store, sessionId, memoryId);
+      const before = trained[ref] ?? 0;
+      // Positive: up to the best share, never twice. Negative (a 0): to the
+      // depression, from wherever the showing stood.
+      const target = share > 0 ? Math.max(before, share) : share;
+      const step = target - before;
+      if (step === 0) return [];
+      const total = words.reduce((s, [, w]) => s + w, 0);
+      if (!(total > 0)) return [];
+      const deltas = words
+        .map(([token, w]) => ({ token, id: memoryId, delta: this.tunables.CUE_TRAIN_RATE * step * (w / total) }))
+        .filter((x) => x.delta !== 0 && Number.isFinite(x.delta));
+      saveCueTrained(this.store, sessionId, memoryId, { ...trained, [ref]: target }, day);
+      this.emit("recall.cues.trained", memoryId, { ref: ref.startsWith("a") ? "asked" : "turn", words: deltas.length, step });
+      return deltas;
+    } catch (err) {
+      this.emit("recall.cues.train.failed", memoryId, { code: err instanceof Error ? err.name : "unknown" });
+      return [];
+    }
   }
 
   /**
@@ -1158,13 +1379,13 @@ export class Recall {
    * store seam is touched and keeps the state in-process instead: an instrument
    * deposits nothing, and every stand-down is observable (observer-mode.md G6).
    */
-  private persist(state: GateState, site: string): void {
+  private persist(state: GateState, site: string, extra: readonly GateRecordInput[] = []): void {
     if (this.observer) {
       this.volatile.set(state.sessionId, state);
       this.emit("recall.observer.standdown", state.sessionId, { site: `persist:${site}` });
       return;
     }
-    saveGateState(this.store, state, this.tunables.MAX_SESSION_RECORDS);
+    saveGateState(this.store, state, this.tunables.MAX_SESSION_RECORDS, extra);
   }
 
   private emitTelemetry(d: RecallDecision, r: RenderResult | null): void {

@@ -197,9 +197,14 @@ export function shorterThan(line: string | undefined, forms: readonly string[] |
  * its `pinned` count lines, is tried as it stands, then again after each
  * step, and the first that fits is kept. The steps the render can take:
  *
+ *   - `todaySoFarSummaries` — at a session start, "Today so far here"'s
+ *     chapter summaries, down to titles only (2026-10-24, W1b): first of
+ *     the steps, below "Still open"'s items;
  *   - `work` — the room held for "Work here" (`lendBytes`);
  *   - `yesterday` — the Yesterday line, one title at a time given way to its
- *     id (`yesterdayShorter`);
+ *     id (`yesterdayShorter`) — and, at a session start since 2026-10-24,
+ *     "Today so far here" under it, whose title forms step down and drop
+ *     first (`todaySoFar`, `briefing.ts#withTodaySoFar`);
  *   - `handoffs` — the room held for "Last here" and the handoff pointer
  *     (`handoffLendBytes`), which the delivery gives up in its own order;
  *   - `arriving` — Arriving's lines past its head (`arrivingHead`), from the
@@ -287,6 +292,21 @@ export function takeRoom(
           limit = req.budgetBytes + work;
           got = attempt();
         }
+        break;
+      case "todaySoFarSummaries":
+        // "Today so far"'s summaries first, down to titles only (2026-10-24,
+        // W1b, `BriefingRequest.todaySoFarSummaries`).
+        while (got === null && y !== undefined && (req.todaySoFarSummaries ?? []).includes(y)) {
+          const next = shorterThan(y, req.yesterdayShorter)[0];
+          if (next === undefined) break;
+          y = next;
+          got = attempt();
+        }
+        break;
+      case "todaySoFar":
+        // "Today so far"'s title forms ride in the Yesterday line's forms,
+        // its own steps first (`briefing.ts#withTodaySoFar`): the next case
+        // takes them.
         break;
       case "yesterday":
         for (const form of shorterThan(y, req.yesterdayShorter)) {

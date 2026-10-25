@@ -5,7 +5,7 @@
  * the four rules in that file's header apply to every line below.
  */
 import { TUNABLES as PHYSICS, promotionEligibility, sal } from "../../../../core/physics/index.js";
-import type { PromotionVerdict } from "../../../../core/physics/index.js";
+import type { CoreLane, PromotionVerdict } from "../../../../core/physics/index.js";
 import {
   FRAMING,
   LEGACY_CONTEXT,
@@ -255,7 +255,7 @@ export interface Candidate {
   readonly span: number;
   readonly needSpan: number;
   /** The lane that is met, when one is: the next consolidation crosses it (the nightly cap permitting). */
-  readonly lane: "fast" | "slow" | null;
+  readonly lane: CoreLane | null;
   readonly eligible: boolean;
   /**
    * THE FAST LANE'S ROAD (round 3, S3): felt strongly enough, and nothing but
@@ -961,7 +961,7 @@ export interface CoreCandidate {
   readonly days: number;
   readonly span: number;
   /** The lane that is met, when one is. */
-  readonly lane: "fast" | "slow" | null;
+  readonly lane: CoreLane | null;
   readonly eligible: boolean;
   /** The better of the two lanes' progress, 0..2. */
   readonly closeness: number;

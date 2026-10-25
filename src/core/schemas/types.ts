@@ -242,6 +242,12 @@ export interface SupportFilingInput {
   route?: SupportRoute | string;
   /** The lived day it is filed. */
   day: number;
+  /**
+   * Which door filed it, carried on `schema.support.filed` only when given
+   * (B1, 2026-10-24: `awake-duplicate`, an awake belief that said what one
+   * already says). Absent: the event is as before.
+   */
+  via?: string;
 }
 
 export type SupportFileReason =

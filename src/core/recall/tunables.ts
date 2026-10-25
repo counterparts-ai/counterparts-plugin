@@ -242,6 +242,50 @@ export interface RecallTunables {
    *  about the margin an ordinary footnote clears its bar by. CAL. */
   HABITUATION_BAR_LIFT: number;
 
+  // ── an unsettled pair competes (2026-10-24, E3 — an experiment; check ~7 lived days) ──
+  /**
+   * RETROACTIVE INTERFERENCE, IN REAL TIME (2026-10-24, E3; Mike's go 14:47,
+   * lightly held). When BOTH members of a standing unsettled pair are this
+   * turn's candidates (the newer reached by the turn's words or meaning, not
+   * only by a link), the OLDER one — the one labelled "Unsettled — may be out
+   * of date" (`standing.ts#unsettledCompetition`, the label's own rule) —
+   * counts in the gate at `activation × (1 − k · sim · fresh)` once it has
+   * cleared the floor and its admission bar at its own reach: the loud tier's
+   * checks and both rankings see the scaled number, so the newer wins a close
+   * race and the older can lose the loud slot or a capped place. A WEIGHT,
+   * never a filter: the older is admitted as before and shows, labelled,
+   * whenever there is room; only a newer past the absolute floor presses; the
+   * older alone is untouched; nothing is written. A pair
+   * confirmed at night is `headsWin`'s; one undone competes no more. Off:
+   * nothing is read and the turn is exactly as before. Read at use.
+   */
+  UNSETTLED_COMPETES: boolean;
+  /**
+   * k: how hard the newer presses on the older at full similarity and
+   * freshness. 0.6: a just-written pair at the detector's highest closeness
+   * cuts the older to 0.4 of its activation; a typical proposal (cosine ~0.87,
+   * `sim` ~0.35) to ~0.8 — enough to lose a close race, not enough to bury it.
+   * CAL.
+   */
+  UNSETTLED_COMPETE_K: number;
+  /**
+   * `sim` is the pair's cosine above this, over what is left to 1, clamped to
+   * 0..1. 0.8 = the slot detector's LOWER bar (`reconsolidation.ts`
+   * `SLOT_LINEAGE_COSINE`), which every proposal clears, so every proposal
+   * competes a little; from the detector's main bar (0.85) six of the eight
+   * proposals on the 10-24 corpus would have pressed by 12% at most. A pair
+   * either of whose memories has no vector competes not at all. CAL.
+   */
+  UNSETTLED_COMPETE_SIM_FLOOR: number;
+  /**
+   * `fresh` = 1 − (lived days since the newer was born) / this, floored at 0:
+   * 1 the day it is written, gone after the slot window
+   * (`reconsolidation.ts` `SLOT_WINDOW_DAYS`), by when the dream has answered
+   * (`SLOT_PER_NIGHT`) or should have — so an old unanswered pair stops
+   * pressing on its own. CAL.
+   */
+  UNSETTLED_COMPETE_WINDOW_DAYS: number;
+
   // ── context priming (an experiment, 2026-10-19; check ~10-22) ───────────
   // Trying a head start for memories connected to what this session is doing,
   // to see whether primed footnotes are rated more useful than unprimed ones
@@ -434,6 +478,48 @@ export interface RecallTunables {
   /** Cap on remembered per-session surfacing records. The store has no meta
    *  expiry (INTERFACE-GAPS.md #1), so the row bounds itself. CAL. */
   MAX_SESSION_RECORDS: number;
+
+  // ── cue learning (2026-10-24, R3 — an experiment; switch `physics.CUE_LEARNING`) ──
+  /**
+   * What a learned word-to-memory pair is worth when the word is in the turn,
+   * in CUE UNITS (one maximally-rare word, `informativeness(1, N)`), times the
+   * pair's weight (0..`associate.CUE_W_CAP`) and the word's SHARE of the turn
+   * (its cue weight over the total of the turn's own unambiguous words — the
+   * split training uses; 1 for a bare word). Bounds how far learning can carry
+   * a memory: a fully learned pair in a one-word turn is worth this many rare
+   * words whatever the word, never `cue.weight × w` (that would count rarity
+   * twice); inside a long prompt, its share of that (review of #613: flat, a
+   * 39-word prompt about something else that said "ping" once brought the
+   * ping memory LOUD at 13.4; by share it stays below the bar). 6, not the
+   * brief's "about one rare word": the loud tier's floor is absolute
+   * (`FLOOR_STRONG_DEFAULT_UNITS` 4.5 units), and a bare one-word prompt brings
+   * at most ~1 unit of its own, so at 1 unit no amount of practice could ever
+   * make "ping" bring pong back LOUD — the brief's own bar for the demo. At 6,
+   * three uses (one found by a question, two by the bare word: w ≈ 0.79)
+   * clear it with a little room, measured (test/cue-learning.test.ts, 1.); at
+   * 5 they fell just short (4.36 units of 4.5). One use of a bare word (w 0.5)
+   * is 3 units: a footnote, not loud. A long prompt spreads each use thin
+   * (training is split by the words' weights) and reads each pair thin (the
+   * share), so a pair learned in passing stays a small lift and a practised
+   * word in someone else's subject tips a race at most. CAL.
+   */
+  CUE_PAIR_UNITS: number;
+  /**
+   * η: the delta one full use (opened, quoted, `drewOn`, rated 2–3) sends from
+   * the turn that showed the memory, SPLIT over the turn's cue words in
+   * proportion to their weights (Hebb with a fixed budget per event). With the
+   * saturating update a one-word cue goes 0 → 0.5 → 0.75 → 0.875 over three
+   * uses. Bounds how fast a habit forms. CAL.
+   */
+  CUE_TRAIN_RATE: number;
+  /** A rating of 1 (on topic, not used) trains this share of a full use. Small: it was the right subject. CAL. */
+  CUE_TRAIN_RATED_ONE: number;
+  /**
+   * A rating of 0 DEPRESSES the pairs its turn made, by this share of a full
+   * use (the weight floors at 0): cue-specific habituation, so a competitor
+   * called noise for "ping" drops for "ping" and nothing else. CAL.
+   */
+  CUE_TRAIN_RATED_ZERO: number;
 }
 
 export const TUNABLES: RecallTunables = {
@@ -630,6 +716,13 @@ export const TUNABLES: RecallTunables = {
   HABITUATION_CLEAR_SCORE: 2,
   HABITUATION_BAR_LIFT: 0.5,
 
+  // E3, 2026-10-24 (an experiment; check ~7 lived days after install). Revert:
+  // `UNSETTLED_COMPETES: false` (nothing read, the turn exactly as before).
+  UNSETTLED_COMPETES: true,
+  UNSETTLED_COMPETE_K: 0.6,
+  UNSETTLED_COMPETE_SIM_FLOOR: 0.8,
+  UNSETTLED_COMPETE_WINDOW_DAYS: 7,
+
   PRIME_LINK_UNITS: 1,
   PRIME_TRAIN_SHARE: 0.5,
   PRIME_TRAIN_CENTRE: 1,
@@ -701,6 +794,11 @@ export const TUNABLES: RecallTunables = {
   BUDGET_MS: 1200,
 
   MAX_SESSION_RECORDS: 200,
+
+  CUE_PAIR_UNITS: 6,
+  CUE_TRAIN_RATE: 0.5,
+  CUE_TRAIN_RATED_ONE: 0.25,
+  CUE_TRAIN_RATED_ZERO: 1,
 };
 
 export function withTunables(overrides: Partial<RecallTunables> = {}): RecallTunables {

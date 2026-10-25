@@ -73,11 +73,16 @@ export type { DecayResult, DecaySkip } from "./decay.js";
 
 export {
   CONSOLIDATION_SKIPS,
+  PROMOTION_SHADOW_EVENT,
+  PROMOTION_SHADOW_SLEEP_EVENT,
   REFLECTED_FEELING_KEY,
+  SHADOW_MARK_PREFIX,
   aboutMe,
   acceptsReflectedFeeling,
   coreContextFor,
   coreRecurrence,
+  coreSupportFor,
+  coreSupportOf,
   identityBlock,
   laterFeelingCarriers,
   laterFeelingWasAwake,

@@ -2425,7 +2425,7 @@ export class McpServer {
     });
     this.noteRecall(row, 0, question, false, payload, ids, key);
     this.markSeen(ids, key);
-    this.noteAsked(ids, key);
+    this.noteAsked(ids, key, question);
     return this.result(payload, false);
   }
 
@@ -2439,12 +2439,12 @@ export class McpServer {
    * like the seen set (`seenKey`); nothing for a session nobody identified.
    * Never throws.
    */
-  private noteAsked(ids: readonly string[], key?: string): void {
+  private noteAsked(ids: readonly string[], key?: string, question?: string): void {
     if (ids.length === 0) return;
     const session = key ?? this.seenKey();
     if (session === UNBOUND_SESSION) return;
     this.telemetry(() => {
-      this.counterpart.noteAsked(session, ids);
+      this.counterpart.noteAsked(session, ids, question === undefined ? {} : { question });
     });
   }
 
@@ -3368,7 +3368,16 @@ export class McpServer {
       statement: a["statement"] as string,
       ...(a["about"] === "us" || a["about"] === "me" ? { about: a["about"] } : {}),
     });
-    return { belief: { stored: out.ok && out.reason === "born", reason: out.reason, ...(out.id === null ? {} : { id: out.id }), ...(out.note === undefined ? {} : { note: out.note }) } };
+    return {
+      belief: {
+        stored: out.ok && out.reason === "born",
+        reason: out.reason,
+        ...(out.id === null ? {} : { id: out.id }),
+        ...(out.note === undefined ? {} : { note: out.note }),
+        // B1: a near-duplicate's filing outcome, beside the refusal.
+        ...(out.support === undefined ? {} : { support: out.support }),
+      },
+    };
   }
 
   /**

@@ -5,7 +5,7 @@
  * the four rules in that file's header apply to every line below.
  */
 import { TUNABLES, band, emotionalIntensity, promotionEligibility, rep, sal, strength } from "../../../../core/physics/index.js";
-import type { PromotionVerdict } from "../../../../core/physics/index.js";
+import type { CoreLane, PromotionVerdict } from "../../../../core/physics/index.js";
 import { DREAM_MERGE_REASON } from "../../../../core/dream/index.js";
 import { feelingsLine } from "../../../feelings-line.js";
 import { coreContextFor, curveSinceDay, isJournal } from "../../../../core/sleep/index.js";
@@ -56,9 +56,11 @@ export interface CoreRoad {
   readonly holdShort: boolean;
   readonly oneReturn: boolean;
   readonly needGap: number;
-  readonly lane: "fast" | "slow" | null;
+  readonly lane: CoreLane | null;
   readonly eligible: boolean;
   readonly blocked: "not-about-me" | "demoted-by-owner" | null;
+  /** The support door's level and line (2026-10-24, E2), only while `physics.CORE_DOOR_SUPPORT` is on. */
+  readonly support?: { readonly level: number; readonly need: number };
 }
 
 /**
@@ -82,10 +84,12 @@ export function coreRoad(verdict: PromotionVerdict): CoreRoad {
     needSpan: verdict.slow.needSpan,
     holdShort: verdict.slow.strength !== null && verdict.slow.strength < verdict.slow.needStrength,
     oneReturn: onlyNoLane && !verdict.fast.met && verdict.fast.intensity >= verdict.fast.needIntensity,
-    needGap: verdict.fast.needGap,
+    // The support door's spacing from the making when it is on (E2 review), else the fast lane's gap.
+    needGap: verdict.support?.needGap ?? verdict.fast.needGap,
     lane: verdict.lane,
     eligible: verdict.eligible,
     blocked,
+    ...(verdict.support === undefined ? {} : { support: { level: verdict.support.level, need: verdict.support.needLevel } }),
   };
 }
 

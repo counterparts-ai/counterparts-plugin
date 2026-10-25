@@ -18,6 +18,19 @@ export function coreRoadLine(p, promoted) {
   if (promoted || !p) return "";
   if (p.eligible && p.lane === "fast") return "Felt strongly and come back to — it has met the core's bar, and a sleep can make it core.";
   if (p.eligible && p.lane === "slow") return "It has come back on enough separate days — it has met the core's bar, and a sleep can make it core.";
+  // The support door (2026-10-24, E2): one arc, so one sentence.
+  if (p.eligible && p.lane === "support") return "Life has backed it enough, from separate moments — it has met the core's bar, and a sleep can make it core.";
+  // With the support door on, the lanes' day counts are not its road: how far along the one arc it is.
+  if (p.support) {
+    if (p.blocked === "demoted-by-owner") return "You took it out of the core, so it stays out.";
+    if (!p.byUse) return "";
+    if (p.oneReturn) {
+      return "Felt strongly, so one real use " + p.needGap + (p.needGap === 1 ? " day of use" : " days of use") +
+        " or more after it was made makes it core.";
+    }
+    const pct = Math.max(0, Math.min(99, Math.round((100 * p.support.level) / p.support.need)));
+    return "Real uses from separate moments, on separate days, make it core — it is " + pct + "% of the way.";
+  }
   if (p.oneReturn) {
     return "Felt strongly, so one real return makes it core — coming back to it " + p.needGap +
       (p.needGap === 1 ? " day of use" : " days of use") + " or more after it was made.";

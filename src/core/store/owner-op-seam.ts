@@ -183,6 +183,8 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
   const unarchived: string[] = [];
   /** The ids a removed card linked, kept so its name is not born again (review of #429). */
   let cardLinks = 0;
+  /** Cue pairs into it (v15, R3), removed with it. */
+  let cuePairs = 0;
   const report = access.ownerMutate("chaseRemoved", (db) => {
     const row = access.rawRow(id);
     const already = db.get<{ n: number }>(
@@ -367,6 +369,15 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
     } catch {
       /* a store from before v14 */
     }
+    // v15 (R3 cue learning): the words wired to it. An erased id must stop
+    // being fetched by them (associate's scar §2.2, for cue pairs). Counted
+    // in the report. A file without the table has nothing here.
+    try {
+      cuePairs = db.get<{ n: number }>("SELECT COUNT(*) AS n FROM cue_edges WHERE memory_id = ?", id)?.n ?? 0;
+      db.run("DELETE FROM cue_edges WHERE memory_id = ?", id);
+    } catch {
+      /* a store from before v15 */
+    }
 
     if (row !== undefined) {
       // The skeleton: an address, its family, and nothing else. Physics is
@@ -439,6 +450,7 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
         { surface: "operational.edges", count: edges },
         { surface: "operational.prospective", count: prospective },
         { surface: "operational.gate_session", count: gateRows },
+        ...(cuePairs > 0 ? [{ surface: "operational.cue_edges", count: cuePairs }] : []),
       ],
       neutralized: [
         { surface: "operational.memories", count: row === undefined ? 0 : 1 },

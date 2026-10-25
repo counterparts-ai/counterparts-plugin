@@ -188,4 +188,15 @@ export const TUNABLES = {
    * peak, not a caller's `emotional` score). CAL.
    */
   BELIEF_SESSION_VIVID: 0.6,
+  /**
+   * AN AWAKE REPEAT COUNTS, ONCE A SESSION (B1, 2026-10-24, Mike's yes,
+   * lightly held; lineage #583 → B1). On (the default): a belief written in
+   * the moment that says what an existing one says is still refused
+   * `near-duplicate`, and its memory is filed as support for that belief
+   * (`fileSupport`, route read off said_by), at most once per belief per
+   * session — the memory's own session; an unknown or unbound one (`mcp`)
+   * falls back to once per belief per lived day. Off: nothing is filed, as
+   * before. Check 3–5 days after release (docs/CHECK-AFTER.md).
+   */
+  AWAKE_SUPPORT_ON_DUPLICATE: true,
 } as const;

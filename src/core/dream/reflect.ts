@@ -889,8 +889,11 @@ export class Reflections {
     // candidates and the felt the bundle named, and the candidates the cap
     // left out (R1) — kept beside `fit`, and carried through the finish.
     const lanes = { core: composed.core.length, candidates: composed.candidates.length, felt: composed.felt.length, candidatesNotShown: composed.candidatesMore ?? 0, feltFromCut: fitted.feltFromCut };
+    // THE UNMARKED OFFER, ALWAYS ON THE ROW (2026-10-24, D1): what it was
+    // offered to mark, an empty list included — until then an empty offer
+    // wrote no key, and 10-10 to 10-23 read as silence, not as "offered 0".
     this.store.updateReflection(id, {
-      detail: { ...(packed.later.length > 0 ? { parts: packed.later } : {}), fit: fitRecord, lanes, ...(composed.chaptersAs === undefined ? {} : { chaptersAs: composed.chaptersAs }), ...beliefsDetail(composed.beliefs ?? null), ...(composed.spine === undefined ? {} : { spine: composed.spine.map((b) => b.id) }), ...(composed.unmarked.length > 0 ? { unmarked: composed.unmarked } : {}), ...(composed.staleOpen.length > 0 ? { staleOpen: composed.staleOpen.map((x) => x.id) } : {}), ...(fitted.notCarried.length > 0 ? { notCarried: fitted.notCarried } : {}), ...(composed.reconsidering.length > 0 ? { coreOffered: composed.reconsidering.map((x) => x.id) } : {}) },
+      detail: { ...(packed.later.length > 0 ? { parts: packed.later } : {}), fit: fitRecord, lanes, ...(composed.chaptersAs === undefined ? {} : { chaptersAs: composed.chaptersAs }), ...beliefsDetail(composed.beliefs ?? null), ...(composed.spine === undefined ? {} : { spine: composed.spine.map((b) => b.id) }), unmarked: composed.unmarked, ...(composed.staleOpen.length > 0 ? { staleOpen: composed.staleOpen.map((x) => x.id) } : {}), ...(fitted.notCarried.length > 0 ? { notCarried: fitted.notCarried } : {}), ...(composed.reconsidering.length > 0 ? { coreOffered: composed.reconsidering.map((x) => x.id) } : {}) },
     });
     writeIndex(this.store, "reflection", { ref: id, at: this.store.now(), offered: fitted.offered, looked: [], lineCap: fitted.lineCap, ...(aliases === null ? {} : { aliases: aliases.toJSON() }) });
     this.record("reflection.begun", id, { dream: dreamId, shown: shown.length, ...fitRecord });
@@ -2012,11 +2015,17 @@ export class Reflections {
     const pageStands = page.written || earlierPage !== null;
     // The entry's citations, as a set across finishes — a re-cite is not a new one.
     const entryCites = [...new Set([...idsOf(prior["entryCites"]), ...cites])];
+    // THE UNMARKED OFFER, COUNTED (2026-10-24, D1): how many it was offered,
+    // and which of those it marked (any mark written), across finishes.
+    const offeredUnmarkedIds = stringIds(parseDetail(row.detail)["unmarked"]);
+    const unmarkedMarked = [...new Set([...stringIds(prior["unmarkedMarked"]), ...about.filter((a) => a.ok && a.id !== null && offeredUnmarkedIds.includes(a.id)).map((a) => a.id as string)])];
     const counts = {
       cites: entryCites.length,
       returned: used("returned") + returned.filter((r) => r.counted).length,
       feelings: used("feelings") + feelings.filter((f) => f.ok && f.reason !== "already-recorded").length,
       about: used("about") + about.filter((a) => a.ok).length,
+      unmarkedOffered: offeredUnmarkedIds.length,
+      unmarkedMarked: unmarkedMarked.length,
       core: used("core") + coreDecisions.filter((x) => x.ok).length,
       traits: used("traits") + traits.filter((t) => t.ok && t.reason !== "already-recorded").length,
       page: pageStands,
@@ -2065,6 +2074,9 @@ export class Reflections {
     // What it was offered to mark: the next nights' rotation reads it.
     const offeredUnmarked = parseDetail(row.detail)["unmarked"];
     if (Array.isArray(offeredUnmarked)) detail["unmarked"] = offeredUnmarked;
+    // And which of them it marked (2026-10-24, D1), across finishes: the ids,
+    // an empty list included, so a night that marked none says so.
+    if (Array.isArray(offeredUnmarked)) detail["unmarkedMarked"] = unmarkedMarked;
     // The stale open list it was shown, and what it proposed closing (2026-10-16).
     const offeredStaleList = parseDetail(row.detail)["staleOpen"];
     if (Array.isArray(offeredStaleList)) detail["staleOpen"] = offeredStaleList;
@@ -3245,10 +3257,20 @@ export class Reflections {
       // THE LONG VIEW, GUARANTEED (2026-10-23): its lines are held back from
       // the shared room — and NOT bounded by it, so a core bigger than the
       // room is still shown a line each (the bundle goes in more parts) —
-      // then the unmarked offer's, bounded as before by the room (review of
-      // D1: bounded by what the long view leaves, a big core took it away).
+      // then the unmarked offer's, held back the same way (review of D1:
+      // bounded by what the long view leaves, a big core took it away).
+      // NOT BOUNDED BY THE ROOM EITHER (2026-10-24, the unmarked-offer D1):
+      // bounded by it, a night whose fixed parts filled the room (`avail` 0 —
+      // 10-23's dream: 105,677 characters of 80,000) offered nothing, and the
+      // offer is UNMARKED a night, a line each. Off (`REFLECT_ROOM_ORDER`
+      // false), the branch below keeps #383's bound.
       const longRoom = longView.reduce((n, mid) => n + lineCost(mid), 0);
-      const offerReserve = Math.min(offerRoom, avail);
+      // A STATED BOUND (review of #619): past the room the offer is lines
+      // only — the shared fit gets 0 room, the long view's rescue takes exactly
+      // its lines, so nothing is left over to raise an offered one to an
+      // excerpt — and never more than `unmarkedOfferCap()` (UNMARKED lines at
+      // their longest, about 10k characters). Within the room, as before.
+      const offerReserve = Math.min(offerRoom, Math.max(avail, unmarkedOfferCap()));
       const room = Math.max(0, avail - longRoom - offerReserve);
       const shared = fit(cands, { room, excerptChars: T.DETAIL_CHARS });
       const thin = thinIn(shared);
@@ -4546,6 +4568,18 @@ function isJournalCopy(row: MemoryRow): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * THE UNMARKED OFFER'S MOST, PAST THE ROOM (review of #619, D1): `UNMARKED`
+ * lines at their longest — the fit's `OVERHEAD` each, and a `LINE_BYTES` line
+ * at its widest on the wire (`wireChars` counts a non-ASCII UTF-16 unit as
+ * three, so a 200-byte line costs at most 300). Read at use. With the
+ * defaults: 24 × (120 + 300) = 10,080 characters.
+ */
+export function unmarkedOfferCap(): number {
+  const T = REFLECT_TUNABLES;
+  return Math.max(0, Math.floor(T.UNMARKED)) * (FIT_TUNABLES.OVERHEAD + Math.ceil(T.LINE_BYTES * 1.5));
 }
 
 /**

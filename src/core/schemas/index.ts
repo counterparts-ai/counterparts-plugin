@@ -125,6 +125,11 @@ export type { LookAlike, TagTally, TagsNightInput, TagsNightOutcome } from "./ta
  * is that no such verb exists (§5 G1, scar §2.17's "write paths ship, curation
  * paths starve" read in reverse).
  */
+/** A support weight as a reply says it: two decimals at most (B1's note). */
+export function supportWeightText(w: number): string {
+  return String(Math.round(w * 100) / 100);
+}
+
 export const PUBLIC_SURFACE = [
   // writes
   "mention",
@@ -1116,7 +1121,7 @@ export class Schemas {
       return { ok: false, reason: "already-counted", beliefId, route: null, weight: 0 };
     }
     const weight = this.store.supportOf(beliefId).find((r) => r.memoryId === input.memoryId)?.weight ?? 0;
-    this.emit("schema.support.filed", beliefId, { memoryId: input.memoryId, stance: input.stance, route, weight, day: input.day });
+    this.emit("schema.support.filed", beliefId, { memoryId: input.memoryId, stance: input.stance, route, weight, day: input.day, ...(input.via === undefined ? {} : { via: input.via }) });
     const out: SupportFileOutcome = { ok: true, reason: "filed", beliefId, route, weight, ...(note === undefined ? {} : { note }) };
     if (input.stance === "contrary") {
       return { ...out, revision: this.challengeBelief({ updates: beliefId, challengerId: input.memoryId, day: input.day, weight }) };

@@ -131,8 +131,8 @@ export interface MechanismEvidence {
   /** Also count how many firings landed TODAY (the window's `today`). */
   readonly today?: boolean;
   /**
-   * The sleep phase it runs in, when it runs on a SCHEDULE rather than every
-   * day (consolidation: every `CADENCE.consolidate` lived days). A quiet week
+   * The sleep phase it runs in, when it runs on a SCHEDULE (consolidation:
+   * every `CADENCE.consolidate` lived days, 1 since 2026-10-24). A quiet week
    * of a phase that ran on time is "next run in N days", not "quiet".
    */
   readonly schedule?: Phase;
@@ -294,7 +294,7 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
     // BUILT (2026-09-26, dreaming + consolidation): durability now comes from
     // RETURNS — every spaced return makes a memory fade more slowly, credited
     // the moment it happens (the census) — and the core from its two lanes,
-    // decided every three lived days (the schedule). A dream's merges are
+    // decided every lived day (the schedule; every third until 2026-10-24). A dream's merges are
     // consolidation too, and so are its FOLDS (2026-10-20: a fold gathers what
     // belongs together into what it adds up to). The cycle row itself is not a
     // proof (it lands every night).

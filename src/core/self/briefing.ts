@@ -168,13 +168,28 @@ export const TRIM_ORDER: readonly LaneName[] = [
  * room for "Work here", and every lane takes room from the lanes below it
  * here, lowest first — never from one above:
  *
- *   - `hints`, `craft`, `threads` — "Nearby", store-wide craft, and "Still
- *     open" past its first item: the trim loop's (`TRIM_ORDER`), whole
- *     elements from the end of each lane;
+ *   - `hints`, `craft` — "Nearby" and store-wide craft: the trim loop's
+ *     (`TRIM_ORDER`), whole elements from the end of each lane;
+ *   - `todaySoFarSummaries` — "Today so far here"'s chapter summaries
+ *     (2026-10-24; W1 → W1b, Mike 21:11, lightly held; session start only,
+ *     `self.TODAY_SO_FAR`): shorter summaries, then titles only — before
+ *     "Still open" loses an item, because a summary can be opened by its
+ *     chapter's id and a Still open item that drops is a promise forgotten.
+ *     The render steps the line down a form before it pops any lane ranked
+ *     above this one (`render`'s trim loop), and a rescue takes these forms
+ *     first (`takeRoom`);
+ *   - `threads` — "Still open" past its first item: the trim loop's, as
+ *     `hints` and `craft`;
  *   - `work` — "Work here": the delivery's room for this directory's work
  *     lines (`lendBytes`), which then shows fewer of them;
  *   - `openCount` — "Still open"'s count beside the items the trim kept,
  *     paid for out of "Work here" and nothing else (review of #358);
+ *   - `todaySoFar` — "Today so far here" (2026-10-24, lane W1, lightly
+ *     held; session start only, `self.TODAY_SO_FAR`): its title forms —
+ *     fewer titles, then none (its summaries gave way at
+ *     `todaySoFarSummaries`, W1b). It rides in the Yesterday line's place as
+ *     a second line (`withTodaySoFar`), so every step that takes the
+ *     Yesterday line's room takes this line's first;
  *   - `yesterday` — the Yesterday line: a title at a time gives way to its
  *     id, pointers instead of titles (`yesterdayShorter`);
  *   - `lastHere`, `handoffs` — the delivery's room for "Last here" and this
@@ -230,9 +245,11 @@ export const TRIM_ORDER: readonly LaneName[] = [
 export const ROOM_ORDER = [
   "hints",
   "craft",
+  "todaySoFarSummaries",
   "threads",
   "work",
   "openCount",
+  "todaySoFar",
   "yesterday",
   "lastHere",
   "handoffs",
@@ -247,6 +264,58 @@ export const ROOM_ORDER = [
   "page",
 ] as const;
 export type RoomLane = (typeof ROOM_ORDER)[number];
+
+/**
+ * "TODAY SO FAR" IN THE YESTERDAY LINE'S PLACE (2026-10-24, lane W1, lightly
+ * held). The two lines are one piece of furniture under the framing line —
+ * Yesterday, then "Today so far here" — and one ladder of forms, widest
+ * first: "Today so far" steps down first beside the whole Yesterday line
+ * (its place in `ROOM_ORDER` is just below `yesterday`), then drops, then
+ * the Yesterday line steps down as it always has. Every reader of the
+ * Yesterday line's room (`render`'s floor, `takeRoom`'s `yesterday` step, the
+ * page's borrowing) then sees both without a parameter of its own. Without a
+ * "Today so far" line the Yesterday line and its forms come back untouched,
+ * byte for byte. Pure.
+ *
+ * THE FORMS WITH SUMMARIES GIVE WAY EARLIER (2026-10-24, W1b, Mike 21:11,
+ * lightly held): `summaries` names which of `today` still carry chapter
+ * summaries (`handoff/last-here.ts#todaySoFarSummaryForms`), and the ladder
+ * forms built from them come back as `todaySoFarSummaries`, so the render
+ * steps them down before "Still open" loses an item (`ROOM_ORDER`'s
+ * `todaySoFarSummaries`) — down to titles only, which stay at `todaySoFar`.
+ */
+export function withTodaySoFar(
+  yesterday: { readonly yesterday?: string; readonly yesterdayShorter?: readonly string[] },
+  today: readonly string[],
+  summaries: readonly string[] = [],
+): { yesterday?: string; yesterdayShorter?: string[]; todaySoFarSummaries?: string[] } {
+  const y = yesterday.yesterday;
+  const ys = y === undefined || y.length === 0 ? [] : [y, ...(yesterday.yesterdayShorter ?? []).filter((s) => s.length > 0 && byteLength(s) < byteLength(y))];
+  if (today.length === 0) {
+    if (y === undefined) return {};
+    return yesterday.yesterdayShorter === undefined ? { yesterday: y } : { yesterday: y, yesterdayShorter: [...yesterday.yesterdayShorter] };
+  }
+  const join = (t: string): string => (ys[0] === undefined ? t : `${ys[0]}\n${t}`);
+  const forms = [...today.map(join), ...ys];
+  const summed = new Set(today.filter((t) => summaries.includes(t)).map(join));
+  const out: string[] = [];
+  const said: string[] = [];
+  let last = Number.POSITIVE_INFINITY;
+  for (const f of forms) {
+    const size = byteLength(f);
+    if (size >= last) continue;
+    out.push(f);
+    if (summed.has(f)) said.push(f);
+    last = size;
+  }
+  const [widest, ...shorter] = out;
+  if (widest === undefined) return {};
+  return {
+    yesterday: widest,
+    ...(shorter.length === 0 ? {} : { yesterdayShorter: shorter }),
+    ...(said.length === 0 ? {} : { todaySoFarSummaries: said }),
+  };
+}
 
 /** Where each lane the trim loop pops sits in `ROOM_ORDER`: Arriving's lines
  *  past its head at `arriving`, "Who I am" with the page. */
@@ -692,6 +761,14 @@ export interface BriefingRequest {
    */
   readonly yesterdayShorter?: readonly string[];
   /**
+   * WHICH OF THOSE FORMS STILL CARRY "TODAY SO FAR"'S SUMMARIES (2026-10-24,
+   * W1b; `withTodaySoFar`): `yesterday` and the leading `yesterdayShorter`
+   * entries, stepped down before any lane ranked above
+   * `ROOM_ORDER`'s `todaySoFarSummaries` gives way. Not a switch: absent, or
+   * none of the forms, and the order is W1's. Ignored without `yesterday`.
+   */
+  readonly todaySoFarSummaries?: readonly string[];
+  /**
    * THE ROOM THE DELIVERY HOLDS FOR "WORK HERE" (review of #350, 2026-10-09),
    * in bytes: the caller's reserve for this directory's work lines, which it
    * took out of `budgetBytes` before composing. Lent, first of the delivery's
@@ -1091,7 +1168,9 @@ export function compose(
 
   const build = (bytes: string): string => {
     const lines: string[] = [headerLine(day, elements, bytes), FRAMING.context];
-    if (yesterday !== undefined && yesterday.length > 0) lines.push(flatten(yesterday));
+    // One line, or two since 2026-10-24: "Today so far here" rides under it
+    // (`withTodaySoFar`). A line with no newline prints exactly as before.
+    if (yesterday !== undefined && yesterday.length > 0) for (const l of yesterday.split("\n")) if (l.trim().length > 0) lines.push(flatten(l));
     for (const lane of LANE_ORDER) {
       const items = kept[lane];
       if (lane === "hints" && elsewhere !== undefined && elsewhere.length > 0) lines.push("", flatten(elsewhere));
@@ -1339,6 +1418,15 @@ export function render(
   const lone = (lane: LaneName): boolean => lane === "threads" && kept.threads.length === 1;
   const outranksLine = (lane: LaneName): boolean =>
     ROOM_ORDER.indexOf(lone(lane) ? "openFirst" : TRIM_ROOM[lane]) > ROOM_ORDER.indexOf("elsewhere");
+  // "TODAY SO FAR"'S SUMMARIES GIVE WAY BEFORE "STILL OPEN" LOSES AN ITEM
+  // (2026-10-24; W1 → W1b, Mike 21:11, lightly held): before the loop pops a
+  // lane ranked above `todaySoFarSummaries`, the line steps down a form while
+  // it still carries summaries — to titles only, which stay at `todaySoFar`.
+  const summed = req.todaySoFarSummaries ?? [];
+  const summaryStep = (lane: LaneName): string | undefined =>
+    yesterday !== undefined && summed.includes(yesterday) && ROOM_ORDER.indexOf(TRIM_ROOM[lane]) > ROOM_ORDER.indexOf("todaySoFarSummaries")
+      ? shorterThan(yesterday, req.yesterdayShorter)[0]
+      : undefined;
 
   // EACH LANE'S LINE IS RESERVED (2026-10-12): the loop composes with the
   // line of every lane that has lost something so far — to its cap, the
@@ -1383,6 +1471,15 @@ export function render(
         }
         const items = kept[lane];
         if (items.length === 0) continue;
+        const narrower = summaryStep(lane);
+        if (narrower !== undefined && yesterday !== undefined) {
+          // What the line borrowed (`base`) shrinks with it: the room it no
+          // longer needs goes back, not to a lane below `work`.
+          if (base > req.budgetBytes) base = Math.max(req.budgetBytes, base - (floorWith(yesterday) - floorWith(narrower)));
+          yesterday = narrower;
+          stepped = true;
+          break;
+        }
         if (lane === "identity" && !fold && Object.keys(lost).length > 0) {
           const folded = linesFor(lost, kept, true);
           if (compose(kept, req.day, resolve, coreName, identity, folded.more, yesterday, elsewhere, folded.fold).bytes <= base) {

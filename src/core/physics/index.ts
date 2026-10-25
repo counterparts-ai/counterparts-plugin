@@ -233,6 +233,73 @@ export const TUNABLES = {
    *  age-fair: a memory made on day 15 qualifies as fast as one made on day 1. CAL. */
   CORE_SLOW_WINDOW_DAYS: 30,
   /**
+   * THE CORE DOOR IS ONE SUPPORT ARC (2026-10-24, E2; elegance check §2). On,
+   * a memory about me or us crosses when its CORE SUPPORT reaches
+   * `CORE_SUPPORT_LINE` — the support beliefs already use (§5.13,
+   * `supportCredit`), counted over the memory's own recurrence evidence
+   * (`sleep/consolidate.ts#coreSupportFor`): a real use of it or its slot
+   * (opened, quoted, drawn on, rated 2–3) counts `SUPPORT_RETURN`, a session's
+   * re-encoding the same, a reflection's citation as a FOUND filing (rising
+   * once a later real use echoes it); a glimpse, a rating of 1 and a dream's
+   * replay count nothing. The height `BELIEF_SUPPORT_CAP x (1 − e^(−S /
+   * BELIEF_SUPPORT_SCALE))` times the days factor `min(1, ln(1 + days) /
+   * ln(1 + BELIEF_RESIST_DAYS))` over its distinct LIVED days (an un-echoed
+   * find gives none: insight earns support, not time; the slot's making is
+   * the first of them, and the day after it the same occasion —
+   * `CORE_SUPPORT_GAP_DAYS`) — one crossing, one
+   * counted record naming the filings. The fast and slow lanes above are not
+   * read for eligibility while it is on (their progress is still computed,
+   * for the readers that show it). Off: the two lanes exactly as before.
+   * Decided by Mike, 2026-10-24, lightly held (E2, an experiment).
+   * Why: eight thresholds and two ways of counting days said one sentence —
+   * it kept coming back, from separate moments, over time, and it mattered —
+   * and their history was lowering each whenever nothing passed.
+   *
+   * THREE SETTINGS (`CoreDoorMode`, read through `coreDoorMode`): `"off"` —
+   * the two lanes, byte for byte as before; `"on"` — the support door
+   * decides, as above; `"shadow"` (the DEFAULT, 2026-10-24 21:00, Mike's yes
+   * 20:59, lightly held) — the two lanes decide, exactly as off, and the
+   * support door runs beside them and only records: one `promotion.shadow`
+   * row per disagreement and one `promotion.shadow.sleep` row per sleep
+   * (`sleep/consolidate.ts#runShadow`). `true` / `false` still read as on /
+   * off. Why shadow: on the harness the door grew the core about half as
+   * fast as the lanes (days 7/14/21/28/end 0/0/3/4/6 against 0/6/10/11/12),
+   * against Mike's 10-20/10-21 rulings that the core was starving; a week of
+   * rows on his store decides on, off or tune.
+   */
+  CORE_DOOR_SUPPORT: "shadow" as CoreDoorMode | boolean,
+  /**
+   * THE MAKING IS THE FIRST MOMENT (E2 review, 2026-10-24): the core door's
+   * days factor counts the slot's first encoding's lived day as one of its
+   * days — once any lived filing stands, so a reflection alone still gives
+   * none — and a lived filing fewer than this many lived days after it as
+   * that same day: "not the very next day", the fast lane's
+   * `CORE_FAST_GAP_DAYS` read as spacing. So one real use two or more days
+   * after the making is two lived days (birth and the use), and one the day
+   * after is one. Why: "from separate moments, over time" — with the door's
+   * first cut a felt use the day after birth crossed, one occasion on one
+   * day. CAL, lightly held.
+   */
+  CORE_SUPPORT_GAP_DAYS: 2,
+  /**
+   * Where the core door's support crosses (E2): the height x days factor
+   * above. One real use felt at `CORE_FAST_FEELING` (0.6) two or more days
+   * after the making is 0.1013; at 0.55 — the most a feeling word gives
+   * unweighed (`store/feelings.ts#defaultStrength`) — 0.0997, at 0.5 0.0981,
+   * unfelt 0.0808. The line sits midway between 0.55 and 0.6 (a feeling of
+   * 0.575), so a strongly felt memory that comes back once, spaced, is in —
+   * the fast lane, falling out of the arc — and a defaulted or merely felt
+   * one needs another occasion. One use the day after the making is one
+   * lived day (at most 0.072, felt at 1): never in alone. Two real uses on
+   * two lived days after the making are in whatever the feeling (0.129, or
+   * 0.163 with its own day), and so are two sessions on one spaced day
+   * (0.114). A reflection alone never is (no lived day).
+   * CAL, tuned on the harness (E2 review, 2026-10-24, the 10-24 and 10-23
+   * corpora) from the first cut's 0.0615 (just under one use felt at 0.5,
+   * one lived day): 0.0999, 0.1005 and 0.1012 cross the same memories.
+   */
+  CORE_SUPPORT_LINE: 0.1005,
+  /**
    * The salience-claim ceiling for a FALLBACK-minted memory (owner ruling
    * 2026-08-29, the authorship doctrine's salience half): the experiencer's own
    * "remember this" commands the full 0-1 floor — lived testimony, the analog
@@ -537,6 +604,13 @@ export const TUNABLES = {
   SUPPORT_FOUND: 0.7,
   /** What a found filing rises to once life echoes it. */
   SUPPORT_FOUND_ECHOED: 1.0,
+  /**
+   * RETURN: a memory's own real use (or its slot's re-encoding by a session),
+   * as a filing toward its CORE support (E2, 2026-10-24, `CORE_DOOR_SUPPORT`):
+   * lived, full weight, as testimony and choice are for a belief. Never a
+   * belief's route (`SUPPORT_ROUTES` is the table's vocabulary). CAL.
+   */
+  SUPPORT_RETURN: 1.0,
   /** LINK: another belief (strong enough to lend it, `SUPPORT_LINK_FLOOR`) backs it — each. CAL. */
   SUPPORT_LINK: 0.25,
   /** …and at most this much from links altogether, so a cluster can't hold itself up. */
@@ -644,6 +718,22 @@ export const TUNABLES = {
    */
   OWN_WRITE_GATE: true,
 
+  // --- cue learning (2026-10-24, R3, an experiment) ---
+  /**
+   * THE WORDS THAT BROUGHT A MEMORY BACK, AND HELPED, WIRE TO IT. On, recall
+   * keeps each turn's informative cue words beside what the turn showed, a
+   * credited use of a memory (an open, a quote, `drewOn`, a rating) wires the
+   * words of the turn that showed it to the memory (`associate`'s `cue_edges`,
+   * bounded like association's edges), and a learned pair fetches its memory
+   * as one more cue (`recall/activate.ts`). Off: nothing is recorded, trained
+   * or read, and every bundle and recall is byte-identical to before. One
+   * switch for both modules, because both read physics.
+   * Decided by Mike, 2026-10-24, lightly held (R3; the ping/pong demo).
+   * Why: practising "ping → pong" should make the answer come faster, and
+   * until now talking about a habit only added competitors to it.
+   */
+  CUE_LEARNING: true,
+
   // --- §5.12 a changed fact fades once (2026-09-29, contradictions) ---
   /**
    * What a memory's DECAY is multiplied by, once, when it is settled as
@@ -693,6 +783,25 @@ export interface KindPhysics {
 }
 
 export type DecayShape = "exponential" | "flat" | "power-law";
+
+/**
+ * The core door's three settings (`TUNABLES.CORE_DOOR_SUPPORT`, 2026-10-24,
+ * E2): `off` the two lanes, `shadow` the two lanes with the support door
+ * recording beside them, `on` the support door.
+ */
+export type CoreDoorMode = "off" | "shadow" | "on";
+
+/**
+ * The core door's setting as one of its three values — every reader goes
+ * through here, never the raw tunable (the string `"off"` is truthy). `true`
+ * and `"true"` read as on, `false` and `"false"` as off, and anything this
+ * does not know as off: the lanes, as before the door existed.
+ */
+export function coreDoorMode(v: unknown = TUNABLES.CORE_DOOR_SUPPORT): CoreDoorMode {
+  if (v === true || v === "on" || v === "true") return "on";
+  if (v === "shadow") return "shadow";
+  return "off";
+}
 
 export function kindPhysics(kind: Kind): KindPhysics {
   return TUNABLES.KINDS[kind];
@@ -1412,8 +1521,9 @@ export function band(m: MemoryPhysics, d: number, shape: DecayShape = TUNABLES.D
 // §5.3 Core — the two lanes into the identity band (2026-09-26)
 // ---------------------------------------------------------------------------
 
-/** Which lane carried a memory into the core. */
-export type CoreLane = "fast" | "slow";
+/** Which lane carried a memory into the core: `support` is the one arc of
+ *  `CORE_DOOR_SUPPORT` (2026-10-24, E2); `fast` and `slow` the two lanes before it. */
+export type CoreLane = "fast" | "slow" | "support";
 
 export type PromotionReason =
   | "eligible"
@@ -1425,7 +1535,8 @@ export type PromotionReason =
   | "not-about-me"
   /** The owner sent it back to ordinary fading; the lanes do not re-promote it. */
   | "demoted-by-owner"
-  /** About me, but neither lane is met yet (`fast` / `slow` say which part). */
+  /** About me, but neither lane is met yet (`fast` / `slow` say which part);
+   *  with `CORE_DOOR_SUPPORT` on, its support is under the line (`support`). */
   | "no-lane-yet";
 
 export interface PromotionVerdict {
@@ -1464,6 +1575,29 @@ export interface PromotionVerdict {
     /** Decayed strength on `ctx.day` (null when no day was given) and the floor it must reach: within reach (`REACH`). */
     readonly strength: number | null;
     readonly needStrength: number;
+  };
+  /**
+   * THE SUPPORT DOOR (2026-10-24, E2): present only while `CORE_DOOR_SUPPORT`
+   * is on, and then it alone decides `eligible` and `lane` (the two lanes
+   * above are still computed, as progress readings).
+   */
+  support?: {
+    readonly met: boolean;
+    /** Height x days factor, and the line it must reach (`CORE_SUPPORT_LINE`). */
+    readonly level: number;
+    readonly needLevel: number;
+    /** The support sum S and its distinct lived days. */
+    readonly support: number;
+    readonly days: number;
+    /** How many filings stand behind it. */
+    readonly filings: number;
+    /** Decayed strength on `ctx.day` (null without one), and `REACH`. */
+    readonly strength: number | null;
+    readonly needStrength: number;
+    /** An earlier state of its slot: the slot's support lifts the current one. */
+    readonly earlier: boolean;
+    /** `CORE_SUPPORT_GAP_DAYS`: how many lived days after the making a use counts a day of its own. */
+    readonly needGap: number;
   };
   /** `base` as it stands — carried for the record, never a threshold. */
   base: number;
@@ -1570,7 +1704,76 @@ export interface CoreContext {
    * feeling half. Absent: false — the intensity alone decides, as before.
    */
   readonly stronglyFelt?: boolean;
+  /**
+   * THE MEMORY'S CORE SUPPORT (2026-10-24, E2), counted by the caller over its
+   * slot (`sleep/consolidate.ts#coreSupportFor`) — read only while
+   * `CORE_DOOR_SUPPORT` is on. Absent then: no support at all (never the old
+   * lanes), so a reader that did not count it never sees a door open.
+   */
+  readonly support?: CoreDoorSupport;
 }
+
+/**
+ * The feeling the core door reads (§5.3): every feeling while the door to
+ * feelings recorded later is open, else only those felt at the time
+ * (`feelingPeakLived`). The fast lane's intensity, and since 2026-10-24 (E2)
+ * what multiplies each core filing (`SUPPORT_FEELING`).
+ */
+export function coreFeeling(m: Pick<MemoryPhysics, "salience" | "feelingPeak" | "feelingPeakLived">, acceptsReflected: boolean): number {
+  return acceptsReflected || m.feelingPeakLived === undefined ? emotionalIntensity(m) : emotionalIntensity({ ...m, feelingPeak: m.feelingPeakLived });
+}
+
+/**
+ * A MEMORY'S CORE SUPPORT (2026-10-24, E2): the belief's support arithmetic
+ * (`supportCredit`, §5.13) over the memory's recurrence filings, read as one
+ * number — `BELIEF_SUPPORT_CAP x (1 − e^(−S / BELIEF_SUPPORT_SCALE))` (its
+ * height) times `min(1, ln(1 + days) / ln(1 + BELIEF_RESIST_DAYS))` (its
+ * days factor), `days` its distinct LIVED days (`SupportCredit.livedOn`: an
+ * un-echoed find gives none) — with `bornDay` (the slot's first encoding's
+ * lived day) one of them once any lived day stands, and a lived day fewer
+ * than `CORE_SUPPORT_GAP_DAYS` after it counted as it (E2 review: the making
+ * is the first moment, and the day after it the same occasion). Without
+ * `bornDay`, the lived days alone. Pure.
+ */
+export interface CoreDoorSupport {
+  /** The support sum S (`SupportCredit.uses`). */
+  readonly support: number;
+  /** Distinct lived days behind it: the making's among them once a lived filing stands (`coreDoorSupport`). */
+  readonly days: number;
+  readonly height: number;
+  readonly daysFactor: number;
+  /** height x daysFactor: what reaches `CORE_SUPPORT_LINE`. */
+  readonly level: number;
+  /** Each filing, ids and numbers only, with the weight it counted — the crossing's record names them. */
+  readonly filings: readonly { readonly memoryId: string; readonly route: string; readonly day: number; readonly session: string | null; readonly weight: number }[];
+  /** An earlier state of its slot (a later member settled over it). */
+  readonly earlier: boolean;
+}
+
+export function coreDoorSupport(filings: readonly SupportFiling[], opts: { earlier?: boolean; bornDay?: number | null } = {}): CoreDoorSupport {
+  const credit = supportCredit(filings);
+  const born = opts.bornDay;
+  let lived = credit.livedOn.length;
+  if (typeof born === "number" && lived > 0) {
+    const days = new Set<number>([born]);
+    for (const d of credit.livedOn) days.add(d - born < TUNABLES.CORE_SUPPORT_GAP_DAYS ? born : d);
+    lived = days.size;
+  }
+  const height = TUNABLES.BELIEF_SUPPORT_CAP * (1 - Math.exp(-credit.uses / TUNABLES.BELIEF_SUPPORT_SCALE));
+  const daysFactor = lived <= 0 ? 0 : Math.min(1, Math.log(1 + lived) / Math.log(1 + TUNABLES.BELIEF_RESIST_DAYS));
+  return {
+    support: credit.uses,
+    days: lived,
+    height,
+    daysFactor,
+    level: height * daysFactor,
+    filings: filings.map((f, i) => ({ memoryId: f.memoryId, route: f.route, day: f.day, session: f.session, weight: credit.weights[i] ?? 0 })),
+    earlier: opts.earlier === true,
+  };
+}
+
+/** No filings at all: what the support door reads when the caller counted none. */
+const NO_CORE_DOOR_SUPPORT: CoreDoorSupport = { support: 0, days: 0, height: 0, daysFactor: 0, level: 0, filings: [], earlier: false };
 
 /**
  * Core eligibility (§5.3, owner decisions 2026-09-26). Only for memories about
@@ -1591,12 +1794,21 @@ export interface CoreContext {
  * replays do not count toward either lane — a dream can nominate, only a lane
  * promotes. Evaluated at consolidation by `sleep/`, which executes the crossing
  * (and caps how many cross per night).
+ *
+ * THE SUPPORT DOOR (2026-10-24, E2, `CORE_DOOR_SUPPORT` "on"): one crossing in
+ * place of both lanes — its core support (`ctx.support`, `coreDoorSupport`) at
+ * or past `CORE_SUPPORT_LINE`, not an earlier state of its slot, and within
+ * reach on the day. The gates about meaning stay: about me (recognition
+ * opens it once the support is met), not demoted, not already identity.
+ * `supportDoor` says which door answers: the setting's by default (on only
+ * at "on"; "shadow" and "off" are the lanes); the shadow passes true to ask
+ * the support door's question beside the lanes' (`sleep/consolidate.ts`).
  */
-export function promotionEligibility(m: MemoryPhysics, ctx: CoreContext): PromotionVerdict {
+export function promotionEligibility(m: MemoryPhysics, ctx: CoreContext, supportDoor: boolean = coreDoorMode() === "on"): PromotionVerdict {
   // v9: the fast lane's feeling, without the feelings a reflection recorded
   // later unless the owner opened that door (`CORE_FAST_ACCEPTS_REFLECTED_FEELING`).
   const accepts = ctx.acceptsReflectedFeeling ?? TUNABLES.CORE_FAST_ACCEPTS_REFLECTED_FEELING;
-  const intensity = accepts || m.feelingPeakLived === undefined ? emotionalIntensity(m) : emotionalIntensity({ ...m, feelingPeak: m.feelingPeakLived });
+  const intensity = coreFeeling(m, accepts);
   const days = m.returnDays ?? 0;
   const last = m.lastReturnDay ?? null;
   const gap = last === null ? null : last - m.birthDay;
@@ -1620,18 +1832,26 @@ export function promotionEligibility(m: MemoryPhysics, ctx: CoreContext): Promot
     rec.anchored &&
     rec.earlier !== true &&
     (now === null || now >= TUNABLES.REACH);
+  // THE SUPPORT DOOR (2026-10-24, E2): one arc decides, when it is on.
+  // `supportDoor`: the setting's (`coreDoorMode() === "on"`), unless the
+  // caller asks the door's question itself — the shadow (`sleep/consolidate.ts`).
+  const door = supportDoor;
+  const sup = ctx.support ?? NO_CORE_DOOR_SUPPORT;
+  const supportMet = door && sup.level >= TUNABLES.CORE_SUPPORT_LINE - 1e-9 && !sup.earlier && (now === null || now >= TUNABLES.REACH);
+  const opened = door ? supportMet : fastMet;
   const blockedBy: PromotionReason[] = [];
   if (m.promotedIdentity) blockedBy.push("already-identity");
   // Recognising myself in it counts as about me, for the fast lane only, when
-  // nothing marked what it is about (wheel v2, `CoreContext.selfRelevantFeeling`).
-  if (!ctx.aboutMe && !(ctx.selfRelevantFeeling === true && fastMet)) blockedBy.push("not-about-me");
+  // nothing marked what it is about (wheel v2, `CoreContext.selfRelevantFeeling`);
+  // with the support door on, once its support is met.
+  if (!ctx.aboutMe && !(ctx.selfRelevantFeeling === true && opened)) blockedBy.push("not-about-me");
   if (ctx.demoted === true) blockedBy.push("demoted-by-owner");
-  if (!fastMet && !slowMet) blockedBy.push("no-lane-yet");
+  if (door ? !supportMet : !fastMet && !slowMet) blockedBy.push("no-lane-yet");
   return {
     eligible: blockedBy.length === 0,
     reason: blockedBy[0] ?? "eligible",
     blockedBy,
-    lane: fastMet ? "fast" : slowMet ? "slow" : null,
+    lane: door ? (supportMet ? "support" : null) : fastMet ? "fast" : slowMet ? "slow" : null,
     fast: {
       met: fastMet,
       intensity,
@@ -1651,6 +1871,22 @@ export function promotionEligibility(m: MemoryPhysics, ctx: CoreContext): Promot
       strength: now,
       needStrength: TUNABLES.REACH,
     },
+    ...(door
+      ? {
+          support: {
+            met: supportMet,
+            level: sup.level,
+            needLevel: TUNABLES.CORE_SUPPORT_LINE,
+            support: sup.support,
+            days: sup.days,
+            filings: sup.filings.length,
+            strength: now,
+            needStrength: TUNABLES.REACH,
+            earlier: sup.earlier,
+            needGap: TUNABLES.CORE_SUPPORT_GAP_DAYS,
+          },
+        }
+      : {}),
     base: base(m),
     returnDays: days,
   };
@@ -1720,6 +1956,18 @@ export interface PromotionCrossing {
   readonly returnDays: number;
   /** Kept on the record for the readers that print it; now equals `returnDays`. */
   readonly reinforcedDays: number;
+  /**
+   * THE SUPPORT DOOR'S CROSSING (2026-10-24, E2; absent before, and with
+   * `CORE_DOOR_SUPPORT` off): the level it reached, the line, the support sum
+   * and its lived days, and every filing behind it — ids and numbers only.
+   */
+  readonly support?: {
+    readonly level: number;
+    readonly line: number;
+    readonly sum: number;
+    readonly days: number;
+    readonly filings: CoreDoorSupport["filings"];
+  };
 }
 
 export interface PromotionOutcome {
@@ -1734,6 +1982,7 @@ export interface PromotionOutcome {
 export function promote(m: MemoryPhysics, d: number, ctx: CoreContext): PromotionOutcome {
   const verdict = promotionEligibility(m, { ...ctx, day: d });
   if (!verdict.eligible || verdict.lane === null) return { promoted: false, verdict, crossing: null, next: null };
+  const sup = verdict.lane === "support" ? (ctx.support ?? NO_CORE_DOOR_SUPPORT) : null;
   return {
     promoted: true,
     verdict,
@@ -1746,6 +1995,9 @@ export function promote(m: MemoryPhysics, d: number, ctx: CoreContext): Promotio
       intensity: verdict.fast.intensity,
       returnDays: verdict.returnDays,
       reinforcedDays: verdict.returnDays,
+      ...(sup === null
+        ? {}
+        : { support: { level: sup.level, line: TUNABLES.CORE_SUPPORT_LINE, sum: sup.support, days: sup.days, filings: sup.filings } }),
     },
     next: { promotedIdentity: true },
   };
@@ -1989,8 +2241,16 @@ export function creditReturn(
 export const SUPPORT_ROUTES = ["testimony", "choice", "use", "found", "link"] as const;
 export type SupportRoute = (typeof SUPPORT_ROUTES)[number];
 
+/**
+ * THE CORE'S OWN ROUTES (2026-10-24, E2): a memory's real use (`return`) and
+ * its slot's re-encoding by a session (`reencoded`), filed toward its CORE
+ * support (`sleep/consolidate.ts#coreSupportFor`). Lived, `SUPPORT_RETURN`
+ * each. Never a belief's (`SUPPORT_ROUTES` is the table's vocabulary).
+ */
+export const CORE_SUPPORT_ROUTES = ["return", "reencoded"] as const;
+
 /** The lived routes: what life itself said, as against what a reflection found or another belief lends. */
-const LIVED_ROUTES: ReadonlySet<string> = new Set(["testimony", "choice", "use"]);
+const LIVED_ROUTES: ReadonlySet<string> = new Set(["testimony", "choice", "use", ...CORE_SUPPORT_ROUTES]);
 
 /** A filing with no folder (the chapter episodes) shares this one: unknown, not new. */
 const UNKNOWN_FOLDER = "(unknown folder)";
@@ -2008,6 +2268,9 @@ export function supportRouteWeight(route: string): number {
       return TUNABLES.SUPPORT_FOUND;
     case "link":
       return TUNABLES.SUPPORT_LINK;
+    case "return":
+    case "reencoded":
+      return TUNABLES.SUPPORT_RETURN;
     default:
       return 0;
   }
@@ -2037,6 +2300,14 @@ export interface SupportCredit {
   readonly lastDay: number | null;
   /** Distinct lived days the support comes from: a lived (or echoed) memory's own day, an un-echoed find's filing day. */
   readonly days: number;
+  /**
+   * Of those, the days a LIVED (or echoed) filing gives — an un-echoed find's
+   * filing day and a link's left out: what the core door's days factor reads
+   * (2026-10-24, E2), so insight earns support, not lived time. A belief reads `days`.
+   */
+  readonly livedDays: number;
+  /** …and those days themselves, ascending (the core door folds the making's neighbour into it, E2 review). */
+  readonly livedOn: readonly number[];
 }
 
 /**
@@ -2071,6 +2342,7 @@ export function supportCredit(filings: readonly SupportFiling[]): SupportCredit 
   let uses = 0;
   let lastDay: number | null = null;
   const days = new Set<number>();
+  const livedDays = new Set<number>();
   for (const f of filings) {
     let w: number;
     let echoed = false;
@@ -2104,9 +2376,10 @@ export function supportCredit(filings: readonly SupportFiling[]): SupportCredit 
       // day it was filed until life echoes it — one night of finds is one
       // day: insight earns strength, not hardness (design §4). A link, its day.
       days.add(LIVED_ROUTES.has(f.route) || echoed ? (f.bornDay ?? f.day) : f.day);
+      if (LIVED_ROUTES.has(f.route) || echoed) livedDays.add(f.bornDay ?? f.day);
     }
   }
-  return { weights, uses, lastDay, days: days.size };
+  return { weights, uses, lastDay, days: days.size, livedDays: livedDays.size, livedOn: [...livedDays].sort((a, b) => a - b) };
 }
 
 /**

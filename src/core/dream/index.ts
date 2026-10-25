@@ -103,7 +103,7 @@ export { DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 export type { DreamAction } from "./tunables.js";
 export { MIND_TUNABLES, mindRanked, onMyMind } from "./mind.js";
 export type { MindItem } from "./mind.js";
-export { CORE_MENTIONED_PREFIX, REFLECT_QUESTIONS, REFLECT_TUNABLES, Reflections, reflectionOpener } from "./reflect.js";
+export { CORE_MENTIONED_PREFIX, REFLECT_QUESTIONS, REFLECT_TUNABLES, Reflections, reflectionOpener, unmarkedOfferCap } from "./reflect.js";
 export { coreAsks, coreWaiting } from "./core-ask.js";
 export type { CoreAsk, CoreDecided } from "./core-ask.js";
 // Wave 2 lane B (2026-10-21): the night's tagging ask, a child of its own.

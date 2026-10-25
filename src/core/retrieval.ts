@@ -34,6 +34,7 @@
  */
 import type { BeliefsFn, RecallResult, TagPartnersFn, Turn } from "./recall/index.js";
 import type { Recall } from "./recall/index.js";
+import { TUNABLES as PHYSICS } from "./physics/index.js";
 
 /** Structural, not nominal: this file imports no neighbour's class. */
 export interface AliasSource {
@@ -68,6 +69,8 @@ export interface SpreadSource {
   /** Structurally `Associate.partnersOf` — one hop, for context priming
    *  (2026-10-19). Optional: without it priming's link channel is dark. */
   partnersOf?(ids: readonly string[], day?: number): ReadonlyMap<string, readonly { id: string; weight: number }[]>;
+  /** Cue learning's read (R3, 2026-10-24): the learned pairs out of some index terms at a lived day. */
+  learnedCues?(terms: readonly string[], day?: number): ReadonlyMap<string, readonly { id: string; weight: number }[]>;
 }
 
 export interface RetrievalSources {
@@ -107,6 +110,12 @@ export function composeTurn(turn: Turn, sources: RetrievalSources): Turn {
   }
   // CONTEXT PRIMING's link channel (2026-10-19): bound only on a turn that
   // primes at all — the ambient turn, which set `turn.prime`.
+  // CUE LEARNING (R3, 2026-10-24 — an experiment): bound only while the
+  // switch is on, so off, the turn is exactly what it was.
+  if (PHYSICS.CUE_LEARNING && sources.associate?.learnedCues !== undefined && turn.learned === undefined) {
+    const source = sources.associate;
+    out.learned = (terms, day) => source.learnedCues?.(terms, day) ?? new Map();
+  }
   if (sources.associate?.partnersOf !== undefined && turn.prime !== undefined && turn.prime.partners === undefined) {
     const source = sources.associate;
     out.prime = { ...turn.prime, partners: (ids, day) => source.partnersOf?.(ids, day) ?? new Map() };
