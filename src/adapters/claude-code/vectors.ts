@@ -75,7 +75,10 @@ export type Emit = (name: string, data: Record<string, string | number | boolean
  * prompt keeps at least ~70% of the joined text at typical lengths and the whole
  * cue stays inside one embedding call. Not measured against surfacing quality
  * yet — the day-1 watch is whether `semantic: "lagged"` turns into surfaced
- * items that were not already lexically cued.
+ * items that were not already lexically cued. Since 2026-10-25
+ * (`recall.SEMANTIC_THIS_TURN`, on) the next turn ranks its own text instead
+ * and reads this row only past the in-line count guard; the row is still
+ * written every turn, beside the embed backfill this worker also runs.
  */
 export const LAG_PROMPT_BYTES = 2000;
 export const LAG_REPLY_BYTES = 800;

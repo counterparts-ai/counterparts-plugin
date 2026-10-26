@@ -125,9 +125,10 @@ export interface SelfTunables {
   /**
    * "STILL OPEN" LEADS WITH WHAT IS LIVE (2026-10-18, the wake-polish
    * builder, lightly held): an open thread untouched — neither born nor used
-   * — for this many lived days ranks after every one touched since, and the
-   * lane's count line says how many of what it counts are that old ("41
-   * untouched for 2+ weeks"). "Untouched" is read as #489 D's `staleOpen`
+   * — for this many lived days ranks after every one touched since. (Until
+   * 2026-10-25 the lane's count line also said how many of what it counted
+   * were that old, "41 untouched for 2+ weeks"; dropped as a third rule
+   * beside `OPEN_CARRY_DAYS`, `briefing.ts#OPEN_TAIL_WORDS`.) "Untouched" is read as #489 D's `staleOpen`
    * reads it (born or used), but the thresholds differ: the nightly
    * close-offer looks from `REFLECT_TUNABLES.STALE_OPEN_DAYS` (4) and offers
    * at most 5 a night, so it does not count what this counts. CAL.
@@ -336,6 +337,17 @@ export interface SelfTunables {
    */
   PAGE_WRITER_ASKS_PER_DAY: number;
   /**
+   * "LAST NIGHT:" IN THE WAKE (2026-10-25, the wake-polish builder from
+   * random-5b's 10-25 wake; Mike's go, lightly held). On: a session start's
+   * wake carries one line saying what last night's dream and reflection did,
+   * by id and in a few words, or that it was a quiet night, or that none ran
+   * (`dream/night-line.ts#nightLine`) — between the Yesterday line and "Today
+   * so far here", in the same piece of furniture, and the last of it to give
+   * way (`Counterpart#dayLinesFor`). Off: no line, the wake exactly as before.
+   * Read at use.
+   */
+  NIGHT_LINE: boolean;
+  /**
    * "TODAY SO FAR" IN THE WAKE (2026-10-24, lane W1; Mike's go 17:45, lightly
    * held). On: a session start's wake carries one more line under the
    * Yesterday line — today's chapters written in this folder before the one
@@ -350,9 +362,9 @@ export interface SelfTunables {
    * YESTERDAY READS DAY'S END'S SUMMARY (2026-10-24, lane W1; Mike's go
    * 17:45, lightly held). On: at a session start, when day's end left a
    * summary about yesterday (`writer.ts#daySummaries`) and the privacy gate
-   * lets it through (`Counterpart#daySummaryShown`: every memory it cites
-   * nameable in this wake, and every chapter and memory of that day from this
-   * folder or one whose scope setting is on), the Yesterday line leads with it and
+   * lets it through (`Counterpart#daySummaryShown`: every memory it cites, and
+   * every chapter and memory of that day, from this folder or one whose scope
+   * setting is on — a cite whatever its mark since Y2), the Yesterday line leads with it and
    * lists the chapters after it, fewer as room asks. Otherwise, and off, the
    * chapter list exactly as before. Read at use.
    */
@@ -501,6 +513,7 @@ export const SELF_TUNABLES: SelfTunables = {
   DAY_SUMMARY: true,
   DAY_SUMMARY_CHARS: 600,
   PAGE_WRITER_ASKS_PER_DAY: 2,
+  NIGHT_LINE: true,
   TODAY_SO_FAR: true,
   YESTERDAY_FROM_SUMMARY: true,
 

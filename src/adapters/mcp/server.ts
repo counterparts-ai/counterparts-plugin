@@ -169,7 +169,44 @@ import type { FitIndex, FitMechanism } from "../../core/fit/index.js";
 
 /** Recall's keys a night run's short ids may stand in (2026-10-23). */
 const RECALL_ID_KEYS: ReadonlySet<string> = new Set(["ids", "handle"]);
-import { WAKE_BUILD_KEY } from "../../core/self/index.js";
+
+/** How many items the `still open` handle gives a page (2026-10-25). CAL. */
+export const STILL_OPEN_PAGE = 20;
+
+/**
+ * The facts questions that ask for the list itself (2026-10-25, the O1
+ * builder): on the owner's 10-25 snapshot these matched none of 156 open
+ * threads by content, so they are answered by the `still open` handle. Exact
+ * after case, punctuation and spacing are folded: a question about a thing
+ * ("is the seed order still open?") is a question, not this.
+ */
+const STILL_OPEN_QUESTIONS: ReadonlySet<string> = new Set([
+  "still open",
+  "whats still open",
+  "what is still open",
+  "what remains open",
+  "whats open",
+  "what is open",
+  "open threads",
+  "my open threads",
+  "the open threads",
+  "what are the open threads",
+  "what are my open threads",
+  "list open threads",
+  "list the open threads",
+  "which threads are open",
+  "which threads are still open",
+  "what threads are still open",
+  "what is still unresolved",
+  "whats still unresolved",
+]);
+
+/** True when a facts question asks for exactly the list of what is still open. */
+export function asksStillOpen(question: string): boolean {
+  const folded = question.toLowerCase().replace(/[’']/g, "").replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+  return STILL_OPEN_QUESTIONS.has(folded);
+}
+import { STILL_OPEN_HANDLE, WAKE_BUILD_KEY } from "../../core/self/index.js";
 import type { PageWriterMode } from "../../core/self/index.js";
 import { canonicalToolName, toolDefinitions, toolSpec } from "./tools.js";
 import { writeUpDoor } from "./write-up.js";
@@ -2167,6 +2204,18 @@ export class McpServer {
     if (typeof handle === "string" && handle.trim().toLowerCase() === LAST_EXCHANGE_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
       return this.lastExchangeTool();
     }
+    // WHAT'S STILL OPEN (2026-10-25): the list "Still open" carries, by the
+    // handle, or by a facts question that asks for exactly that.
+    const stillOpenAsked =
+      (typeof handle === "string" && handle.trim().toLowerCase() === STILL_OPEN_HANDLE && args["question"] === undefined && args["ids"] === undefined) ||
+      (handle === undefined && args["ids"] === undefined && args["mode"] === "facts" && typeof args["question"] === "string" && asksStillOpen(args["question"]));
+    if (stillOpenAsked) {
+      const page = args["page"];
+      if (page !== undefined && (typeof page !== "number" || !Number.isInteger(page) || page < 1)) {
+        return this.refuse("recall", "page-not-a-positive-integer", {});
+      }
+      return this.stillOpenTool(typeof page === "number" ? page : 1, handle === undefined);
+    }
     const question = args["question"];
     const ids = args["ids"];
     if (handle !== undefined && typeof handle !== "string") {
@@ -2318,6 +2367,58 @@ export class McpServer {
         reason: "last-exchange",
         handle: LAST_EXCHANGE_HANDLE,
         ...lastExchangeAnswer(ex, { zone: this.counterpart.store.zone(), now: this.nowFn() }),
+      },
+      false,
+    );
+  }
+
+  /**
+   * `recall` with the handle `still open` (2026-10-25, the O1 builder;
+   * roadmap 10-25, lightly held): everything the wake's "Still open" carries
+   * — the open threads the carry rule keeps and the core memories being
+   * reconsidered, in the lane's order (`Counterpart#stillOpen`) — with ids,
+   * titles and how long since each was touched, `STILL_OPEN_PAGE` to a page.
+   * What the lane's tail counts, listed. Also reached by a facts question
+   * that asks exactly that ("what's still open", `asksStillOpen`): measured
+   * on the owner's 10-25 snapshot, those matched none of 156 open threads.
+   *
+   * Reads only, like `last exchange`: no recall row, no credit, no seen set,
+   * no quotable record — a ring event alone. Being listed is not a touch
+   * (`self/identity.ts#openCarry`), so asking cannot keep a thread carried.
+   * Never reached under observer (G5): recall stands down first.
+   */
+  private stillOpenTool(page: number, routed: boolean): ToolResult {
+    const { items, notCarried } = this.counterpart.stillOpen();
+    const pages = Math.max(1, Math.ceil(items.length / STILL_OPEN_PAGE));
+    const at = Math.min(page, pages);
+    const shown = items.slice((at - 1) * STILL_OPEN_PAGE, at * STILL_OPEN_PAGE);
+    this.emit("mcp.recall.stillopen", undefined, { total: items.length, page: at, shown: shown.length, notCarried, routed });
+    const touched = (n: number): string => (n === 0 ? "this lived day" : n === 1 ? "1 lived day ago" : `${String(n)} lived days ago`);
+    const faded =
+      notCarried === 0
+        ? ""
+        : ` Not listed: ${String(notCarried)} open ${notCarried === 1 ? "thread" : "threads"} untouched for ${String(this.counterpart.self.tunables.OPEN_CARRY_DAYS)}+ lived days, no longer carried — not closed; a question about the thing itself finds one, and a touch carries it again.`;
+    return this.result(
+      {
+        path: "handle",
+        reason: "still-open",
+        handle: STILL_OPEN_HANDLE,
+        ...(routed ? { routed: "a facts question asking what is still open is answered by this handle" } : {}),
+        total: items.length,
+        page: at,
+        pages,
+        ...(notCarried === 0 ? {} : { notCarried }),
+        items: shown.map((i) => ({
+          id: i.id,
+          title: i.title,
+          touched: touched(i.livedDaysSinceTouched),
+          ...(i.reconsidering === true ? { reconsidering: "a core memory being reconsidered: keep or retire it" } : {}),
+          ...(i.date === undefined ? {} : { date: i.date }),
+        })),
+        note:
+          (items.length === 0
+            ? "Nothing is still open."
+            : `What "Still open" carries, in the wake's order: what is live first, newest touched first.${at < pages ? ` More on page ${String(at + 1)} (page: ${String(at + 1)}).` : ""} Recall an id to read it whole. A lived day is a day the memory was in use.`) + faded,
       },
       false,
     );

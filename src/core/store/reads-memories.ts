@@ -166,11 +166,15 @@ export function copiesOf(store: Store, refs: readonly string[]): Map<string, { i
 }
 
 export function workCandidates(store: Store, scope: string, limit: number): string[] {
+  // NOT A CHAPTER'S SUMMARY (2026-10-25, review of Y1): one carries its
+  // chapter's folder since Y1, and one marked `work` would take a slot here
+  // only for `workHere` to drop it as a journal copy (`meta.episodeId`).
   return store["ops"]
     .all<{ id: string }>(
       `SELECT id FROM memories
           WHERE type = 'memory' AND archived = 0 AND origin_scope = ?
             AND band != 'identity' AND event_date IS NULL AND body != ''
+            AND COALESCE(source, '') != 'episode'
             AND (about = 'work' OR (about IS NULL AND kind IN ('skill', 'fact', 'entity', 'place')))
           ORDER BY MAX(birth_day, last_used_day) DESC, id
           LIMIT ?`,

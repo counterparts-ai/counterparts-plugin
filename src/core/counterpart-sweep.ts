@@ -364,8 +364,15 @@ export function sweepWake(cp: Counterpart, override?: number): SweepWake {
     const composed = cp.self.build({
       budgetBytes: cap,
       day: cp.store.livedDay(),
+      // A CHAPTER'S SUMMARY THAT RECORDED A FOLDER stands aside too (review
+      // of P1, 2026-10-25): one wake serves every crashed folder's chunks
+      // (`sweepAll`), so it has no one reader to ask, and the interpreter
+      // writes what it proposes under the crashed session's folder — a
+      // summary from a folder set off would otherwise travel there. As
+      // `Counterpart#hintKeptOut` fails closed for a reader that names no
+      // folder.
       omit: (s) => {
-        const hide = s.physics.protected;
+        const hide = s.physics.protected || (s.source === "episode" && cp["hintKeptOut"](s.id, {}));
         if (hide) omitted += 1;
         return hide;
       },

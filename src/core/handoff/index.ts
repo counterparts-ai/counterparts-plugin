@@ -117,12 +117,13 @@ export const HANDOFF_EXCERPT_BYTES = 160;
  * 1,963 since a "since" line can follow it (2026-10-09): three plans at the
  * title cap and a count, 317 bytes on the widest block (1,646). 1,946 since
  * each says its staleness as one sentence and the newest no longer counts the
- * work since it (2026-10-18, the wake-polish builder).
+ * work since it (2026-10-18, the wake-polish builder). 1,949 since that
+ * sentence is two clauses (2026-10-25: a byte longer at its widest, each of three).
  * In practice the share rule binds first: at the 9,000 bytes the owner's hosts
  * report, no reserve can pass 1,125, so a block that wide is carried with two
  * shown rather than three.
  */
-export const HANDOFF_RESERVE_MAX_BYTES = 1946;
+export const HANDOFF_RESERVE_MAX_BYTES = 1949;
 
 /**
  * Slack on top of the block that actually exists, so a reserve taken at one
@@ -654,7 +655,9 @@ export function versionOlder(a: string | null | undefined, b: string | null | un
  * wake-polish builder, lightly held; first built 2026-10-01 for random-f2's
  * item 1): how old it is, and what has happened since —
  *
- *   `2 days old; since then: a newer chapter here; written on 0.3.24, 0.3.25 now`
+ *   `2 days old, with a newer chapter here since; release 0.3.24 then, 0.3.25 now`
+ *
+ * (that wording since 2026-10-25 — below, in the function).
  *
  * "A newer chapter here" when a session other than its writer wrote a chapter
  * in this directory after it; the release when the process that wrote it ran
@@ -677,12 +680,17 @@ export function staleWords(opts: {
 }): string | null {
   const release = versionOlder(opts.writtenWith, opts.installed);
   if (!release && opts.newerChapter !== true) return null;
-  const parts: string[] = [];
+  // TWO CLAUSES, NOT THREE (2026-10-25, the wake-polish builder from
+  // random-5b's 10-25 wake, lightly held): how old and what came since read
+  // as one ("1 day old, with a newer chapter here since"), the release as the
+  // other ("release 0.3.34 then, 0.3.35 now") — before, three clauses and
+  // "written" twice beside the stamp: "1 day old; since then: a newer
+  // chapter here; written on 0.3.34, 0.3.35 now".
   const age = opts.age ?? null;
-  if (age !== null && Number.isFinite(age) && age >= 1) parts.push(`${String(Math.floor(age))} ${age < 2 ? "day" : "days"} old`);
-  if (opts.newerChapter === true) parts.push("since then: a newer chapter here");
-  if (release) parts.push(`written on ${opts.writtenWith as string}, ${opts.installed as string} now`);
-  return parts.join("; ");
+  const old = age !== null && Number.isFinite(age) && age >= 1 ? `${String(Math.floor(age))} ${age < 2 ? "day" : "days"} old` : null;
+  const since = opts.newerChapter !== true ? null : old === null ? "a newer chapter here since" : `${old}, with a newer chapter here since`;
+  const parts = [since ?? old, release ? `release ${opts.writtenWith as string} then, ${opts.installed as string} now` : null];
+  return parts.filter((p): p is string => p !== null).join("; ");
 }
 
 /**

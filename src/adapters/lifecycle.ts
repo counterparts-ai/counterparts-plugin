@@ -1170,7 +1170,16 @@ export class Lifecycle implements HostLifecycle {
   recallTurn(
     input: SessionInput,
     text: string,
-    opts: { budgetBytes?: number; withhold?: ReadonlySet<string>; noCues?: boolean } = {},
+    opts: {
+      budgetBytes?: number;
+      withhold?: ReadonlySet<string>;
+      noCues?: boolean;
+      /** Who started this turn, as the host reads it (N1, 2026-10-25): `person`
+       *  (an attended session, a prompt no host frame opens), `host` (attended,
+       *  but a hand-back, a task notice or a peer's message started it) or
+       *  `unattended`. Recorded on the row only; absent where the host cannot say. */
+      startedBy?: "person" | "host" | "unattended";
+    } = {},
   ): ReturnType<Counterpart["recallForTurn"]> {
     const result = this.counterpart.recallForTurn(
       {
@@ -1220,7 +1229,11 @@ export class Lifecycle implements HostLifecycle {
       // watch can read out of the store tomorrow. `semantic: "none"` on every
       // real turn is exactly the finding this PR closes. Since 2026-10-19 a
       // turn the lag never reached (first prompt, stale row) reads `in-line`
-      // (or `in-line-skipped` past the vector-count guard); `in-line` on a
+      // (or `in-line-skipped` past the vector-count guard). Since 2026-10-25,
+      // with `recall.SEMANTIC_THIS_TURN` on, every turn that can reads
+      // `in-line`, and `lagged` means it could not (past the guard, with the
+      // worker's fresh row as the fallback). The worker's own health is its
+      // `adapter.semantic.lag` rows. With the switch off, `in-line` on a
       // session's later turns is the lag falling behind, by name.
       semantic: decision.semanticSource,
       semanticFrom: decision.semanticFromTurn,
@@ -1232,6 +1245,22 @@ export class Lifecycle implements HostLifecycle {
       echoSkipped: decision.echoSkipped,
       projectSkipped: decision.projectSkipped,
       crossProjectLifted: decision.crossProjectLifted,
+      // WHAT STOPPED A MEMORY (N1, 2026-10-25, observation only): the decision
+      // row's counts, flat, beside the skips above, so a week's read of the
+      // turns a person started is one table (`startedBy`). The near miss's
+      // margin is on the decision row (`nearMiss.margin`); `turn` joins the two.
+      // Absent with `recall.STOP_COUNTS` off, as on the decision row.
+      turn: decision.turn,
+      ...(decision.nearMiss === undefined
+        ? {}
+        : {
+            habituationCut: decision.habituationCut ?? 0,
+            nearMissCount: decision.nearMiss.count,
+            capped: decision.capped ?? 0,
+            budgetTrimmed: decision.budgetTrimmed ?? 0,
+            inhibited: decision.inhibited ?? 0,
+          }),
+      ...(opts.startedBy === undefined ? {} : { startedBy: opts.startedBy }),
     });
     return result;
   }

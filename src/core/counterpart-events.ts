@@ -922,6 +922,15 @@ export const RECALL_DECISION_FIELDS = [
   "projectSkipped",
   // Mike's "slightly higher bar" (2026-10-21): what only the cross-project lift kept back.
   "crossProjectLifted",
+  // What stopped a memory, counted (N1, 2026-10-25, observation only): beside
+  // the echo and project skips, what habituation alone, a near miss of the
+  // bar (with the margin used), a full tier, the render's bytes and lateral
+  // inhibition kept from showing. Added the way `echoSkipped` was.
+  "habituationCut",
+  "nearMiss",
+  "capped",
+  "budgetTrimmed",
+  "inhibited",
   // An unsettled pair competes (E3, 2026-10-24, an experiment): how many olders
   // counted at a weight. Undefined, so left out of the written row, while
   // `UNSETTLED_COMPETES` is off: an off turn's row is byte-identical.
@@ -1072,6 +1081,12 @@ export function recallDecisionRecord(
     // PROJECTS (2026-10-21): another project's work turned away; 0 while off.
     projectSkipped: d.projectSkipped,
     crossProjectLifted: d.crossProjectLifted,
+    // WHAT STOPPED A MEMORY (N1): counts only, copied off the decision.
+    habituationCut: d.habituationCut,
+    nearMiss: d.nearMiss,
+    capped: d.capped,
+    budgetTrimmed: d.budgetTrimmed,
+    inhibited: d.inhibited,
     // AN UNSETTLED PAIR COMPETES (E3): undefined while off, so not written.
     pairsCompeted: d.pairsCompeted,
     // CONTEXT PRIMING (2026-10-19, an experiment): null on a turn it did not run.

@@ -677,7 +677,7 @@ export function dayIsEmpty(store: Store, about: string): boolean {
 }
 
 /** How deep a chain of dream merges is followed back to its originals' day. */
-const MERGE_DEPTH = 4;
+export const MERGE_DEPTH = 4;
 
 /**
  * IS THIS LIVE ROW PART OF THAT DAY? Learned on it — or, since the writer

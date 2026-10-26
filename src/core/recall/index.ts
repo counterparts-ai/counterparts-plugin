@@ -348,6 +348,35 @@ export interface RecallDecision {
   /** How many only `CROSS_PROJECT_BAR_LIFT` kept below their bar this turn —
    *  another project's work that would otherwise have shown (2026-10-21). */
   readonly crossProjectLifted: number;
+  /**
+   * WHAT STOPPED A MEMORY, COUNTED (N1, 2026-10-25 — observation only): beside
+   * `echoSkipped` and `projectSkipped`, how many candidates each other
+   * mechanism kept from showing this turn, so "why did fewer memories show"
+   * is a query over the rows. Every count is read off `verdicts` and the
+   * render's `trimmed` after the turn was decided: nothing here is judged by
+   * them, and nothing more is read from the store (`stopCounts`). Counts
+   * only, no ids. All 0 on a quiet turn. All five absent when `STOP_COUNTS`
+   * is off, so an off turn's row is the row before them.
+   *
+   * `habituationCut`: turned away `below-bar` that the bar habituation's lift
+   * alone stopped — it cleared the bar it would have faced without it. Not
+   * one `crossProjectLifted` already counts: each candidate is in one count.
+   */
+  readonly habituationCut?: number;
+  /** `below-bar` within `margin` of the bar it faced (activation ≥ (1 − margin)
+   *  × bar; `NEAR_MISS_MARGIN`, the value used recorded here), not already
+   *  counted in `habituationCut` or `crossProjectLifted`. */
+  readonly nearMiss?: { readonly margin: number; readonly count: number };
+  /** Admitted past its tier's cap (`capped`, the gate's slots and the quiet
+   *  pointers'): ranked, and not fitted. */
+  readonly capped?: number;
+  /** Admitted to a tier, then cut by the render to fit the turn's bytes (the
+   *  `surfaced` and `footnote` lanes of `trimmed`; the beliefs slot gives way
+   *  first and never takes a memory's room, so it displaces none). */
+  readonly budgetTrimmed?: number;
+  /** Lateral inhibition (`inhibited`): an earlier version whose head was
+   *  brought in, or a near-duplicate of a stronger admitted one. */
+  readonly inhibited?: number;
   /** How many olders of an unsettled pair counted at a weight this turn, their
    *  newer a candidate too (E3, 2026-10-24; which ones: `competed` on their
    *  verdicts and shown tier rows). Absent when `UNSETTLED_COMPETES` is off or
@@ -601,6 +630,7 @@ export class Recall {
         echoSkipped: 0,
         projectSkipped: 0,
         crossProjectLifted: 0,
+        ...this.stops(turn.sessionId, () => NO_STOPS(this.tunables)),
         primed: plan === null ? null : { ...NO_PRIME, sources: plan.sources, train: plan.activation.train !== null },
         beliefs: null,
         spread: null,
@@ -828,6 +858,7 @@ export class Recall {
       echoSkipped: gated.verdicts.filter((v) => v.verdict === "echo-skipped").length,
       projectSkipped: gated.verdicts.filter((v) => v.verdict === "project-skipped").length,
       crossProjectLifted: gated.crossLifted.length,
+      ...this.stops(turn.sessionId, () => stopCounts(gated.verdicts, gated.crossLifted, rendered.trimmed, this.tunables)),
       ...(competing === null ? {} : { pairsCompeted: gated.competed.length }),
       primed,
       beliefs: beliefPicks === null ? null : { offered: beliefPicks.offered, shown: rendered.beliefs, bytes: rendered.beliefBytes },
@@ -1350,6 +1381,22 @@ export class Recall {
     return n;
   }
 
+  /**
+   * The stop counts for the decision row (N1), or none: switched off
+   * (`STOP_COUNTS`), or a count that threw. Observation only, so a throw
+   * here costs the row its five keys (as off), never the turn its recall —
+   * the adapter's guard would otherwise swallow it and the turn go quiet.
+   */
+  private stops(sessionId: string, count: () => StopCounts): StopCounts {
+    if (!this.tunables.STOP_COUNTS) return {};
+    try {
+      return count();
+    } catch (err) {
+      this.emit("recall.stopcounts.failed", sessionId, { code: err instanceof Error ? err.name : "unknown" });
+      return {};
+    }
+  }
+
   private readonly ring: RecallEvent[] = [];
 
   private emit(
@@ -1527,6 +1574,53 @@ export function headsWin(store: Store, candidates: readonly Candidate[], day: nu
     }
   });
   return brought.size === 0 ? out : out.filter((c) => !(brought.has(c.id) && c.standsFor === undefined));
+}
+
+/** What stopped a memory this turn (N1, 2026-10-25): the counts `RecallDecision` carries. */
+export type StopCounts = Pick<RecallDecision, "habituationCut" | "nearMiss" | "capped" | "budgetTrimmed" | "inhibited">;
+
+/** A quiet turn's: nothing reached the gate, so nothing was stopped there. */
+function NO_STOPS(t: RecallTunables): StopCounts {
+  return { habituationCut: 0, nearMiss: { margin: t.NEAR_MISS_MARGIN, count: 0 }, capped: 0, budgetTrimmed: 0, inhibited: 0 };
+}
+
+/**
+ * WHAT STOPPED A MEMORY THIS TURN, COUNTED (N1, 2026-10-25 — observation
+ * only). Read off what the turn already decided: the gate's verdicts (each
+ * `below-bar` one carries the bar it faced, lifts included), the ids only the
+ * cross-project lift kept back, and the render's trims. No store read, no
+ * judgement: a pure count after the fact, so the turn's memories, order and
+ * bytes are what they were without it.
+ */
+export function stopCounts(
+  verdicts: readonly CandidateVerdict[],
+  crossLifted: readonly string[],
+  trimmed: readonly { readonly lane: string }[],
+  t: RecallTunables,
+): StopCounts {
+  const margin = t.NEAR_MISS_MARGIN;
+  const crossed = new Set(crossLifted);
+  let habituationCut = 0;
+  let near = 0;
+  let capped = 0;
+  let inhibited = 0;
+  for (const v of verdicts) {
+    if (v.verdict === "capped") capped++;
+    else if (v.verdict === "inhibited") inhibited++;
+    else if (v.verdict === "below-bar") {
+      // One bucket each, beside `crossProjectLifted`: a habituated memory of
+      // another project that either lift alone would have kept back (at the
+      // defaults, 1.5–1.875 × its plain bar) is the cross-project lift's, the
+      // count that came first, and neither habituation's nor a near miss.
+      if (crossed.has(v.id)) continue;
+      // The bar it faced is plain * (1 + HABITUATION_BAR_LIFT) * crossLift
+      // (gate.ts): clearing it without habituation's part is what that part stopped.
+      if (v.habituated === true && v.activation >= v.bar / (1 + t.HABITUATION_BAR_LIFT)) habituationCut++;
+      else if (v.bar > 0 && v.activation >= (1 - margin) * v.bar) near++;
+    }
+  }
+  const budgetTrimmed = trimmed.filter((x) => x.lane === "surfaced" || x.lane === "footnote").length;
+  return { habituationCut, nearMiss: { margin, count: near }, capped, budgetTrimmed, inhibited };
 }
 
 function trainsOf(verdicts: readonly CandidateVerdict[], id: string): boolean {

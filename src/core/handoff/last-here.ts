@@ -784,6 +784,19 @@ export const ELSEWHERE_TITLES_MAX = 2;
  */
 export const ELSEWHERE_TITLE_BYTES = 48;
 
+/**
+ * HOW LONG AN OPEN SESSION MAY GO WITHOUT A TURN BEFORE "TODAY, ELSEWHERE"
+ * STOPS CALLING IT LIVE (2026-10-25, the wake-polish builder from random-5b's
+ * 10-25 wake; lightly held, a starting point): two hours. The registry calls a
+ * session live for four hours after its last prompt or Stop
+ * (`adapters/sessions.ts#SESSION_TTL_MS`, a window sized for binding, not for
+ * telling), so a terminal left open overnight read "~/motelier open since
+ * 10-24 16:49 (live)". Past this, the line says `open since 10-24 16:49,
+ * quiet since 07:12` instead, and a session "Here, also open" says `since
+ * 09:08, quiet since 10:02`. Revert: `Infinity` (always "(live)").
+ */
+export const ELSEWHERE_QUIET_MS = 2 * 60 * 60 * 1000;
+
 /** A memory an elsewhere line names: its id, its title (or first words), when it was written. */
 export interface MemoryHere {
   readonly id: string;
@@ -857,6 +870,8 @@ export function todayElsewhereLines(
   dirs: readonly TodayElsewhere[],
   zone?: string,
   here: readonly HereSession[] = [],
+  now?: number,
+  quietMs: number = ELSEWHERE_QUIET_MS,
 ): { line: string; shorter: string[] } | null {
   const named = dirs
     .filter((d) => d.firstAt !== null || d.memories > 0 || d.chapter !== null)
@@ -873,18 +888,30 @@ export function todayElsewhereLines(
   // before) says its start with the day. `lastAt` is today's, by the caller.
   const start = (firstAt: number, lastAt: number | null): string =>
     lastAt !== null && localDate(firstAt, zone) !== localDate(lastAt, zone) ? localStamp(firstAt, zone) : clock(firstAt);
+  // OPEN BUT QUIET (2026-10-25, `ELSEWHERE_QUIET_MS`): no turn there for
+  // that long, the line says since when rather than "(live)". Without `now`
+  // (a caller with no clock) every live one reads "(live)", as before.
+  // Quiet from the minute it opened: "quiet since then", not the time twice.
+  const quiet = (lastAt: number | null | undefined, from: number | null): string => {
+    if (now === undefined || lastAt === null || lastAt === undefined || now - lastAt < quietMs) return "";
+    // A turn before today's midnight says its day (review of #623): a session
+    // open past midnight is live for four hours after its last turn.
+    const at = localDate(lastAt, zone) === localDate(now, zone) ? clock(lastAt) : localStamp(lastAt, zone);
+    return from !== null && clock(from) === clock(lastAt) && localDate(from, zone) === localDate(lastAt, zone) ? ", quiet since then" : `, quiet since ${at}`;
+  };
   const one = (d: TodayElsewhere, chapters: boolean, titles: number): string => {
+    const hush = d.live ? quiet(d.lastAt, d.firstAt) : "";
     const when =
       d.firstAt === null
         ? ""
         : d.live
-          ? ` open since ${start(d.firstAt, d.lastAt)} (live)`
+          ? ` open since ${start(d.firstAt, d.lastAt)}${hush.length > 0 ? hush : " (live)"}`
           : ` ${start(d.firstAt, d.lastAt)}–${clock(d.lastAt ?? d.firstAt)}`;
     const chapter = !chapters || d.chapter === null ? "" : ` — ${chapterWords(d.chapter)}`;
     return `${placeWords(d.scope)}${when}${chapter}${countWords(d.memories, d.titles, titles)}`;
   };
   const oneHere = (h: HereSession, titles: number): string =>
-    `${sessionWords(h.session, h.model)}${h.scope === undefined ? "" : ` in ${placeWords(h.scope)}`}${h.startedAt === null ? "" : ` since ${start(h.startedAt, h.lastAt ?? null)}`}${titleWords(h.titles, titles)}`;
+    `${sessionWords(h.session, h.model)}${h.scope === undefined ? "" : ` in ${placeWords(h.scope)}`}${h.startedAt === null ? "" : ` since ${start(h.startedAt, h.lastAt ?? null)}${quiet(h.lastAt, h.startedAt)}`}${titleWords(h.titles, titles)}`;
   return elsewhereForms("Today, elsewhere:", named, one, { sessions: hereOrder(here), one: oneHere, head: HERE_ALSO_OPEN });
 }
 

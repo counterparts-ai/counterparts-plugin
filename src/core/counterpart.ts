@@ -41,7 +41,7 @@ import { Associate, appendPendingCues, appendPendingDeltas, claimPending, releas
 import type { CoactivateResult, CueDelta, CueFlushReport, Credited, FlushReport, PairDelta, PendingClaim } from "./associate/index.js";
 import { READ_TODAY_AT_START, horizonFor } from "./briefing.js";
 import { episodeGate } from "./bridge.js";
-import { Dreams, Reflections } from "./dream/index.js";
+import { Dreams, NIGHT_LINE_READ, Reflections, nightLine } from "./dream/index.js";
 import { meetingDay } from "./onboarding.js";
 import type { VectorSource } from "./bridge.js";
 import type { MintResult } from "./mint.js";
@@ -192,15 +192,16 @@ import type {
   PageWriterRun,
   PageWriterStatus,
   SelfPage,
+  StillOpenItem,
   WakeDelivery,
   WakeResult,
   WakeTrigger,
   WriterInput,
 } from "./self/index.js";
 import { acceptsReflectedFeeling, keepCore, ownerNames, retireCore } from "./sleep/index.js";
-import { DAYS_END_JOURNAL_SHARE, WRITER_JOURNAL_CHARS, WRITER_JOURNAL_SHARE, daySummaries, journalBlockChars } from "./self/writer.js";
+import { DAYS_END_JOURNAL_SHARE, MERGE_DEPTH, WRITER_JOURNAL_CHARS, WRITER_JOURNAL_SHARE, daySummaries, journalBlockChars } from "./self/writer.js";
 import { chapterSummaries } from "./self/summaries.js";
-import { withTodaySoFar } from "./self/briefing.js";
+import { withNightLine, withTodaySoFar } from "./self/briefing.js";
 import type { WriterJournal } from "./self/writer.js";
 import { dayJournal } from "./dream/slices.js";
 import { DREAM_TUNABLES } from "./dream/tunables.js";
@@ -409,6 +410,21 @@ function linksDespite(r: CreditResult): boolean {
   const why = r.outcome?.reason;
   return why === "birth-day" || why === "own-write" || why === "stale-day" || why === "already-credited-today";
 }
+
+/**
+ * A ROW THE NIGHTLY RUN WROTE — a dream's merge or gist, a reflection's entry
+ * — told by origin (`dream:` / `reflection:`, which catches a merge, whose
+ * `source` is its best source's) or by source, as the store's `NIGHTLY_SQL`
+ * tells it. Filed under the folder the night ran in, whatever folders its
+ * words came from.
+ */
+function isNightRow(row: { source: string | null; origin_ref: string | null }): boolean {
+  const ref = row.origin_ref ?? "";
+  return row.source === "dreamed" || row.source === "reflection" || ref.startsWith("dream:") || ref.startsWith("reflection:");
+}
+
+/** How deep `Counterpart#nightOriginFolders` follows night rows made of night rows: as deep as day's end follows a merge to its day. */
+const NIGHT_ORIGINS_DEPTH = MERGE_DEPTH;
 
 export class Counterpart {
   readonly store: Store;
@@ -814,7 +830,21 @@ export class Counterpart {
       this.yesterdayLeftOut = null;
       this.yesterdayKeepsNewest = false;
       let assembled = delivery === undefined ? null : this.assembleWake(delivery, here);
-      let result = delivery === undefined ? this.self.wake() : this.self.wake(delivery, assembled?.text);
+      // THE PUBLISHED BUNDLE DELIVERED AS IT IS (P1, 2026-10-25) takes the
+      // same "Might be relevant" read as the assembly: a chapter's summary
+      // from a folder this reader may not be shown is taken out. A delivery
+      // that names no folder fails closed (`hintKeptOut` with nothing known).
+      const keptOut = (id: string): boolean => this.hintKeptOut(id, here ?? {});
+      // And its Yesterday line (review of P1; self INTERFACE-GAPS §14): the
+      // published one names every folder's chapters, for no reader; this
+      // reader's gated line takes its place (`yesterdayFor` with a reader, the
+      // assembly's gate), and a start with no date gets none. Asked by
+      // `Self#wake` only when it delivers the published bundle.
+      const dayForms = (): string[] => {
+        const y = this.yesterdayFor(delivery?.date, { here });
+        return y.yesterday === undefined ? [] : [y.yesterday, ...(y.yesterdayShorter ?? [])];
+      };
+      let result = delivery === undefined ? this.self.wake() : this.self.wake(delivery, assembled?.text, keptOut, dayForms);
       this.deliveredThreads = assembled === null ? null : new Set(assembled.kept.threads);
       // AT LEAST ONCE (review of #536): the Yesterday line left its newest
       // episode to "Last here", but when the splice will carry no "Last here"
@@ -924,6 +954,9 @@ export class Counterpart {
           : { horizonMore: asked.more, horizonMoreItems: asked.moreItems.map((i) => (nearDue(i.due, at) ? { ...i, near: true } : i)) }),
         ...this.dayLinesFor(at, here),
         ...this.elsewhereFor(at, here),
+        // Whoever reads: a delivery that names no folder keeps out every
+        // other folder's summary (P1: fail closed where the reader is unknown).
+        hintKeptOut: (id: string) => this.hintKeptOut(id, here ?? {}),
       });
       if (out === null) return null;
       this.emit("counterpart.wake.assembled", undefined, {
@@ -1019,7 +1052,7 @@ export class Counterpart {
       }
       // This folder's other open sessions (2026-10-20), the same title gates.
       const mine = this.hereSessions(gate, here?.sessions?.() ?? [], since, until, { skip: new Set(this.store.openThreadIds()), startedSince: false });
-      const lines = todayElsewhereLines([...dirs.values()] as TodayElsewhere[], zone, mine);
+      const lines = todayElsewhereLines([...dirs.values()] as TodayElsewhere[], zone, mine, this.nowFn());
       if (lines === null) return {};
       return lines.shorter.length === 0 ? { elsewhere: lines.line } : { elsewhere: lines.line, elsewhereShorter: lines.shorter };
     } catch {
@@ -1489,6 +1522,23 @@ export class Counterpart {
     });
   }
 
+  /**
+   * EVERYTHING "STILL OPEN" CARRIES, today (2026-10-25, the O1 builder;
+   * `Self#stillOpen`): what the `still open` recall handle lists — the open
+   * threads the carry rule keeps (`self/identity.ts#openCarry`) and the core
+   * memories being reconsidered, in the wake's order; and how many open
+   * threads the carry no longer keeps (`notCarried`), counted, not listed.
+   * Reads only: nothing it lists is touched, so listing cannot keep a thread
+   * carried. Empty on a store that cannot answer; never throws.
+   */
+  stillOpen(): { items: StillOpenItem[]; notCarried: number } {
+    try {
+      return this.self.stillOpen(this.store.livedDay());
+    } catch {
+      return { items: [], notCarried: 0 };
+    }
+  }
+
   /** The wake's "Last said here" line for `here`, or null. Never throws. Any
    *  session in the folder gets it — except under observer, whose wake must
    *  not point at a handle that stands down (review of #392). */
@@ -1862,11 +1912,59 @@ export class Counterpart {
    * (`todaySoFarFor`), as one piece of furniture with one ladder of forms
    * (`self/briefing.ts#withTodaySoFar`). With no "Today so far" line this is
    * the Yesterday line exactly. Never throws.
+   *
+   * "LAST NIGHT:" BETWEEN THEM (2026-10-25, the wake-polish builder;
+   * `self.NIGHT_LINE`, read at use): what the night did, or that it was
+   * quiet, or that none ran (`nightLineFor`), in the same furniture and the
+   * last of it to give way (`self/briefing.ts#withNightLine`).
    */
   private dayLinesFor(at: string, here: WakeHere | undefined): { yesterday?: string; yesterdayShorter?: string[]; todaySoFarSummaries?: string[] } {
     const y = this.yesterdayFor(at, { here });
     const today = this.todaySoFarFor(at, here, y.yesterday ?? "");
-    return withTodaySoFar(y, today.forms, today.summaries);
+    return withNightLine(withTodaySoFar(y, today.forms, today.summaries), SELF_TUNABLES.NIGHT_LINE ? this.nightLineFor(at) : null);
+  }
+
+  /**
+   * THE "LAST NIGHT:" LINE for a session starting on `at` (2026-10-25,
+   * `dream/night-line.ts#nightLine`): what `counterparts night` reads — the
+   * newest dream and its change counts, the newest reflection, the latest
+   * headless run's row and the dreaming setting. Reads only, four indexed
+   * reads; no journal, no model. Null when there is nothing to say or
+   * anything throws. The newest `NIGHT_LINE_READ` dreams and reflections,
+   * not one (L1, 2026-10-25): before the day's run the line names the latest
+   * FINISHED night, which an abandoned dream may sit in front of.
+   */
+  private nightLineFor(at: string): string | null {
+    try {
+      // Each dream's changes counted only when the line names it (review of
+      // #626): `Dreams#counts` reads every change row, and a session start
+      // would otherwise read them for all `NIGHT_LINE_READ` dreams.
+      const counter = this.dreams;
+      const dreams = this.store.dreams({ limit: NIGHT_LINE_READ }).map((d) => {
+        let counts: Record<string, number> | null = null;
+        return {
+          id: d.id,
+          date: d.date,
+          state: d.state,
+          get counts(): Record<string, number> {
+            return (counts ??= counter.counts(d.id));
+          },
+        };
+      });
+      const reflections = this.reflections.list(NIGHT_LINE_READ).map((r) => ({ id: r.id, date: r.date, state: r.state, entry_id: r.entry_id, page_version: r.page_version }));
+      return nightLine({
+        today: at,
+        now: this.nowFn(),
+        dream: dreams[0] ?? null,
+        reflection: reflections[0] ?? null,
+        dreams,
+        reflections,
+        run: this.dreams.nightRun(),
+        setting: this.dreams.setting(),
+      });
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1940,17 +2038,25 @@ export class Counterpart {
    * `pageWriterInput`; its recall reaches the store too) — so what it cites
    * does not bound what its words drew on. It is shown only when ALL of:
    *
-   *   - every memory it cites is nameable in this wake (`nameableHere`): this
-   *     folder's own, or marked about me, us or the owner from a folder whose
-   *     scope setting is on. A cite that no longer reads (removed, forgotten)
-   *     or is not a memory fails it;
+   *   - every memory it cites comes from this folder or one whose scope
+   *     setting is on, and records its folder (its chapter's, for a chapter's
+   *     summary: `memoryFolder`) — whatever its mark, since Y2 (2026-10-25,
+   *     Mike's go, lightly held): the summary may mention other folders' work,
+   *     as "Today, elsewhere" names their work by title. Until then only a
+   *     cite marked about me, us or the owner crossed (`nameableHere`). A cite
+   *     that no longer reads (removed, forgotten), is denied, or is not a
+   *     memory fails it. A cite the night wrote (a dream's merge or gist, a
+   *     reflection's entry) is filed under the folder the night ran in, so it
+   *     is read by its originals' folders (`nightOriginFolders`), and fails
+   *     when any original is not open or cannot be told (review of Y2);
    *   - every chapter written that day (`chaptersWrittenOn`, unbounded by
    *     birth day, archived and merged episodes included) comes from this
    *     folder or one whose scope setting is on, and records its folder;
    *   - every memory of that day — lived that day as day's end picks them
    *     (a second-hand write-up the next morning included), or written inside
    *     it (backdated included) — archived and merged rows included, the
-   *     night's own merges and reflections left to their originals, comes from
+   *     night's own merges, gists and reflections read by their originals'
+   *     folders as a cite is, comes from
    *     this folder or one whose scope setting is on, and records its folder.
    *
    * The store is read as day's end SAW it, not as the night left it: the
@@ -1959,11 +2065,14 @@ export class Counterpart {
    * whatever day's end's recall reached on other days — a summary's cites are
    * the only bound on that.
    *
-   * No way to ask the scope setting (`exportsFrom` absent) and nothing from
-   * another folder passes. Stricter than the brief's floor (cites, plus
-   * chapters only when nothing is cited) because the prose can carry a private
-   * folder's day without citing it. Never throws: a store that will not
-   * answer shows no summary.
+   * One rule for all three: a folder the owner has turned off, paused or set
+   * to observe (`exportsFrom` false) holds the summary back wherever it shows
+   * in that day, and the wake falls back to the chapter list. No way to ask
+   * the scope setting (`exportsFrom` absent) and nothing from another folder
+   * passes. Stricter than the brief's floor (cites, plus chapters only when
+   * nothing is cited) because the prose can carry a private folder's day
+   * without citing it. Never throws: a store that will not answer shows no
+   * summary.
    */
   private daySummaryShown(date: string, here: WakeHere | undefined): string | null {
     try {
@@ -1988,7 +2097,8 @@ export class Counterpart {
       // THE STORE AS DAY'S END SAW IT, NOT AS THE NIGHT LEFT IT (review of
       // #614): archived and merged rows count too — the night's dream archives
       // and merges after day's end has read them — and a chapter or memory
-      // with no folder recorded fails, as it does in `nameableHere`.
+      // with no folder recorded fails, as it does in `nameableHere`. A memory
+      // written from a chapter reads its chapter's folder (`memoryFolder`).
       for (const id of this.store.list({ type: "episode" })) {
         const row = this.store.row(id);
         if (row !== undefined && chaptersWrittenOn(row, date, zone) > 0 && !open(row.origin_scope)) return null;
@@ -1996,29 +2106,143 @@ export class Counterpart {
       // The day's memories as day's end picks them (`writer.ts#dayMemories`:
       // the day LIVED, so a second-hand write-up the next morning is that
       // day's), and every one written inside the day. The night's own rows
-      // (a merge, a reflection) are filed under the dreaming folder; the
-      // originals they came from are read here with their own.
+      // (a merge, a gist, a reflection's entry) are filed under the folder
+      // the night ran in, so they are read by their originals' folders
+      // (`nightOriginFolders`, review of Y2): a night that ran early in the
+      // day may have merged an older memory of a folder since set off, and
+      // day's end reads that merge as the day's (`writer.ts#isOfDay`).
+      const denied = new Set(this.store.deniedIds());
+      const allOpen = (folders: readonly (string | null)[] | null): boolean => folders !== null && folders.every((f) => open(f));
       for (const id of this.store.list({ type: "memory", learnedOnFrom: date })) {
         const row = this.store.row(id);
         if (row === undefined) continue;
-        const ref = row.origin_ref ?? "";
-        if (row.source === "dreamed" || row.source === "reflection" || ref.startsWith("dream:") || ref.startsWith("reflection:")) continue;
         const inDay = row.created_at !== null && row.created_at >= from && row.created_at < to;
-        if ((inDay || livedOn(row) === date) && !open(row.origin_scope)) return null;
+        if (!inDay && livedOn(row) !== date) continue;
+        if (!allOpen(isNightRow(row) ? this.nightOriginFolders(row, denied) : [this.memoryFolder(row)])) return null;
       }
       // Backdated rows written inside the day (learned on an earlier date).
       const before = new Map(this.store.memoryCountsByScopeSince(from).map((r) => [r.scope, r.count] as const));
       for (const r of this.store.memoryCountsByScopeSince(to)) before.set(r.scope, (before.get(r.scope) ?? 0) - r.count);
       for (const [scope, n] of before) if (n > 0 && !open(scope)) return null;
-      const denied = new Set(this.store.deniedIds());
+      // THE CITES, BY FOLDER ALONE (2026-10-25, Y2): the same `open` as the
+      // day's chapters and memories above — whatever the cite's mark. Until
+      // Y2 only a cite marked about me, us or the owner crossed folders
+      // (`nameableHere`), so day's end, which tells the whole day, almost
+      // never showed for someone who works in several (10-24: one ~/motelier
+      // `work` cite held it in ~/counterparts).
+      // A cite the NIGHT wrote (a dream's merge or gist, a reflection's
+      // entry) is filed under the folder the night ran in, not where its
+      // words came from: it is read by its originals' folders instead
+      // (`nightOriginFolders`, review of Y2), and fails when any of them is
+      // not open or cannot be told.
       for (const id of told.cites) {
         if (denied.has(id)) return null;
         const row = this.store.row(id);
         if (row === undefined || row.type !== "memory") return null;
-        const aboutMe = row.about !== null && row.about !== undefined && (CORE_ABOUT_MARKS as readonly string[]).includes(row.about);
-        if (!this.nameableHere(row.origin_scope, aboutMe, here)) return null;
+        if (!allOpen(isNightRow(row) ? this.nightOriginFolders(row, denied) : [this.memoryFolder(row)])) return null;
       }
       return told.text;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * IS THIS "NEARBY" ITEM KEPT OUT OF A WAKE FOR `here`? (review of Y2,
+   * 2026-10-25; the brief's privacy lines.) The published bundle chooses its
+   * hints store-wide, for no reader, so a chapter's summary — the chapter's
+   * own account of the work — from a folder the owner set off, paused or to
+   * observe was listed in every other folder's wake. Kept out: a chapter's
+   * summary (`source` episode, written from a chapter) whose folder
+   * (`memoryFolder`) is another folder whose scope setting is not on, or any
+   * other folder when the setting cannot be read (`exportsFrom` absent) — and,
+   * for a reader that names no folder (`here.scope` absent), every summary
+   * that recorded one (P1: fail closed). Read on both roads to a wake's hints:
+   * the assembly (`Self#assemble`) and the published bundle delivered as it is
+   * (`Self#wake`, `briefing-delivery.ts#hintsForReader`). One
+   * whose chapter recorded no folder (from before folders) is kept, as
+   * before: there is no folder to ask about. Other hints are not this read's
+   * (self INTERFACE-GAPS §14). A store that will not answer keeps it out.
+   */
+  private hintKeptOut(id: string, here: WakeHere): boolean {
+    try {
+      const row = this.store.row(id);
+      if (row === undefined || row.type !== "memory" || row.source !== "episode" || !(row.origin_ref ?? "").startsWith("epi_")) return false;
+      const folder = this.memoryFolder(row);
+      if (folder === null) return false;
+      const norm = (s: string): string => s.trim().replace(/\/+$/, "");
+      const own = norm(here.scope ?? "");
+      if (own.length > 0 && norm(folder) === own) return false;
+      return here.exportsFrom === undefined || here.exportsFrom(folder) !== true;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * THE FOLDERS A NIGHT ROW'S WORDS CAME FROM, for a privacy read (review of
+   * Y2, 2026-10-25): a dream's merge (`meta.mergedFrom`), a dream's gist or
+   * fold (`meta.sources`), a reflection's entry (`meta.cites`) — each is
+   * filed under the folder the night ran in, so its own `origin_scope` says
+   * nothing about whose memories it rewords. Its originals are followed, a
+   * night row among them through its own, `NIGHT_ORIGINS_DEPTH` deep, as
+   * `self/writer.ts#isOfDay` follows a merge to its day; an archived original
+   * reads as any row does. Null — the caller fails the cite — when it names
+   * no originals, when one is gone, denied, or neither a memory nor a
+   * chapter, or past the depth; an original with no folder recorded comes
+   * back null in the list, and the caller's `open` fails it. Never throws.
+   */
+  private nightOriginFolders(row: { meta: string }, denied: ReadonlySet<string>, depth = 0): (string | null)[] | null {
+    if (depth >= NIGHT_ORIGINS_DEPTH) return null;
+    try {
+      const meta = JSON.parse(row.meta) as Record<string, unknown>;
+      const ids = new Set<string>();
+      for (const key of ["mergedFrom", "sources", "cites"]) {
+        const v = meta[key];
+        if (Array.isArray(v)) for (const x of v) if (typeof x === "string" && x.length > 0) ids.add(x);
+      }
+      if (ids.size === 0) return null;
+      const out: (string | null)[] = [];
+      for (const id of ids) {
+        if (denied.has(id)) return null;
+        const orig = this.store.row(id);
+        if (orig === undefined) return null;
+        if (orig.type === "episode") {
+          out.push(orig.origin_scope !== null && orig.origin_scope.trim().length > 0 ? orig.origin_scope : null);
+          continue;
+        }
+        if (orig.type !== "memory") return null;
+        if (!isNightRow(orig)) {
+          out.push(this.memoryFolder(orig));
+          continue;
+        }
+        const deeper = this.nightOriginFolders(orig, denied, depth + 1);
+        if (deeper === null) return null;
+        out.push(...deeper);
+      }
+      return out;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * THE FOLDER A MEMORY WAS WRITTEN IN, for a privacy read (2026-10-25, Y1):
+   * its own `origin_scope`; else, for a memory written from a chapter (its
+   * `origin_ref` an episode's id), that chapter's. Chapter-written memories
+   * were born with no folder until Y1 (`self/index.ts#putSummary`), while
+   * the chapter itself always recorded one — so this reads the rows already
+   * written without a migration. Null when neither says: the caller's gate
+   * fails it, as before. Never throws.
+   */
+  private memoryFolder(row: { type: string; origin_scope: string | null; origin_ref: string | null }): string | null {
+    if (row.origin_scope !== null && row.origin_scope.trim().length > 0) return row.origin_scope;
+    const ref = row.origin_ref ?? "";
+    if (row.type !== "memory" || !ref.startsWith("epi_")) return null;
+    try {
+      const chapter = this.store.row(ref);
+      if (chapter === undefined || chapter.type !== "episode") return null;
+      return chapter.origin_scope !== null && chapter.origin_scope.trim().length > 0 ? chapter.origin_scope : null;
     } catch {
       return null;
     }
@@ -2772,14 +2996,24 @@ export class Counterpart {
    * `no-text`, `embed-failed`) — embeds its own text and ranks it in line (`session.ts#inLineSemantic`), recorded as
    * `in-line`, or `in-line-skipped` when box 3 is past the count guard. With no
    * vector to be had (no embedder, an empty box 3) the lag's word stands.
+   *
+   * THIS TURN'S MEANING, EVERY TURN (2026-10-25, `recall/tunables.ts#SEMANTIC_THIS_TURN`,
+   * on; an experiment, check ~2026-11-01): a FRESH lag row no longer wins either.
+   * The turn embeds its own text in line, so the meaning lookup is about what was
+   * just asked, not the exchange before it. Past the count guard a fresh lag row
+   * is used as before (`lagged`, with its `semanticFromTurn`), so a huge store
+   * loses nothing; with no fresh row there, `in-line-skipped`. Off: the paragraph
+   * above, exactly. The worker still writes its row after every turn; with the
+   * switch on, this reads it only as that fallback.
    */
   private withSemantic(turn: RecallTurn): RecallTurn {
     if (turn.vector !== undefined || turn.semanticHits !== undefined) return turn;
     const lag = loadSessionSemantic(this.store, turn.sessionId);
-    if (lag.source !== "lagged") {
+    if (lag.source !== "lagged" || this.recall.tunables.SEMANTIC_THIS_TURN) {
       const own = inLineSemantic(this.store, turn.text, this.recall.tunables.SEMANTIC_INLINE_MAX_VECTORS);
       if (own !== null && "vector" in own) return { ...turn, vector: own.vector, semanticSource: "in-line" };
-      if (own !== null) return { ...turn, semanticSource: "in-line-skipped" };
+      // Skipped with a fresh lag row ready (the switch on, a store past the guard): the lag stands.
+      if (own !== null && lag.source !== "lagged") return { ...turn, semanticSource: "in-line-skipped" };
     }
     return {
       ...turn,

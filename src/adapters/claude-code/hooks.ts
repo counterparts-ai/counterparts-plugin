@@ -1058,6 +1058,8 @@ export class ClaudeCodeAdapter extends Lifecycle {
         // Said outright this turn, so not ALSO handed over as a quiet cue.
         ...(waiting.length === 0 ? {} : { withhold: new Set(waiting.map((r) => r.memoryId)) }),
         ...(byHost ? { noCues: true } : {}),
+        // Who started the turn, for the row only (N1): the reading above.
+        startedBy: !isInteractive(input) ? "unattended" : byHost ? "host" : "person",
       });
       const decision = result.decision;
       // "SINCE YOU STARTED" (2026-10-11): what changed in other directories

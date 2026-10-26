@@ -104,13 +104,15 @@ export {
   WAKE_WHOLE_SENTENCE,
   applyPreface,
   arrivingTense,
+  dayLineForReader,
   groupDigits,
+  hintsForReader,
   prefaceLine,
   readSentinel,
   spliceBeforeSentinel,
   withHeadFields,
 } from "./briefing-delivery.js";
-export type { PrefaceFacts, PrefacedBundle, SentinelReading } from "./briefing-delivery.js";
+export type { HintsForReader, PrefaceFacts, PrefacedBundle, SentinelReading } from "./briefing-delivery.js";
 
 /**
  * Composed order — behavioral-spec §1's, minus the two riders the Rulings drop
@@ -317,6 +319,79 @@ export function withTodaySoFar(
   };
 }
 
+/** The night line's head (`dream/night-line.ts#nightLine` writes it; the room reads it). */
+export const NIGHT_LINE_HEAD = "Last night:";
+
+/**
+ * The night line's other head (2026-10-25, the L1 builder): before the day's
+ * run, the line describes the latest finished night, by its date —
+ * `The night of Oct 23: dream drm_… made …` (`dream/night-line.ts#nightLine`).
+ */
+export const NIGHT_OF_HEAD = "The night of ";
+
+/** True for the night line, under either head: what the room takes out (`briefing-room.ts#withoutNightLine`). */
+export function isNightLine(line: string): boolean {
+  return line.startsWith(NIGHT_LINE_HEAD) || line.startsWith(NIGHT_OF_HEAD);
+}
+
+/**
+ * "LAST NIGHT:" IN THE SAME PIECE OF FURNITURE (2026-10-25, the wake-polish
+ * builder; `self.NIGHT_LINE`, lightly held). The night line rides in every
+ * form of the Yesterday line's ladder (`withTodaySoFar`'s), between the
+ * Yesterday line and "Today so far here" — the order things happened in —
+ * and the ladder gains one last rung, the night line alone: the Yesterday
+ * line and "Today so far" step down as they always have, and the night line
+ * is the last of the furniture to give way. A form that carried summaries
+ * (`todaySoFarSummaries`) still does, with the line in it. Without a night
+ * line the furniture comes back untouched, byte for byte. Pure.
+ *
+ * Unlike the Yesterday line's pointers, the night line is not a floor: a
+ * rescue for a dated item, "Still open"'s first item or anything ranked
+ * above them takes it out once every room below that item is spent
+ * (`briefing-room.ts#takeRoom`, review of #623) — before, a wake with no
+ * Yesterday line had the night line as its only form, and a tight one
+ * folded a thing due today into "More than this wake lists" to keep it.
+ */
+export function withNightLine(
+  day: { readonly yesterday?: string; readonly yesterdayShorter?: readonly string[]; readonly todaySoFarSummaries?: readonly string[] },
+  night: string | null,
+): { yesterday?: string; yesterdayShorter?: string[]; todaySoFarSummaries?: string[] } {
+  const copy = (): { yesterday?: string; yesterdayShorter?: string[]; todaySoFarSummaries?: string[] } => ({
+    ...(day.yesterday === undefined ? {} : { yesterday: day.yesterday }),
+    ...(day.yesterdayShorter === undefined ? {} : { yesterdayShorter: [...day.yesterdayShorter] }),
+    ...(day.todaySoFarSummaries === undefined ? {} : { todaySoFarSummaries: [...day.todaySoFarSummaries] }),
+  });
+  if (night === null || night.trim().length === 0) return copy();
+  const n = flatten(night);
+  const y = day.yesterday;
+  if (y === undefined || y.length === 0) return { yesterday: n };
+  const forms = [y, ...(day.yesterdayShorter ?? []).filter((s) => s.length > 0 && byteLength(s) < byteLength(y))];
+  // After the Yesterday line when the form opens with it, else first.
+  const into = (f: string): string => {
+    const lines = f.split("\n");
+    const at = lines[0]?.startsWith("Yesterday") === true ? 1 : 0;
+    return [...lines.slice(0, at), n, ...lines.slice(at)].join("\n");
+  };
+  const summed = new Set(day.todaySoFarSummaries ?? []);
+  const out: string[] = [];
+  const said: string[] = [];
+  let last = Number.POSITIVE_INFINITY;
+  for (const f of [...forms.map(into), n]) {
+    const size = byteLength(f);
+    if (size >= last) continue;
+    out.push(f);
+    last = size;
+  }
+  for (const f of forms) if (summed.has(f)) said.push(into(f));
+  const [widest, ...shorter] = out;
+  if (widest === undefined) return copy();
+  return {
+    yesterday: widest,
+    ...(shorter.length === 0 ? {} : { yesterdayShorter: shorter }),
+    ...(said.length === 0 ? {} : { todaySoFarSummaries: said.filter((s) => out.includes(s)) }),
+  };
+}
+
 /** Where each lane the trim loop pops sits in `ROOM_ORDER`: Arriving's lines
  *  past its head at `arriving`, "Who I am" with the page. */
 const TRIM_ROOM: Readonly<Record<LaneName, RoomLane>> = {
@@ -412,7 +487,7 @@ export const MORE_NOUN: Readonly<Record<LaneName, string>> = {
 
 /** The phrases before the plain-words rename, read back (`countedLanes`) off
  *  a stored bundle as `LEGACY_FRAMING` is; nothing composes them any more. */
-const LEGACY_MORE_NOUN: Readonly<Partial<Record<LaneName, string>>> = {
+export const LEGACY_MORE_NOUN: Readonly<Partial<Record<LaneName, string>>> = {
   hints: "nearby",
   horizon: "arriving",
 };
@@ -432,25 +507,55 @@ function overdueAmong(lane: LaneName, ids: readonly string[], overdue: readonly 
 export const OVERDUE_WORD = "overdue";
 
 /**
- * WHAT "STILL OPEN"'S COUNT SAYS OF ITS OLD ONES (2026-10-18, the wake-polish
- * builder, lightly held): `(56 more still open, 19 untouched for 2+ weeks;
- * recall ids …)` — the threads untouched for `STILL_OPEN_STALE_DAYS` (14)
- * lived days, which rank last (`identity.ts#byThreadLive`). Fourteen lived
- * days are at least two weeks of the calendar: a lived day is a day the
- * memory was used.
+ * WHAT "STILL OPEN"'S COUNT SAID OF ITS OLD ONES, 2026-10-18 to 2026-10-25:
+ * `(56 more still open, 19 untouched for 2+ weeks; recall ids …)`. Nothing
+ * composes it now (`OPEN_TAIL_WORDS`); `countedLanes` still reads it off a
+ * bundle stored before.
  */
 export const STALE_OPEN_WORDS = "untouched for 2+ weeks";
 
-/** `(3 more still open; recall ids: mem_…, mem_…, mem_…)`, `(56 more still
- *  open, 19 untouched for 2+ weeks; recall ids: …)`, and for "Coming up"
+/** The recall handle that lists what "Still open" carries (`Counterpart#stillOpen`, 2026-10-25). Exact, trimmed, case-folded, like `last exchange`. */
+export const STILL_OPEN_HANDLE = "still open";
+
+/**
+ * "STILL OPEN"'S TAIL, CALM AND WITHOUT IDS (2026-10-25, the wake-polish
+ * builder from random-5b's 10-25 wake; Mike's go, lightly held):
+ * `(96 more open, kept quietly; recall finds one by what it's about)`.
+ * The line it replaces — `(96 more still open, 15 untouched for 2+ weeks;
+ * recall ids (the first 5): mem_…×5)` — read as guilt, and five bare ids said
+ * nothing of what they were. Its "untouched" count was a third rule beside
+ * the carry (`identity.ts#openCarry`: 21 lived days, a glimpse is not a
+ * touch) and the order (`STILL_OPEN_STALE_DAYS`: 14, born or used), so it is
+ * dropped rather than realigned; the order still puts the weeks-old last.
+ *
+ * WHY "BY WHAT IT'S ABOUT", NOT "ASK WHAT'S STILL OPEN": measured on the
+ * owner's 10-25 snapshot, the facts questions "what's still open", "open
+ * threads" and "what is still unresolved" matched none of its 156 open
+ * threads — they share no content word with them — and no recall door lists
+ * every open thread. A facts question about the thing itself reaches any
+ * memory sharing a content word with it, open or not. Revert: the generic
+ * form below for `threads` too.
+ *
+ * THE TAIL NAMES THE DOOR THAT LISTS THEM (2026-10-25, the O1 builder;
+ * roadmap 10-25, lightly held): `(96 more open, kept quietly; recall "still
+ * open" lists them)` — the `still open` handle (`STILL_OPEN_HANDLE`) lists
+ * every item "Still open" carries, in its order, so the count points at its
+ * list the way "Last said here" points at `last exchange`. Six bytes shorter
+ * than the words it replaces (`OPEN_TAIL_WORDS_BEFORE`), which `countedLanes`
+ * still reads off a bundle stored with them. Revert: those words here.
+ */
+export const OPEN_TAIL_WORDS = `kept quietly; recall "${STILL_OPEN_HANDLE}" lists them`;
+
+/** "Still open"'s tail words from #623 (2026-10-25, morning), read back off a bundle stored with them. */
+export const OPEN_TAIL_WORDS_BEFORE = "kept quietly; recall finds one by what it's about";
+
+/** `(3 more might be relevant; recall ids: mem_…, mem_…, mem_…)`; for "Still
+ *  open" `(56 more open, kept quietly; …)` (`OPEN_TAIL_WORDS`); for "Coming up"
  *  `(2 overdue, 4 more coming up; recall ids: …)` or `(2 overdue; recall ids: …)`. */
-export function moreLine(lane: LaneName, ids: readonly string[], overdue?: readonly string[], stale?: readonly string[]): string {
+export function moreLine(lane: LaneName, ids: readonly string[], overdue?: readonly string[]): string {
+  if (lane === "threads") return `(${String(ids.length)} more open, ${OPEN_TAIL_WORDS})`;
   const late = overdueAmong(lane, ids, overdue);
-  if (late === 0) {
-    const old = lane !== "threads" || stale === undefined || stale.length === 0 ? 0 : ids.filter((id) => stale.includes(id)).length;
-    const said = old === 0 ? "" : `, ${String(old)} ${STALE_OPEN_WORDS}`;
-    return `(${String(ids.length)} more ${MORE_NOUN[lane]}${said}; ${recallIds(ids)})`;
-  }
+  if (late === 0) return `(${String(ids.length)} more ${MORE_NOUN[lane]}; ${recallIds(ids)})`;
   const rest = ids.length - late;
   return `(${String(late)} ${OVERDUE_WORD}${rest === 0 ? "" : `, ${String(rest)} more ${MORE_NOUN[lane]}`}; ${recallIds(ids)})`;
 }
@@ -509,7 +614,15 @@ export function countedLanes(text: string): Partial<Record<LaneName, number>> {
       out[collapsed] = Number(/^\D*(\d+) — /.exec(line.slice(heading.length))?.[1] ?? 0);
       continue;
     }
-    // "Still open"'s old ones ride inside the count (2026-10-18): `(56 more still open, 19 untouched for 2+ weeks; …)`.
+    // "Still open"'s calm tail (2026-10-25): `(96 more open, kept quietly; …)`,
+    // in today's words or #623's (`OPEN_TAIL_WORDS_BEFORE`).
+    const tails = [OPEN_TAIL_WORDS, OPEN_TAIL_WORDS_BEFORE].map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const calm = new RegExp(`^\\((\\d+) more open, (?:${tails})\\)`).exec(line);
+    if (calm !== null) {
+      out.threads = Number(calm[1]);
+      continue;
+    }
+    // "Still open"'s old ones rode inside the count (2026-10-18 to 10-25): `(56 more still open, 19 untouched for 2+ weeks; …)`.
     const more = new RegExp(`^\\((\\d+) more (.+?)(?:, \\d+ ${STALE_OPEN_WORDS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})?; recall ids`).exec(line);
     const lane = more === null ? undefined : byNoun.get(more[2] ?? "");
     if (more !== null && lane !== undefined) {
@@ -571,7 +684,7 @@ export function collapsedLine(lane: LaneName, ids: readonly string[], counted?: 
 
 /** What "Coming up" counts rather than lists, as a composition's request
  *  carries it (`BriefingRequest.horizonLater`, `.horizonOverdue`). */
-export type HorizonCounted = Pick<BriefingRequest, "horizonLater" | "horizonOverdue" | "threadsStale">;
+export type HorizonCounted = Pick<BriefingRequest, "horizonLater" | "horizonOverdue">;
 
 /** The lane a collapsed line (`collapsedLine`) speaks for, or null for any other line. */
 export function collapsedLane(line: string): LaneName | null {
@@ -826,10 +939,6 @@ export interface BriefingRequest {
   /** Those of `horizonLater` past their date (review of #511): the line
    *  counts them as overdue. Absent: none said so. */
   readonly horizonOverdue?: readonly string[];
-  /** "Still open"'s threads untouched for `STILL_OPEN_STALE_DAYS` lived days
-   *  (`Lanes.threadsStale`, 2026-10-18): its count line says how many of what
-   *  it counts are that old. Absent: nothing said. */
-  readonly threadsStale?: readonly string[];
 }
 
 export interface TrimEvent {

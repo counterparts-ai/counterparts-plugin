@@ -65,7 +65,7 @@ import { LAST_EXCHANGE_HANDLE } from "../../core/handoff/last-exchange.js";
 import { RECALL_MAX_IDS } from "./deliberate.js";
 import { FACTS_MEANING_CAP, FACTS_PAGE_SIZE, FACTS_TAIL_SIZE } from "./facts.js";
 import { RECURRENCES } from "../../core/time.js";
-import { PAGE_ROOM_BYTES } from "../../core/self/briefing.js";
+import { PAGE_ROOM_BYTES, STILL_OPEN_HANDLE } from "../../core/self/briefing.js";
 import { CLAIM_PREFIX_MIN_CHARS } from "../../core/self/page.js";
 import { MEET_STEPS } from "../../core/onboarding.js";
 
@@ -905,11 +905,11 @@ const RECALL: ToolSpec = {
       page: {
         type: "integer",
         minimum: 1,
-        description: "With a question: which page of the answer (1 is the first). The header says how many more there are.",
+        description: `With a question, or the handle "${STILL_OPEN_HANDLE}": which page of the answer (1 is the first). The answer says how many pages there are.`,
       },
       handle: {
         type: "string",
-        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads a short summary of that night, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored.`,
+        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads a short summary of that night, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page).`,
       },
       ids: {
         type: "array",

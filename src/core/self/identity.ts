@@ -443,13 +443,6 @@ function byOpened(a: Ranked, b: Ranked): number {
   return byContentThenId(a, b);
 }
 
-/**
- * Of the open threads, those untouched for `staleDays` lived days or more —
- * what "Still open"'s count line says of what it counts (2026-10-18).
- */
-function staleAmong(lane: readonly Ranked[], day: number, staleDays: number): string[] {
-  return lane.filter((r) => day - (r.touchedDay ?? r.bornDay) >= staleDays).map((r) => r.id);
-}
 
 /** Hints order: the hint score (organic strength x habituation), then as `byStrength`. */
 function byHint(a: Ranked, b: Ranked): number {
@@ -500,12 +493,6 @@ export interface Lanes {
   later?: readonly string[];
   /** Those of `later` past their date (review of #511): counted as overdue. */
   overdue?: readonly string[];
-  /**
-   * "STILL OPEN"'S OLD ONES, by id (2026-10-18): open threads untouched for
-   * `STILL_OPEN_STALE_DAYS` lived days or more. They rank last, and the
-   * lane's count line says how many of what it counts are that old.
-   */
-  threadsStale?: readonly string[];
 }
 
 /**
@@ -677,9 +664,6 @@ export function rankLanes(
   };
   const waiting = opts.waiting ?? new Set<string>();
   const rotated = [...rotate(reconsidering.filter((r) => waiting.has(r.id))), ...rotate(reconsidering.filter((r) => !waiting.has(r.id)))];
-  // Which open threads are old, for the count line — before the core
-  // memories join the lane: those are not aged.
-  const threadsStale = staleAmong(threads, turn, t.STILL_OPEN_STALE_DAYS);
   const shownFlags = Math.min(rotated.length, t.RECONSIDERING_MAX);
   threads.unshift(...rotated.slice(0, shownFlags));
   const flagsWaiting = rotated.slice(shownFlags).map((r) => r.id);
@@ -702,7 +686,6 @@ export function rankLanes(
         ...(opts.horizonMore ?? []).filter((id) => !inIdentity.has(id) && !settledOver.has(id) && !arriving.has(id)),
       ],
     },
-    ...(threadsStale.length === 0 ? {} : { threadsStale }),
   };
 }
 

@@ -110,6 +110,9 @@ export type { CoreAsk, CoreDecided } from "./core-ask.js";
 export { applyTagsAnswer, askTags, renderTagsBundle, tagNights, tagsBundle, tagsPrompt, undoNightTags, undoTagNight, NIGHT_CARD_KINDS, OWN_TAG_VIAS, SUBJECT_KIND_BY_PREFIX, TAGS_ASK_PREFIX, TAGS_NIGHT_PREFIX } from "./tags.js";
 export type { TagNight, TagsAnswer, TagsApplied, TagsBundle } from "./tags.js";
 export { FEELING_WEEKS_TUNABLES, awakeFeelingCounts, feelingWeeks } from "./feeling-weeks.js";
+// The wake's "Last night:" line (2026-10-25, wake polish).
+export { NIGHT_LINE_CHANGES, NIGHT_LINE_HEAD, NIGHT_LINE_READ, NIGHT_LINE_STALE_DAYS, NIGHT_OF_HEAD, nightChangeWords, nightLine, nightOf } from "./night-line.js";
+export type { NightDream, NightFacts, NightReflection } from "./night-line.js";
 export type { FeelingWeeks } from "./feeling-weeks.js";
 export type { ReflectBundle, ReflectContext, ReflectFinish, ReflectItem, ReflectOutcome, ReflectRefusal } from "./reflect.js";
 

@@ -7,7 +7,21 @@
  */
 import { byteLength } from "./identity.js";
 import { addDays, dayOfShort, isDay } from "../time.js";
-import { DUE_PAST_WORD, DUE_WORD, FRAMING, LEGACY_FRAMING, fixedPointTotal } from "./briefing.js";
+import {
+  COLLAPSED_WORDS,
+  DUE_PAST_WORD,
+  DUE_WORD,
+  FOLDED_WORDS,
+  FRAMING,
+  LEGACY_FRAMING,
+  LEGACY_MORE_NOUN,
+  MORE_NOUN,
+  PAGE_END_LINES,
+  collapsedLane,
+  fixedPointTotal,
+  headingsOf,
+  isFoldedLine,
+} from "./briefing.js";
 
 
 // ── reading a rendered bundle back ──────────────────────────────────────────
@@ -432,4 +446,241 @@ export function withHeadFields(text: string, fields: readonly string[]): Preface
     sentinel: composed[composed.length - 1] ?? null,
     applied: true,
   };
+}
+
+// ── one reader's "Might be relevant", in a bundle delivered as published ─────
+
+/** What `hintsForReader` took out of a published bundle for one reader. */
+export interface HintsForReader {
+  readonly text: string;
+  /** Listed lines ("- " items) taken out. */
+  readonly lines: number;
+  /** Ids taken out of the lane's count lines (its "N more", collapsed or folded part). */
+  readonly ids: number;
+  /** True when a listed line or a count line was taken out because nothing
+   *  could say which memory it was (fail closed). */
+  readonly blind: boolean;
+}
+
+const RECALL_IDS_RE = "recall ids(?: \\(the first \\d+\\))?";
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * THE PUBLISHED BUNDLE'S "MIGHT BE RELEVANT", FOR ONE READER (P1, 2026-10-25;
+ * review of Y2 found it). The hints lane is chosen store-wide, for no reader
+ * (INTERFACE-GAPS §12), so the session-start assembly leaves out what its
+ * reader may not be shown (`AssembleRequest.hintKeptOut`). A start that
+ * cannot assemble (`Self#assemble` null: a bundle an older build published,
+ * a host on another ceiling, no budget, no date) delivers the published
+ * bundle, and this is its same read on that road: every listed line and every
+ * named id `keptOut` says no to is taken out of the lane, its count told one
+ * less for each, and a lane left with nothing is not printed.
+ *
+ * `listed` is the published record's `hints` (`WakeShown`, in rendered
+ * order), when the record speaks for this very bundle. A line is matched to
+ * its memory by that order only — never by an `[id]` in its text, which a
+ * standing can carry for another memory. With no record, or one whose count
+ * disagrees with the lines, a listed line cannot be told apart and is taken
+ * out (fail closed; that bundle lasts until the next turn-end). A count line
+ * this cannot read is taken out too.
+ *
+ * Both byte counts are re-solved, and `elements=` and the sentinel's `hints=`
+ * lowered by the lines taken out, so the delivered block still states its own
+ * truth — only for a bundle that was a clean render: a damaged one loses the
+ * lines but keeps its stated counts, so its damage stays readable
+ * (`applyPreface`'s reason). Pure.
+ */
+export function hintsForReader(text: string, listed: readonly string[] | null, keptOut: (id: string) => boolean): HintsForReader {
+  const same: HintsForReader = { text, lines: 0, ids: 0, blind: false };
+  const lines = text.split("\n");
+  const heads = headingsOf("hints");
+  const nouns = [MORE_NOUN.hints, LEGACY_MORE_NOUN.hints].filter((n): n is string => n !== undefined);
+  const nounRe = `(${nouns.map(escapeRe).join("|")})`;
+  const out = (id: string): boolean => {
+    try {
+      return keptOut(id);
+    } catch {
+      return true;
+    }
+  };
+  const drop = new Set<number>();
+  const put = new Map<number, string>();
+  let gone = 0;
+  let ids = 0;
+  let blind = false;
+  /** A list of named ids, less the kept-out ones: the new count and names, or null when none was kept out. */
+  const less = (n: number, named: readonly string[]): { n: number; named: string[] } | null => {
+    const kept = named.filter((id) => !out(id));
+    if (kept.length === named.length) return null;
+    ids += named.length - kept.length;
+    return { n: n - (named.length - kept.length), named: kept };
+  };
+  const recallWords = (n: number, named: readonly string[]): string =>
+    `${n > named.length ? `recall ids (the first ${String(named.length)})` : "recall ids"}: ${named.join(", ")}`;
+
+  // THE LANE: the last line, after a blank one, that is its heading or its
+  // collapsed line, below the page's end line when a page is printed — a
+  // page's own words can read like the heading, and the page never carries an
+  // end line of its own (`isPageFrameLine`). Only "Coming up" is composed
+  // below the lane, and none of its lines reads like it; what a delivery
+  // splices at the foot comes after this read.
+  const pageEnds = new Set<string>(Object.values(PAGE_END_LINES));
+  let floor = 0;
+  lines.forEach((l, i) => {
+    if (pageEnds.has(l)) floor = i;
+  });
+  let h = -1;
+  for (let i = lines.length - 2; i > floor; i--) {
+    const l = lines[i] ?? "";
+    if (lines[i - 1] === "" && (heads.includes(l) || collapsedLane(l) === "hints")) {
+      h = i;
+      break;
+    }
+  }
+  if (h > 0) {
+    let end = h + 1;
+    while (end < lines.length && lines[end] !== "") end++;
+    const head = lines[h] ?? "";
+    const collapsedRe = (heading: string): RegExp => new RegExp(`^${escapeRe(heading)} (\\d+) — (.+?); ${RECALL_IDS_RE}: (.+)$`);
+    if (collapsedLane(head) === "hints") {
+      const heading = heads.find((x) => head.startsWith(`${x} `)) ?? FRAMING.hints;
+      const m = collapsedRe(heading).exec(head);
+      const got = m === null ? null : less(Number(m[1]), (m[3] ?? "").split(", "));
+      if (m === null) {
+        blind = true;
+        drop.add(h - 1).add(h);
+      } else if (got !== null) {
+        if (got.named.length === 0 || got.n <= 0) drop.add(h - 1).add(h);
+        else put.set(h, `${heading} ${String(got.n)} — ${m[2] ?? COLLAPSED_WORDS}; ${recallWords(got.n, got.named)}`);
+      }
+    } else {
+      const bullets: number[] = [];
+      const counts: number[] = [];
+      for (let i = h + 1; i < end; i++) ((lines[i] ?? "").startsWith("- ") ? bullets : counts).push(i);
+      const known = listed !== null && listed.length === bullets.length ? listed : null;
+      if (known === null && bullets.length > 0) blind = true;
+      let kept = 0;
+      bullets.forEach((i, k) => {
+        const id = known?.[k];
+        if (id === undefined || out(id)) {
+          drop.add(i);
+          gone += 1;
+        } else kept += 1;
+      });
+      // The lane's "N more" line, under its items.
+      const moreRe = new RegExp(`^\\((\\d+) more ${nounRe}; ${RECALL_IDS_RE}: (.+)\\)$`);
+      let more: { n: number; named: string[]; noun: string } | null = null;
+      for (const i of counts) {
+        const m = moreRe.exec(lines[i] ?? "");
+        if (m === null) {
+          blind = true;
+          drop.add(i);
+          continue;
+        }
+        const named = (m[3] ?? "").split(", ");
+        const got = less(Number(m[1]), named);
+        more = { n: got?.n ?? Number(m[1]), named: got?.named ?? named, noun: m[2] ?? MORE_NOUN.hints };
+        if (more.named.length === 0 || more.n <= 0) {
+          drop.add(i);
+          more = null;
+        } else if (got !== null) put.set(i, `(${String(more.n)} more ${more.noun}; ${recallWords(more.n, more.named)})`);
+        if (more !== null && kept === 0 && bullets.length > 0) drop.add(i);
+      }
+      if (kept === 0 && bullets.length > 0) {
+        // Nothing listed: the lane is its one collapsed line, or nothing.
+        drop.add(h - 1).add(h);
+        if (more !== null) {
+          drop.delete(h - 1);
+          drop.delete(h);
+          put.set(h, `${head} ${String(more.n)} — ${COLLAPSED_WORDS}; ${recallWords(more.n, more.named)}`);
+        }
+      }
+    }
+  }
+  // THE FOLDED LINE's part for this lane (`foldedLine`), composed under "Who
+  // I am" — below the page's end line, so a page line that reads like it is
+  // not taken for it.
+  const f = lines.findIndex((l, i) => i > floor && isFoldedLine(l));
+  if (f > 0) {
+    const partRe = new RegExp(`^(\\d+) ${nounRe} \\(recall ids: (.*?)(?:, and \\d+ more)?\\)$`);
+    const parts = (lines[f] ?? "").slice(FOLDED_WORDS.length + 1).split("; ");
+    let changed = false;
+    const kept: string[] = [];
+    for (const p of parts) {
+      const m = partRe.exec(p);
+      if (m === null) {
+        kept.push(p);
+        continue;
+      }
+      const got = less(Number(m[1]), (m[3] ?? "").split(", "));
+      if (got === null) kept.push(p);
+      else {
+        changed = true;
+        if (got.named.length > 0 && got.n > 0)
+          kept.push(`${String(got.n)} ${m[2] ?? MORE_NOUN.hints} (recall ids: ${got.named.join(", ")}${got.n > got.named.length ? `, and ${String(got.n - got.named.length)} more` : ""})`);
+      }
+    }
+    if (changed && kept.length === 0) {
+      drop.add(f);
+      if (lines[f - 1] === "") drop.add(f - 1);
+    } else if (changed) put.set(f, `${FOLDED_WORDS} ${kept.join("; ")}`);
+  }
+  if (drop.size === 0 && put.size === 0) return same;
+
+  const body = lines.flatMap((l, i) => (drop.has(i) ? [] : [put.get(i) ?? l]));
+  return { text: restated(text, body, gone), lines: gone, ids, blind };
+}
+
+/**
+ * A published bundle's lines, changed for one reader, joined again: on a
+ * clean render both byte counts re-solved, and `elements=` and the
+ * sentinel's `hints=` lowered by `gone` listed hints; on a damaged one the
+ * stated counts left as they were, so the damage stays readable
+ * (`applyPreface`'s reason). Pure.
+ */
+function restated(original: string, body: readonly string[], gone: number): string {
+  const intact = readSentinel(original).intact && OPEN_RE.test(original.split("\n", 1)[0] ?? "");
+  if (!intact) return body.join("\n");
+  const lower = (line: string, field: string): string =>
+    gone === 0 ? line : line.replace(new RegExp(`\\b${field}=(\\d+)`), (_m, n: string) => `${field}=${String(Math.max(0, Number(n) - gone))}`);
+  const open = lower(body[0] ?? "", "elements");
+  const tail = lower(lower(body[body.length - 1] ?? "", "elements"), "hints");
+  const build = (stated: string): string[] => [
+    open.replace(BYTES_FIELD, `bytes=${stated}`),
+    ...body.slice(1, -1),
+    tail.replace(BYTES_FIELD, `bytes=${stated}`),
+  ];
+  const skeleton = byteLength(build("").join("\n"));
+  return build(String(fixedPointTotal(skeleton, 2))).join("\n");
+}
+
+// ── one reader's Yesterday line, in a bundle delivered as published ─────────
+
+/**
+ * THE PUBLISHED BUNDLE'S YESTERDAY LINE, FOR ONE READER (review of P1,
+ * 2026-10-25; self INTERFACE-GAPS §14). The turn-end's render is composed for
+ * no reader, so its Yesterday line names every folder's chapters by title and
+ * id — a folder set off among them. A session start that assembles reads the
+ * line gated (`Counterpart#yesterdayFor` with a reader); one that delivers
+ * the published bundle as it is now does too. The furniture under the
+ * framing — every line between the context line and the first blank line,
+ * which in a published bundle is the Yesterday line alone — is replaced by
+ * the reader's own gated line (`forms`, widest first): the widest form no
+ * longer in bytes than what it replaces, or nothing when none fits or there
+ * is none. Nothing the published render said there is kept (fail closed),
+ * and the bundle never grows. Furniture, so only the byte counts move. Pure.
+ */
+export function dayLineForReader(text: string, forms: readonly string[]): { text: string; changed: boolean } {
+  const lines = text.split("\n");
+  if (lines.length < 3) return { text, changed: false };
+  // Under the context line; a bundle that carries none starts at its Yesterday line.
+  const start = (lines[1] ?? "").startsWith("Yesterday") ? 1 : 2;
+  let end = start;
+  while (end < lines.length - 1 && lines[end] !== "") end++;
+  const was = lines.slice(start, end);
+  const room = byteLength(was.join("\n"));
+  const form = forms.find((f) => f.trim().length > 0 && !f.includes("\n") && byteLength(f) <= room);
+  const now = form === undefined ? [] : [form];
+  if (now.length === was.length && now.every((l, i) => l === was[i])) return { text, changed: false };
+  return { text: restated(text, [...lines.slice(0, start), ...now, ...lines.slice(end)], 0), changed: true };
 }

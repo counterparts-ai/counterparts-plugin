@@ -504,11 +504,15 @@ export type SemanticReason =
  *
  *   `none`        nothing was offered and no lag row exists (a core caller, or
  *                 the first turn of a session).
- *   `lagged`      a fresh row from the immediately preceding turn was used.
+ *   `lagged`      a fresh row from the immediately preceding turn was used
+ *                 (with `SEMANTIC_THIS_TURN` on, 2026-10-25: only when this
+ *                 turn could not rank its own text — past the count guard,
+ *                 or no sync embedder).
  *   `in-line`     THIS text was embedded now: by the caller (the deliberate
  *                 ask, which has no latency budget), or, since 2026-10-19, by
  *                 the ambient turn itself when no fresh lag row was ready
- *                 (`inLineSemantic`).
+ *                 (`inLineSemantic`) — since 2026-10-25, with
+ *                 `SEMANTIC_THIS_TURN` on, on every ambient turn it can.
  *   `in-line-skipped` no fresh lag row, and box 3 holds more vectors than an
  *                 ambient turn may rank in line (`SEMANTIC_INLINE_MAX_VECTORS`).
  *   `stale`       a row exists but is older than one turn.
@@ -650,7 +654,8 @@ function rankedUnder(store: Store, model: string, dim: number): boolean {
 
 /**
  * THE AMBIENT TURN'S OWN VECTOR, for the turns the lag never reached
- * (2026-10-19): `none` (a session's first prompt) and `stale`. The text is
+ * (2026-10-19): `none` (a session's first prompt) and `stale` — and, with
+ * `SEMANTIC_THIS_TURN` on (2026-10-25), every ambient turn. The text is
  * stripped of host boilerplate first, as the worker strips it (§9 G3: before
  * cue extraction AND before embedding), and embedded by the store's own SYNC
  * embedder (`Store.textVector`: null with no embedder, or when nothing ranks

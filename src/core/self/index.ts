@@ -79,6 +79,7 @@ import type {
   IdentityCoreSpec,
   LaneName,
   Lanes,
+  OpenCarry,
   Ranked,
   Scanned,
   SchemaBytesReport,
@@ -113,6 +114,7 @@ import type {
   Resolved,
   SentinelReading,
 } from "./briefing.js";
+import { dayLineForReader, hintsForReader } from "./briefing.js";
 import {
   PAGE_META_BY,
   PAGE_META_REASON,
@@ -335,6 +337,22 @@ export function wakeShown(store: Pick<Store, "getMeta">): WakeShown | null {
   }
 }
 
+/** One item the `still open` handle lists (`Self#stillOpen`, 2026-10-25). */
+export interface StillOpenItem {
+  readonly id: string;
+  /** Its title, else its first line, on one line, at most `STILL_OPEN_TITLE_CHARS`. */
+  readonly title: string;
+  /** Lived days (days the memory was in use) since it was last touched, as the carry rule reads a touch (`openCarry`). */
+  readonly livedDaysSinceTouched: number;
+  /** A core memory being reconsidered, which waits on a keep-or-retire decision. */
+  readonly reconsidering?: true;
+  /** Its date, when it has one (the wake lists such a thread under "Coming up"). */
+  readonly date?: string;
+}
+
+/** The most characters of a title the `still open` handle gives. */
+export const STILL_OPEN_TITLE_CHARS = 160;
+
 /**
  * WHAT A SESSION START HANDS `Self#assemble` (2026-10-10): what the turn-end
  * render was handed, read again for the moment the session starts — the
@@ -357,6 +375,15 @@ export interface AssembleRequest
   readonly horizonMore?: readonly string[];
   /** `horizonMore` with their dates (`BoundaryRequest.horizonMoreItems`). */
   readonly horizonMoreItems?: readonly HorizonItem[];
+  /**
+   * A "Nearby" item this session may not be shown (review of Y2,
+   * 2026-10-25): the published bundle's hints are chosen store-wide, for no
+   * reader, so the caller names the ones its reader's folder rules keep out
+   * (`Counterpart#hintKeptOut`: a chapter's summary from a folder whose scope
+   * setting is off). Left out of the lane, neither listed nor counted.
+   * Absent: every hint the bundle chose.
+   */
+  readonly hintKeptOut?: (id: string) => boolean;
 }
 
 /**
@@ -1093,6 +1120,71 @@ export class Self {
   }
 
   /**
+   * "STILL OPEN"'S CANDIDATES, as the wake assembled at session start reads
+   * them (2026-10-10; lifted out 2026-10-25 so the `still open` handle reads
+   * the same): the open threads still carried (`openCarry`, 2026-10-22) and
+   * the core memories being reconsidered, each read once (`scanOne`). Reads
+   * only.
+   */
+  private openScanned(day: number): { open: Scanned[]; carry: OpenCarry; flagged: Set<string> } {
+    const flagged = reconsideringIds(this.store);
+    // Only the threads still carried (2026-10-22, `openCarry`): one nobody
+    // touched in `OPEN_CARRY_DAYS` is in no lane here, as at the turn-end.
+    const carry = openCarry(this.store, day, this.tunables.OPEN_CARRY_DAYS, this.tunables.OPEN_CARRY_GLIMPSE_TOUCH);
+    const openIds = [...new Set([...this.store.openThreadIds().filter((id) => !carry.notCarried.has(id)), ...flagged])];
+    const open: Scanned[] = [];
+    for (const id of openIds) {
+      const s = scanOne(this.store, id, day);
+      if (s === null) continue;
+      if (s.band === "identity" && flagged.has(id)) open.push({ ...s, reconsidering: true });
+      else if (s.unresolved && s.band !== "identity") open.push(s);
+    }
+    return { open, carry, flagged };
+  }
+
+  /**
+   * EVERYTHING "STILL OPEN" CARRIES, IN ITS ORDER (2026-10-25, the O1
+   * builder; roadmap 10-25, lightly held): what the `still open` recall
+   * handle lists. The same candidates the wake assembled at session start
+   * reads (`openScanned`: the carry rule, the core memories being
+   * reconsidered) and the same ranking (`rankLanes`, with what is settled
+   * over left out and the unsettled ones after) — the lane's listed items,
+   * then what its tail counts, in one list. One difference, said: no
+   * horizon is passed, so an open thread with a date, which the wake lists
+   * under "Coming up" instead, is here too, where the ranking puts it. Reads
+   * only: no stamp, no return, no seen set — being listed is not a touch
+   * (`openCarry`), so the handle cannot keep a thread carried.
+   */
+  stillOpen(day: number): { items: StillOpenItem[]; notCarried: number } {
+    const { open, carry } = this.openScanned(day);
+    const settled = settledOver(this.store);
+    const lanes = rankLanes(open, [], this.tunables, {
+      carry,
+      settledOver: settled,
+      unsettled: unsettledAmong(this.store, open.map((s) => s.id)),
+      waiting: waitingIds(this.store, day),
+    });
+    const byId = new Map(open.map((s) => [s.id, s] as const));
+    const out: StillOpenItem[] = [];
+    for (const id of [...lanes.threads.map((r) => r.id), ...(lanes.overflow?.threads ?? [])]) {
+      const s = byId.get(id);
+      if (s === undefined) continue;
+      const first = s.doc.body.split("\n").find((l) => l.trim().length > 0) ?? "";
+      const whole = flatten((s.doc.title ?? "").trim() || first);
+      const title = whole.length <= STILL_OPEN_TITLE_CHARS ? whole : `${whole.slice(0, STILL_OPEN_TITLE_CHARS - 1).trimEnd()}…`;
+      const touched = carry.touched.get(id) ?? Math.max(s.doc.bornDay, s.physics.lastUsedDay);
+      out.push({
+        id,
+        title,
+        livedDaysSinceTouched: Math.max(0, day - touched),
+        ...(s.reconsidering === true ? { reconsidering: true } : {}),
+        ...(s.doc.eventDate === undefined ? {} : { date: s.doc.eventDate }),
+      });
+    }
+    return { items: out, notCarried: carry.notCarried.size };
+  }
+
+  /**
    * THE WAKE, ASSEMBLED AT SESSION START (2026-10-10), from reads only: no
    * scan of the store, no model, no embedding, and no write — not even the
    * rotation's stamps or Nearby's showing, which stay the turn-end's (self
@@ -1148,18 +1240,8 @@ export class Self {
     ];
     // Still open, from the open memories — and the core memories being
     // reconsidered, which wait on a decision (2026-10-11).
-    const flagged = reconsideringIds(this.store);
-    // Only the threads still carried (2026-10-22, `openCarry`): one nobody
-    // touched in `OPEN_CARRY_DAYS` is in no lane here, as at the turn-end.
-    const carry = openCarry(this.store, day, this.tunables.OPEN_CARRY_DAYS, this.tunables.OPEN_CARRY_GLIMPSE_TOUCH);
-    const openIds = [...new Set([...this.store.openThreadIds().filter((id) => !carry.notCarried.has(id)), ...flagged])];
-    const open: Scanned[] = [];
-    for (const id of openIds) {
-      const s = scanOne(this.store, id, day);
-      if (s === null) continue;
-      if (s.band === "identity" && flagged.has(id)) open.push(note({ ...s, reconsidering: true }));
-      else if (s.unresolved && s.band !== "identity") open.push(note(s));
-    }
+    const { open: openRead, carry, flagged } = this.openScanned(day);
+    const open = openRead.map(note);
     const fresh = rankLanes(open, horizon, this.tunables, {
       carry,
       settledOver: settled,
@@ -1190,7 +1272,9 @@ export class Self {
     // "Nearby" as the turn-end CHOSE it — what it listed, then what its trim
     // popped (2026-10-12) — so this composition lists or counts them in its
     // own room rather than leaving the popped ones without a word.
-    const hintsScanned = carried([...shown.hints, ...shown.more.hints], "hints");
+    const keptOut = req.hintKeptOut;
+    const hintIds = [...shown.hints, ...shown.more.hints];
+    const hintsScanned = carried(keptOut === undefined ? hintIds : hintIds.filter((id) => !keptOut(id)), "hints");
     const covered = hintsScanned.length === 0 ? new Set<string>() : this.pageCovers(hintsScanned);
     const lanes: Lanes = {
       identity: carried(shown.identity, "identity").map((s) => rankedAs(note(s), "identity")),
@@ -1209,7 +1293,6 @@ export class Self {
       },
       ...(coming.later.length === 0 ? {} : { later: coming.later }),
       ...(coming.overdue.length === 0 ? {} : { overdue: coming.overdue }),
-      ...(fresh.threadsStale === undefined ? {} : { threadsStale: fresh.threadsStale }),
     };
     return this.composeLanes(lanes, docs, sources, {
       day,
@@ -1374,8 +1457,6 @@ export class Self {
           ...(lanes.later === undefined || lanes.later.length === 0 || req.omit !== undefined ? {} : { horizonLater: lanes.later }),
           // And which of them are past their date, so it says "overdue" (review of #511).
           ...(lanes.overdue === undefined || lanes.overdue.length === 0 || req.omit !== undefined ? {} : { horizonOverdue: lanes.overdue }),
-          // And which open threads are weeks old, so "Still open"'s count says so (2026-10-18).
-          ...(lanes.threadsStale === undefined || lanes.threadsStale.length === 0 || req.omit !== undefined ? {} : { threadsStale: lanes.threadsStale }),
           ...(req.elsewhereShorter === undefined || req.elsewhere === undefined || req.omit !== undefined
             ? {}
             : { elsewhereShorter: req.elsewhereShorter }),
@@ -2694,11 +2775,54 @@ export class Self {
    * no model and no write; the cost is a single aggregate, not O(store) prose,
    * and a caller that passes nothing pays exactly the old one meta row
    * (INTERFACE-GAPS #2).
+   *
+   * `hintKeptOut` (P1, 2026-10-25): a delivery of the PUBLISHED bundle — no
+   * `assembled` text — takes the reader's "Might be relevant" read the
+   * assembly takes (`AssembleRequest.hintKeptOut`), through
+   * `briefing-delivery.ts#hintsForReader`. Not applied to a read that is not
+   * a delivery (the owner's dashboard), nor to an assembled wake, which
+   * applied it already.
+   *
+   * `dayForms` (review of P1, 2026-10-25; INTERFACE-GAPS §14): on the same
+   * road, the published Yesterday line — every folder's chapter titles, for
+   * no reader — is replaced by this reader's gated line, widest form first
+   * (`Counterpart#yesterdayFor` with a reader), through
+   * `briefing-delivery.ts#dayLineForReader`; none given or none that fits,
+   * and the line is not printed. Asked only on this road.
+   *
+   * Either read throwing delivers nothing (fail closed): the bundle it was
+   * reading for cannot be shown unread.
    */
-  wake(delivery?: WakeDelivery, assembled?: string): WakeResult {
+  wake(delivery?: WakeDelivery, assembled?: string, hintKeptOut?: (id: string) => boolean, dayForms?: () => readonly string[]): WakeResult {
     // A wake ASSEMBLED at session start (`assemble`, 2026-10-10) is delivered
     // in place of the published one, with the same preface and tense.
-    const raw = assembled ?? this.store.getMeta(BRIEFING_KEY);
+    let raw = assembled ?? this.store.getMeta(BRIEFING_KEY);
+    // THE PUBLISHED BUNDLE, FOR THIS READER (P1): its hints were chosen
+    // store-wide; what this reader may not be shown is taken out before the
+    // preface, matched to its lines by the record published beside it when
+    // that record speaks for this very bundle.
+    let hintsOut: { lines: number; ids: number; blind: boolean } | null = null;
+    let dayLine: boolean | null = null;
+    if (assembled === undefined && delivery !== undefined && (hintKeptOut !== undefined || dayForms !== undefined) && raw !== undefined && raw.length > 0) {
+      try {
+        if (hintKeptOut !== undefined) {
+          const shown = wakeShown(this.store);
+          const reader = hintsForReader(raw, shown !== null && shown.hash === hashText(raw) ? shown.hints : null, hintKeptOut);
+          if (reader.text !== raw) {
+            raw = reader.text;
+            hintsOut = { lines: reader.lines, ids: reader.ids, blind: reader.blind };
+          }
+        }
+        if (dayForms !== undefined) {
+          const day = dayLineForReader(raw, dayForms());
+          raw = day.text;
+          dayLine = day.changed;
+        }
+      } catch (err) {
+        this.emit("self.wake.reader.failed", undefined, { code: err instanceof Error ? err.name : "unknown" });
+        raw = undefined;
+      }
+    }
     if (raw === undefined) {
       this.emit("self.wake", undefined, { ok: false, reason: "absent", bytes: 0 });
       return {
@@ -2769,6 +2893,8 @@ export class Self {
       stated: reading.statedBytes,
       elements: reading.statedElements,
       preface: delivered?.applied ?? false,
+      ...(hintsOut === null ? {} : { hintsKeptOut: hintsOut.lines + hintsOut.ids, hintsBlind: hintsOut.blind }),
+      ...(dayLine === true ? { dayLineForReader: true } : {}),
     });
     return {
       text: delivered?.text ?? raw,
@@ -3331,6 +3457,12 @@ export class Self {
     // chapter's "owner" with that mark's floor.
     const legacy = doc.meta[CHAPTER_ABOUT_META] === undefined;
     const mark = input.about ?? aboutMarkOf(chapterAbout(doc.meta, input.chapter)) ?? (legacy ? aboutMarkOf(doc.meta[EPISODE_ABOUT_META]) : null);
+    // ITS CHAPTER'S FOLDER (2026-10-25, Y1): the directory the episode was
+    // born in (`appendChapter` sets it at birth), so a privacy read of the
+    // summary (the Yesterday-from-summary gate) knows where it was written.
+    // Until then every summary was born with none. An episode from before
+    // folders has none to give, and its summary none either.
+    const folder = this.store.row(input.episodeId)?.origin_scope ?? null;
     const put: Parameters<Store["put"]>[0] = {
       type: "memory",
       kind: "self",
@@ -3344,7 +3476,7 @@ export class Self {
         [CLAIMED_DEFAULT_SPELLED]: true,
       },
       source: "episode",
-      origin: { session: input.sessionId, ref: input.episodeId },
+      origin: { session: input.sessionId, ref: input.episodeId, ...(folder === null || folder.length === 0 ? {} : { scope: folder }) },
       salience: { claimed: defaultClaimFor({ about: mark, kind: "self" }).claim },
     };
     // THE TITLE, THROUGH THE SECRETS SCAN ONLY (review of #293, B3): the

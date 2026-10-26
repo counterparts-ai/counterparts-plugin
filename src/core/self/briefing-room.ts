@@ -9,7 +9,7 @@ import type { LaneName, Ranked } from "./identity.js";
 import { byteLength } from "./identity.js";
 import { addDays, isDay } from "../time.js";
 import { TODAY_ELSEWHERE_MAX_BYTES } from "../handoff/last-here.js";
-import { LANE_ORDER, ROOM_ORDER, collapsedLine, compose, flatten, foldedLine, moreLine } from "./briefing.js";
+import { LANE_ORDER, ROOM_ORDER, collapsedLine, compose, flatten, foldedLine, isNightLine, moreLine } from "./briefing.js";
 import type { BriefingRequest, Composed, HorizonCounted, IdentityBlock, Resolve, RoomLane, TrimEvent } from "./briefing.js";
 
 
@@ -97,7 +97,7 @@ export function pinnedLines(
   for (const lane of LANE_ORDER) {
     const ids = pinned[lane];
     if (ids === undefined || ids.length === 0) continue;
-    out[lane] = lane !== "identity" && kept[lane].length === 0 ? collapsedLine(lane, ids, counted) : moreLine(lane, ids, counted?.horizonOverdue, counted?.threadsStale);
+    out[lane] = lane !== "identity" && kept[lane].length === 0 ? collapsedLine(lane, ids, counted) : moreLine(lane, ids, counted?.horizonOverdue);
   }
   return out;
 }
@@ -342,7 +342,29 @@ export function takeRoom(
         break;
     }
   }
+  // THE NIGHT LINE GIVES WAY TO A DATED ITEM, "STILL OPEN"'S FIRST ITEM AND
+  // WHAT RANKS ABOVE THEM (review of #623, 2026-10-25): the last of the
+  // furniture, and taken out only here, once every room below `target` is
+  // spent — the Yesterday line's pointers stay a floor, as before. Without
+  // this a wake with no Yesterday line had the night line as its only form,
+  // and a tight one folded a thing due today away to keep it.
+  if (got === null && y !== undefined && ROOM_ORDER.indexOf(target) >= ROOM_ORDER.indexOf("openFirst")) {
+    const without = withoutNightLine(y);
+    if (without !== y) {
+      y = without;
+      got = attempt();
+    }
+  }
   return got;
+}
+
+/** The day furniture with its night line ("Last night:", "The night of …:") taken out; undefined when that was all of it. */
+export function withoutNightLine(y: string): string | undefined {
+  const lines = y.split("\n");
+  const kept = lines.filter((l) => !isNightLine(l));
+  if (kept.length === lines.length) return y;
+  const out = kept.join("\n");
+  return out.trim().length === 0 ? undefined : out;
 }
 
 /**
@@ -567,7 +589,7 @@ export function tellLost(ctx: {
   for (const lane of MORE_ORDER) {
     const ids = ctx.lost[lane];
     if (ids === undefined || ids.length === 0) continue;
-    lines[lane] = lane !== "identity" && ctx.kept[lane].length === 0 ? collapsedLine(lane, ids, ctx.req) : moreLine(lane, ids, ctx.req.horizonOverdue, ctx.req.threadsStale);
+    lines[lane] = lane !== "identity" && ctx.kept[lane].length === 0 ? collapsedLine(lane, ids, ctx.req) : moreLine(lane, ids, ctx.req.horizonOverdue);
     const candidate = at(lines);
     if (candidate.bytes > ctx.limit) {
       delete lines[lane];
