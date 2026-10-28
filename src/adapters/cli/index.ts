@@ -77,6 +77,8 @@ export {
   CONFIG_FILE,
   HOOK_SCRIPT,
   HOST_EVENTS,
+  HOSTED_DENY_URL,
+  DENY_KEY,
   MCP_SCRIPT,
   MCP_SERVER_NAME,
   budgetRefusal,

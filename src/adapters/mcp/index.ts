@@ -21,7 +21,7 @@ export {
 } from "./protocol.js";
 export type { ErrorResponse, Id, ParsedLine, Request, Response, SuccessResponse } from "./protocol.js";
 
-export { DESKTOP_TOOLS, TOOLS, TOOL_ALIASES, TOOL_NAMES, WAKE, canonicalToolName, renderDescription, toolDefinitions, toolSpec } from "./tools.js";
+export { CLAUDE_AI_TOOLS, CLAUDE_AI_WAKE, DESKTOP_TOOLS, TOOLS, TOOL_ALIASES, TOOL_NAMES, WAKE, canonicalToolName, renderDescription, toolDefinitions, toolListFor, toolSpec } from "./tools.js";
 export type { Privilege, ToolName, ToolSpec } from "./tools.js";
 
 export {
@@ -161,9 +161,11 @@ export function openServer(opts: OpenServerOptions = {}): McpServer {
     // Which host, and what Claude Desktop's `wake` needs (2026-09-30) — carried
     // through unchanged; the server decides what to do with them.
     ...(opts.host === undefined ? {} : { host: opts.host }),
+    ...(opts.canary === undefined ? {} : { canary: opts.canary }),
     ...(opts.lifecycle === undefined ? {} : { lifecycle: opts.lifecycle }),
     ...(opts.wakeNotice === undefined ? {} : { wakeNotice: opts.wakeNotice }),
     ...(opts.manifestVersion === undefined ? {} : { manifestVersion: opts.manifestVersion }),
+    ...(opts.pluginVersion === undefined ? {} : { pluginVersion: opts.pluginVersion }),
     ...(opts.env === undefined ? {} : { env: opts.env }),
     ...(opts.launchObserver === undefined ? {} : { launchObserver: opts.launchObserver }),
     ...(opts.onEvent === undefined ? {} : { onEvent: opts.onEvent }),

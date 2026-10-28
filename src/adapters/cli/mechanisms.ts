@@ -68,15 +68,14 @@ function plural(n: number, one: string, many = `${one}s`): string {
   return `${String(n)} ${n === 1 ? one : many}`;
 }
 
-const NOT_BUILT = (why: string) => (): { light: Light; says: string } => ({
-  light: LIGHT.notBuilt,
-  says: `not built yet: ${why}`,
-});
-
 /**
  * THE CONSOLE'S WINDOW: seven CALENDAR days, today included, in the store's
  * zone — the same window the `fired` report counts over. The lived-day bound
  * only keeps the read cheap (a lived day is never longer than a calendar day).
+ * A census has no row to date and counts from its bound alone, so it is given
+ * the dashboard's: seven lived days, today included (2026-10-26, review of
+ * #629 — at `- 7` a belief born eight lived days back lit the console's
+ * Schemas row while the dashboard and `fired` called it quiet).
  */
 export function calendarWindow(store: ReadOnlyStore, today: string): EvidenceWindow {
   let livedDay = 0;
@@ -89,6 +88,7 @@ export function calendarWindow(store: ReadOnlyStore, today: string): EvidenceWin
   const zone = store.zone();
   return {
     sinceDay: Math.max(0, livedDay - FIRED_DAYS),
+    censusSinceDay: Math.max(0, livedDay - (FIRED_DAYS - 1)),
     today: livedDay,
     contains: (row: EventRow) => {
       const date = rowDate(row, payloadOf(row), zone);
@@ -367,9 +367,32 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
     name: "Schemas",
     group: "Transformation",
     id: "schema",
-    // Entity cards are built; beliefs about them have no live producer.
-    evidence: ["entity-birth"],
-    read: NOT_BUILT("nothing forms beliefs about people and projects yet"),
+    // Built since wave 2 (0.3.31): the night's reflection forms beliefs about
+    // me, us and the people and projects in play, adopts a dream's
+    // candidates, and files the memories that back or go against them; a
+    // session may form one about me awake. Read off the rows (the census).
+    evidence: ["entity-birth", "belief-birth", "belief-support"],
+    read: (v) => {
+      const born = part(v, "born");
+      const adopted = part(v, "adopted");
+      const support = part(v, "support");
+      const contrary = part(v, "contrary");
+      const held = v.held === null ? "" : `; ${plural(v.held, "belief")} held`;
+      if (v.fired) {
+        const parts: string[] = [];
+        if (born > 0) parts.push(`${plural(born, "belief")} formed`);
+        if (adopted > 0) parts.push(`${plural(adopted, "belief")} adopted from a dream`);
+        parts.push(`${plural(support, "memory", "memories")} filed as support (${String(contrary)} against)`);
+        return { light: LIGHT.working, says: `${parts.join(", ")}${held}` };
+      }
+      return {
+        light: LIGHT.idle,
+        says:
+          (v.held ?? 0) > 0
+            ? `built, not firing this week: no belief formed and no memory filed for or against one${held}`
+            : "built, not firing yet: no beliefs yet (the night's reflection forms one when lived memories back it)",
+      };
+    },
   },
   {
     name: "Gist",

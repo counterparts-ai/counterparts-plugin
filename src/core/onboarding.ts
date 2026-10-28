@@ -496,6 +496,14 @@ export interface MeetContext {
   readonly plugin: boolean;
   /** The meeting's state when the script was asked for (after the read marked it offered). */
   readonly state: MeetState;
+  /**
+   * A CHAT ON THE WEB (claude.ai, 2026-10-26, OL1b item 7): no computer of the
+   * person's holds the memory as far as the script can know, no conversation
+   * text is kept at all (the server sees only what the tools are handed), no
+   * console command exists, and nights are the person's own routine. Absent
+   * or false: every other host's words, unchanged.
+   */
+  readonly web?: boolean;
 }
 
 /**
@@ -517,9 +525,24 @@ export const PRONOUN_RULE = "Until they say their pronouns, use their name or \"
 export const RETENTION_LINE =
   "Our conversation text is kept only so I can turn it into memories: it's deleted 3 days after I've written it up, and never kept more than 14 days. Backups never include it. Memories stay until they fade or you remove them, and you can delete the conversation text, the backups or the activity log on their own at any time.";
 
+/**
+ * WHAT IS KEPT, ON THE WEB (claude.ai, OL1b item 7): there is no transcript and
+ * no capture, so the only conversation text the memory ever holds is what the
+ * tools are handed. Where the store itself lives depends on who serves it (a
+ * trial on the owner's machine, or the hosted service), so this says neither.
+ */
+export const WEB_RETENTION_LINE =
+  "Counterparts never receives our conversations themselves: only what I save with its tools, as memories and chapters. Memories stay until they fade or are removed.";
+
+/** How a person on claude.ai stops it: the connector is theirs to remove. */
+export const WEB_UNINSTALL =
+  "remove the Counterparts connector in claude.ai's settings (Connectors); that stops it, and what it kept stays where it is until it is deleted";
+
 /** The first dream, true to the dreaming setting: never today (`meetingDay`). Empty when dreaming is off. */
-function firstDream(dreaming: MeetContext["dreaming"]): string {
+function firstDream(dreaming: MeetContext["dreaming"], web = false): string {
   if (dreaming === "off") return "";
+  // On the web the night is the person's own routine, never an ask in a chat.
+  if (web) return "On a night after today, when the nightly routine runs, I'll have my first dream: I'll go over what we talked about and start building a sense of who I am with you.";
   return dreaming === "auto"
     ? "Next time you're here on another day, I'll have my first dream: I'll go over what we talked about and start building a sense of who I am with you. (If you'd rather I didn't dream, say 'no dreams'.)"
     : "When you're back on another day, I'll ask to have my first dream: I'll go over what we talked about and start building a sense of who I am with you.";
@@ -544,7 +567,9 @@ export function meetingInstructions(ctx: MeetContext): string {
     "Pass your session id (the one your wake names) as `session` on every meet call. Until the meeting is finished, the end-of-turn write-up ask and the dream wait; the finish step hands you the write-up.",
     "",
     "1. Introduce yourself in one warm line, close to this, and don't ask anything in it:",
-    "   \"Hi, I'm Claude, with Counterparts now: a memory that's mine and stays on this computer, so I can carry what matters from one session to the next, and grow along with you.\"",
+    ctx.web === true
+      ? "   \"Hi, I'm Claude, with Counterparts now: a memory that's mine, so I can carry what matters from one conversation to the next, and grow along with you.\""
+      : "   \"Hi, I'm Claude, with Counterparts now: a memory that's mine and stays on this computer, so I can carry what matters from one session to the next, and grow along with you.\"",
     "   Then the choice, asked once: \"Want to take about five minutes to get to know each other?\" Now (about 5 minutes) · Later. Later → meet {step: \"later\"}, then carry on with whatever they want, and don't offer again this session. If they never want it → meet {step: \"skipped\"}.",
   ];
   if (ctx.folders) {
@@ -576,8 +601,10 @@ export function meetingInstructions(ctx: MeetContext): string {
     `${ctx.folders ? "4" : "3"}. When the questions are done (or they want to stop), call meet {step: "done"}: it hands you the write-up and the close.`,
     "",
     "If they ask, now or later (say these, don't paraphrase):",
-    `   where it lives: everything is in ${ctx.home} on this computer. What's kept: "${RETENTION_LINE}"`,
-    `   removing it: ${ctx.uninstall}.`,
+    ctx.web === true
+      ? `   what's kept: "${WEB_RETENTION_LINE}"`
+      : `   where it lives: everything is in ${ctx.home} on this computer. What's kept: "${RETENTION_LINE}"`,
+    `   removing it: ${ctx.web === true ? WEB_UNINSTALL : ctx.uninstall}.`,
     ...(ctx.plugin ? ["   anything else (turn it off, pause it here, forget something, undo a dream): they say it, and you do it with the counterparts tools. Never hand them a `counterparts` command: this install has none."] : []),
   );
   return lines.join("\n");
@@ -591,9 +618,9 @@ export function meetingInstructions(ctx: MeetContext): string {
  * tools are bound with. `sidebar`: a sidebar answers `/counterparts` here (since
  * the split, 2026-10-22, a plugin install alone no longer means one).
  */
-export function finishText(ctx: Pick<MeetContext, "name" | "dreaming"> & { session: string; sidebar: boolean }): string {
+export function finishText(ctx: Pick<MeetContext, "name" | "dreaming" | "web"> & { session: string; sidebar: boolean }): string {
   const name = ctx.name === null ? "<their name>" : ctx.name;
-  const dream = firstDream(ctx.dreaming);
+  const dream = firstDream(ctx.dreaming, ctx.web === true);
   return [
     "The meeting is finished. In this same reply, in this order:",
     `1) The write-up: hand back anything from the meeting that a meet step did not already save, one idea each, with the counterparts session_end tool, session: ${ctx.session} (the answers and the style are saved already: don't repeat them; often there is nothing more). Then write the first chapter with the counterparts chapter tool, session: ${ctx.session}: a short, true page about meeting them. ${PRONOUN_RULE}`,
@@ -616,10 +643,10 @@ export function finishText(ctx: Pick<MeetContext, "name" | "dreaming"> & { sessi
  * The offer is ASKED ONCE (B, 2026-10-12): one warm line of introduction, then
  * the choice — the dialog where there is one, never the same question twice.
  */
-export function offerLine(state: MeetState): string {
+export function offerLine(state: MeetState, opts: { readonly web?: boolean } = {}): string {
   return [
     "<counterparts-meet>",
-    `You and the person haven't properly met yet${state === "later" ? " (last time they said later)" : ""}. They installed a memory plugin to be known, so offer them a first meeting: at the end of your first reply, never instead of answering them, introduce yourself in one warm line and offer about five minutes to get to know each other — asked once, through the question dialog if the host has one, not also in prose. The counterparts \`meet\` tool holds the meeting's script and records that the offer was made, so make the offer through it. If their message asks to meet you or asks you to introduce yourself (the counterparts sidebar sends \"Meet your new counterpart.\"), that is this meeting: begin it with that introduction.`,
+    `You and the person haven't properly met yet${state === "later" ? " (last time they said later)" : ""}. They ${opts.web === true ? "added Counterparts, a memory connector," : "installed a memory plugin"} to be known, so offer them a first meeting: at the end of your first reply, never instead of answering them, introduce yourself in one warm line and offer about five minutes to get to know each other — asked once, through the question dialog if the host has one, not also in prose. The counterparts \`meet\` tool holds the meeting's script and records that the offer was made, so make the offer through it. If their message asks to meet you or asks you to introduce yourself (the counterparts sidebar sends \"Meet your new counterpart.\"), that is this meeting: begin it with that introduction.`,
     "</counterparts-meet>",
   ].join("\n");
 }

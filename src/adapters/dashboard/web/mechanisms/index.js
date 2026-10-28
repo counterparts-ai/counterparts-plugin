@@ -35,6 +35,7 @@ import * as reconsolidationPanel from "./reconsolidation/panel.js";
 import * as interferencePanel from "./interference/panel.js";
 import * as retrievalPanel from "./retrieval/panel.js";
 import * as saliencePanel from "./salience/panel.js";
+import * as schemaPanel from "./schema/panel.js";
 
 export const MECHANISMS = [salience, emotional, decay, interference, retrieval, association, prospective, consolidation, dreaming, reconsolidation, episodic_semantic, schema];
 
@@ -60,6 +61,7 @@ export const PANELS = {
   reconsolidation: reconsolidationPanel,
   interference: interferencePanel,
   "episodic-semantic": gistPanel,
+  schema: schemaPanel,
 };
 
 /**

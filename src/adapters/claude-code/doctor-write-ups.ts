@@ -7,13 +7,14 @@ import { TUNABLES } from "../config.js";
 // promise a different number from the job that does the deleting. READ-ONLY:
 // `remember/index.ts` re-exports the plan and the readers, never the deleter.
 import { SpanBuffer } from "../../core/remember/index.js";
-import { lapsesSince, ledger } from "../../core/coverage/index.js";
+import { COVERAGE_TUNABLES, lapsesSince, ledger } from "../../core/coverage/index.js";
 import type { LedgerEntry } from "../../core/coverage/index.js";
 import {
   hostOf,
   hostSessionEvidence,
   listSessions,
-  pointable,
+  lapsingWords,
+  notPointableWhy,
   progressKey,
   readWriteUpPointer,
   readWriteUpProgress,
@@ -38,10 +39,11 @@ export const WRITE_UP_LAPSE_WINDOW_DAYS = 7;
  *
  * It says yesterday's state: how many sessions captured something that date
  * and how much of it is written up; how many sessions owe a write-up now; and
- * how many stretches lapsed in the last week. AMBER when a stretch from
- * yesterday or earlier is owed — the next session in that project is pointed
- * at it, so one still owed the morning after is one whose project nobody has
- * opened. Never red: nothing is deleted while a stretch is owed, and a lapse
+ * how many stretches lapsed in the last week. AMBER when an owed stretch is
+ * OVERDUE (`overdue`, S2c 2026-10-26): the catch-up had its chance and it is
+ * still here. Until S2c it was amber for any stretch from yesterday or
+ * earlier — and once a short check-in owed its write-up (S2), that was every
+ * morning before the first prompt, which is where the night runs. Never red: nothing is deleted while a stretch is owed, and a lapse
  * deletes nothing either. The two ambers #192 added for the pointer itself —
  * deferred for room, and a session finished here waiting on another project —
  * are kept as they were.
@@ -55,16 +57,68 @@ export interface OwedReading {
   readonly now: number;
   /** Sessions that owe a write-up the pointer can offer (`coverage/`'s rule). */
   readonly waiting: number;
-  /** ...of which the stretch is from yesterday or earlier. */
+  /** ...of which are OVERDUE (`overdue`): the catch-up had its chance and the
+   *  debt is still here. The field keeps its old name; until S2c it counted
+   *  every stretch from yesterday or earlier. */
   readonly stale: number;
-  /** Small debts the pointer never offers (no registry record, or not a
-   *  person's session): they owe, and lapse with their days of use. */
+  /** Short debts the pointer never offers (`sessions.ts#notPointableWhy`):
+   *  they owe, and lapse with their days of use. */
   readonly unpointed: number;
+  /** ...of which from a headless run (`claude -p`, the Agent SDK). */
+  readonly unpointedHeadless: number;
+  /** ...of which from a session with no registry record. */
+  readonly unpointedNoRecord: number;
+  /** The newest catch-up row's time (`catchUpOf`, any age), or null. */
+  readonly lastCatchUpAt: number | null;
+}
+
+/** "1 overdue (a catch-up has run since, or 2 days of use)": the clause the
+ *  Catch-up and Authorship lines add after the owed count. */
+export function overdueWords(n: number): string {
+  return `${String(n)} overdue (a catch-up has run since, or ${String(OVERDUE_DAYS_OF_USE)} days of use)`;
+}
+
+/** Days of use after a stretch's date, with no catch-up run since, that make
+ *  it overdue: the person came back on a later day and nothing cleared it. */
+export const OVERDUE_DAYS_OF_USE = 2;
+
+/**
+ * OVERDUE (S2c, 2026-10-26): a debt the catch-up had its chance at and did
+ * not clear — not a debt waiting for its first night. The night runs at the
+ * next day of use's first prompt, so yesterday's check-ins are owed every
+ * morning until then; that is the ordinary state, not a problem.
+ *
+ * Overdue when a catch-up ran on a LATER DATE than the stretch's latest piece
+ * (dates in the store's zone: the night is launched from the morning session's
+ * first prompt, so that session's own pieces land around the run's row, and a
+ * second run the same day — a whole night after a catch-up-only one — is not
+ * a chance at that day's sessions in any way a person could tell apart); or
+ * when `OVERDUE_DAYS_OF_USE` days of use came after it and no catch-up has run
+ * since — where nights never run (dreaming off, or a night that never starts),
+ * the next session's pointer had a whole day of use to offer it. Loose on
+ * purpose (guards loose-first): a run that was bounded and left a part counts
+ * as a chance too.
+ */
+export function overdue(e: LedgerEntry, zone: string, lastCatchUpAt: number | null): boolean {
+  if (e.stretch === null) return false;
+  const day = localDate(e.stretch.lastAt, zone);
+  if (lastCatchUpAt !== null && localDate(lastCatchUpAt, zone) > day) return true;
+  // No catch-up on a later date (the arm above), so none since that counts.
+  return e.daysOfUseSince >= OVERDUE_DAYS_OF_USE;
+}
+
+/** The newest catch-up row's time, or null when none ran (or it cannot be read). */
+function lastCatchUpAt(store: Store): number | null {
+  try {
+    return catchUpOf(store)?.at ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** `failed` when it cannot be read. It reads every scope's captured words, so
  *  the budgeted session-start reading never calls it. */
-export function readOwed(store: Store, today: string): OwedReading | "failed" {
+export function readOwed(store: Store): OwedReading | "failed" {
   try {
     const now = store.now();
     // READ-ONLY by construction: an observer buffer writes nothing, and it
@@ -75,9 +129,13 @@ export function readOwed(store: Store, today: string): OwedReading | "failed" {
     const host = hostSessionEvidence(store);
     const entries = ledger(spans, { now, zone, host: (s) => ({ endedAt: host(s).endedAt }) });
     const all = entries.filter((e) => e.owed);
-    const owed = all.filter((e) => pointable(e, store.dir));
-    const stale = owed.filter((e) => e.stretch !== null && localDate(e.stretch.lastAt, zone) < today).length;
-    return { spans, plan, entries, now, waiting: owed.length, stale, unpointed: all.length - owed.length };
+    const why = new Map(all.map((e) => [e.session, notPointableWhy(e, store.dir)]));
+    const owed = all.filter((e) => why.get(e.session) === null);
+    const night = lastCatchUpAt(store);
+    const stale = owed.filter((e) => overdue(e, zone, night)).length;
+    const headless = all.filter((e) => why.get(e.session) === "headless").length;
+    const noRecord = all.filter((e) => why.get(e.session) === "no-record").length;
+    return { spans, plan, entries, now, waiting: owed.length, stale, unpointed: headless + noRecord, unpointedHeadless: headless, unpointedNoRecord: noRecord, lastCatchUpAt: night };
   } catch {
     return "failed";
   }
@@ -93,6 +151,8 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
   let waiting: number | null = null;
   let stale = 0;
   let unpointed = 0;
+  let unpointedHeadless = 0;
+  let unpointedNoRecord = 0;
   let yesterdayWords = "";
   let yesterdayData: { sessions: number; pieces: number; written: number } | null = null;
   /** Sessions FINISHED in one project and waiting on words they left in
@@ -105,6 +165,8 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
     waiting = reading.waiting;
     stale = reading.stale;
     unpointed = reading.unpointed;
+    unpointedHeadless = reading.unpointedHeadless;
+    unpointedNoRecord = reading.unpointedNoRecord;
     // YESTERDAY, keyed on the pieces' own dates in the store's zone.
     const day = entries
       .map((e) => e.perDate[yesterday])
@@ -143,8 +205,9 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
       );
       if (elsewhere.length === 0) continue;
       const e = entries.find((x) => x.session === session);
-      const from = e?.stretch === null || e === undefined ? input.today : localDate(e.stretch.lastAt, store.zone());
-      shares.push({ session, here, elsewhere, stale: from < input.today });
+      // OVERDUE AS THE COUNT IS (S2c): waiting on another project is the
+      // ordinary state until the catch-up has had its chance.
+      shares.push({ session, here, elsewhere, stale: e !== undefined && overdue(e, store.zone(), reading.lastCatchUpAt) });
     }
     shares.sort((a, b) => Number(b.stale) - Number(a.stale));
   } catch {
@@ -157,7 +220,7 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
       : waiting === 0
         ? "nothing owed"
         : `${String(waiting)} session${waiting === 1 ? "" : "s"} to catch up` +
-          (stale === 0 ? "" : `, ${String(stale)} from yesterday or earlier`);
+          (stale === 0 ? "" : `, ${overdueWords(stale)}`);
   // THE NIGHTLY RUN'S CATCH-UP (2026-10-01): its newest row, within two days.
   let night: ReturnType<typeof catchUpOf> = null;
   try {
@@ -183,7 +246,7 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
       yesterdayWords,
       nightWords,
       owedWords,
-      unpointed === 0 ? "" : `${String(unpointed)} small, not known as a person's session: left to lapse`,
+      lapsingWords(unpointedHeadless, unpointedNoRecord),
       lapses === 0 ? "" : `${String(lapses)} lost unwritten this week`,
     ]
       .filter((w) => w.length > 0)
@@ -194,6 +257,8 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
     waiting,
     stale,
     unpointed,
+    unpointedHeadless,
+    unpointedNoRecord,
     lapsedWeek: lapses,
     yesterday,
     yesterdaySessions: yesterdayData?.sessions ?? null,
@@ -267,9 +332,9 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
         title,
         detail,
         (auto
-          ? "The nightly run catches up on everything owed each morning; counterparts catch-up does it now. "
+          ? "The nightly run had its chance at these, or has not run in two days of use, and they are still owed; counterparts catch-up does it now. "
           : "Run counterparts catch-up to write them up now, or open a session in the project each one is in: its start points at the oldest. ") +
-          "counterparts coverage says which. A stretch nobody writes up lapses after two more days of use — nothing is deleted, it stops being owed.",
+          `counterparts coverage says which. A stretch nobody writes up lapses after ${String(COVERAGE_TUNABLES.LAPSE_DAYS_OF_USE)} days of use — nothing is deleted, it stops being owed.`,
         data,
       ),
     ];

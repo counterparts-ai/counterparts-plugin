@@ -92,6 +92,12 @@ export interface StoreOptions extends Stance {
    * `counterparts rollback --upgrade-again` sets it; it clears the hold after.
    */
   releaseRollbackHold?: boolean;
+  /**
+   * The `chmod` the at-open tightening uses (`private.ts#tightenStore`). A
+   * test's seam, to make one path refuse the way exFAT does; absent in every
+   * real open.
+   */
+  chmod?: (path: string, mode: number) => void;
 }
 
 export interface PutInput {

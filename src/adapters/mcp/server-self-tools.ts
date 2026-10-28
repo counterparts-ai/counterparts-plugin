@@ -17,7 +17,7 @@ import {
 import type { TraceInput } from "../../core/self/page.js";
 import type { PageWriterMode, PageWriterRun } from "../../core/self/index.js";
 import type { ToolResult } from "./server-options.js";
-import { dreamHow, PAGE_REFUSAL_DETAIL, pageLaneAnswer, pageRoomAnswer } from "./server-words.js";
+import { DREAMING_OFF_REFUSAL, dreamHow, dreamLaunchHowFor, PAGE_REFUSAL_DETAIL, pageLaneAnswer, pageRoomAnswer, reflectLaunchHowFor, settingSaidFor } from "./server-words.js";
 import type { McpServer } from "./server.js";
 
 /**
@@ -55,6 +55,17 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
   const writerChild = (server["env"][NIGHT_CHILD_ENV] ?? "").trim() === "writer";
   if (writerChild && phase !== "writer") return refused("writer-child", "This is the nightly run's day's end child: only phase \"writer\" is served here.");
   if (dreamChild && phase === "writer" && SELF_TUNABLES.PAGE_SPLIT) return refused("writer-child-only", "Tonight day's end runs in a child of its own, before the dream: go on with the dream.");
+  // "NO DREAMS" HOLDS PAST THE LAUNCH (review of #650): while the setting is
+  // off, `writer` and `begin` called without a launch are refused too — over
+  // the HTTP door a routine (or any caller) could otherwise skip the gated
+  // launch and dream anyway. A run already under way finishes: today's row is
+  // `launched` (a launch, or the hook's headless start), or this server is the
+  // headless night's own (a child's or the catch-up's mark, `nightRun`).
+  const offWithoutNight = (): boolean =>
+    dreams.setting() === "off" && !server["nightRun"]() && server.counterpart.store.dreamAsk(at)?.state !== "launched";
+  // WHOSE WORDS (review of #650): the session being served's, as `placeHost`
+  // reads it — a Code-tab call on Desktop's server is a Claude Code session.
+  const wordsHost: string = server["placeHost"];
   const nextAfter = (part: NightPart, dream: string | null): string | null => {
     const next = nightNext(part);
     if (writerChild) return null;
@@ -71,6 +82,10 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
         // The day's row becomes `launched` (claimed, or flipped from an
         // accepted ask), so a run that dies before its dream begins is
         // started again (review of #271).
+        // "NO DREAMS" MEANS NO DREAMS (OL1d): while the setting is off, no
+        // night starts from here, on any host — a claude.ai routine included.
+        // A run already under way finishes (its later phases: `offWithoutNight`).
+        if (dreams.setting() === "off") return refused("dreaming-off", DREAMING_OFF_REFUSAL);
         dreams.launched({ at, session });
         server["emit"]("mcp.dream", undefined, { phase: "launch", session });
         return server["result"](
@@ -83,7 +98,7 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
             // retelling in the session's own words would carry none, and the
             // dream's title and changes would read as something that
             // happened (adversarial review of #251).
-            how: "Hand `prompt` to a background agent (the Agent tool), unchanged, and carry on. When it finishes, show the owner its first line (the dream's) exactly as it came back — it carries the dream's mark, which keeps the dream out of lived memory. If a morning share follows, tell it to the owner in your own words, as a telling (\"While I slept I dreamed…\"), then call the reflect tool with phase \"told\" — never state what was dreamed as something that happened.",
+            how: dreamLaunchHowFor(wordsHost),
           },
           false,
         );
@@ -125,16 +140,15 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
         const out = dreams.setSetting(value, { by: "session", session });
         if (!out.ok) return refused(out.reason, `value is one of ${DREAMING_SETTINGS.join(", ")}. It is ${dreams.setting()} now.`);
         server["emit"]("mcp.dream", undefined, { phase: "setting", setting: out.setting, before: out.before });
-        const said: Record<DreamingSetting, string> = {
-          auto: "Dreaming on its own: once a day, the first session starts the nightly run by itself, in a separate windowless session in the background, and says so in one line. Today's run is still yours to start, if the owner asked for it.",
-          ask: "Dreaming asks first: once a day, the first session shows the owner the question in the terminal and waits for their word.",
-          off: "No dreams: nothing starts the nightly run and nothing asks. It can be turned back on with this phase (value ask or auto) when the owner says so.",
-        };
+        // The setting is the person's wish; the host decides who starts the
+        // night, so the words are the served session's host's (OL1d).
+        const said: Readonly<Record<DreamingSetting, string>> = settingSaidFor(wordsHost);
         // "No dreams" does not stop a run already going (owner decision D): said.
         const finishes = out.setting === "off" && dreams.nightRunUnderWay() ? ` ${NIGHT_RUN_FINISHES}` : "";
         return server["result"]({ phase, setting: out.setting, before: out.before, said: `${said[out.setting]}${finishes}` }, false);
       }
       case "begin": {
+        if (offWithoutNight()) return refused("dreaming-off", DREAMING_OFF_REFUSAL);
         const model = readSession(server["registryDir"], session)?.model;
         // THE RUN MOVED PAST THE WRITER (review of #271): an open claim this
         // session still holds is answered `nothing-to-say` here, when the
@@ -252,6 +266,7 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
         // part (the owner's order), so the night's claim is written here, for
         // this session and this run; a claim this session already holds is
         // reused (a run started again the same day claims nothing twice).
+        if (offWithoutNight()) return refused("dreaming-off", DREAMING_OFF_REFUSAL);
         const dreamArg = typeof args["dream"] === "string" ? args["dream"] : null;
         const claim = server.counterpart.claimNightWriter({ session, run: dreamArg ?? `night of ${at}` });
         const out = server.counterpart.nightWriter({ session, tool: NIGHT_WRITER_TOOL });
@@ -393,7 +408,7 @@ export function reflectTool(server: McpServer, sent: Record<string, unknown>): T
             // After a dream whose run was cut off before it reflected
             // (review of #271): the reflection alone, on that dream.
             prompt: reflections.launchPrompt({ session, dream: typeof args["dream"] === "string" ? args["dream"] : null }),
-            how: "Hand `prompt` to a background agent (the Agent tool), unchanged, and carry on. When it finishes, if it left a morning share, tell it to the owner in your own words, then call this tool with phase \"told\".",
+            how: reflectLaunchHowFor(server["placeHost"]),
           },
           false,
         );

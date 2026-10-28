@@ -35,7 +35,8 @@
  * guards, then goes through the same door. Not here: a
  * chapter's regrown copy (`episode-regrown`, one chapter's text re-rendered,
  * not one memory over another) and the schema belief / current-state arms
- * (no live producer).
+ * (a belief revises under its own pressure in `schemas/`, live since wave 2,
+ * 0.3.31; a current state still has no live producer).
  *
  * **One way to settle, from anywhere.** A new memory settles the one it
  * `updates` as it is written (`settleOnWrite`, called by `revision.ts` in

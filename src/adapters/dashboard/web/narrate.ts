@@ -1316,7 +1316,9 @@ export const REF_KIND = {
   "handoff.shown": "handoff",
   "handoff.cleared": "handoff",
   "handoff.refused": "none",
-  // The ref is the chapter (an episode row) the line would have named.
+  // The ref is the chapter (an episode row) the line would have named — or,
+  // since the review of #636, the later session with no chapter it named
+  // first, which no store row answers (`subjectOf` prints it as a session).
   "handoff.lasthere.noroom": "memory",
   "recall.credit": "none",
   "recall.rated": "session",
@@ -1367,8 +1369,13 @@ function subjectOf(store: ReadOnlyStore, row: EventRow): string | null {
       // A name this file has never heard of, carrying a ref. Print the raw
       // address rather than guessing at what it points to.
       return row.ref;
-    default:
-      return reveal(store, row.ref, 60).label;
+    default: {
+      const r = reveal(store, row.ref, 60);
+      // "Last here"'s no-room row names a session when the line led with one
+      // that wrote no chapter: not an unknown memory.
+      if (row.name === "handoff.lasthere.noroom" && r.state === "unknown") return `session ${row.ref}`;
+      return r.label;
+    }
   }
 }
 

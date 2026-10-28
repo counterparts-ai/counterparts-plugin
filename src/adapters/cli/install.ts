@@ -94,6 +94,22 @@ export const BIN = {
 export const MCP_SERVER_NAME = "counterparts";
 
 /**
+ * COUNTERPARTS ONLINE, KEPT OUT OF CLAUDE CODE (2026-10-27, R1). Claude Code
+ * loads a person's claude.ai connectors into every session, so somebody with
+ * this install AND the hosted connector would get two memory servers over two
+ * stores. `connect` puts this one entry in `deniedMcpServers`
+ * (`wire.ts#mergeDeny`); `disconnect` takes exactly it out; `doctor` reads it.
+ *
+ * The URL, never a `serverName`: the name is whatever each person typed for
+ * the connector. The domain is the hosted DESIGN's lean (`app.counterparts.ai`),
+ * not a final word: this constant is the one place to change it.
+ */
+export const HOSTED_DENY_URL = "https://app.counterparts.ai/*";
+
+/** The settings key Claude Code reads its MCP deny list from. */
+export const DENY_KEY = "deniedMcpServers";
+
+/**
  * THE TWO ENTRY SCRIPTS, ABSOLUTE, resolved from THIS file's location — never
  * from a working directory and never from a name on a PATH.
  *
@@ -443,7 +459,7 @@ export function settingsBlock(hookCommand = runCommand(HOOK_SCRIPT)): string {
   for (const event of HOST_EVENTS) {
     hooks[event] = [{ hooks: [{ type: "command", command: hookCommand }] }];
   }
-  return JSON.stringify({ hooks }, null, 2);
+  return JSON.stringify({ hooks, [DENY_KEY]: [{ serverUrl: HOSTED_DENY_URL }] }, null, 2);
 }
 
 /**
@@ -588,6 +604,9 @@ export interface HostRead {
   readonly plugin: PluginInstallRead | null;
   /** A recorded `counterparts-sidebar@…` install (`host-wiring.ts#sidebarPluginRecorded`). */
   readonly sidebarPlugin: boolean;
+  /** Some settings file read carries `{ "serverUrl": HOSTED_DENY_URL }` in
+   *  `deniedMcpServers` (R1, 2026-10-27). */
+  readonly deny: boolean;
 }
 
 /** Which of our host entries a runtime row came from: Claude Code's hooks, its
@@ -776,6 +795,8 @@ export function readHost(
   const stale = new Map<string, string>();
   const settingsRead: string[] = [];
   const settingsUnreadable: string[] = [];
+  // Counterparts Online kept out (R1): our URL in any settings file read.
+  let deny = false;
   // WHICH RUNTIME the host launches us with — read off the same commands, never
   // spawned: `bun run <script>` or `node --import <node-hooks.mjs> <script>`.
   const runtimes = new Map<string, { kind: RuntimeKind | "binary"; used: Set<HostUse>; projectEnv: Set<HostUse> }>();
@@ -809,6 +830,7 @@ export function readHost(
     if (read.state === "unreadable") settingsUnreadable.push(path);
     if (read.state !== "read") continue;
     settingsRead.push(path);
+    if (Array.isArray(read.value[DENY_KEY]) && (read.value[DENY_KEY] as unknown[]).some((e) => e !== null && typeof e === "object" && (e as Record<string, unknown>)["serverUrl"] === HOSTED_DENY_URL)) deny = true;
     const hooks = read.value["hooks"];
     if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) continue;
     for (const [event, entries] of Object.entries(hooks as Record<string, unknown>)) {
@@ -886,6 +908,7 @@ export function readHost(
     })),
     plugin: pluginInstall({ home, env, cwd }),
     sidebarPlugin: sidebarPluginRecorded({ home, env, cwd }),
+    deny,
   };
 }
 

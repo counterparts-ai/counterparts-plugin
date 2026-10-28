@@ -50,6 +50,7 @@ import {
 } from "../../core/counterpart.js";
 import type { PlainReminder } from "../../core/counterpart.js";
 import { newNightRunId } from "../../core/dream/index.js";
+import { DREAM_TUNABLES } from "../../core/dream/tunables.js";
 import { PRONOUN_RULE, coverFinish, meetingHold } from "../../core/onboarding.js";
 import type { DreamOffer } from "../../core/dream/index.js";
 import type { BoundaryKind } from "../../core/remember/index.js";
@@ -77,8 +78,10 @@ import { localDate } from "../../core/time.js";
 import { openThread } from "../../core/self/identity.js";
 import { TUNABLES } from "../config.js";
 import { TUNABLES as RECALL_TUNABLES } from "../../core/recall/tunables.js";
-import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessage, readCheckout } from "./doctor.js";
+import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessage, readCheckout, wakeMeaningLine } from "./doctor.js";
 import type { CheckoutReading } from "./doctor.js";
+import { staleWindowsLine as staleWindowsSaid } from "./stale-windows.js";
+import { upperFirst, windowStep } from "../update-words.js";
 import { nightRowTimeoutMs, planNightRunner } from "./night-run.js";
 import { NOTHING_OWED_BEFORE_KEY, catchUpOf, catchUpWords, owedBefore } from "./night-catch-up.js";
 import type { NightKind } from "./night-run.js";
@@ -525,8 +528,14 @@ export const RATE_CLAUSE = "`rated` 0–3 each footnote shown since you last wro
 /**
  * WHAT OPEN MEANS, IN THE ASK (2026-10-22, the open-threads brief): the same
  * narrowing as the `unresolved` field's own text (`mcp/tools.ts#UNRESOLVED_PROPERTY`).
+ *
+ * AND WHAT WOULD CLOSE IT (2026-10-27, F1 after S1): the Stop ask is the door
+ * most open items come through, so it invites `settlesWhen` beside them — "if
+ * you can", never demanded (`mcp/tools.ts#SETTLES_WHEN_PROPERTY` says the rest).
+ * Without it the nightly reflection is shown few items it could close.
  */
-export const OPEN_MEANS = "`unresolved` only when someone owes an answer (a question to them, a check with a date, a promise)";
+export const OPEN_MEANS =
+  "`unresolved` only when someone owes an answer (a question to them, a check with a date, a promise), plus `settlesWhen` if you can name what closes it";
 
 /** How long one open item's title may run in the ask's last line (2026-10-22). */
 const OPEN_TITLE_CHARS = 60;
@@ -535,7 +544,7 @@ const OPEN_TITLE_CHARS = 60;
  * The most the ask's open line may run, whole (the review of #592, F5): a
  * title is clipped at `OPEN_TITLE_CHARS` and an id is 16 characters, so five
  * items fit; an item past it is left out, never cut. With the two lines'
- * own pin (720) the whole ask stays under ~1,250 characters.
+ * own pin (770) the whole ask stays under ~1,300 characters.
  */
 export const OPEN_LINE_MAX_CHARS = 520;
 
@@ -741,6 +750,18 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // are Claude Desktop's server, which serves a call as this session only
       // when the call names it. A terminal session's wake is unchanged.
       const codeTab = codeTabSessionLine(input);
+      // SEARCH BY MEANING THAT CANNOT RUN (2026-10-27, W1): one line under the
+      // clock, beside the Code tab's, for the model to tell its person — with
+      // the fix for this install's route (`doctor-meaning.ts`). None on a
+      // resume (the replayed wake already holds it), and only where a person
+      // will see the reply (`watchedAtStart`: not the headless night, not
+      // `claude -p` or the SDK, not a compaction).
+      const meaning = resumed || !watched ? null : this.meaningLine(input);
+      // OLDER WINDOWS AFTER AN UPGRADE (2026-10-27, U1a): above W1's line, said
+      // once per store version by the first watched wake that finds older
+      // servers still running (`stale-windows.ts`), under the same rule.
+      const stale = resumed || !watched ? null : this.staleWindowsLine(input);
+      const leadLines = [codeTab, stale, meaning].filter((l): l is string => l !== null);
       // THE FIRST MEETING'S MARKER (2026-10-11), on every session-start wake:
       // the state word only, for the mod, which cannot reach the dashboard
       // before somebody starts it. The store marker beside it (2026-10-12)
@@ -751,7 +772,7 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // one tag of their own in front of a wake that has none (`tagLead`);
       // `ONE_TAG_LINE` off puts them back under the clock.
       const tags = tagLead(woke.tags ?? markers(), woke.text, woke.tagged === true);
-      const lead = `${woke.text.length === 0 && plain.context.length === 0 && codeTab === null ? "" : `${this.nowLine()}\n`}${ONE_TAG_LINE ? "" : tags}${codeTab === null ? "" : `${codeTab}\n`}${plain.context}${ONE_TAG_LINE ? tags : ""}`;
+      const lead = `${woke.text.length === 0 && plain.context.length === 0 && leadLines.length === 0 ? "" : `${this.nowLine()}\n`}${ONE_TAG_LINE ? "" : tags}${leadLines.map((l) => `${l}\n`).join("")}${plain.context}${ONE_TAG_LINE ? tags : ""}`;
       const sent = woke.bytes + Buffer.byteLength(lead, "utf8");
       const rides =
         plain.due.length > 0 &&
@@ -1284,9 +1305,17 @@ export class ClaudeCodeAdapter extends Lifecycle {
         store.setMeta(NOTHING_OWED_BEFORE_KEY, input.at);
         return false;
       }
-      if (!dreams.claimOffer(offer)) return false;
-      const started = this.startNightRun(input, offer);
-      this.emit("adapter.night.catch-up-only", { started, owed, dream: offer.dreamSkipped ?? null });
+      // OWED WRITE-UPS COUNT AS NEW (S2, 2026-10-26): the catch-up runs first
+      // in the night, so with what it is about to write the queue reaches
+      // `MIN_NEW`, and the night runs whole — not its catch-up alone. Each
+      // owed session counts as one. A first day stays catch-up only.
+      const whole =
+        DREAM_TUNABLES.OWED_COUNTS_AS_NEW && offer.dreamSkipped === "too-little-new" && offer.fresh + owed >= DREAM_TUNABLES.MIN_NEW;
+      const { dreamSkipped: _skipped, ...asWhole } = offer;
+      const chosen: DreamOffer = whole ? asWhole : offer;
+      if (!dreams.claimOffer(chosen)) return false;
+      const started = this.startNightRun(input, chosen, whole);
+      this.emit("adapter.night.catch-up-only", { started, owed, dream: chosen.dreamSkipped ?? null, ...(whole ? { owedAsNew: owed, fresh: offer.fresh } : {}) });
       return started;
     } catch {
       return false;
@@ -1320,16 +1349,20 @@ export class ClaudeCodeAdapter extends Lifecycle {
    * started; false — with a `could-not-start` row saying why — when it did
    * not, so the next offer asks instead. Never throws.
    */
-  private startNightRun(input: HookInput, offer: DreamOffer): boolean {
+  private startNightRun(input: HookInput, offer: DreamOffer, owedAsNew = false): boolean {
     const dreams = this.counterpart.dreams;
     const store = this.counterpart.store;
     const run = newNightRunId();
+    // `owedAsNew` (S2 review): made whole by owed write-ups counted as new —
+    // the run reads the queue again after its catch-up (`night-run.ts`).
     const kind: NightKind =
       offer.reflects !== null
         ? { kind: "reflection", dream: offer.reflects }
-        : offer.dreamSkipped === undefined
-          ? { kind: "night" }
-          : { kind: "night", dreamSkipped: offer.dreamSkipped };
+        : offer.dreamSkipped !== undefined
+          ? { kind: "night", dreamSkipped: offer.dreamSkipped }
+          : owedAsNew
+            ? { kind: "night", owedAsNew: true }
+            : { kind: "night" };
     const base = {
       run,
       date: offer.at,
@@ -1465,6 +1498,12 @@ export class ClaudeCodeAdapter extends Lifecycle {
       const decision = decideUpdateNotice(this.counterpart.store.dir, {
         sessionId: input.sessionId,
         installed: installedBuild(),
+        // The route's step (U1a): Reconnect restarts a plugin's old folder.
+        // The npm install keeps the words it has always had, and so does an
+        // adapter told no route (a test, an embedder).
+        ...(this.install === undefined || this.install === "npm"
+          ? {}
+          : { remedy: `${upperFirst(windowStep(this.install, input.entrypoint === CODE_TAB_ENTRYPOINT))}.` }),
       });
       // Ring rows only when there is something to say; `bin/hook.ts` copies
       // them to stderr, because this process lives for one hook.
@@ -1829,6 +1868,53 @@ export class ClaudeCodeAdapter extends Lifecycle {
     } catch {
       /* the check runs again next turn; a hook may not fail the host (§5 G2) */
     }
+  }
+
+  /**
+   * THE WAKE'S LINE WHEN SEARCH BY MEANING IS ON AND CANNOT RUN (2026-10-27,
+   * W1; `doctor-meaning.ts#wakeMeaningLine`), or null. For the model to tell
+   * its person, so it rides in the injection — unlike `notice`, which is the
+   * person's terminal and red only. An observer says nothing; a reading that
+   * fails costs the line, never the wake, and leaves one ring row.
+   */
+  meaningLine(input: HookInput): string | null {
+    if (this.observer) return null;
+    try {
+      const line = wakeMeaningLine({
+        config: this.config,
+        store: this.counterpart.store,
+        // The day the `stopped` line is claimed for: said once a day at most.
+        today: input.at ?? localDate(this.nowFn(), this.counterpart.store.zone()),
+        ...(this.install === undefined ? {} : { install: this.install }),
+      });
+      if (line !== null) this.emit("adapter.meaning.off", {});
+      return line;
+    } catch (err) {
+      this.emit("adapter.meaning.failed", { code: codeOf(err) });
+      return null;
+    }
+  }
+
+  /**
+   * THE WAKE'S LINE ABOUT OLDER WINDOWS (2026-10-27, U1a;
+   * `stale-windows.ts#staleWindowsLine`), or null: Claude Code windows still
+   * running a Counterparts older than the memory, each with its own route's
+   * step (this window's route and tab for a record that does not say). This
+   * window's own host is left out: it is the one being told. Claimed when
+   * composed, once per store version. An observer says nothing (and could
+   * not claim it).
+   */
+  staleWindowsLine(input: HookInput): string | null {
+    if (this.observer) return null;
+    const said = staleWindowsSaid({
+      store: this.counterpart.store,
+      fallback: { route: this.install, codeTab: input.entrypoint === CODE_TAB_ENTRYPOINT },
+      now: this.nowFn(),
+      selfHostPid: process.ppid,
+    });
+    if (said === null) return null;
+    this.emit("adapter.update.stale-windows", { windows: said.found.windows, desktop: said.found.desktop });
+    return said.line;
   }
 
   /**

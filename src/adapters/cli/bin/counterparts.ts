@@ -35,6 +35,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { BINARY, TRANSPILED } from "../../runtime.js";
+import { usePrivateUmask, withHostUmask } from "../../private-umask.js";
 import type { Binary } from "../../runtime.js";
 import { npmWiring } from "../../host-wiring.js";
 import { PACKAGE_ROOT, PLUGIN_ROOT_ENV, npmDoctorCommand, pluginDoctorLine, pluginOrigin, runningAsPlugin } from "../../plugin.js";
@@ -86,8 +87,8 @@ function doctorFromStoodDownPlugin(): number | null {
   const wired = npmDoctorCommand(wiring);
   const r =
     wired !== null
-      ? spawnSync(wired.exe, [...wired.args], { stdio: "inherit", env })
-      : spawnSync("counterparts", process.argv.slice(2), { stdio: "inherit", env });
+      ? withHostUmask(() => spawnSync(wired.exe, [...wired.args], { stdio: "inherit", env }))
+      : withHostUmask(() => spawnSync("counterparts", process.argv.slice(2), { stdio: "inherit", env }));
   if (r.error !== undefined) {
     process.stdout.write("The npm install's `counterparts` is not on this PATH. Run `counterparts doctor` in a terminal.\n");
     return 0;
@@ -152,6 +153,7 @@ export function isEntryPoint(argv1: string | undefined, url: string, binary: Bin
 /** Run one console command and exit — what this file does as a script, and
  *  what the single binary's `cli` mode calls. */
 export function start(): void {
+  usePrivateUmask();
   // THE PLUGIN DIRECTORY'S BUNDLE (transpiled, no `plugin-run.sh`): this entry
   // is what its commands run, from a Bash call that carries no
   // CLAUDE_PLUGIN_ROOT, so it says what `plugin-run.sh cli` says for the full

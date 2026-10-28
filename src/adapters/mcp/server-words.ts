@@ -1,8 +1,10 @@
 /** What the MCP server says: its name and version, its refusals, its notes to Claude Desktop, and the words its tools answer with (moved out of `server.ts`, 2026-10-11). */
 import { homedir } from "node:os";
 import { basename, dirname } from "node:path";
-import { DEFAULT_HOST, wordingFor } from "../hosts.js";
+import { CLAUDE_AI_HOST, CLAUDE_AI_SCOPE, DEFAULT_HOST, DESKTOP_HOST, DESKTOP_SCOPE, wordingFor } from "../hosts.js";
 import type { InstallRoute } from "../plugin.js";
+import { newerStoreRemedy, newerStoreWords, reloadStep } from "../update-words.js";
+import type { NewerStoreInput } from "../update-words.js";
 import { RECALL_MAX_IDS } from "./deliberate.js";
 import type { DreamBundle } from "../../core/dream/index.js";
 import { PRONOUN_RULE } from "../../core/onboarding.js";
@@ -19,7 +21,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.37";
+export const SERVER_VERSION = "0.3.38";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -39,6 +41,24 @@ export function staleServerRefusal(host: string = DEFAULT_HOST): string {
 export const STALE_SERVER_REFUSAL = staleServerRefusal(DEFAULT_HOST);
 
 /**
+ * THE SAME REFUSAL WITH THE ROUTE'S STEP (U1a, 2026-10-27). "Run /mcp and
+ * Reconnect" is right for an npm install, which is replaced in place, and
+ * Claude Desktop's and claude.ai's servers keep their own hosts' words. For
+ * the PLUGIN it loops: Claude Code keeps the old version's folder, and an
+ * open window's server keeps its path until `/reload-plugins`, so Reconnect
+ * starts the same old code. Those servers get the plugin's step
+ * (`update-words.ts#newerStoreWords`: reload when Claude Code records a newer
+ * version than this server runs, update first otherwise), and an `either`
+ * server names both. A plain sentence the model can pass on.
+ */
+export function newerStoreRefusal(input: Omit<NewerStoreInput, "who">): string {
+  const host = input.host ?? DEFAULT_HOST;
+  if (host !== DEFAULT_HOST || input.route === "npm") return staleServerRefusal(host);
+  const words = newerStoreWords({ ...input, who: "server" });
+  return `This tool did nothing: ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
+}
+
+/**
  * THE SAME GATE WHEN ONLY THE CACHE IS AHEAD (2026-10-11): the search cache
  * (`cache/cache.sqlite`, box 3) carries a newer build's stamp while the store
  * does not. "Was updated … reconnect" is not true there — after a rollback
@@ -56,10 +76,16 @@ export const STALE_SERVER_REFUSAL = staleServerRefusal(DEFAULT_HOST);
  * runs — there the newer build IS installed, and the reconnect alone loads
  * it. So the sentence says both, and deleting is offered only for going back.
  */
-export function cacheAheadRefusal(cacheFile: string, host: string = DEFAULT_HOST): string {
+export function cacheAheadRefusal(cacheFile: string, host: string = DEFAULT_HOST, route?: Omit<NewerStoreInput, "who" | "host">): string {
   const w = wordingFor(host);
   const lower = (s: string): string => `${s.charAt(0).toLowerCase()}${s.slice(1)}`;
-  return `The search cache was written by a newer Counterparts build than this server runs, so this tool did nothing. If that newer build is installed, ${lower(w.reconnect)} If you went back to an older build, delete ${cacheFile}* (the search cache alone; no memory is kept there) and run \`counterparts verify --rebuild --keep-vectors\` to rebuild its word index, then ${lower(w.reconnectFirst)}.`;
+  // A PLUGIN'S SERVER (U1a): Reconnect restarts its old folder, so both ways
+  // end in the route's step instead — update-or-reload for the newer build,
+  // a reload (or a new session) to let go of the deleted file.
+  const viaPlugin = host === DEFAULT_HOST && route !== undefined && route.route !== "npm";
+  const load = viaPlugin ? `${newerStoreRemedy({ ...route, who: "server", host })}.` : lower(w.reconnect);
+  const restart = viaPlugin ? reloadStep(route.codeTab === true) : lower(w.reconnectFirst);
+  return `The search cache was written by a newer Counterparts build than this server runs, so this tool did nothing. If that newer build is installed, ${load} If you went back to an older build, delete ${cacheFile}* (the search cache alone; no memory is kept there) and run \`counterparts verify --rebuild --keep-vectors\` to rebuild its word index, then ${restart}.`;
 }
 
 /** The gate's refusal when the stamps could not be read at all — the same
@@ -89,6 +115,25 @@ export const START_PROMPT = {
   description: "Wake this chat's memory before we begin.",
   text: "Before anything else, call the counterparts wake tool, read what it returns, and keep the session id it gives for this chat. Then say hello as yourself — briefly — with that memory in mind.",
 } as const;
+
+/**
+ * CLAUDE.AI'S PROMPT (2026-10-26, OL1b item 5): claude.ai lists a connector's
+ * prompts in the + menu (it called `prompts/list` three times on the trial's
+ * first day), so a person can start a chat with one click. The person picks
+ * it, so it may ask for the call outright; it also says what to do with what
+ * the wake brings, as the instruction block does.
+ */
+export const CLAUDE_AI_START_PROMPT = {
+  name: "wake-counterparts",
+  title: "Wake Counterparts",
+  description: "Wake your long-term memory for this conversation before we begin.",
+  text: "Before anything else, call the counterparts wake tool, read what it returns, and keep the session id it gives for this conversation. If it brings something for me — something due, something left open between us, what you dreamed — mention it briefly. Then say hello as yourself, with that memory in mind.",
+} as const;
+
+/** The one prompt a chat host offers: claude.ai's, else Desktop's. */
+export function startPromptFor(host: string): { readonly name: string; readonly title: string; readonly description: string; readonly text: string } {
+  return host === CLAUDE_AI_HOST ? CLAUDE_AI_START_PROMPT : START_PROMPT;
+}
 
 /**
  * THE ONE LINE THAT MAKES A DESKTOP DREAM LINE TRUE THERE. The day's dream line
@@ -261,3 +306,172 @@ export const ANSWERS_HINT =
 /** Beside a write that closed a dated memory and sent no title (2026-10-14). */
 export const TITLE_ASKED_NOTE =
   "No title was given, and the old memory's was not carried over: this closes it, and the old title would read as still open. A title is asked for: give a memory that closes something its own short one (\"Taxes filed\").";
+
+/**
+ * CLAUDE.AI'S `instructions` (2026-10-26, the claude.ai trial): Desktop's one
+ * line, said for a chat on the web — no Code tab, no Stop ask, no end of
+ * conversation this server can see. claude.ai reportedly drops the field
+ * (anthropics/claude-ai-mcp#93); the trial's canary rides beside it to measure
+ * exactly that (`claudeAiInstructions`).
+ */
+export const CLAUDE_AI_INSTRUCTIONS =
+  "Counterparts is your memory. In every conversation, call its wake tool first — before answering anything, and above all anything about the person, the past, or work in progress — and once: it returns this conversation's briefing and a session id to pass as `session` on every later call in it. Without a wake, what recall returns is a slice, not the whole record: never present it as complete. Nothing tells this memory when a conversation ends, so remember what matters as it comes up, in the moment, with the remember tool.";
+
+/**
+ * The `instructions` a claude.ai server sends, with the trial's CANARY when the
+ * entry point was handed one: one invented fact no tool description carries, so
+ * a cold question about it shows whether claude.ai delivered this field at all.
+ */
+export function claudeAiInstructions(canary?: string): string {
+  return canary === undefined || canary.length === 0 ? CLAUDE_AI_INSTRUCTIONS : `${CLAUDE_AI_INSTRUCTIONS}\n\n${canary}`;
+}
+
+/** What a claude.ai call that needs a session is told when none is live. */
+export const NO_CLAUDE_AI_SESSION =
+  "No claude.ai session is live. Call the `wake` tool first: it starts this conversation's session and returns its id.";
+
+/** The claude.ai copy of `desktopBindNote`: no Code tab on the other end. */
+export function claudeAiBindNote(session: string): string {
+  return `No session was named, so this call was filed under the most recent claude.ai session — ${session}, which may be another conversation's. Every tool takes "session" here: pass the id wake gave this conversation, so its calls stay together.`;
+}
+
+/**
+ * WHAT A LAUNCH RESULT SAYS TO DO WITH ITS PROMPT, on claude.ai (2026-10-26,
+ * OL1c). Every other host's `how` hands the prompt to "a background agent (the
+ * Agent tool)"; claude.ai has none, and its `dream` / `reflect` descriptions say
+ * the prompt is followed in the same run or conversation. The rest — the
+ * dream's line shown as it came back, the share told as a telling and marked
+ * told — is every host's, except that a share left in the night routine waits
+ * for the next conversation (the routine's own prompt says so too).
+ */
+export const CLAUDE_AI_DREAM_LAUNCH_HOW =
+  "Follow `prompt` yourself, here, step by step, through every call it names, passing the same session. In the night routine, a morning share it leaves is for the person's next conversation: do not tell it there or mark it told. In a conversation where the person asked you to dream, show them the dream's line from the hand-back exactly as it came back — it carries the dream's mark, which keeps the dream out of lived memory — and if a morning share follows, tell it in your own words, as a telling (\"While I slept I dreamed…\"), then call the reflect tool with phase \"told\" — never state what was dreamed as something that happened.";
+
+/** The claude.ai copy of the reflect `launch` result's `how` (see above). */
+export const CLAUDE_AI_REFLECT_LAUNCH_HOW =
+  "Follow `prompt` yourself, here, step by step, passing the same session. When it finishes, if it left a morning share, tell it to the person in your own words, then call this tool with phase \"told\".";
+
+/** The claude.ai copy of `DESKTOP_DREAM_NOTE`. */
+export const CLAUDE_AI_DREAM_NOTE =
+  "(claude.ai: there is no terminal here, so nobody has shown them that line — say it to them yourself, once, in your own words. And there is no background Agent tool: if they say dream, follow the prompt the launch returns yourself, here.)";
+
+/**
+ * THE WORDS A HOOKLESS CHAT HOST'S RESULTS SAY ABOUT IT, by host. Desktop's
+ * entry is the constants above, unchanged; claude.ai's names no Code tab.
+ */
+export interface ChatWords {
+  /** The host as a sentence names it: "Claude Desktop", "claude.ai". */
+  readonly label: string;
+  /** The place its chats share. */
+  readonly place: string;
+  readonly instructions: string;
+  readonly noSession: string;
+  readonly bindNote: (session: string) => string;
+  readonly dreamNote: string;
+  /** The Code-tab clause a "name your session" sentence adds, or "". */
+  readonly codeTabClause: string;
+}
+
+export const CHAT_WORDS: Readonly<Record<string, ChatWords>> = {
+  [DESKTOP_HOST]: {
+    label: "Claude Desktop",
+    place: DESKTOP_SCOPE,
+    instructions: DESKTOP_INSTRUCTIONS,
+    noSession: NO_DESKTOP_SESSION,
+    bindNote: desktopBindNote,
+    dreamNote: DESKTOP_DREAM_NOTE,
+    codeTabClause: " — or, in a Claude Code session (Desktop's Code tab), the id your wake or Stop ask names",
+  },
+  [CLAUDE_AI_HOST]: {
+    label: "claude.ai",
+    place: CLAUDE_AI_SCOPE,
+    instructions: CLAUDE_AI_INSTRUCTIONS,
+    noSession: NO_CLAUDE_AI_SESSION,
+    bindNote: claudeAiBindNote,
+    dreamNote: CLAUDE_AI_DREAM_NOTE,
+    codeTabClause: "",
+  },
+};
+
+/** The words for a chat host; Desktop's for any host without its own. */
+export function chatWordsFor(host: string): ChatWords {
+  return CHAT_WORDS[host] ?? (CHAT_WORDS[DESKTOP_HOST] as ChatWords);
+}
+
+/**
+ * "NO DREAMS" MEANS NO DREAMS (2026-10-26, OL1d, from #649's review). While the
+ * dreaming setting is `off`, a dream `launch` refuses on every host with this,
+ * and so do `writer` and `begin` called without one (review of #650): no night
+ * starts from the tool — not day's end, not the dream, not the reflection after
+ * it. A run already under way is not stopped (owner decision D): today's row
+ * says `launched`, or the server is the headless night's own (Claude Code's
+ * night composes its prompt from the store, never through `launch`).
+ */
+export const DREAMING_OFF_REFUSAL =
+  'Dreaming is off ("no dreams"), so no night starts: no day\'s end, no dream, no reflection — do not call those phases for it. Saying "dreams on" turns it back on: this tool, phase "setting", value "auto", on their word.';
+
+/**
+ * WHAT THE `setting` RESULT SAYS, by host (OL1d). The setting is the person's
+ * wish; the HOST decides who starts the night. Claude Code's first session
+ * starts it in the background (its words, byte for byte as before). A hookless
+ * host starts nothing on its own: on claude.ai (and the hosted server, which is
+ * claude.ai's host) the person's routine, or a chat on their word, runs it, and
+ * no daily question is shown there; Desktop's chat says the day's question
+ * itself and follows a launch's prompt in the chat, while a Claude Code
+ * session on the same memory, if there is one, still starts an `auto` night.
+ */
+export type DreamingSettingWords = Readonly<Record<"auto" | "ask" | "off", string>>;
+
+export const CLAUDE_CODE_SETTING_SAID: DreamingSettingWords = {
+  auto: "Dreaming on its own: once a day, the first session starts the nightly run by itself, in a separate windowless session in the background, and says so in one line. Today's run is still yours to start, if the owner asked for it.",
+  ask: "Dreaming asks first: once a day, the first session shows the owner the question in the terminal and waits for their word.",
+  off: "No dreams: nothing starts the nightly run and nothing asks. It can be turned back on with this phase (value ask or auto) when the owner says so.",
+};
+
+export const CLAUDE_AI_SETTING_SAID: DreamingSettingWords = {
+  auto: "Dreaming on: nothing here starts a night on its own — their night routine, or saying \"dream\" in a chat, runs the night (day's end, the dream, the reflection).",
+  ask: "Dreaming on: claude.ai shows no daily question, so this works as auto does — their night routine, or saying \"dream\" in a chat, runs the night.",
+  off: "No dreams: the night is skipped even if their routine runs — its launch is refused and says so. Saying \"dreams on\" turns it back on (this phase, value auto).",
+};
+
+export const DESKTOP_SETTING_SAID: DreamingSettingWords = {
+  auto: "Dreaming on its own: this chat starts nothing by itself. If Claude Code shares this memory, its first session of a day starts the nightly run in the background; here, saying \"dream\" runs it in the chat.",
+  ask: "Dreaming asks first: once a day, the first wake brings the question — say it to them once, in your own words, and wait for their word.",
+  off: "No dreams: nothing starts the nightly run and nothing asks, and a launch is refused. It can be turned back on with this phase (value ask or auto) when the owner says so.",
+};
+
+/** The `setting` result's words for the server's host; Claude Code's for any host without its own. */
+export function settingSaidFor(host: string): DreamingSettingWords {
+  if (host === CLAUDE_AI_HOST) return CLAUDE_AI_SETTING_SAID;
+  if (host === DESKTOP_HOST) return DESKTOP_SETTING_SAID;
+  return CLAUDE_CODE_SETTING_SAID;
+}
+
+/** Every host but claude.ai and Desktop: the dream `launch` result's `how`, as before. */
+export const DREAM_LAUNCH_HOW =
+  "Hand `prompt` to a background agent (the Agent tool), unchanged, and carry on. When it finishes, show the owner its first line (the dream's) exactly as it came back — it carries the dream's mark, which keeps the dream out of lived memory. If a morning share follows, tell it to the owner in your own words, as a telling (\"While I slept I dreamed…\"), then call the reflect tool with phase \"told\" — never state what was dreamed as something that happened.";
+
+/** Every host but claude.ai and Desktop: the reflect `launch` result's `how`, as before. */
+export const REFLECT_LAUNCH_HOW =
+  "Hand `prompt` to a background agent (the Agent tool), unchanged, and carry on. When it finishes, if it left a morning share, tell it to the owner in your own words, then call this tool with phase \"told\".";
+
+/**
+ * DESKTOP'S `how` (OL1d): Desktop's chat has no background Agent tool (its dream
+ * note already says to follow the launch's prompt in the chat), so the result
+ * says the same.
+ */
+export const DESKTOP_DREAM_LAUNCH_HOW =
+  "Follow `prompt` yourself, here, step by step, through every call it names, passing the same session. When it finishes, show the owner the dream's line from the hand-back exactly as it came back — it carries the dream's mark, which keeps the dream out of lived memory. If a morning share follows, tell it to the owner in your own words, as a telling (\"While I slept I dreamed…\"), then call the reflect tool with phase \"told\" — never state what was dreamed as something that happened.";
+
+export const DESKTOP_REFLECT_LAUNCH_HOW =
+  "Follow `prompt` yourself, here, step by step, passing the same session. When it finishes, if it left a morning share, tell it to the owner in your own words, then call this tool with phase \"told\".";
+
+/** The dream `launch` result's `how` for the server's host. */
+export function dreamLaunchHowFor(host: string): string {
+  return host === CLAUDE_AI_HOST ? CLAUDE_AI_DREAM_LAUNCH_HOW : host === DESKTOP_HOST ? DESKTOP_DREAM_LAUNCH_HOW : DREAM_LAUNCH_HOW;
+}
+
+/** The reflect `launch` result's `how` for the server's host. */
+export function reflectLaunchHowFor(host: string): string {
+  return host === CLAUDE_AI_HOST ? CLAUDE_AI_REFLECT_LAUNCH_HOW : host === DESKTOP_HOST ? DESKTOP_REFLECT_LAUNCH_HOW : REFLECT_LAUNCH_HOW;
+}

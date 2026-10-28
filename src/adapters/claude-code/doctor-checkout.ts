@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { finding } from "./doctor-finding.js";
 import type { Finding } from "./doctor-finding.js";
+import { withHostUmask } from "../private-umask.js";
 
 // ── which checkout is running ───────────────────────────────────────────────
 
@@ -116,7 +117,8 @@ export const CHECKOUT_BUDGET_MS = 1000;
 
 function gitIn(root: string, remainingMs: () => number, env: NodeJS.ProcessEnv): GitRunner {
   return (args: readonly string[]): GitResult => {
-    const res = spawnSync("git", ["-C", root, ...args], {
+    // Under the umask this process was started with (`private-umask.ts`).
+    const res = withHostUmask(() => spawnSync("git", ["-C", root, ...args], {
       timeout: remainingMs(),
       encoding: "utf8",
       windowsHide: true,
@@ -126,7 +128,7 @@ function gitIn(root: string, remainingMs: () => number, env: NodeJS.ProcessEnv):
       // prove the budget against a spawn that actually blocks. Passing
       // `process.env` is what inheriting already meant.
       env,
-    });
+    }));
     if (res.error !== undefined && res.error !== null) {
       const code = (res.error as NodeJS.ErrnoException).code ?? "";
       return { ok: false, out: "", failed: code === "ETIMEDOUT" ? "timeout" : "missing" };

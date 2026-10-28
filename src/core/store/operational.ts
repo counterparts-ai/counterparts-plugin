@@ -506,7 +506,9 @@ export const DDL: readonly string[] = [
   // v8: DREAMS (`core/dream/`). One row per dream: when, for which session, its
   // state (`begun`, `journaled`, `undone`), and its JOURNAL — the dream's own
   // entry, kept here and never as a memory, so it can never be mistaken for a
-  // lived event (no decay, no dedup, no prune, no recall). The latest row's day
+  // lived event (no decay, no dedup, no prune). Since 2026-10-27 (D1) recall
+  // reaches it by what it was about, labelled [dream] (the recall tool's night reader;
+  // no column: a recall is a `dream.recalled` event). The latest row's day
   // is "last dreamed".
   `CREATE TABLE IF NOT EXISTS dreams (
      id          TEXT PRIMARY KEY,
@@ -1415,6 +1417,40 @@ export function isPreRowsDatabase(path: string): boolean {
     return Number.isFinite(n) && n < SCHEMA_VERSION && !hasBodyColumn(db);
   } catch {
     return false;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      /* nothing to say about a handle that will not close */
+    }
+  }
+}
+
+/**
+ * ONE META VALUE FROM A DATABASE THIS BUILD WOULD REFUSE (F1, 2026-10-27): the
+ * hook and doctor read the wake's build stamp (`self/behind.ts#WAKE_BUILD_KEY`)
+ * from a store a newer Counterparts upgraded (`SCHEMA_AHEAD`), to tell whether
+ * the plugin's recorded version is new enough to reload into. The store would
+ * not open for them, so this is its own connection: `wal: false` (a WAL
+ * conversion takes the write lock, and a newer writer may be migrating), one
+ * SELECT, closed. The `meta` table is the one thing every schema has kept.
+ * Not quite "writes nothing": when this is the last connection to a WAL store,
+ * SQLite's close checkpoints the WAL into the file — harmless, and what the
+ * refused open just before it did on its own close too (review of #668).
+ * No wait for a lock (`busyTimeoutMs: 0`, set at the open, whose own pragmas
+ * would otherwise wait): a store held EXCLUSIVE (a rollback's copy, a
+ * migration) answers null at once instead of after `BUSY_TIMEOUT_MS`.
+ * Null for a file that is not there, has no such key, or will not read; never throws.
+ */
+export function peekMeta(path: string, key: string): string | null {
+  if (!existsSync(path)) return null;
+  let db;
+  try {
+    db = openDb(path, { wal: false, busyTimeoutMs: 0 });
+    const value = db.get<{ value: string }>("SELECT value FROM meta WHERE key = ?", key)?.value;
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
   } finally {
     try {
       db?.close();

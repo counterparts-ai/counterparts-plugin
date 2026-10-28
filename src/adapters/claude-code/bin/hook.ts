@@ -14,10 +14,10 @@
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DATA_DIR_ENV, dataDir, describeGuardRefusal } from "../../../core/store/index.js";
+import { DATABASE_FILE, DATA_DIR_ENV, dataDir, describeGuardRefusal, isStoreError } from "../../../core/store/index.js";
 import {
   defaultConfigPath,
   implicitConfigRefusal,
@@ -51,14 +51,20 @@ import { NIGHT_RUN_ENV } from "../night-run.js";
 import {
   CONFIG_REFUSED,
   CONFIG_UNREADABLE,
+  aheadWriter,
   classifyStandDown,
   decideSay,
+  newerStoreSay,
   readMark,
   writeMark,
 } from "../standdown.js";
+import { CODE_TAB_ENTRYPOINT } from "../../hosts.js";
+import { newerStoreWords } from "../../update-words.js";
 import type { SaysSoHook, StandDownFault } from "../standdown.js";
 import { readTranscript } from "../transcript.js";
 import { BINARY, entryScript, scriptArgs } from "../../runtime.js";
+import { usePrivateUmask } from "../../private-umask.js";
+import { tightenInstallBase } from "../../private-base.js";
 import type { Binary } from "../../runtime.js";
 import { noteNpmLive, npmWiringForGate } from "../../npm-live.js";
 import {
@@ -70,6 +76,7 @@ import {
   installRoute,
   markTwiceSaid,
   pluginOrigin,
+  recordedForThisCopy,
   runningAsPlugin,
   takeFirstRunNotice,
   twiceNoticePath,
@@ -566,8 +573,11 @@ interface Said {
  * ONE LINE ON STDERR ALWAYS — AND, WHEN THIS WAS A FAULT, ONE RED LINE WHERE
  * THE OWNER WILL SEE IT.
  *
- * Exit code is untouched (0, always) and nothing else is injected: no wake, no
- * context, just the `systemMessage` the host displays. WHAT to say and WHETHER
+ * Exit code is untouched (0, always) and no wake is injected: just the
+ * `systemMessage` the host displays — and, for the one fault that has a line
+ * for the model (`StandDownFault.say`: a memory a newer Counterparts upgraded),
+ * that line as `additionalContext`, so the model does not act as if it
+ * remembers. WHAT to say and WHETHER
  * to say it is `standdown.ts#decideSay`'s, which is the rule that tells a store
  * that will not open from a database that was merely busy; this function is the
  * process end of it — the two channels, the mark, and the ordering.
@@ -592,8 +602,59 @@ function standDown(
   // still one this session has met, and the count is what decides the next one.
   writeMark(dataDir, said.sessionId, decision.mark);
   if (decision.message === null) return;
-  process.stdout.write(JSON.stringify({ systemMessage: decision.message }));
+  // A FAULT WITH A LINE FOR THE MODEL TOO (U1a: a memory a newer Counterparts
+  // upgraded) rides the envelope the paused notice does (`sayPaused`): the
+  // person's line as `systemMessage`, the model's as `additionalContext`.
+  process.stdout.write(
+    decision.model === null
+      ? JSON.stringify({ systemMessage: decision.message })
+      : hostDelivery(said.hook, { injection: decision.model, ask: null }, {}, [decision.message]).stdout,
+  );
   said.wroteStdout = true;
+}
+
+/**
+ * THE STAND-DOWN'S WORDS FOR A STORE A NEWER COUNTERPARTS UPGRADED (U1a,
+ * 2026-10-27), or the fault unchanged. The step is this copy's route's
+ * (`update-words.ts#newerStoreWords`): a hook is the code installed at its own
+ * path, so on npm a store ahead of it means the install is the older one
+ * (update); on the plugin it is the folder Claude Code loaded for this window,
+ * and `installed_plugins.json` says whether `/reload-plugins` would load a
+ * newer one (reload) or not (update first). Read only when the fault is this
+ * one; never throws — a fact it cannot read gives the update words.
+ *
+ * THE WRITER TOO (F1, after the review of #666): reload only into a record at
+ * least as new as the version that upgraded the memory. The store refused to
+ * open, so its wake stamp is read from the database file on its own
+ * connection (`standdown.ts#aheadWriter`): the path the refusal named, else
+ * the configured store's (the cache's refusal names none). Read off the npm
+ * route only, as the server does — npm's step is the update either way.
+ */
+function withNewerStoreWords(
+  fault: StandDownFault | null,
+  payload: Record<string, unknown>,
+  err: unknown,
+  storeDir: string | undefined,
+): StandDownFault | null {
+  if (fault === null || fault.code !== "SCHEMA_AHEAD") return fault;
+  try {
+    const route = installRoute(process.env);
+    const cwd = process.env["CLAUDE_PROJECT_DIR"] ?? eventDirectory(payload);
+    const loaded = installedVersion();
+    const named = isStoreError(err) ? err.detail["path"] : undefined;
+    const dbPath = typeof named === "string" ? named : storeDir === undefined ? null : join(storeDir, DATABASE_FILE);
+    const words = newerStoreWords({
+      route,
+      who: "hook",
+      loaded,
+      recorded: route === "npm" ? null : recordedForThisCopy({ home: homedir(), env: process.env, cwd }),
+      writer: route === "npm" ? null : aheadWriter(dbPath, loaded),
+      codeTab: (process.env["CLAUDE_CODE_ENTRYPOINT"] ?? "") === CODE_TAB_ENTRYPOINT,
+    });
+    return newerStoreSay(fault, words);
+  } catch {
+    return fault;
+  }
 }
 
 /**
@@ -708,7 +769,7 @@ async function main(): Promise<void> {
     const remedy = `Set "dataDir" in ${choice.path}, or set ${DATA_DIR_ENV}.`;
     standDown(said, {
       line: describeGuardRefusal(err, remedy) ?? detail,
-      fault: classifyStandDown(err),
+      fault: withNewerStoreWords(classifyStandDown(err), payload, err, said.dataDir),
       marker: true,
     });
   }
@@ -837,6 +898,8 @@ async function runHook(
   // From here the configuration was understood, so the store it names is the one
   // a stand-down may leave its once-per-session mark under.
   said.dataDir = loaded.dataDir;
+  // The install's base directory, private (R1, `private-base.ts`): once a session.
+  if (name === "session-start" && loaded.dataDir !== undefined) tightenInstallBase(choice.path, loaded.dataDir);
   // THE SESSION'S OWN DIRECTORY — the one everything this event captures will be
   // FILED under, whatever directory the agent's shell has wandered into. It is
   // resolved here rather than above because its first source is the session
@@ -1096,6 +1159,7 @@ export function isEntryPoint(argv1: string | undefined, url: string, binary: Bin
 /** Run the hook and exit — what this file does as a script, and what the
  *  single binary's `hook` mode calls. */
 export function start(): void {
+  usePrivateUmask();
   void main().then(
     () => process.exit(process.exitCode === 2 ? 2 : 0),
     (err: unknown) => {

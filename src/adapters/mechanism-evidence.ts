@@ -18,7 +18,7 @@
  * dashboard code.
  *
  * **Built / partly / not** is `build` below, one table: the pills' tags and the
- * home page's "N of 11 built" read it. The calls are from
+ * home page's "N of 12 built" read it. The calls are from
  * `docs/research/mechanism-audit-2026-09-24.md` plus what shipped since (emotion
  * part A, prospective reminders, the entity-card fade). A working default,
  * revisable.
@@ -51,6 +51,19 @@ export const FAMILIES: readonly Family[] = ["encoding", "storage", "retrieval", 
 export type Build = "built" | "partly" | "not";
 
 export type Payload = Record<string, unknown>;
+
+/** A count read off the store's rows rather than the event log (`MechanismEvidence.census`). */
+export interface Census {
+  readonly key: string;
+  readonly count: (store: ReadOnlyStore, sinceDay: number) => number;
+  readonly says: readonly [string, string];
+}
+
+/** A mechanism's censuses, as a list (none, one, or several). */
+export function censusesOf(m: MechanismEvidence): readonly Census[] {
+  if (m.census === undefined) return [];
+  return "key" in m.census ? [m.census] : m.census;
+}
 
 /** One kind of row that proves a mechanism fired. */
 export interface Proof {
@@ -93,13 +106,11 @@ export interface MechanismEvidence {
   /**
    * A mechanism whose firing is ARITHMETIC ON A ROW rather than an event (the
    * emotion lift): rows it acted on born inside the window, counted from the
-   * store. Backs no event seq.
+   * store. Backs no event seq. Several, for a mechanism whose work is only
+   * on its rows (Schemas, 2026-10-26: beliefs born, adopted, and the memories
+   * filed for and against them), each a part of its own.
    */
-  readonly census?: {
-    readonly key: string;
-    readonly count: (store: ReadOnlyStore, sinceDay: number) => number;
-    readonly says: readonly [string, string];
-  };
+  readonly census?: Census | readonly Census[];
   /** For a mechanism that is not built: the one plain line shown instead. */
   readonly grey?: string;
   /**
@@ -392,14 +403,49 @@ export const MECHANISM_EVIDENCE: readonly MechanismEvidence[] = [
     proofs: [{ key: "gist", event: "dream.changed", sum: "gist", stands: dreamStands, says: ["pattern dreamed into a memory of its own", "patterns dreamed into memories of their own"] }],
   },
   {
-    // Entity cards exist (and fade, under Forgetting), but beliefs about them
-    // have no live producer (`addBelief` is called only by the demo seeder),
-    // and a card's birth leaves no durable row. Not built, for the light.
+    // BUILT (wave 2 lane C, 0.3.31; read here since 2026-10-26): beliefs about
+    // me, us, and the people, projects and places a night's memories name.
+    // The night's reflection writes them (`birth_route` `reflection`) and
+    // adopts a dream's candidates (`dream`); a session may write one about me
+    // or us awake (`session`). Each is born weak and earns its strength from
+    // the lived memories filed for it (`belief_support`), and one filed
+    // against it presses it (`challengeBelief`, counted under
+    // Reconsolidation). The schemas' own events live in the ring, so the
+    // light reads the rows: beliefs born in the window by their lived birth
+    // day, filings by theirs. A belief carried from v1 (`migrated`) was not
+    // born here and is held, not counted as formed. Entity cards are built
+    // too (they fade under Forgetting); a card's birth leaves no durable row.
     id: "schema",
     family: "transformation",
-    build: "not",
+    build: "built",
     proofs: [],
-    grey: "In development: beliefs about people and projects are not formed yet.",
+    census: [
+      {
+        key: "born",
+        count: (store, sinceDay) => beliefRows(store).filter((r) => r.route !== "dream" && r.route !== "migrated" && r.bornDay >= sinceDay).length,
+        says: ["belief formed", "beliefs formed"],
+      },
+      {
+        key: "adopted",
+        count: (store, sinceDay) => beliefRows(store).filter((r) => r.route === "dream" && r.bornDay >= sinceDay).length,
+        says: ["belief adopted from a dream", "beliefs adopted from a dream"],
+      },
+      {
+        key: "support",
+        count: (store, sinceDay) => filings(store, "support", sinceDay),
+        says: ["memory filed as support for a belief", "memories filed as support for beliefs"],
+      },
+      {
+        key: "contrary",
+        count: (store, sinceDay) => filings(store, "contrary", sinceDay),
+        says: ["memory filed against a belief", "memories filed against beliefs"],
+      },
+    ],
+    held: {
+      count: (store) => beliefRows(store).length,
+      says: ["belief held", "beliefs held"],
+      none: "No beliefs yet: the night's reflection forms one when lived memories back it.",
+    },
   },
 ];
 
@@ -412,6 +458,12 @@ export const FELT_EVENTS: ReadonlySet<string> = new Set(
 export interface EvidenceWindow {
   /** The lowest lived day a row may carry — the SQL bound, and the census's. */
   readonly sinceDay: number;
+  /**
+   * The lowest lived day a census counts from, when it is not `sinceDay`: the
+   * console reads event rows from a looser lived bound and dates them by the
+   * calendar, but a census has only the lived day (review of #629).
+   */
+  readonly censusSinceDay?: number;
   /** The lived day that counts as today. */
   readonly today: number;
   /** Whether a row falls inside the window. Default: `row.day >= sinceDay`. */
@@ -601,6 +653,29 @@ function carriesFeeling(store: ReadOnlyStore, p: Payload): boolean {
   return feltOn(store, p).length > 0;
 }
 
+/**
+ * THE LIVE BELIEFS (Schemas, 2026-10-26): `schema` rows carrying a birth
+ * route (v14), which only a belief does, with how and on which lived day each
+ * was born. A store before v14 has none.
+ */
+function beliefRows(store: ReadOnlyStore): { id: string; route: string; bornDay: number }[] {
+  if (!store.hasColumn("memories", "birth_route")) return [];
+  const out: { id: string; route: string; bornDay: number }[] = [];
+  for (const id of store.list({ type: "schema", archived: false })) {
+    const row = store.row(id);
+    if (row === undefined || row.birth_route === null || row.birth_route === undefined) continue;
+    out.push({ id, route: row.birth_route, bornDay: row.birth_day });
+  }
+  return out;
+}
+
+/** Memories filed for (or against) a live belief on a lived day at or after `sinceDay` (`belief_support.day`). */
+function filings(store: ReadOnlyStore, stance: "support" | "contrary", sinceDay: number): number {
+  let n = 0;
+  for (const b of beliefRows(store)) for (const r of store.supportOf(b.id)) if (r.stance === stance && r.day >= sinceDay) n += 1;
+  return n;
+}
+
 /** A settle's row counts while its pair is still settled — an undo takes it back. */
 /**
  * A settle a DETECTED door made (2026-10-11, Group 2b; review 10 C6): a slot
@@ -715,14 +790,14 @@ function judge(store: ReadOnlyStore, window: EvidenceWindow): { verdicts: Verdic
       }
       parts.push({ key: proof.key, count: total, says: proof.says });
     }
-    if (m.census !== undefined) {
+    for (const c of censusesOf(m)) {
       let count = 0;
       try {
-        count = m.census.count(store, window.sinceDay);
+        count = c.count(store, window.censusSinceDay ?? window.sinceDay);
       } catch {
         // A store that cannot answer the census simply has no census count.
       }
-      parts.push({ key: m.census.key, count, says: m.census.says });
+      parts.push({ key: c.key, count, says: c.says });
     }
     // A store that will not answer reads as unknown (null), never as zero —
     // zero turns the light grey, and a failed read is not evidence of nothing.

@@ -116,6 +116,26 @@ export function isWorkMemory(m: WorkFacts, rule: WorkRule = {}): boolean {
 }
 
 /**
+ * WHERE AN OPEN THREAD STANDS FOR ONE READER'S "STILL OPEN" (O2, 2026-10-26;
+ * Mike agreed the lean that morning, lightly held): `here` — written in one of
+ * the reader's folders (`folders`: this folder and its project's, as
+ * `projectFolders` gives them, each `projectFolder`-normalized); `personal` —
+ * not work by `isWorkMemory` (marked me, us, owner or world, or unmarked and
+ * personal by kind), shown after this folder's wherever the session wakes;
+ * `out` — another folder's work, which stays in its folder as "Work here"
+ * does. A thread with NO FOLDER recorded (null, empty, or a host's name scope
+ * such as `claude-desktop:` read from somewhere else) is never `out`, marked
+ * work or not: there is no folder it could be another's work in, and leaving
+ * it out would leave it out of every wake. Pure.
+ */
+export function threadPlace(m: WorkFacts, folders: ReadonlySet<string>, rule: WorkRule = {}): "here" | "personal" | "out" {
+  const scope = m.originScope === null ? "" : projectFolder(m.originScope);
+  if (scope.length > 0 && folders.has(scope)) return "here";
+  if (isDirectoryScope(m.originScope) && isWorkMemory(m, rule)) return "out";
+  return "personal";
+}
+
+/**
  * IS THIS CRAFT THAT TRAVELS (2026-10-21, `PROJECTS_TRAVEL`): a skill with no
  * mark, or marked `world` — how a job is done, wherever it was learned — born
  * on or after `craftSince`. A skill marked `work` is its project's; one marked

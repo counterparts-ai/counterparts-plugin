@@ -53,7 +53,7 @@ import { CUE_MODE_META, DATE_FROM_META, RECURRING_META } from "./prospective/ind
 import type { Proposal } from "./remember/index.js";
 import { isDay, isRecurrence, localDate } from "./time.js";
 import type { AboutMark, AboutSetter, Store } from "./store/index.js";
-import { SECOND_HAND_META_KEY, WRITTEN_UP_BY_META_KEY } from "./types.js";
+import { SECOND_HAND_META_KEY, SETTLES_WHEN_META_KEY, settlesWhenOf, WRITTEN_UP_BY_META_KEY } from "./types.js";
 import type { Band, Salience } from "./types.js";
 
 /** The canonical prose meta key. One spelling, read by `sleep/dedup.ts`. */
@@ -64,6 +64,8 @@ export const UPDATES_META_KEY = "updates";
 export const CLAIMED_DEFAULT_META_KEY = "claimedDefault";
 /** An open loop is an ordinary memory with a flag (`remember/` CONTRACT §4). */
 export const UNRESOLVED_META_KEY = "unresolved";
+/** What would settle an open item (2026-10-27, S1): `types.ts#SETTLES_WHEN_META_KEY`. */
+export { SETTLES_WHEN_META_KEY, settlesWhenOf };
 /**
  * WHO CLOSED AN OPEN THREAD, when the nightly reflection did (2026-10-20, an
  * experiment): `{reflection, why, shows?}` — the reflection's id, what shows it
@@ -223,6 +225,11 @@ export function mintProposal(store: Store, proposal: Proposal, opts: MintOptions
     meta["updatesMethod"] = proposal.updates?.method ?? "declared";
   }
   if (proposal.unresolved) meta[UNRESOLVED_META_KEY] = true;
+  // WHAT WOULD SETTLE IT (2026-10-27, S1), beside the flag only, in the same
+  // bag: no schema bump.
+  if (proposal.unresolved && typeof proposal.settlesWhen === "string" && proposal.settlesWhen.length > 0) {
+    meta[SETTLES_WHEN_META_KEY] = proposal.settlesWhen;
+  }
   if (proposal.aliases.length > 0) meta["aliases"] = [...proposal.aliases];
   if (proposal.feeling !== null) meta["feeling"] = proposal.feeling.feeling;
   // A capped claim's RAW value survives in prose meta: the cap is doctrine,

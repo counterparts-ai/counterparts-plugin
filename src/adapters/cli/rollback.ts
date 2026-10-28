@@ -79,6 +79,7 @@ import { listSessions, readServerRecords, serverBelieved } from "../sessions.js"
 import { pathGuard, readLiveness, realpathDeep, sameFilesystemRefusal } from "./start-fresh.js";
 import { look } from "./wire.js";
 import type { ProcessLister } from "./wire.js";
+import { ASIDE_NAME_RE, ASIDE_PREFIX } from "../owned-names.js";
 
 /** Take the hold away, and its directory when that leaves it empty. Here and
  *  not in the store, whose files call no filesystem removal. */
@@ -91,9 +92,8 @@ export function clearRollbackHold(storeDir: string): void {
   removeIfEmpty(join(storeDir, ROLLBACK_HOLD_DIR));
 }
 
-/** `<base>/rollback-aside-v13-2026-10-11T07-25-00-000Z`. */
-export const ASIDE_PREFIX = "rollback-aside-v";
-const ASIDE_NAME_RE = /^rollback-aside-v[0-9A-Za-z]+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
+/** `<base>/rollback-aside-v13-2026-10-11T07-25-00-000Z`: spelled in `owned-names.ts`, the list uninstall and privacy share. */
+export { ASIDE_PREFIX } from "../owned-names.js";
 
 /** `counterparts.sqlite.rollback-<pid>`: the copy, before it is renamed into place. */
 const TMP_INFIX = ".rollback-";

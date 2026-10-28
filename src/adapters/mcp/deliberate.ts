@@ -380,7 +380,8 @@ export function deliberateRecall(
   if ([hasHandle, hasQuestion, hasIds].filter(Boolean).length > 1) {
     return { path: "none", reason: "both-arguments", ...EMPTY, storeSize: liveCount(counterpart) };
   }
-  if (hasHandle) return expandHandle(counterpart, (input.handle as string).trim(), opts);
+  // A night asked for alone, by its handle, comes whole (2026-10-26, OL1b).
+  if (hasHandle) return expandHandle(counterpart, (input.handle as string).trim(), opts, { wholeNight: true });
   if (hasIds) return expandIds(counterpart, askedIds, opts);
   // A question is a MODE's (`facts.ts`, `meaning.ts`), never this file's.
   if (hasQuestion) return { path: "none", reason: "question-needs-mode", ...EMPTY, storeSize: liveCount(counterpart) };
@@ -405,6 +406,8 @@ export function expandHandle(
   counterpart: Counterpart,
   handle: string,
   opts: DeliberateOptions,
+  /** `wholeNight`: a night's journal and entry uncut (the handle path); among `ids`, a summary. */
+  how: { readonly wholeNight?: boolean } = {},
 ): DeliberateResult {
   const store = counterpart.store;
   const storeSize = store.list({ archived: false }).length;
@@ -429,7 +432,7 @@ export function expandHandle(
   // like every address (`nights.ts`).
   const night = nightKindOf(handle);
   if (night !== null) {
-    const got = readNight(counterpart, handle);
+    const got = readNight(counterpart, handle, { whole: how.wholeNight === true });
     if (!got.ok) return { ...base, reason: got.reason, memories: [], considered: 0, nightAsked: night };
     return { ...base, reason: "expanded", memories: [], considered: 1, nights: [got.night] };
   }

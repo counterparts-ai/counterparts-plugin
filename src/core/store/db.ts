@@ -11,6 +11,7 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { StoreError } from "./errors.js";
+import { PRIVATE_FILE_MODE, chmodQuiet } from "./private.js";
 
 export type SqlValue = string | number | bigint | null | Uint8Array;
 export type SqlParam = SqlValue | boolean | undefined;
@@ -143,6 +144,14 @@ export interface OpenDbOptions {
    * this, and `adapters/cli` opens box 3 read-only for a census.
    */
   readonly wal?: boolean;
+  /**
+   * The connection's busy wait, set first as always (I39). Absent:
+   * `BUSY_TIMEOUT_MS`. 0 for a peek that would rather answer "can't read it
+   * now" than wait (`operational.ts#peekMeta`, review of #668): the open's own
+   * pragmas wait on a store held EXCLUSIVE, so the wait has to be chosen here,
+   * not after the open.
+   */
+  readonly busyTimeoutMs?: number;
 }
 
 /**
@@ -354,7 +363,13 @@ export function wroteOn(db: Db): boolean {
 }
 
 export function openDb(path: string, opts: OpenDbOptions = {}): Db {
+  // A DATABASE THIS OPEN CREATES IS 0600 (R1, `private.ts`), set before
+  // anything turns WAL on: SQLite gives `-wal` and `-shm` the database
+  // file's own mode, so the three come out private together. An existing file
+  // keeps its mode here; `tightenStore` is what changes one.
+  const minted = path !== ":memory:" && path !== "" && !path.startsWith("file:") && !existsSync(path);
   const { raw, driver } = openRaw(path);
+  if (minted && existsSync(path)) chmodQuiet(path, PRIVATE_FILE_MODE);
   let depth = 0;
   let savepointSeq = 0;
 
@@ -496,10 +511,18 @@ export function openDb(path: string, opts: OpenDbOptions = {}): Db {
   // inside another writer's commit window — which is where "database is locked"
   // came from. Set on every connection, including the short-lived one
   // `VACUUM INTO` opens for a backup (§5 G8, live-verify 2026-08-25).
-  exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  exec(`PRAGMA busy_timeout = ${String(opts.busyTimeoutMs ?? BUSY_TIMEOUT_MS)}`);
   // Foreign keys are OFF by default in SQLite; referential integrity is enforced by
   // the store (contract §5 G4), so turn them on before anything is written.
   exec("PRAGMA foreign_keys = ON");
+  // FAST on both runtimes, set rather than inherited: it is a compile-time default
+  // of whichever SQLite the runtime carries. bun (1.3, macOS) ships it at 2; node's
+  // bundled SQLite (22.23, 24.22, measured 2026-10-26) ships it at 0, which left a
+  // deleted row's words in the page's free space through a checkpoint and a close.
+  // FAST zeroes what a delete frees inside a page at no extra I/O; whole freed
+  // OVERFLOW pages are still not zeroed, which is why removal VACUUMs (§5 G17).
+  // Connection-local: it writes nothing to the file, so an observer may set it.
+  exec("PRAGMA secure_delete = FAST");
   if (opts.wal === true) convertToWal(db);
   // FULL, not WAL's usual NORMAL: that is a durability ruling for the owner to
   // make, not a cleanup to make on the way past. TUNABLE — the one knob here

@@ -329,6 +329,58 @@ export function lastHereBlock(
   return lines.map(flatten).join("\n");
 }
 
+/**
+ * A SESSION HERE NEWER THAN EVERY CHAPTER HERE, with none of its own (S2,
+ * 2026-10-26): what "Last here" names first when the folder's newest session
+ * left no chapter. Short check-ins rarely write one, and until this the line
+ * kept naming an older chapter — the Dana week's day-1 meeting, until day 6 —
+ * as if nothing had happened since.
+ */
+/** How many later sessions with no chapter are looked at, newest first, for
+ *  one with something to show (words still held, or a memory). */
+export const LATER_HERE_TRIED = 3;
+
+export interface LaterHere {
+  readonly session: string;
+  /** `Oct 26 21:00–21:06`: when it was here. */
+  readonly when: string;
+  /**
+   * Its newest live memory — the night's second-hand write-up of it, or a
+   * note it made in the moment — by title (or first sentence) and id; null
+   * when nothing from it is written yet. Never a dream's or a reflection's
+   * own output, though a night files those under the session it launched in
+   * (L2, 2026-10-26). The id is the door to the rest.
+   */
+  readonly memory: { readonly id: string; readonly title: string } | null;
+}
+
+/**
+ * THE LINE FOR A LATER SESSION, widest first (`lastHereLadder`'s shape): the
+ * session with its newest memory and the chapter before it by title (`Before
+ * it:`, left out when the wake's body already names it, `named`), then the
+ * session alone. It says only what is true of it: no chapter, and what of it
+ * is written up — "Last said here" beside it quotes its last words while they
+ * are inside a day. Pure.
+ */
+export function laterHereLadder(
+  later: LaterHere,
+  before: LastHere | null,
+  reader: string | null = null,
+  said?: (id: string) => boolean,
+): string[] {
+  const what =
+    later.memory === null
+      ? ", no chapter, not written up yet."
+      : `, no chapter — "${excerpt(later.memory.title, LAST_HERE_TITLE_BYTES)}" (${later.memory.id}).`;
+  const head = flatten(`Last here: ${sessionWords(later.session, null, reader)}, ${later.when}${what}`);
+  const out: string[] = [];
+  if (before !== null && said?.(before.chapter.id) !== true) {
+    out.push(`${head}\n${flatten(`Before it: ${sessionWords(before.chapter.session, before.chapter.model, reader)}, ${before.when} ${named(before.chapter)}.`)}`);
+  }
+  out.push(head);
+  return out;
+}
+
 /** How many of yesterday's chapters the "Yesterday" line names by title. */
 export const YESTERDAY_SHOWN = 4;
 

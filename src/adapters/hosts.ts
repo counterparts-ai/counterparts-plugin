@@ -46,6 +46,42 @@ export function isHostName(value: unknown): value is string {
 export const DESKTOP_HOST = "claude-desktop";
 
 /**
+ * CLAUDE.AI'S CHAT, OVER THE WEB (2026-10-26, the claude.ai trial). A custom
+ * connector: claude.ai web and mobile reach this server as remote MCP over
+ * HTTPS (`adapters/remote/`), from Anthropic's cloud. Hookless, like Desktop's
+ * chat — no SessionStart, no Stop, no transcript — so the server is its own hook
+ * here too (`wake`), with its own place, `claude-ai:`. The HOST is decided by the
+ * transport that launched the server, never by the client's name: what name the
+ * remote client sends is unknown until the trial measures it, and `claude-ai`
+ * is already Desktop's chat's name (`hostOfClient`).
+ */
+export const CLAUDE_AI_HOST = "claude-ai";
+
+/** The one place every claude.ai chat shares, as Desktop's chats share theirs. */
+export const CLAUDE_AI_SCOPE = "claude-ai:";
+
+/**
+ * THE HOOKLESS CHAT HOSTS and the place each files under. A server serving one
+ * of these mints its sessions with `wake`, binds per call, and carries the
+ * write-up ask on a tool result (`mcp/server.ts`, where `desktop` reads "a
+ * hookless chat host").
+ */
+export const CHAT_HOST_SCOPES: Readonly<Record<string, string>> = {
+  ["claude-desktop"]: "claude-desktop:",
+  [CLAUDE_AI_HOST]: CLAUDE_AI_SCOPE,
+};
+
+/** Is `host` a chat host with no hooks (Desktop's chat, claude.ai)? */
+export function isChatHost(host: string): boolean {
+  return Object.prototype.hasOwnProperty.call(CHAT_HOST_SCOPES, host);
+}
+
+/** The place a chat host files under, or null for a host with directories. */
+export function chatScopeOf(host: string): string | null {
+  return isChatHost(host) ? (CHAT_HOST_SCOPES[host] as string) : null;
+}
+
+/**
  * WHAT THE INSTALL AND QUICKSTART SAY ABOUT DESKTOP'S TOOL PERMISSION
  * (2026-10-02). Measured in a Desktop chat: its tools still asked before each
  * call, the model never called `wake`, answered "what do you remember about
@@ -231,6 +267,21 @@ export const HOST_WORDING: Readonly<Record<string, HostWording>> = {
       `Counterparts is off for Claude Desktop's chats. Nothing is recorded or read here — call \`scope\` with mode \`on\`, or run \`${at.hereCommand("--on")}\`.`,
     pausedRefusal: (at) =>
       `Counterparts is paused for Claude Desktop's chats. Nothing is recorded or read here until it is resumed — call \`scope\` with mode \`resume\`, or run \`${at.entryCommand("--resume")}\`.`,
+  },
+  // claude.ai has no app to reopen and no `/mcp`: the server behind the
+  // connector is a process somebody started, and a newer build loads when it
+  // is started again.
+  [CLAUDE_AI_HOST]: {
+    reconnect: "Restart the Counterparts server behind this connector to load it.",
+    reconnectFirst: "Restart the Counterparts server behind this connector",
+    scopeOff:
+      "claude.ai's chats are no longer recorded or read. Every other tool will refuse until it is turned back on — including in a new chat, which is the point.",
+    scopeOn:
+      "Recorded. This takes effect immediately, for every tool in every claude.ai chat. Nothing is collected from before now: claude.ai keeps no transcript here, so only what is written through the tools is remembered.",
+    offRefusal: (at) =>
+      `Counterparts is off for claude.ai's chats. Nothing is recorded or read here — call \`scope\` with mode \`on\`, or run \`${at.hereCommand("--on")}\`.`,
+    pausedRefusal: (at) =>
+      `Counterparts is paused for claude.ai's chats. Nothing is recorded or read here until it is resumed — call \`scope\` with mode \`resume\`, or run \`${at.entryCommand("--resume")}\`.`,
   },
 };
 

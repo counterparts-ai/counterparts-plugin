@@ -18,6 +18,7 @@
  *   dreaming          — the memories the last dream changed
  *   reconsolidation   — recent corrections weighed against old memories
  *   episodic-semantic — the patterns dreams wrote as memories of their own
+ *   schema            — the newest beliefs formed, with what backs and goes against each
  *
  * A grey mechanism (not built) gets no picture and no activity: it has none.
  * Which rows count as a firing is `MECHANISM_PROOFS`, in `mechanisms.ts`.
@@ -192,6 +193,17 @@ export type Picture =
         readonly bar: number;
         readonly crossed: boolean;
       }[];
+    }
+  | {
+      readonly kind: "schema";
+      /** The newest live beliefs born here (not carried from v1), with how many memories back each and go against it. */
+      readonly beliefs: readonly (Said & {
+        readonly day: number;
+        /** `reflection`, `session`, `dream` (adopted) or `correction` (`memories.birth_route`). */
+        readonly route: string;
+        readonly support: number;
+        readonly against: number;
+      })[];
     };
 
 export interface MechanismPanelView {
@@ -311,6 +323,8 @@ function pictureOf(src: DashboardSource, id: string, day: number): Picture | nul
       return reconsolidationPicture(src);
     case "interference":
       return interferencePicture(src);
+    case "schema":
+      return schemaPicture(src);
     default:
       return null;
   }
@@ -783,6 +797,36 @@ function reconsolidationPicture(src: DashboardSource): Picture {
     };
   });
   return { kind: "reconsolidation", revisions };
+}
+
+// ── schemas ─────────────────────────────────────────────────────────────────
+
+/**
+ * The newest beliefs formed here (2026-10-26): each live belief with a birth
+ * route other than `migrated`, newest born first, with the memories counted
+ * for and against it (`belief_support`).
+ */
+function schemaPicture(src: DashboardSource): Picture {
+  const store = src.store;
+  if (!store.hasColumn("memories", "birth_route")) return { kind: "schema", beliefs: [] };
+  const born: { id: string; day: number; at: number; route: string }[] = [];
+  for (const id of store.list({ type: "schema", archived: false })) {
+    const row = store.row(id);
+    if (row === undefined || row.birth_route === null || row.birth_route === undefined || row.birth_route === "migrated") continue;
+    born.push({ id, day: row.birth_day ?? 0, at: row.created_at ?? 0, route: row.birth_route });
+  }
+  born.sort((a, b) => b.day - a.day || b.at - a.at || (a.id < b.id ? -1 : 1));
+  const beliefs = born.slice(0, PICTURE_ROWS).map((b) => {
+    const filed = store.supportOf(b.id);
+    return {
+      ...said(src, b.id),
+      day: b.day,
+      route: b.route,
+      support: filed.filter((r) => r.stance === "support").length,
+      against: filed.filter((r) => r.stance === "contrary").length,
+    };
+  });
+  return { kind: "schema", beliefs };
 }
 
 /**

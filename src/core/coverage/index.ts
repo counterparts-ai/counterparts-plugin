@@ -21,7 +21,10 @@
  *   - **The pacer's third arm** (`askFromStretch`): three unwritten pieces and
  *     half an hour since the later of the stretch's first piece and the last ask.
  *   - **What a session owes** (the `owed` field): a stretch of three pieces over
- *     fifteen minutes, in a session that is not active, that has not lapsed.
+ *     fifteen minutes — or, for a session that left no record of its own (S2,
+ *     2026-10-26: no claim but in-the-moment notes', no write-up mark), any
+ *     stretch of `UNRECORDED_OWED_PIECES` — in a session that is not active,
+ *     that has not lapsed.
  *     `remember/owes.ts` reads it for retention and the write-up; nothing else
  *     decides it.
  *   - **Lapse** — a LOSS, and said as one (2026-10-10): at the first turn-end
@@ -44,7 +47,7 @@
 import { Buffer } from "node:buffer";
 
 import { keyFor } from "../remember/spans.js";
-import type { Span, SpanBuffer } from "../remember/spans.js";
+import type { CoverageMark, Span, SpanBuffer } from "../remember/spans.js";
 import type { Store } from "../store/index.js";
 import { localDate } from "../time.js";
 import { isKnownSession } from "../types.js";
@@ -91,6 +94,14 @@ export interface LedgerEntry {
   readonly stretch: Stretch | null;
   /** The stretch is past the floor (pieces and minutes). */
   readonly overFloor: boolean;
+  /**
+   * The session left a record of its own (S2, 2026-10-26): a claim that is
+   * not an in-the-moment note's — a handback's memories, "nothing new", a
+   * chapter, a write-up's — or a write-up mark. Without one, its unwritten
+   * stretch is owed whatever its size (`UNRECORDED_OWED_PIECES`); with one,
+   * only past the floor.
+   */
+  readonly recorded: boolean;
   readonly owed: boolean;
   readonly lapsed: boolean;
   /** Owed, and under `SMALL_STRETCH_PIECES`: one line is enough. */
@@ -199,6 +210,30 @@ export function askFromStretch(
   return now - Math.max(stretch.firstAt, lastAskAt ?? -Infinity) >= t.ASK_AFTER_MS;
 }
 
+/**
+ * IS THIS CLAIM A SESSION'S RECORD, or only an in-the-moment note's (S2,
+ * 2026-10-26)? `remember` claims its own turn, and its mark on its own span is
+ * `own`; a handback's memories, a write-up's, "nothing new", a chapter and the
+ * write-up door's own claim carry no own mark. So a claim is a note's when any
+ * of its marks is `own` — read off `coverage.jsonl` alone, no proposal read.
+ */
+function recordClaims(marks: readonly CoverageMark[]): Set<string> {
+  const notes = new Set<string>();
+  for (const m of marks) if (m.own === true && typeof m.proposalId === "string") notes.add(m.proposalId);
+  const out = new Set<string>();
+  for (const m of marks) if (typeof m.proposalId === "string" && !notes.has(m.proposalId)) out.add(m.proposalId);
+  return out;
+}
+
+/**
+ * A DEBT (S2, 2026-10-26): past the floor, or — for a session that left no
+ * record of its own — any unwritten stretch of `UNRECORDED_OWED_PIECES`. Pure.
+ */
+export function isDebt(stretch: Pick<Stretch, "pieces" | "firstAt" | "lastAt"> | null, recorded: boolean): boolean {
+  if (stretch === null) return false;
+  return overFloor(stretch) || (!recorded && stretch.pieces >= COVERAGE_TUNABLES.UNRECORDED_OWED_PIECES);
+}
+
 /** Past the floor that makes a stretch a debt: pieces AND minutes. Pure. */
 export function overFloor(stretch: Pick<Stretch, "pieces" | "firstAt" | "lastAt"> | null): boolean {
   if (stretch === null) return false;
@@ -245,6 +280,8 @@ interface Tally {
   lastCaptureAt: number;
   endAt: number | null;
   writtenUpAt: number | null;
+  /** A claim of its own record stands on one of its pieces (`recordClaims`). */
+  recorded: boolean;
 }
 
 /**
@@ -260,14 +297,21 @@ export function ledger(buffer: SpanBuffer, opts: LedgerOptions): LedgerEntry[] {
     if (typeof session !== "string" || session.length === 0) return null;
     let t = tallies.get(session);
     if (t === undefined) {
-      t = { scopes: new Set(), all: [], unwritten: [], pieces: 0, lastCaptureAt: 0, endAt: null, writtenUpAt: null };
+      t = { scopes: new Set(), all: [], unwritten: [], pieces: 0, lastCaptureAt: 0, endAt: null, writtenUpAt: null, recorded: false };
       tallies.set(session, t);
     }
     return t;
   };
 
   for (const scope of buffer.scopes()) {
-    const covered = buffer.coveredHashes(scope);
+    const marks = buffer.coverage(scope);
+    const covered = new Set(marks.map((m) => m.spanHash));
+    const records = recordClaims(marks);
+    for (const m of marks) {
+      if (!records.has(m.proposalId)) continue;
+      const t = tally(m.session);
+      if (t !== null) t.recorded = true;
+    }
     for (const s of piecesIn(buffer, scope)) {
       const t = tally(s.session);
       if (t === null) continue;
@@ -313,9 +357,13 @@ export function ledger(buffer: SpanBuffer, opts: LedgerOptions): LedgerEntry[] {
     const unwritten = t.writtenUpAt === null ? t.unwritten : t.unwritten.filter((p) => p.at > (t.writtenUpAt as number));
     const stretch = stretchOf(unwritten);
     const floor = overFloor(stretch);
+    // ITS OWN RECORD (S2, 2026-10-26): a claim that is not a note's, or a
+    // write-up mark. Without one, what it said is owed whatever its size.
+    const recorded = t.recorded || t.writtenUpAt !== null;
+    const debt = isDebt(stretch, recorded);
     const since = stretch === null ? 0 : usesAfter(uses, localDate(stretch.lastAt, opts.zone));
-    const lapsed = floor && since >= COVERAGE_TUNABLES.LAPSE_DAYS_OF_USE;
-    const owed = floor && state !== "active" && !lapsed;
+    const lapsed = debt && since >= COVERAGE_TUNABLES.LAPSE_DAYS_OF_USE;
+    const owed = debt && state !== "active" && !lapsed;
     const perDate: Record<string, { pieces: number; written: number }> = {};
     const open = new Set(unwritten);
     for (const p of t.all) {
@@ -334,6 +382,7 @@ export function ledger(buffer: SpanBuffer, opts: LedgerOptions): LedgerEntry[] {
       written: t.pieces - unwritten.length,
       stretch,
       overFloor: floor,
+      recorded,
       owed,
       lapsed,
       small: owed && (stretch?.pieces ?? 0) < COVERAGE_TUNABLES.SMALL_STRETCH_PIECES,
@@ -548,8 +597,11 @@ function writtenUpWords(w: Writer): WrittenUpBy | null {
  * — its turn-ends (`stop` boundaries in `boundaries.jsonl`, which retention
  * never strikes) and the pieces still held, never a `session-end`, whose time
  * is when the host closed it (review of #300 MINOR-2) — and whether it has
- * ended. It is how a chapter that records no directory is joined to the one it
- * was written in, and when that session was here.
+ * ended, the latest lived day it was at work here (`lastDay`, S2: what
+ * "Last here"'s fortnight is counted in), and whether a piece of what it said
+ * is still held here (`held`). It is how a chapter that records no
+ * directory is joined to the one it was written in, and when that session was
+ * here.
  *
  * `only` keeps the walk to the sessions the caller can use; everything else is
  * dropped while reading. Never throws: a buffer that will not answer names no
@@ -559,20 +611,22 @@ export function sessionsHere(
   buffer: SpanBuffer,
   scope: string,
   opts: { only?: ReadonlySet<string> } = {},
-): { session: string; firstAt: number; lastAt: number; ended: boolean }[] {
+): { session: string; firstAt: number; lastAt: number; ended: boolean; lastDay: number | null; held: boolean }[] {
   const norm = (s: string): string => s.trim().replace(/\/+$/, "");
-  const seen = new Map<string, { session: string; firstAt: number; lastAt: number; ended: boolean }>();
+  const seen = new Map<string, { session: string; firstAt: number; lastAt: number; ended: boolean; lastDay: number | null; held: boolean }>();
   // The unbound memory server's shared id is not a session (`UNBOUND_SESSION`):
   // its jots are every unbound server's, so it never ran "here" as one.
   const wanted = (session: unknown): session is string =>
     typeof session === "string" && isKnownSession(session) && (opts.only === undefined || opts.only.has(session));
-  const note = (session: string, at: number): void => {
+  const note = (session: string, at: number, day: unknown): void => {
     if (!Number.isFinite(at) || at <= 0) return;
+    const lived = typeof day === "number" && Number.isFinite(day) ? day : null;
     const held = seen.get(session);
-    if (held === undefined) seen.set(session, { session, firstAt: at, lastAt: at, ended: false });
+    if (held === undefined) seen.set(session, { session, firstAt: at, lastAt: at, ended: false, lastDay: lived, held: false });
     else {
       held.firstAt = Math.min(held.firstAt, at);
       held.lastAt = Math.max(held.lastAt, at);
+      if (lived !== null) held.lastDay = Math.max(held.lastDay ?? lived, lived);
     }
   };
   const ended = new Set<string>();
@@ -581,10 +635,15 @@ export function sessionsHere(
       if (norm(held) !== norm(scope)) continue;
       for (const b of buffer.boundaries(held)) {
         if (!wanted(b.session)) continue;
-        if (b.kind === "stop") note(b.session, b.at);
+        if (b.kind === "stop") note(b.session, b.at, b.day);
         else if (b.kind === "session-end") ended.add(b.session);
       }
-      for (const s of piecesIn(buffer, held)) if (wanted(s.session)) note(s.session, atOf(s));
+      for (const s of piecesIn(buffer, held)) {
+        if (!wanted(s.session)) continue;
+        note(s.session, atOf(s), s.day);
+        const t = seen.get(s.session);
+        if (t !== undefined) t.held = true;
+      }
     }
   } catch {
     return [];

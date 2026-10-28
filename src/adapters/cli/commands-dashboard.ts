@@ -17,6 +17,7 @@ import { hostsSeen } from "../sessions.js";
 import { EXIT, hostConfigFor } from "./commands-shared.js";
 import { storeId } from "../store-id.js";
 import type { Parsed, Io, RunOptions } from "./commands-shared.js";
+import { withHostUmask } from "../private-umask.js";
 
 // ── dashboard ───────────────────────────────────────────────────────────────
 
@@ -253,11 +254,13 @@ function openInBrowser(url: string, env: Record<string, string | undefined>): vo
     process.platform === "darwin" ? "open" : process.platform === "linux" ? "xdg-open" : null;
   if (opener === null) return;
   try {
-    const child = spawn(opener, [url], {
-      detached: true,
-      stdio: "ignore",
-      env: env as NodeJS.ProcessEnv,
-    });
+    const child = withHostUmask(() =>
+      spawn(opener, [url], {
+        detached: true,
+        stdio: "ignore",
+        env: env as NodeJS.ProcessEnv,
+      }),
+    );
     // An ENOENT arrives as an EVENT, not as a throw, and an unhandled 'error'
     // on a child process takes the whole console down with it.
     child.on("error", () => {

@@ -37,8 +37,9 @@
  * accessor, and an instrument reading the skeleton of a removed memory is how the
  * owner sees that something WAS here (constitution 16).
  */
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { mkdirPrivate, storeNeedsTightening, tightenStore } from "./private.js";
 import { randomBytes } from "node:crypto";
 import type { Band, Kind, MemoryPhysics, Salience } from "../types.js";
 import { WRITTEN_UP_BY_META_KEY, isKnownSession, isModelId } from "../types.js";
@@ -294,6 +295,7 @@ export { STEMMER_VERSION, stemTerm } from "./stem.js";
 export * from "./errors.js";
 export * from "../observer.js";
 export * from "./paths.js";
+export * from "./private.js";
 export * from "./prose.js";
 export * from "./render.js";
 export * from "./feelings.js";
@@ -356,6 +358,7 @@ export {
   isPreRowsDatabase,
   OBSERVER_READ_FLOOR,
   pendingMigration,
+  peekMeta,
   SCHEMA_VERSION,
   V8_UPGRADE_KEY,
   V9_UPGRADE_KEY,
@@ -609,6 +612,10 @@ export const EMBEDDER_RECONCILED_EVENT = "store.embedder.reconciled";
 /** The durable row an open writes after it migrated the schema: from, to, and the copy. */
 export const STORE_MIGRATED_EVENT = "store.migrated";
 
+/** The ring event an at-open tightening leaves (R1, `private.ts`): how many
+ *  paths lost their group and other bits, and the ones the filesystem kept. */
+export const STORE_TIGHTENED_EVENT = "store.modes.tightened";
+
 /** Rows per box-3 transaction in the at-open inline refill. CAL. */
 const REFILL_BATCH = 500;
 /**
@@ -799,7 +806,7 @@ export class Store {
     // observer, and only because it is DECLARED rebuildable: an instrument
     // needs somewhere to open the cache, and materializing the cache's own
     // directory changes no canonical state and takes no canonical lock.
-    mkdirSync(paths.cacheDir(this.dir), { recursive: true });
+    mkdirPrivate(paths.cacheDir(this.dir));
     let migration = null as MigrationNote | null;
     this.ops = openOperational(paths.operational(this.dir), {
       initialize: !this.observer,
@@ -996,6 +1003,25 @@ export class Store {
     this.assertLayout();
     this.afterReconcile(identity);
     if (migration !== null) this.noteMigration(migration);
+    // PRIVATE TO ITS USER (R1, `private.ts`): a store an older build left
+    // readable by others is tightened the first time a writer opens it. Two
+    // stats when it is already tight, no write at open either way, and a chmod
+    // the filesystem refuses is a line in the ring, never a refusal.
+    if (!this.observer && process.platform !== "win32") this.tightenIfOpen(opts);
+  }
+
+  private tightenIfOpen(opts: StoreOptions): void {
+    try {
+      if (!storeNeedsTightening(this.dir, opts.snapshotsDir ?? null)) return;
+      const report = tightenStore(this.dir, opts.snapshotsDir ?? null, opts.chmod);
+      this.emit(STORE_TIGHTENED_EVENT, undefined, {
+        tightened: report.tightened,
+        skipped: report.skipped.length,
+        skippedPaths: report.skipped.slice(0, 5).join(", "),
+      });
+    } catch {
+      // Modes are kept where the filesystem lets us; never a reason to fail an open.
+    }
   }
 
   /** The durable row for a migration this open ran, naming the copy taken first. */

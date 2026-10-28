@@ -77,6 +77,34 @@ export const SECOND_HAND_META_KEY = "secondHand";
 export const WRITTEN_UP_BY_META_KEY = "writtenUpBy";
 
 /**
+ * WHAT WOULD SETTLE AN OPEN ITEM (2026-10-27, S1; Ames's idea, lightly held):
+ * a short phrase beside `unresolved: true` ("the landlord replies"), written by `mint.ts`. "Still open" shows it; the nightly reflection
+ * is handed it, so it can close an item whose trigger plainly happened.
+ * Absent: no trigger named.
+ */
+export const SETTLES_WHEN_META_KEY = "settlesWhen";
+
+/**
+ * A phrase kept to `max` CODE POINTS (review of #665: an emoji is never split),
+ * cut at a word when one ends past half way, with "…". Whitespace is folded to
+ * single spaces and trimmed first. Shorter: as it is.
+ */
+export function cutPhrase(text: string, max: number): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  const points = [...one];
+  if (points.length <= max) return one;
+  const cut = points.slice(0, max - 1).join("");
+  const at = cut.lastIndexOf(" ");
+  return `${(at > cut.length / 2 ? cut.slice(0, at) : cut).trimEnd()}…`;
+}
+
+/** An open item's settles-when, read off its meta: the phrase, or null. */
+export function settlesWhenOf(meta: Readonly<Record<string, unknown>>): string | null {
+  const v = meta[SETTLES_WHEN_META_KEY];
+  return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
+}
+
+/**
  * THE DAY A MEMORY WAS LIVED (2026-10-01): its `happened_on` when it was
  * written up second-hand, else the day it was learned. What the page writer's
  * day reads (`self/writer.ts#isOfDay`).

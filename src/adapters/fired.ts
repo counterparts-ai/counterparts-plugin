@@ -220,6 +220,10 @@ export type ProbeId =
   | "dreamed"
   /** Journal chapters, each dated by the moment it was written (`meta.chapterAt`, v12), else the episode's birth. */
   | "chapters"
+  /** Live beliefs born here (a v14 birth route, not `migrated`), dated by when. */
+  | "beliefs.born"
+  /** Memories filed for or against a live belief (`belief_support`), dated by when. */
+  | "beliefs.filed"
   | `versions:${string}`;
 
 export type Evidence =
@@ -496,6 +500,23 @@ export const MECHANISMS: readonly Mechanism[] = [
       reason:
         "a birth shows only as another entity in the store, and a refusal shows nowhere at all — the reasons live in an in-process ring that dies with the hook.",
     },
+  },
+  // BELIEFS (wave 2 lane C, 2026-10-21): the schemas' own events live in the
+  // ring, so these read the rows a belief leaves — its birth route and moment,
+  // and each memory filed for or against it.
+  {
+    id: "belief-birth",
+    label: "a belief was formed (by the night's reflection or a session) or adopted from a dream, born weak",
+    module: "schemas/index.ts#addBelief, dream/reflect.ts",
+    evidence: { kind: "probe", probe: "beliefs.born" },
+    since: "2026-10-21",
+  },
+  {
+    id: "belief-support",
+    label: "a lived memory was filed for or against a belief, counted once",
+    module: "schemas/index.ts#fileSupport",
+    evidence: { kind: "probe", probe: "beliefs.filed" },
+    since: "2026-10-21",
   },
   {
     id: "accommodation",
@@ -2275,6 +2296,12 @@ function readProbes(store: ReadOnlyStore, w: Window): Probed {
     if (row !== undefined && row.archived === 0 && row.source === "dreamed") {
       bump("dreamed", { at: row.created_at, livedDay: row.birth_day });
     }
+    // A LIVE BELIEF (v14): born here unless carried from v1, and every memory
+    // filed for or against it, each dated by the moment it was filed.
+    if (row !== undefined && row.archived === 0 && row.type === "schema" && row.birth_route !== null && row.birth_route !== undefined) {
+      if (row.birth_route !== "migrated") bump("beliefs.born", { at: row.created_at, livedDay: row.birth_day });
+      for (const f of store.supportOf(id)) bump("beliefs.filed", { at: f.createdAt, livedDay: f.day });
+    }
     // A CHAPTER WRITTEN: one per stored moment; an episode from before
     // moments were stored counts its birth (its first chapter) once.
     if (row !== undefined && row.archived === 0 && row.type === "episode") {
@@ -2338,5 +2365,7 @@ function probeLabel(probe: ProbeId): string {
   if (probe === "returns.dream") return "the returns table (dream replays)";
   if (probe === "dreamed") return "memories a dream wrote";
   if (probe === "chapters") return "the journal's chapters";
+  if (probe === "beliefs.born") return "beliefs born here";
+  if (probe === "beliefs.filed") return "the belief support table";
   return `the ${probe.replace(".", " ")} table`;
 }

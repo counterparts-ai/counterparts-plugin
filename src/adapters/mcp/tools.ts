@@ -68,6 +68,7 @@ import { RECURRENCES } from "../../core/time.js";
 import { PAGE_ROOM_BYTES, STILL_OPEN_HANDLE } from "../../core/self/briefing.js";
 import { CLAIM_PREFIX_MIN_CHARS } from "../../core/self/page.js";
 import { MEET_STEPS } from "../../core/onboarding.js";
+import { CLAUDE_AI_HOST, DESKTOP_HOST } from "../hosts.js";
 
 /**
  * A MEMORY'S TITLE, ASKED FOR AS ONE LINE (2026-09-28, build B). Indexes — the
@@ -297,6 +298,17 @@ export const UNRESOLVED_PROPERTY = {
   description:
     'Optional: true only when someone owes an answer — a question to the owner, a check with a date, a promise. A bug observation, a design note or a fact is a memory with no open flag. It stays under "Still open" in the wake until closed. To close one: `updates` its id with `unresolved: false` (or `how: "changed"` and the answer).',
 };
+
+/**
+ * `settlesWhen` beside `unresolved: true` (2026-10-27, S1; Ames's idea: "an
+ * open question needs either a trigger or a decision to let it go"). Invited,
+ * never demanded; a date goes in `eventDate`. Kept in the memory's meta.
+ */
+export const SETTLES_WHEN_PROPERTY = {
+  type: ["string", "null"],
+  description:
+    'Optional, with unresolved: true: what would settle it, in a short phrase ("the landlord replies", "the team decides pricing"). "Still open" shows it, and the nightly run can close the item once a memory shows it happened. A date goes in eventDate. Revising the item with unresolved: true keeps it unless you send a new one (null drops it).',
+} as const;
 
 /**
  * WHAT GOES IN `emotion` AND WHAT IN `carried_by` — said the same way at every
@@ -770,6 +782,7 @@ const REMEMBER: ToolSpec = {
       feelings: FEELINGS_PROPERTY,
       about: ABOUT_PROPERTY,
       unresolved: UNRESOLVED_PROPERTY,
+      settlesWhen: SETTLES_WHEN_PROPERTY,
       traits: TRAITS_PROPERTY,
       feelingsNow: FEELINGS_NOW_PROPERTY,
       remark: REMARK_PROPERTY,
@@ -893,7 +906,7 @@ const RECALL: ToolSpec = {
       question: {
         type: "string",
         description:
-          "What you are trying to remember, in words. Needs mode. A time in it (\"last week\", \"in September\", \"around the cut-over\", \"where did we leave off\") filters a facts answer to that window.",
+          "What you are trying to remember, in words. Needs mode. A time in it (\"last week\", \"in September\", \"around the cut-over\", \"where did we leave off\") filters a facts answer to that window. A dream it reaches comes labelled [dream], with its date and drm_ id: dreamed, not lived — tell it as a dream.",
       },
       query: { type: "string", description: "Another name for question." },
       mode: {
@@ -909,7 +922,7 @@ const RECALL: ToolSpec = {
       },
       handle: {
         type: "string",
-        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads a short summary of that night, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page).`,
+        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads that night whole, read-only. Or "last dream" (or "last night"): the newest dream whole — title, journal, what it did — and the reflection after it, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page).`,
       },
       ids: {
         type: "array",
@@ -1211,6 +1224,7 @@ const SESSION_END: ToolSpec = {
             feelings: FEELINGS_PROPERTY,
             about: ABOUT_PROPERTY,
             unresolved: UNRESOLVED_PROPERTY,
+            settlesWhen: SETTLES_WHEN_PROPERTY,
             traits: TRAITS_PROPERTY,
           },
           required: ["content"],
@@ -1777,11 +1791,11 @@ const REFLECT: ToolSpec = {
       close: {
         type: "array",
         items: { type: "string" },
-        description: "`finish`, optional: ids from the bundle's staleOpen that look done but you are not sure of — asked in the share, closed only on a yes. `close`: the proposed ids the owner agreed are done.",
+        description: "`finish`, optional: ids from the bundle's staleOpen or settlesOpen that look done but you are not sure of — asked in the share, closed only on a yes. `close`: the proposed ids the owner agreed are done.",
       },
       closeNow: {
         type: "array",
-        description: "`finish`, optional: ids from the bundle's staleOpen that a memory you read plainly shows finished — closed now, and said in the share. When in doubt, use `close` instead.",
+        description: "`finish`, optional: ids from the bundle's staleOpen or settlesOpen that a memory you read plainly shows finished (for settlesOpen: that what would settle it happened) — closed now, and said in the share. When in doubt, use `close` instead.",
         items: {
           type: "object",
           properties: {
@@ -2067,9 +2081,217 @@ function withDesktopSession(spec: ToolSpec): ToolSpec {
   return { ...spec, inputSchema: { ...spec.inputSchema, properties: { ...properties, session: DESKTOP_SESSION_PROPERTY } } };
 }
 
+/**
+ * DESKTOP'S `dream` AND `reflect` WORDS (2026-10-26, OL1d, from #649's review).
+ * Desktop's chat has no background Agent tool: its wake's dream note already
+ * says to follow a launch's prompt in the chat, and its launch `how` says the
+ * same (`server-words.ts#DESKTOP_DREAM_LAUNCH_HOW`). The every-host words —
+ * "hand the prompt to a background agent", "Do NOT run the dream yourself in
+ * this conversation" — fought that note. Desktop has no transcript sweep (no
+ * hooks), so the dream's words staying out of the transcript is not what keeps
+ * them out of memory here; the replaced negative says what does. Only summary,
+ * admission and negatives change; privileges are every host's.
+ */
+export const DESKTOP_WORDS: Readonly<
+  Partial<Record<ToolName, { readonly summary?: string; readonly admission?: string; readonly negativeExamples?: readonly string[] }>>
+> = {
+  dream: {
+    summary:
+      "Dreaming, in the nightly run: a few minutes of replay over what was lived since the last dream — merging near-copies, linking what belongs together, replaying what matters, writing a pattern you notice, flagging a contradiction, recording how an old feeling sits now — kept in a dream journal and reversible as a whole — with day's end before it and a reflection after it, in one run. Phases: `launch` (the run's prompt), `begin` / `propose` / `journal` (the dreamer's), `writer` (the night's day's end: the day to read), `decline` (not today), `setting` (auto, ask or off — 'no dreams' is off).",
+    admission:
+      "Call `launch` only after the owner said \"dream\" (or yes, or \"dream on your own\") to the day's dream line, and follow the prompt it returns yourself, here in the chat, step by step: day's end (`writer`), the dream (`begin`, `propose`, `journal`), then the reflection. This chat starts nothing on its own: with the setting `auto`, a Claude Code session on this memory, if there is one, runs the night in its own session. Call `setting` with value `auto` when the owner says \"dream on your own\" or turns it on, `off` when they say 'no dreams', `ask` when they want to be asked; `decline` when they say not today.",
+    negativeExamples: [
+      "Do NOT start a dream the owner did not ask for: you launch only on their word, never on your own.",
+      "Do NOT save what a dream did as something that happened (in `remember` or a chapter): its journal keeps it, marked as a dream — tell it as a dream.",
+      "Do NOT use `propose` to correct or delete a memory — a dream cannot rewrite one in place, delete one, edit the self page or promote one, and it touches only memories its bundle showed it.",
+    ],
+  },
+  reflect: {
+    summary:
+      "Reflection: a few quiet, awake minutes — usually at the end of the nightly run, after the dream — answering two or three questions about yourself, the owner and the two of you, citing the memories your thoughts rest on. It keeps a lived entry, may rewrite your self page from the memories it cites, leaves a short morning share for the owner, can record how a memory feels to you now and what a memory is about. Phases: `launch` (a reflection on its own), `begin` / `part` / `finish` (the reflecting mind's — `part` fetches the rest of a bundle that came in parts), `settle` (two memories it was shown that disagree, when the reason is plain), `told` (the share was told), `close` (a yes to what the share asked), `reopen` (a no to one it closed).",
+    admission:
+      "The nightly run calls `begin` and `finish` after the dream, as its prompt says. Call `launch` only when the owner asks you to reflect, and follow its prompt yourself, here in the chat. Call `told` after you told the owner a morning share, in your own words. Call `close` or `reopen` only on the owner's word about a share's open threads.",
+  },
+};
+
+function withDesktopWords(spec: ToolSpec): ToolSpec {
+  const words = DESKTOP_WORDS[spec.name as ToolName];
+  return words === undefined ? spec : { ...spec, ...words };
+}
+
 /** The tools a Claude Desktop client is offered: every host's — each able to
- *  name its session — and `wake`. */
-export const DESKTOP_TOOLS: readonly ToolSpec[] = [...TOOLS.map(withDesktopSession), WAKE];
+ *  name its session, in the chat's words where those differ — and `wake`. */
+export const DESKTOP_TOOLS: readonly ToolSpec[] = [...TOOLS.map((t) => withDesktopWords(withDesktopSession(t))), WAKE];
+
+/**
+ * `wake` FOR CLAUDE.AI (2026-10-26, the claude.ai trial). The same tool and the
+ * same server code as Desktop's; the words are for a chat on the web — no Code
+ * tab, and no end of conversation this server can see, so it says to remember
+ * in the moment.
+ *
+ * IT DESCRIBES, IT DOES NOT COMMAND (2026-10-26, OL1b item 4). The trial's
+ * first words opened "Call this first in every conversation." The connectors
+ * directory's review forbids a description that tells Claude to call a tool
+ * nobody asked for (research 2026-10-26), so "wake first" lives in the
+ * person's own instruction block, in their voice; this says what wake brings
+ * and when it fits, with the words tool search matches on — conversation,
+ * memory, start.
+ */
+export const CLAUDE_AI_WAKE: ToolSpec = {
+  name: "wake",
+  annotations: annotate("Wake", { readOnly: false }),
+  summary:
+    "Start a conversation with your long-term memory of this person: who you are with them, what is due today, what was left open between you, and how recent conversations went — plus a session id for this conversation.",
+  admission:
+    "At the start of a conversation, once — when the person's setup asks for it, or before you answer anything that needs your memory of them, the past, or work in progress. Pass the session id it returns as `session` on every later call in this conversation. Nothing tells this memory when a conversation ends, so what is worth keeping is saved as it comes up, with `remember`.",
+  negativeExamples: [
+    "Do NOT present what `recall` returned before a wake as the full record: it is a slice. The wake carries what is due, what is open and the recent days.",
+    "Do NOT call it again later in the same conversation to refresh what you know — it starts a new session. Ask `recall` a question (with a mode) instead.",
+  ],
+  privileges: [
+    {
+      claim:
+        "Each call starts a NEW session: it mints the id and writes that session's registry record itself (host claude-ai, the shared place claude-ai:), because claude.ai has no hook to do it.",
+      mechanizedBy: "src/adapters/mcp/server.ts#wakeTool -> src/adapters/lifecycle.ts#noteSession",
+    },
+    {
+      claim:
+        "What it returns is composed by the same code as Claude Code's session start — the published wake, the clock, today's plain reminders. Here 'Coming up' and 'Still open' move up whole, under the framing line; nothing is reworded.",
+      mechanizedBy: "src/adapters/lifecycle.ts#composeWake + src/adapters/lifecycle.ts#plainFor + src/adapters/mcp/chat-wake.ts#chatLanesFirst",
+    },
+    {
+      claim:
+        "It starts the background worker that sleeps and fades memories, as a session start does. It offers no dream line here: on claude.ai the night is the person's own routine, through the dream tool, and never the headless nightly run.",
+      mechanizedBy: "src/adapters/lifecycle.ts#spawnWorker + src/adapters/mcp/server.ts#wakeTool",
+    },
+    {
+      claim: "Under observer stance it stands down over the wire and says so.",
+      mechanizedBy: "src/adapters/mcp/server.ts#standDown",
+    },
+    {
+      claim:
+        "With `night: true` it wakes quiet, as the headless nightly run does: it carries no morning share, claims no reminder and offers no meeting or dream, so what the night leaves is still there for the next conversation.",
+      mechanizedBy: "src/adapters/mcp/server.ts#wakeTool -> src/adapters/lifecycle.ts#plainFor",
+    },
+  ],
+  inputSchema: {
+    type: "object",
+    properties: {
+      night: {
+        type: "boolean",
+        description:
+          "true only in a nightly routine's own run, when its prompt says so: a quiet wake that carries no morning share and no reminder, so they reach the next conversation. Leave it out in a conversation.",
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+/** The `session` a claude.ai conversation names: Desktop's, without the Code tab. */
+const CLAUDE_AI_SESSION_PROPERTY = {
+  type: "string",
+  description:
+    "This conversation's session id from the wake tool. Pass it on every call, so the call is filed under this conversation's session and not the most recent one.",
+};
+
+function withClaudeAiSession(spec: ToolSpec): ToolSpec {
+  const schema = spec.inputSchema as { properties?: Record<string, unknown> };
+  const properties = schema.properties ?? {};
+  if ("session" in properties) return spec;
+  return { ...spec, inputSchema: { ...spec.inputSchema, properties: { ...properties, session: CLAUDE_AI_SESSION_PROPERTY } } };
+}
+
+/**
+ * THE CHAT'S WORDS FOR THE TOOLS A CONVERSATION USES (2026-10-26, OL1b item 4;
+ * lightly held). claude.ai loads connector tools through tool search, which
+ * matches a tool by its name and description, so the summaries a chat leans
+ * on lead with the words a model searches with — memory, conversation, save,
+ * remember, chapter, status. And the "end-of-session ask" and the "boundary
+ * ask" that Claude Code's words lean on do not exist here: nothing on
+ * claude.ai asks at a conversation's end. `summary` and `admission` change,
+ * and, for `dream` alone, the negative examples (2026-10-26, OL1c); every
+ * privilege (with its mechanized path) is Claude Code's, so the audit holds
+ * them all the same. Every other host's descriptions are untouched, byte for
+ * byte.
+ *
+ * THE NIGHT IS A ROUTINE HERE (OL1c, from #647's review). claude.ai shows no
+ * dream line and has no background agent: its nights are a scheduled run the
+ * person set up, which wakes with `night: true`, launches, and follows the
+ * run's prompt itself, in that same run. So `dream` and `reflect` name that
+ * routine, and in an ordinary conversation run only when the person asks.
+ * The every-host words — "the day's dream line", "a background agent", "Do
+ * NOT run the dream yourself in this conversation" — would fight the
+ * routine's own prompt. A replaced negative still says "Do NOT", and the
+ * list is chosen by the server's host (`toolListFor`), never a client's name.
+ */
+export const CLAUDE_AI_WORDS: Readonly<
+  Partial<Record<ToolName, { readonly summary?: string; readonly admission?: string; readonly negativeExamples?: readonly string[] }>>
+> = {
+  remember: {
+    summary:
+      "Save to long-term memory, in the moment: something about the person, a decision, how they like to work, a plan or promise with its date, how the conversation felt, a line that struck you and why. Memory forms only from what you write here and in chapters — nothing reads the conversation afterwards, so what you don't write is not kept. One idea per call; keep the exact words when the words matter.",
+    admission:
+      "When something would be worth having back, however small — as it comes up, rather than saving it for the end: nothing on claude.ai asks at the end of a conversation. Err toward too many: weak memories fade on their own within days unless they are used, so a routine one costs little. Leave salience unset for routine things; set it when something mattered.",
+  },
+  recall: {
+    summary:
+      "Search your long-term memory on purpose: what you remember about the person, past conversations, a project, a plan — beyond what the wake brought. Three kinds of ask, one per call — a question with a mode (facts or meaning), ids to read memories whole, or a handle (an id or an exact title) to read one.",
+  },
+  status: {
+    summary:
+      "Memory status: the census of long-term memory — how much is held, of what kinds, in which bands, how much has left, and how much was removed. Counts and dates only.",
+  },
+  session_end: {
+    summary:
+      "Save several memories at once: the memories half of the write-up ask a tool result carries once a conversation has gone on a while — hand back what caught your attention since you last wrote, one idea per entry, in your own words. With `remember`, this is the only road from conversation to memory. The other half is `chapter`.",
+    admission:
+      "When a tool result carries the write-up ask, with one entry per thing you noticed: what they said, what happened, what was decided, what you learned, a line that struck you and why. Err toward too many. Add one that `updates` anything dated or open now done.",
+  },
+  chapter: {
+    summary:
+      "Write a chapter of this conversation into your journal: what happened and how it went, in your own voice, at any length. The journal stays open — when something significant happens later in the conversation, add to it then.",
+    admission:
+      "When the conversation is wrapping up or the person says goodbye, when a tool result carries the write-up ask, and again whenever something happens afterwards that the chapter you already wrote does not contain.",
+  },
+  dream: {
+    summary:
+      "Dreaming, in the person's night routine (a scheduled run they set up): a few minutes of replay over what was lived since the last dream — merging near-copies, linking what belongs together, replaying what matters, writing a pattern you notice, flagging a contradiction, recording how an old feeling sits now — kept in a dream journal and reversible as a whole — with day's end before it and a reflection after it. Phases: `launch` (the run's prompt), `begin` / `propose` / `journal` (the dreamer's), `writer` (the night's day's end: the day to read), `decline` (not today), `setting` (auto, ask or off — 'no dreams' is off).",
+    admission:
+      "The night routine calls `launch` when its prompt says to, and follows the prompt that returns itself, in that same run: day's end (`writer`), the dream (`begin`, `propose`, `journal`), then the reflection. In an ordinary conversation, call `launch` only when the person asks you to dream now, and follow its prompt there the same way. Call `setting` with value `off` when they say 'no dreams', `auto` or `ask` when they choose one; `decline` when they say not today.",
+    negativeExamples: [
+      "Do NOT start a dream nobody asked for: it runs in the routine the person set up, on its prompt, or in a conversation on the person's word — never on your own.",
+      "Do NOT save what a dream did as something that happened (in `remember` or a chapter): its journal keeps it, marked as a dream — tell it as a dream.",
+      "Do NOT use `propose` to correct or delete a memory — a dream cannot rewrite one in place, delete one, edit the self page or promote one, and it touches only memories its bundle showed it.",
+    ],
+  },
+  reflect: {
+    summary:
+      "Reflection: a few quiet, awake minutes — usually at the end of the person's night routine, after the dream — answering two or three questions about yourself, the person and the two of you, citing the memories your thoughts rest on. It keeps a lived entry, may rewrite your self page from the memories it cites, leaves a short morning share for the person, can record how a memory feels to you now and what a memory is about. Phases: `launch` (a reflection on its own), `begin` / `part` / `finish` (the reflecting mind's — `part` fetches the rest of a bundle that came in parts), `settle` (two memories it was shown that disagree, when the reason is plain), `told` (the share was told), `close` (a yes to what the share asked), `reopen` (a no to one it closed).",
+    admission:
+      "The night routine calls `begin` and `finish` after the dream, as the dream's prompt says. In an ordinary conversation, call `launch` only when the person asks you to reflect, and follow its prompt there yourself. Call `told` after you told the person a morning share that a conversation's wake carried, in your own words. Call `close` or `reopen` only on the person's word about a share's open threads.",
+  },
+};
+
+function withClaudeAiWords(spec: ToolSpec): ToolSpec {
+  const words = CLAUDE_AI_WORDS[spec.name as ToolName];
+  return words === undefined ? spec : { ...spec, ...words };
+}
+
+/** The tools a claude.ai server offers: `wake` first, then every host's, each
+ *  able to name its session, in the chat's words where those differ. */
+export const CLAUDE_AI_TOOLS: readonly ToolSpec[] = [CLAUDE_AI_WAKE, ...TOOLS.map((t) => withClaudeAiWords(withClaudeAiSession(t)))];
+
+/**
+ * WHICH LIST A SERVER OFFERS: a boolean is the old question (is this Desktop?),
+ * a string is the host (`McpServer.host`) — Desktop's chat, claude.ai, or any
+ * other, which is offered every host's tools and no `wake`.
+ */
+export function toolListFor(host: boolean | string): readonly ToolSpec[] {
+  if (host === true || host === DESKTOP_HOST) return DESKTOP_TOOLS;
+  if (host === CLAUDE_AI_HOST) return CLAUDE_AI_TOOLS;
+  return TOOLS;
+}
 
 /**
  * OLD NAMES THAT STILL ANSWER (2026-10-10, Group 1c). `note` became `remember`;
@@ -2099,9 +2321,9 @@ export function canonicalToolName(name: string): string {
  * so a Claude Code client calling it gets today's unknown-tool answer. An old
  * name (`TOOL_ALIASES`) finds its new spec.
  */
-export function toolSpec(name: string, desktop = false): ToolSpec | undefined {
+export function toolSpec(name: string, desktop: boolean | string = false): ToolSpec | undefined {
   const canonical = canonicalToolName(name);
-  return (desktop ? DESKTOP_TOOLS : TOOLS).find((t) => t.name === canonical);
+  return toolListFor(desktop).find((t) => t.name === canonical);
 }
 
 /**
@@ -2129,8 +2351,8 @@ export function renderDescription(spec: ToolSpec): string {
 
 /** The `tools/list` payload. Shape is MCP's; content is the registry's. A
  *  Claude Desktop client (`desktop`) is offered `wake` too, last. */
-export function toolDefinitions(desktop = false): Record<string, unknown>[] {
-  return (desktop ? DESKTOP_TOOLS : TOOLS).map((spec) => ({
+export function toolDefinitions(desktop: boolean | string = false): Record<string, unknown>[] {
+  return toolListFor(desktop).map((spec) => ({
     name: spec.name,
     title: spec.annotations.title,
     description: renderDescription(spec),

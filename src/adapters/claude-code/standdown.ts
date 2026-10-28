@@ -34,11 +34,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { isLocked } from "../../core/store/db.js";
-import { assertSafeDataDir, isStoreError } from "../../core/store/index.js";
+import { WAKE_BUILD_KEY } from "../../core/self/behind.js";
+import { assertSafeDataDir, isStoreError, peekMeta } from "../../core/store/index.js";
 import type { StoreErrorCode } from "../../core/store/index.js";
+import { versionCore } from "../host-wiring.js";
 import { SESSIONS_DIR, isSessionId } from "../sessions.js";
+import { coreNewer } from "../update-words.js";
 
-/** The last words of every stand-down message, and the only ones never cut. */
+/** The last words of every general stand-down message, and the only ones never cut
+ *  (a fault with its own words, `StandDownFault.say`, ends in its own step instead). */
 export const STANDDOWN_TAIL = "Run: counterparts doctor";
 
 /**
@@ -77,6 +81,13 @@ export interface StandDownFault {
   /** One clause of plain words. Never memory text; a path is allowed. */
   readonly reason: string;
   readonly kind: StandDownKind;
+  /**
+   * THE WORDS, when this fault has its own for both readers
+   * (`newerStoreSay`, U1a): the person's line in place of
+   * `standDownMessage`'s, and a line for the model, so it does not act as if
+   * it remembers. Absent: the general red line, to the person only.
+   */
+  readonly say?: { readonly person: string; readonly model: string };
 }
 
 /** The configuration a caller NAMED could not be honoured (`config-path.ts`). */
@@ -301,12 +312,59 @@ function tildeHome(text: string, home: string = homedir()): string {
  * error message, and error messages in this codebase carry codes, ids and paths.
  */
 export function standDownMessage(fault: StandDownFault): string {
+  if (fault.say !== undefined) return fault.say.person;
   const reason = tildeHome(oneLine(fault.reason));
   const said =
     reason.length <= STANDDOWN_REASON_MAX_CHARS
       ? reason
       : `${reason.slice(0, STANDDOWN_REASON_MAX_CHARS - 1)}…`;
   return `Counterparts memory is OFF for this session: ${said} (${fault.code}). ${STANDDOWN_TAIL}`;
+}
+
+/**
+ * A MEMORY A NEWER COUNTERPARTS UPGRADED (`SCHEMA_AHEAD`, U1a, 2026-10-27).
+ *
+ * The general line ends "Run: counterparts doctor", and the commonest way here
+ * is a plugin update in another window: this window's hooks keep the old
+ * folder until `/reload-plugins`, and a plugin install has no `counterparts`
+ * command at all. So this fault says the step instead, in the route's words
+ * (`update-words.ts#newerStoreWords`, the same sentence the MCP server's
+ * refusal is built from), to the person — and to the model too, the paused
+ * notice's pattern, so it does not act as if it remembers. Said as often as
+ * any persistent fault (`decideSay`). `words` is the whole sentence.
+ */
+export function newerStoreSay(fault: StandDownFault, words: string): StandDownFault {
+  const lower = `${words.charAt(0).toLowerCase()}${words.slice(1)}`;
+  return {
+    ...fault,
+    say: {
+      person: `Counterparts memory is OFF in this window: ${lower}`,
+      model:
+        `Counterparts memory is off in this window: ${lower} Until then no memories are loaded and nothing said ` +
+        "here is remembered. Don't act as if you remember earlier sessions; tell the person this step.",
+    },
+  };
+}
+
+/**
+ * THE VERSION THAT UPGRADED A MEMORY THIS COPY REFUSED (F1, 2026-10-27, after
+ * the review of #666): the wake's build stamp, read on its own connection
+ * from the database the store refused (`store#peekMeta`) — the store would not
+ * open, so there is no `Store#getMeta` to ask. The MCP server's rule exactly
+ * (`mcp/server.ts#newerStoreRoute`): only a version-shaped stamp, and only
+ * when it is newer than this copy, so the plugin's reload is said only into a
+ * record at least as new as the writer (`update-words.ts#newerStoreStep`).
+ * Null when there is no path (the cache's own `SCHEMA_AHEAD` names none), no
+ * stamp, or nothing newer; never throws.
+ */
+export function aheadWriter(dbPath: string | null, loaded: string | null): string | null {
+  if (dbPath === null || dbPath.length === 0) return null;
+  try {
+    const wrote = versionCore(peekMeta(dbPath, WAKE_BUILD_KEY));
+    return coreNewer(wrote, loaded) ? wrote : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -503,6 +561,9 @@ export type SaysSoHook = "session-start" | "user-prompt-submit";
 export interface SayDecision {
   /** The message to display, or null to stay on stderr alone. */
   readonly message: string | null;
+  /** The model's line, said exactly when `message` is and the fault has one
+   *  (`StandDownFault.say`); else null. */
+  readonly model: string | null;
   /** The mark this event leaves. Written whether or not anything was said — a
    *  transient nobody was told about is still one this session has met. */
   readonly mark: StandDownMark;
@@ -549,7 +610,11 @@ export function decideSay(
   };
   if (fault.kind === "persistent") {
     const say = hook === "session-start" || !base.told;
-    return { message: say ? standDownMessage(fault) : null, mark: { ...base, told: base.told || say } };
+    return {
+      message: say ? standDownMessage(fault) : null,
+      model: say ? (fault.say?.model ?? null) : null,
+      mark: { ...base, told: base.told || say },
+    };
   }
   const count = was.count + 1;
   // THE ESCALATION OUTRANKS THE SOFT LINE, and is its own once: a session that
@@ -558,6 +623,7 @@ export function decideSay(
   if (count >= TRANSIENT_ESCALATE_AFTER && !was.escalated) {
     return {
       message: busyWedgedMessage(count),
+      model: null,
       mark: { ...base, transient: { count, at: now, told: true, escalated: true } },
     };
   }
@@ -568,6 +634,7 @@ export function decideSay(
         ? BUSY_SESSION_START_MESSAGE
         : BUSY_TURN_MESSAGE
       : null,
+    model: null,
     mark: { ...base, transient: { count, at: now, told: was.told || say, escalated: was.escalated } },
   };
 }

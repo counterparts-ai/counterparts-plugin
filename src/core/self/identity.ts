@@ -19,6 +19,7 @@
  */
 import { createHash } from "node:crypto";
 import type { Band, Kind, MemoryPhysics } from "../types.js";
+import { settlesWhenOf } from "../types.js";
 import { strength } from "../physics/index.js";
 import type { ProseDoc, ReadOnlyStore, Store, WakeDisplayRow } from "../store/index.js";
 import type { SelfTunables } from "./tunables.js";
@@ -245,6 +246,35 @@ export function openThread(store: Store, id: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * HOW MANY OPEN ITEMS NAME WHAT WOULD SETTLE THEM (2026-10-27, S1): every open
+ * thread (`openThread`, carried or not), how many carry a `meta.settlesWhen`,
+ * how many only a date, and how many neither. Counted so a later "let it go" offer for items with no
+ * trigger can be decided on numbers; nothing reads it to act. Never throws.
+ */
+export function openSettlesCounts(store: Store): { open: number; withSettlesWhen: number; dated: number; withoutTrigger: number } {
+  let open = 0;
+  let named = 0;
+  let dated = 0;
+  try {
+    for (const id of store.openThreadIds()) {
+      if (!openThread(store, id)) continue;
+      open += 1;
+      try {
+        const doc = store.readProse(id);
+        // A date is a trigger too (review of #665): counted apart, never twice.
+        if (settlesWhenOf(doc.meta) !== null) named += 1;
+        else if (doc.eventDate !== undefined && doc.eventDate.trim() !== "") dated += 1;
+      } catch {
+        /* unreadable: counted as none named */
+      }
+    }
+  } catch {
+    /* no count read */
+  }
+  return { open, withSettlesWhen: named, dated, withoutTrigger: open - named - dated };
 }
 
 /**
@@ -542,8 +572,10 @@ export interface Lanes {
  * belongs to the directory it was done in — so the craft lane is composed at
  * delivery, for the session's directory, beside "Last here"
  * (`handoff/work-here.ts`, `counterpart.ts#addHandoffPointer`), and Nearby is
- * left with what is personal. An unresolved work memory is still a thread:
- * an open question stays open wherever the session wakes. Off, the lanes are
+ * left with what is personal. An unresolved work memory is still a thread,
+ * in the stored composition (for no reader); a session's own "Still open"
+ * (`opts.threadPlace`, O2 2026-10-26) keeps another folder's work out and
+ * lists this folder's before the personal ones. Off, the lanes are
  * what they were before: craft is skill-kind above the warm floor. With
  * `PROJECTS_TRAVEL` (2026-10-21) craft — a skill not marked `work` — is
  * delivered as a work line in any folder (`work.ts#workHere`), so it is in
@@ -578,6 +610,16 @@ export function rankLanes(
      *  open thread carried. The lane's own ageing (the weeks-old count)
      *  still reads born-or-used, as before. */
     readonly carry?: OpenCarry;
+    /**
+     * ONE READER'S "STILL OPEN" (O2, 2026-10-26; `work.ts#threadPlace`): an
+     * open thread's place for the session reading — `here` leads, `personal`
+     * follows, `out` (another folder's work) is in no lane and no count.
+     * Today's order holds inside each group. A core memory being
+     * reconsidered is not asked: it is the self's decision, store-wide, and
+     * keeps its lead. Absent (the turn-end's composition, for no reader):
+     * every open thread, in one group, as before.
+     */
+    readonly threadPlace?: (s: Scanned) => "here" | "personal" | "out";
   } = {},
 ): Lanes {
   const identity: Ranked[] = [];
@@ -592,6 +634,8 @@ export function rankLanes(
   const later = new Set(opts.later ?? []);
   const unsettled = opts.unsettled ?? new Set<string>();
   const notCarried = opts.carry?.notCarried;
+  /** Open threads that follow this folder's (`opts.threadPlace`'s `personal`). */
+  const personal = new Set<string>();
   const asThread = (s: Scanned): Ranked => {
     const r = rankedAs(s, "threads");
     return unsettled.has(s.id) ? { ...r, unsettled: true } : r;
@@ -612,7 +656,11 @@ export function rankLanes(
     // carried: in no lane of the wake — not "Nearby" either, where it would
     // read as carried still. Recall shows it; a touch carries it again.
     if (s.unresolved) {
-      if (notCarried?.has(s.id) !== true) threads.push(asThread(s));
+      if (notCarried?.has(s.id) === true) continue;
+      const place = opts.threadPlace?.(s) ?? "here";
+      if (place === "out") continue;
+      if (place === "personal") personal.add(s.id);
+      threads.push(asThread(s));
       continue;
     }
     if (opts.workAtDelivery === true) {
@@ -644,7 +692,9 @@ export function rankLanes(
   identity.sort(byRotation(scanned.find((s) => s.day !== undefined)?.day));
   craft.sort(byStrength);
   const turn = scanned.find((s) => s.day !== undefined)?.day ?? 0;
-  threads.sort(byThreadLive(turn, t.STILL_OPEN_STALE_DAYS));
+  // This folder's first, then the personal ones (O2), each in today's order.
+  const live = byThreadLive(turn, t.STILL_OPEN_STALE_DAYS);
+  threads.sort((a, b) => Number(personal.has(a.id)) - Number(personal.has(b.id)) || live(a, b));
   // A few core memories being reconsidered lead "Still open" (2026-10-11):
   // at most `RECONSIDERING_MAX`, the rest counted with the lane's overflow
   // ("more still open"), one decision at a time. Not aged: a core memory

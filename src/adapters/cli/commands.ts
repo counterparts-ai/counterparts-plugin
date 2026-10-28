@@ -144,6 +144,9 @@ export type { Io, RunOptions } from "./commands-shared.js";
 export { logEntryLine, firedLines, DOCTOR_RED_EXIT } from "./commands-readings.js";
 // The settled-things measure, public for a host's own reading (the harness's compare column).
 export { settledReading, settledLines } from "./mechanisms.js";
+// The coverage ledger as rows (2026-10-26): what `counterparts coverage` reads, for the harness's scripted week.
+export { coverageReading } from "./coverage.js";
+export type { CoverageRow } from "./coverage.js";
 export type { SettledReading } from "./mechanisms.js";
 export { carryForward, KNOWN_HOSTS } from "./commands-install.js";
 export { DASHBOARD_DEFAULT_PORT, dashboardLine } from "./commands-dashboard.js";
@@ -622,7 +625,7 @@ export const COMMAND_BLURB: Record<Command, string> = {
   status: "What is held, what left, what was removed. Read-only.",
   install:
     "Cold start: create the store and write claude-code.json under ~/.counterparts/ (the path the hooks read unless --config names another). At a terminal it asks your name, turns on recall by meaning (a local table — nothing leaves this machine), connects Claude Code (counterparts disconnect undoes that), and offers back any memory a parked uninstall set aside. Anywhere else — a pipe, a script, a CI job — and with --no-connect it prints the host's hooks block and MCP line and changes nothing of the host's.",
-  connect: "Connect an AI to your memory: put the five hooks in the host's settings file and register the memory tools. It backs the settings file up first and says the path, keeps every other tool's hooks exactly where they are, repairs an entry of ours that names a path that is gone, and refuses a settings file it cannot parse. Claude Code is the one host it knows today.",
+  connect: "Connect an AI to your memory: put the five hooks in the host's settings file and register the memory tools, and keep Counterparts Online's claude.ai connector out of Claude Code with one deniedMcpServers entry. It backs the settings file up first and says the path, keeps every other tool's hooks exactly where they are, repairs an entry of ours that names a path that is gone, and refuses a settings file it cannot parse. Claude Code is the one host it knows today.",
   disconnect:
     "Disconnect an AI: take the Counterparts hooks back out of the host's settings file and deregister the memory server. It removes only what it recognises as ours; another tool's hooks are never candidates. Your memory is not touched.",
   uninstall:

@@ -336,7 +336,7 @@ export const DURABLE_EVENTS = {
   "handoff.refused": "a handoff was turned away (past the hard limit, stopped by the gate battery, carrying the wake's own markers, written where no project was named, sent as something other than text, sent from a Claude Desktop call that named no session, retiring an id that is not a handoff here, or — with `no-room` — composed before the wake had room reserved for its pointer)",
   // Durable since 2026-10-01: it was a ring event, gone with the hook, and
   // the wake bar could not say a session start went without it.
-  "handoff.lasthere.noroom": "a session start had no room for the \"Last here\" line naming the chapter last written in that project (the bundle's bytes, the ceiling, and whether a handoff was carried in its place)",
+  "handoff.lasthere.noroom": "a session start had no room for the \"Last here\" line naming the chapter last written in that project, or the later session that wrote none (the bundle's bytes, the ceiling, and whether a handoff was carried in its place)",
   // Durable since 2026-10-02: "Work here" had more lines than the wake carried.
   "self.work.overflow": "a session start had more \"Work here\" lines for its project than it carried — more than the wake shows, so they rotate, or fewer fitted the room (how many, how many shown)",
   "recall.credit": "a boundary decided which memories the replies actually used, and credited them",

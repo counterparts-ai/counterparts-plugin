@@ -1,6 +1,6 @@
 /** `Counterpart`'s deposit: the gate's record, the update guard, and carrying facts, reminders and threads onto what is written (bodies moved out of `counterpart.ts`, 2026-10-11; the class keeps a delegate for each). */
 import { batteryGate } from "./bridge.js";
-import { mintProposal, UNRESOLVED_META_KEY } from "./mint.js";
+import { mintProposal, settlesWhenOf, UNRESOLVED_META_KEY } from "./mint.js";
 import { screenTags } from "./tag-screen.js";
 import { cueModeOf, recurrenceOf, DATE_FROM_META, DATE_LINEAGE_MAX, DATE_MOVED_TO_META } from "./prospective/index.js";
 import { errCode, submitProposal } from "./remember/index.js";
@@ -22,6 +22,7 @@ import type { Recurrence } from "./time.js";
 import { markWakeBehind } from "./self/index.js";
 import { ownerNames } from "./sleep/index.js";
 import { isBeliefRow } from "./recall/index.js";
+import { headOf } from "./recall/standing.js";
 import { statusOf, inheritFrom, occurredOnOf, saidByOf } from "./store/index.js";
 import type { MemoryRow, Inherited, MemoryStatus } from "./store/index.js";
 import type {
@@ -214,10 +215,13 @@ export async function deposit(
   const titledProposal: Proposal = titled.carried === undefined ? withFacts : { ...withFacts, title: titled.carried.title };
   // v14, lane B: its tags, a revision's carried over when none were sent.
   const tags = carryTags(cp, carry.proposal, ctx.tags);
-  const proposal: Proposal =
+  const tagged: Proposal =
     tags === null || tags.tags.length === 0
       ? titledProposal
       : { ...titledProposal, tags: tags.tags, tagsVia: tags.from === null ? "write" : "carried" };
+  // What would settle it, a carried-on thread's kept when none was sent (S1).
+  const settled = carrySettles(cp, tagged);
+  const proposal: Proposal = settled === null ? tagged : { ...tagged, settlesWhen: settled };
   // What it is about, a revision's carried over when none was sent (2026-10-11).
   const about = cp["carryAbout"](carry.proposal, ctx.about);
   const mint = mintProposal(cp.store, proposal, {
@@ -603,6 +607,35 @@ export function carryTags(cp: Counterpart, p: Proposal, sent: readonly string[] 
     return none;
   }
   return prior.length === 0 ? none : { tags: prior, from: target, ...dropped };
+}
+
+/**
+ * A CARRIED-ON THREAD KEEPS WHAT WOULD SETTLE IT (2026-10-27, S1). A revision
+ * that `updates` an open item and says `unresolved: true` moves the thread to
+ * itself (`closeThread`); left without a `settlesWhen`, the new row would show
+ * no trigger on the very thread that had one. So the old one's is carried,
+ * as a title or tags are. Sent (a phrase, or `null` to drop it): what was
+ * sent stands. Only for an address the author declared and the store
+ * resolved. Null: nothing to carry.
+ */
+export function carrySettles(cp: Counterpart, p: Proposal): string | null {
+  if (!p.unresolved || p.settlesWhen !== undefined || p.threadSaid !== true) return null;
+  const target = p.updates?.method === "declared" ? p.updates.resolved : null;
+  if (target === null) return null;
+  try {
+    const meta = cp.store.readProse(target).meta;
+    if (meta[UNRESOLVED_META_KEY] === true) return settlesWhenOf(meta);
+    // A CHAIN (review of #665): `updates` named an item the thread already
+    // moved on from (a → b, then c updates a). The thread lives where the
+    // chain now ends — the memory that holds over it (`recall/standing.ts#headOf`,
+    // as a reminder is found where it now lives, `reminderHolder`).
+    const head = headOf(cp.store, target);
+    if (head === null || head === target) return null;
+    const at = cp.store.readProse(head).meta;
+    return at[UNRESOLVED_META_KEY] === true ? settlesWhenOf(at) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

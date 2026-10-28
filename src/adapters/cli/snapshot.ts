@@ -27,7 +27,6 @@ import {
   copyFileSync,
   existsSync,
   lstatSync,
-  mkdirSync,
   readdirSync,
   realpathSync,
   statSync,
@@ -43,6 +42,7 @@ import {
   isWithin,
   paths,
 } from "../../core/store/index.js";
+import { mkdirPrivate } from "../../core/store/index.js";
 import type { Store } from "../../core/store/index.js";
 
 export type CopyMethod = "vacuum-into" | "file-tree" | "skipped";
@@ -158,11 +158,11 @@ function copyTree(from: string, to: string): number {
   if (!existsSync(from)) return 0;
   const stat = statSync(from);
   if (!stat.isDirectory()) {
-    mkdirSync(join(to, ".."), { recursive: true });
+    mkdirPrivate(join(to, ".."));
     copyFileSync(from, to);
     return 1;
   }
-  mkdirSync(to, { recursive: true });
+  mkdirPrivate(to);
   let files = 0;
   for (const name of readdirSync(from)) {
     files += copyTree(join(from, name), join(to, name));
@@ -189,7 +189,7 @@ export function snapshot(store: Store, target: string): SnapshotReport {
     // The layout is re-asserted here, not assumed from open: a directory that
     // appeared since the store opened must be classified before it is skipped.
     store.assertLayout();
-    mkdirSync(resolvedTarget, { recursive: true });
+    mkdirPrivate(resolvedTarget);
   } catch (err) {
     return {
       ok: false,

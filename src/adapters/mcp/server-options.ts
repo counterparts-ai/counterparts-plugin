@@ -113,6 +113,14 @@ export interface McpServerOptions {
    */
   host?: string;
   /**
+   * THE CLAUDE.AI TRIAL'S CANARY (2026-10-26): one invented fact, added to the
+   * `initialize` `instructions` a claude.ai server sends and to nothing else —
+   * no tool description carries it — so a cold question about it shows whether
+   * claude.ai delivered the field. Set by `adapters/remote/bin/serve-http.ts`;
+   * ignored by every other host.
+   */
+  canary?: string;
+  /**
    * WHAT CLAUDE DESKTOP'S `wake` NEEDS TO RUN A SESSION START, handed in by the
    * entry point (`bin/serve.ts`) and used only once a Desktop client is seen:
    * the configuration this process read (the wake's budget, the worker's
@@ -130,12 +138,21 @@ export interface McpServerOptions {
   /**
    * THE DOCTOR NOTICE for Desktop's `wake` — `claude-code/doctor.ts`'s red-only
    * line, which this library may not import, so the entry point hands over a
-   * closure (`bin/serve.ts`). Null or absent: nothing to say.
+   * closure (`bin/serve.ts`). Null or absent: nothing to say. `night`: the
+   * wake is a night's own (`wake` with `night: true`), which no person reads.
    */
-  wakeNotice?: () => string | null;
+  wakeNotice?: (opts: { night: boolean }) => string | null;
   /** The package version on disk now (`sessions.ts#manifestVersionOnDisk`),
    *  injectable so the update line is provable without reinstalling. */
   manifestVersion?: () => string | null;
+  /**
+   * The newest Counterparts plugin version Claude Code records for this
+   * folder (`host-wiring.ts#pluginVersionRecorded`), read when a plugin
+   * server meets a newer store: newer than this server is "reload", anything
+   * else "update" (U1a). Injectable so the choice is provable without a real
+   * `installed_plugins.json`; absent, read from the home directory.
+   */
+  pluginVersion?: () => string | null;
   /** This process's environment, read once at `initialize` for Claude Code's
    *  markers (`hosts.ts#claudeCodeEnvMarker`). Injectable for a test; absent,
    *  `process.env`. */

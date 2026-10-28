@@ -265,8 +265,22 @@ export const HOW_I_WORK_RULE =
 export const PAGE_ROOM_RULE =
   `The whole page has ${String(PAGE_ROOM_BYTES)} bytes of room (UTF-8; an em dash or an accented letter is more than one byte), and it should stay thin: most of a core is still unearned, and a page that says less is read whole. Write within the room. A page past it is sent back once, with how many bytes over, to be cut and sent again — cut, don't add a short version.`;
 
+/**
+ * NO RECORD IS UNKNOWN, NOT "DIDN'T" (2026-10-26, roadmap S3; Mike: guidance,
+ * "maybe not hardened rule or anything though so we have flexibility"). The
+ * Dana week: on day 2 the counterpart warned Dana a glaze would run; no
+ * handback kept it, so on day 4 it said "I have no record of warning you", and
+ * the nights made that identity — "when Dana remembered me warning them… I
+ * told them I hadn't" — humble about something it had done. Words only, said
+ * to every night writer (the page writer and the reflection through
+ * `PAGE_WRITING_RULE`, the reflection's entry and the dream beside it); nothing
+ * checks a sentence against it. Revert: drop it from those places.
+ */
+export const NO_RECORD_RULE =
+  `What you did or didn't do, said or didn't say, rests on a memory that says so. Finding no record of something ("I have no record of warning them") is not a memory that it didn't happen: memory has gaps, most of all from short sessions, so say you don't know rather than that you didn't.`;
+
 export const PAGE_WRITING_RULE =
-  `${HOW_I_WORK_RULE} The page is read on later days and by sessions on other models. Name the model when a claim is about one model ("the Opus 5.5 system card says…", not "my system card says…"); write a date, never "tonight" or "today"; and add no revised-on line of your own — the wake dates the page. ${PAGE_ROOM_RULE}`;
+  `${HOW_I_WORK_RULE} The page is read on later days and by sessions on other models. Name the model when a claim is about one model ("the Opus 5.5 system card says…", not "my system card says…"); write a date, never "tonight" or "today"; and add no revised-on line of your own — the wake dates the page. ${NO_RECORD_RULE} ${PAGE_ROOM_RULE}`;
 
 /**
  * THE DATE A RUN ON `today` IS ABOUT — yesterday, always.

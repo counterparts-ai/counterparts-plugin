@@ -15,11 +15,12 @@
  *
  * If the copy cannot be made, the caller does not migrate.
  */
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, realpathSync, renameSync, statSync } from "node:fs";
 import { utcDate } from "../time.js";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { openDb } from "./db.js";
+import { PRIVATE_FILE_MODE, chmodQuiet, mkdirPrivate } from "./private.js";
 import { DATABASE_FILE, assertSafeDataDir, defaultSnapshotsDir, forbiddenRoots, isWithin } from "./paths.js";
 
 /** The marker in a pre-migration copy's name. */
@@ -69,6 +70,9 @@ export function vacuumInto(
     // Single-quoted SQL literal: the path is escaped for SQL, never interpolated
     // into a shell, because nothing here shells out.
     db.exec(`VACUUM INTO '${destination.replace(/'/g, "''")}'`);
+    // THE COPY IS 0600 (R1): `VACUUM INTO` gives its output `0644 & ~umask`,
+    // never the source's mode (measured, bun 1.3 and Node 22/24).
+    chmodQuiet(destination, PRIVATE_FILE_MODE);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: String((err as Error).message ?? err) };
@@ -173,7 +177,7 @@ export function snapshotBeforeMigration(input: PreMigrationInput): PreMigrationC
   const partial = join(dir, `.partial-${instant}-${String(process.pid)}`);
   // A failure below leaves the partial where it is: the store deletes nothing,
   // and the daily sweep removes a stale partial by this name.
-  mkdirSync(partial, { recursive: true });
+  mkdirPrivate(partial);
   const copy = vacuumInto(input.dbPath, join(partial, DATABASE_FILE));
   if (!copy.ok) throw new Error(copy.error);
   const bad = checkCopy(join(partial, DATABASE_FILE), input.from);

@@ -13,6 +13,7 @@
  */
 import { implicitConfigRefusal, namedConfigRefusal, namedUnreadableRefusal } from "../../config-path.js";
 import { openLog } from "../../log/index.js";
+import { usePrivateUmask } from "../../private-umask.js";
 import { nightChildrenWords } from "../../../core/dream/index.js";
 
 import { NIGHT_KIND_ENV, NIGHT_RUN_ENV, openNightCounterpart, readKind, runNight } from "../night-run.js";
@@ -90,6 +91,7 @@ function standDown(config: Parameters<typeof openNightCounterpart>[0], run: stri
 /** The nightly run, then exit — what this file does as a script, and what the
  *  single binary's `nightly` mode calls. */
 export function start(): void {
+  usePrivateUmask();
   void main().then(
     () => process.exit(0),
     (err: unknown) => {

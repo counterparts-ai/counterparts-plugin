@@ -90,6 +90,37 @@ export interface HostReading {
    *  would read it: which halves it would stand down for. Null when there is
    *  none it would believe; absent when not read. */
   readonly npmMarker?: { readonly hooks: boolean; readonly server: boolean } | null;
+  /** A settings file read keeps Counterparts Online out of Claude Code
+   *  (`deniedMcpServers`, R1); absent when not read. */
+  readonly deny?: boolean;
+}
+
+/**
+ * COUNTERPARTS ONLINE KEPT OUT OF CLAUDE CODE (2026-10-27, R1). Claude Code
+ * loads a person's claude.ai connectors into every session, so this install
+ * beside a hosted connector would be two memories over two stores. `connect`
+ * writes the one `deniedMcpServers` entry; this line says whether it is there.
+ *
+ * Only beside npm wiring: with nothing of ours connected the Claude Code line
+ * already says to run `connect`, and a plugin-only install has no `connect`
+ * to run (it would wire the host twice), so neither gets a line here.
+ */
+export function denyFindings(reading: HostReading): Finding[] {
+  if (reading.deny === undefined) return [];
+  if (reading.events.length === 0 && !reading.mcp) return [];
+  if (reading.deny) {
+    return [finding("online-deny", "green", "Online", "Counterparts Online's claude.ai connector is kept out of Claude Code (deniedMcpServers)", "", { deny: true })];
+  }
+  return [
+    finding(
+      "online-deny",
+      "amber",
+      "Online",
+      "Counterparts Online is not kept out of Claude Code: a claude.ai connector to it would load into every session as a second memory over a different store",
+      "Run: counterparts connect — it backs up ~/.claude/settings.json and adds the one deniedMcpServers entry, leaving everything else as it is.",
+      { deny: false },
+    ),
+  ];
 }
 
 /** How a Runtime row names where a command was wired: `desktop` is Claude

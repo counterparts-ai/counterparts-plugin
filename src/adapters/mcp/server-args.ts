@@ -49,6 +49,12 @@ export interface RecallRowFields {
    * so a later open by id can be joined against it (the ~10-27 check).
    */
   readonly tail?: readonly string[];
+  /**
+   * A question's dreams (D1, review of #663): each dream that came beside the
+   * answer, why, and its meaning score (null when none was measured) — so the
+   * bar can be calibrated on live use. Ids and numbers only.
+   */
+  readonly dreams?: readonly { readonly id: string; readonly why: string; readonly score: number | null }[];
 }
 
 /**

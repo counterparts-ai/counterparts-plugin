@@ -85,6 +85,7 @@ import type { Store } from "../../../core/store/index.js";
 import { hostSessionEvidence, installedVersion, writeUpSources } from "../../sessions.js";
 import { openLog } from "../../log/index.js";
 import { BINARY } from "../../runtime.js";
+import { usePrivateUmask } from "../../private-umask.js";
 import type { Binary } from "../../runtime.js";
 
 import {
@@ -750,6 +751,7 @@ async function main(): Promise<void> {
 /** One worker run, then exit — what this file does as a script, and what the
  *  single binary's `runner` mode calls. */
 export function start(): void {
+  usePrivateUmask();
   void main().then(
     () => process.exit(0),
     (err: unknown) => {

@@ -54,6 +54,19 @@
  *      host's own door. We READ the file to decide whether to call it — reading
  *      is what `doctor` already does — and we shell out to change it.
  *
+ * ONE KEY BESIDE `hooks` (2026-10-27, R1): one entry in `deniedMcpServers`,
+ * `{ "serverUrl": install.ts#HOSTED_DENY_URL }`, so a person's claude.ai
+ * connector to Counterparts Online is not loaded into Claude Code as a second
+ * memory. Every rule above holds for it: one plan with the hooks
+ * (`planSettings`), so one backup and one atomic write; every other entry in
+ * that list keeps its place and keys; already there is no change; a list
+ * that is not a list is a refusal on `connect` (and left alone by
+ * `disconnect`); and `disconnect` takes out exactly that entry and nothing
+ * else (`mergeDeny`). OURS IS RECOGNISED BY CONTENT: an entry that is exactly
+ * that one object is taken out whoever typed it. A person leaving this
+ * install for Online wants it gone anyway, and `disconnect` says which entry
+ * it took out.
+ *
  * The one thing this file cannot do anything about is said out loud instead:
  * a Claude Code session that is already open. Measured 2026-09-21 — after
  * `settings.json` changes, an open session's hooks fire on its NEXT TURN, and
@@ -88,13 +101,17 @@ import { expandHome, hookCommandLive, isOurHookCommand, npmWiring, readOurHook }
 import { noteNpmLive, removeNpmLive } from "../npm-live.js";
 import { PACKAGE_ROOT, PLUGIN_DATA_ENV, PLUGIN_ROOT_ENV } from "../plugin.js";
 import { claudeCodeEnvMarker } from "../hosts.js";
+import { withHostUmask } from "../private-umask.js";
+import { tightenInstallBase } from "../private-base.js";
 import { parseScriptInvocation, readsHostUserConfig, scriptArgs, shellTokens } from "../runtime.js";
 import { installedBuild, installedVersion, readServerRecords, sameBuild, serverBelieved } from "../sessions.js";
 import type { BuildStamp, ServerRecordRead } from "../sessions.js";
 import type { Io } from "./commands.js";
 import {
   BIN,
+  DENY_KEY,
   HOOK_COMMAND_MARK,
+  HOSTED_DENY_URL,
   HOST_EVENTS,
   MCP_SCRIPT,
   MCP_SERVER_NAME,
@@ -362,7 +379,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Six refusals, and each one is a shape whose meaning we would be guessing at:
  * a symlink out of the home, something that is not a regular file, bytes that
  * are not JSON, a top-level value that is not an object, a `hooks` key that is
- * not an object, and one of our five events whose value is not an array.
+ * not an object, and one of our five events whose value is not an array. (A
+ * `deniedMcpServers` that is not a list is `connect`'s seventh, `denyRefusal`:
+ * `disconnect` has nothing to take out of it.)
  * Guessing about any of them means rewriting somebody's configuration into a
  * shape they did not choose.
  */
@@ -784,6 +803,128 @@ export function mergeHooks(
   return { value: next, events, changed, foreignKept, wrapped, spared };
 }
 
+// ── the deny entry (2026-10-27, R1) ─────────────────────────────────────────
+
+export interface DenyResult {
+  readonly value: Record<string, unknown>;
+  /** `added`/`kept` on a wire, `removed`/`none` on an unwire. */
+  readonly change: "added" | "kept" | "removed" | "none";
+  readonly changed: boolean;
+  /** Entries belonging to anybody else, carried through untouched. */
+  readonly foreignKept: number;
+}
+
+/** Is this deny-list entry exactly ours — `{ "serverUrl": HOSTED_DENY_URL }`
+ *  and no other key? An entry that names our URL beside keys of its own is
+ *  somebody's: it counts as "already kept out" and is never removed. */
+function isOurDeny(entry: unknown): boolean {
+  return isRecord(entry) && entry["serverUrl"] === HOSTED_DENY_URL && Object.keys(entry).length === 1;
+}
+
+/** Does this entry keep our URL out, whoever wrote it? */
+function deniesOurs(entry: unknown): boolean {
+  return isRecord(entry) && entry["serverUrl"] === HOSTED_DENY_URL;
+}
+
+/**
+ * Add (or remove) Counterparts Online's one entry in `deniedMcpServers`, PURE
+ * over the settings object, under `mergeHooks`' rules: every other entry keeps
+ * its place and its keys, a second copy of ours is dropped, and a list that
+ * already keeps our URL out is left as it is. On an unwire the KEY goes when
+ * ours was the last thing in it (our litter, as an emptied hook event is), so
+ * a list that was already `[]` before a wire does not come back.
+ *
+ * A `deniedMcpServers` that is not a list never gets here (`sightSettings`
+ * refuses it); handed one anyway, this changes nothing.
+ *
+ * WHAT THIS CANNOT PROVE (said in the PR, and a RUNBOOK §7 step): that a
+ * `serverUrl` entry alone keeps a claude.ai connector out of Claude Code. The
+ * documented match is on the server's URL, and `/mcp` at deploy is the check.
+ */
+export function mergeDeny(settings: Record<string, unknown>, direction: "wire" | "unwire"): DenyResult {
+  const raw = settings[DENY_KEY];
+  if (raw !== undefined && !Array.isArray(raw)) {
+    return { value: settings, change: direction === "wire" ? "kept" : "none", changed: false, foreignKept: 0 };
+  }
+  const list: unknown[] = Array.isArray(raw) ? raw : [];
+  const foreignKept = list.filter((e) => !isOurDeny(e)).length;
+  const ours = list.filter(isOurDeny).length;
+  if (direction === "wire") {
+    if (ours === 0 && list.some(deniesOurs)) {
+      // Somebody's own entry for our URL already does the work.
+      return { value: settings, change: "kept", changed: false, foreignKept };
+    }
+    if (ours === 1) return { value: settings, change: "kept", changed: false, foreignKept };
+    const next = structuredClone(settings) as Record<string, unknown>;
+    if (ours > 1) {
+      // A copy pasted twice: the first stays where it is, the rest go.
+      let seen = false;
+      next[DENY_KEY] = list.filter((e) => {
+        if (!isOurDeny(e)) return true;
+        if (seen) return false;
+        seen = true;
+        return true;
+      });
+      return { value: next, change: "kept", changed: true, foreignKept };
+    }
+    next[DENY_KEY] = [...structuredClone(list), { serverUrl: HOSTED_DENY_URL }];
+    return { value: next, change: "added", changed: true, foreignKept };
+  }
+  if (ours === 0) return { value: settings, change: "none", changed: false, foreignKept };
+  const next = structuredClone(settings) as Record<string, unknown>;
+  const kept = (next[DENY_KEY] as unknown[]).filter((e) => !isOurDeny(e));
+  if (kept.length === 0) delete next[DENY_KEY];
+  else next[DENY_KEY] = kept;
+  return { value: next, change: "removed", changed: true, foreignKept };
+}
+
+/**
+ * THE DENY LIST IS A LIST OR NOTHING, for `connect` (2026-10-27, R1): any other
+ * shape is one whose meaning we would be guessing at, so a wire refuses it like
+ * a bad `hooks` key. An unwire does not ask: it has nothing of ours to take out
+ * of a value that is not a list, and leaves it as it is (review of #657).
+ */
+export function denyRefusal(sight: SettingsSight): string | null {
+  const denied = sight.value[DENY_KEY];
+  if (denied === undefined || Array.isArray(denied)) return null;
+  const what = denied === null ? "null" : isRecord(denied) ? "an object" : `a ${typeof denied}`;
+  return (
+    `refused: the "${DENY_KEY}" key in ${sight.target} is ${what}, not a list. The host reads it ` +
+    "as a list of servers to keep out, and this command will not overwrite a value whose meaning it cannot tell."
+  );
+}
+
+/** Does this settings object keep our URL out (any entry naming it)? */
+export function denyPresent(settings: Record<string, unknown>): boolean {
+  const raw = settings[DENY_KEY];
+  return Array.isArray(raw) && raw.some(deniesOurs);
+}
+
+/**
+ * The hooks and the deny entry, as ONE plan over one object, so there is one
+ * backup and one write whichever of the two changed.
+ */
+export interface SettingsPlan {
+  readonly hooks: MergeResult;
+  readonly deny: DenyResult;
+  readonly value: Record<string, unknown>;
+  readonly changed: boolean;
+}
+
+export function planSettings(
+  settings: Record<string, unknown>,
+  command: string,
+  direction: "wire" | "unwire",
+  spare?: (command: string) => boolean,
+  keepDeny = false,
+): SettingsPlan {
+  const hooks = mergeHooks(settings, command, direction, spare);
+  const deny = keepDeny
+    ? { value: hooks.value, change: "none" as const, changed: false, foreignKept: 0 }
+    : mergeDeny(hooks.value, direction);
+  return { hooks, deny, value: deny.value, changed: hooks.changed || deny.changed };
+}
+
 // ── writing it ──────────────────────────────────────────────────────────────
 
 /**
@@ -829,7 +970,8 @@ export function writeSettings(
   let backup: string | null = null;
   let temp: string | null = null;
   try {
-    mkdirSync(dir, { recursive: true });
+    // Not our directory (`~/.claude`, Desktop's folder): made under the host's umask.
+    withHostUmask(() => mkdirSync(dir, { recursive: true }));
     if (sight.exists) {
       backup = copyToFreeBackup(target, now);
       // A backup of a 0600 file must not be world-readable because `copyFile`
@@ -878,7 +1020,9 @@ export function realSpawner(env: Record<string, string | undefined>): Spawner {
     // ARGUMENTS, NEVER A SHELL STRING. The store path and the config path come
     // from a file on disk and can hold anything at all; a shell would interpret
     // it. `spawnSync` with an array passes each one through whole.
-    const res = spawnSync(CLAUDE_BIN, [...args], {
+    // Under the umask this process was started with: `claude` writes its own
+    // files, and they keep the modes they always had (`private-umask.ts`).
+    const res = withHostUmask(() => spawnSync(CLAUDE_BIN, [...args], {
       encoding: "utf8",
       timeout: CLAUDE_TIMEOUT_MS,
       windowsHide: true,
@@ -886,7 +1030,7 @@ export function realSpawner(env: Record<string, string | undefined>): Spawner {
       // a `spawnSync` with no `env` resolves the binary against the REAL
       // environment, so a caller's PATH would be ignored.
       env: env as NodeJS.ProcessEnv,
-    });
+    }));
     if (res.error !== undefined && res.error !== null) {
       const code = (res.error as NodeJS.ErrnoException).code ?? "";
       return {
@@ -1188,6 +1332,9 @@ export interface WireResult {
    *  was (`mcp` is then "skipped"). A caller that removes it later needs to
    *  know whether that removal will need `claude` (`uninstall.ts#offerDelete`). */
   readonly mcpLeft?: LeftWhy;
+  /** What happened to the `deniedMcpServers` entry (2026-10-27, R1); absent
+   *  on the arms that returned before the settings were planned. */
+  readonly deny?: DenyResult["change"];
 }
 
 /**
@@ -1239,15 +1386,17 @@ export async function wire(input: WireInput): Promise<WireResult> {
     u.heading("Connecting Claude Code…");
   }
 
-  if (sight.refusal !== null) {
-    io.err(sight.refusal);
+  const refusal = sight.refusal ?? denyRefusal(sight);
+  if (refusal !== null) {
+    io.err(refusal);
     io.err("");
-    io.err("Nothing was changed. The block to merge by hand, under a top-level \"hooks\" key:");
+    io.err("Nothing was changed. The block to merge by hand, its two keys at the top level:");
     for (const line of settingsBlock(command).split("\n")) io.err(`  ${line}`);
     return { outcome: "refused", hooks: "refused", mcp: "skipped", backup: null, mcpConfirmed: false };
   }
 
-  const merged = mergeHooks(sight.value, command, "wire");
+  const plan = planSettings(sight.value, command, "wire");
+  const merged = plan.hooks;
   const mcp = readMcp(home, env, input.store, input.custom, input.exe);
   // WHEN OUR READ OF THE HOST'S FILE FAILS, ASK THE HOST (review m8).
   //
@@ -1259,7 +1408,7 @@ export async function wire(input: WireInput): Promise<WireResult> {
   const mcpNeeded = !registered;
 
   // ── nothing to do ─────────────────────────────────────────────────────────
-  if (!merged.changed && !mcpNeeded) {
+  if (!plan.changed && !mcpNeeded) {
     u.ok(
       `already connected — all ${String(HOST_EVENTS.length)} hooks and the memory tools are in place.`,
     );
@@ -1267,7 +1416,7 @@ export async function wire(input: WireInput): Promise<WireResult> {
     u.hint(`tools: ${tilde(mcp.file, home)} (registered as "${MCP_SERVER_NAME}")`);
     u.hint("Nothing was changed and no backup was taken.");
     if (!input.dryRun) noteWired(input);
-    return { outcome: "ok", hooks: "already", mcp: "already", backup: null, mcpConfirmed: false };
+    return { outcome: "ok", hooks: "already", mcp: "already", backup: null, mcpConfirmed: false, deny: "kept" };
   }
 
   // ── say what would change ─────────────────────────────────────────────────
@@ -1288,13 +1437,14 @@ export async function wire(input: WireInput): Promise<WireResult> {
       u,
       sight,
       home,
-      hooksClause(merged.changed, sight.exists),
+      hooksClause(plan.changed, sight.exists),
       mcp.present
         ? mcp.matches
           ? "already registered"
           : "re-registered via `claude mcp add`"
         : "via `claude mcp add`",
     );
+    if (plan.deny.change === "added") u.hint(`1 entry -> ${DENY_KEY} in the same file (keeps Counterparts Online out of Claude Code)`);
   }
   for (const e of replacing) {
     u.hint(`${e.event}: replacing a Counterparts hook that names ${e.was ?? "another path"}`);
@@ -1346,18 +1496,22 @@ export async function wire(input: WireInput): Promise<WireResult> {
   /** Where the hooks ended up — the re-read file's target when there was a
    *  write, and the one already sighted when there was not. */
   let landedIn = sight.target;
-  if (merged.changed) {
+  /** What happened to the deny entry: `kept` until a write says otherwise. */
+  let deny: DenyResult["change"] = "kept";
+  if (plan.changed) {
     // RE-READ BEFORE WRITING (commands.ts rule 2): between the preview and the
     // answer the file may have changed — another tool's installer, an editor
     // saving. The plan is re-made against what is there NOW, and a file that
     // has become unreadable in the meantime refuses rather than gets rewritten.
     const fresh = sightSettings(named, home);
-    if (fresh.refusal !== null) {
-      io.err(`refused after re-reading the file: ${fresh.refusal}`);
+    const freshRefusal = fresh.refusal ?? denyRefusal(fresh);
+    if (freshRefusal !== null) {
+      io.err(`refused after re-reading the file: ${freshRefusal}`);
       return { outcome: "refused", hooks: "refused", mcp: "skipped", backup: null, mcpConfirmed: false };
     }
-    const again = mergeHooks(fresh.value, command, "wire");
+    const again = planSettings(fresh.value, command, "wire");
     landedIn = fresh.target;
+    deny = again.deny.change;
     if (!again.changed) {
       // THE WORK WAS DONE WHILE WE ASKED (review n3). The re-read found the
       // hooks already right — another `connect`, another terminal, the person
@@ -1365,6 +1519,7 @@ export async function wire(input: WireInput): Promise<WireResult> {
       // it took a backup and rewrote identical bytes; now nothing is written
       // and nothing is backed up, and the line below says "already in".
       u.hint("The hooks were already in place when the file was read again, so nothing was written.");
+      deny = "kept";
     } else {
       const wrote = writeSettings(fresh, again.value, now);
       backup = wrote.backup;
@@ -1377,7 +1532,11 @@ export async function wire(input: WireInput): Promise<WireResult> {
         );
         return { outcome: "failed", hooks: "refused", mcp: "skipped", backup, mcpConfirmed: false };
       }
-      hooksWord = again.events.some((e) => e.change === "replaced") ? "repaired" : "wired";
+      hooksWord = !again.hooks.changed
+        ? "already"
+        : again.hooks.events.some((e) => e.change === "replaced")
+          ? "repaired"
+          : "wired";
     }
   }
 
@@ -1408,9 +1567,15 @@ export async function wire(input: WireInput): Promise<WireResult> {
         : "memory tools registered";
   const hooksSaid = `${String(HOST_EVENTS.length)} hooks ${verb} ${where}${kept}`;
   u.ok(tools === null ? hooksSaid : `connected — ${hooksSaid}, ${tools}`);
+  if (deny === "added") u.hint(DENY_ADDED_LINE);
   noteWired(input);
-  return { outcome: "ok", hooks: hooksWord, mcp: mcpWord, backup, mcpConfirmed: false };
+  return { outcome: "ok", hooks: hooksWord, mcp: mcpWord, backup, mcpConfirmed: false, deny };
 }
+
+/** `connect`'s one line when the deny entry went in — said once, on the run
+ *  that added it, and never on a run that found it there. */
+export const DENY_ADDED_LINE =
+  `Counterparts Online's connector is kept out of Claude Code (${DENY_KEY} in the same file), so a claude.ai connection never becomes a second memory here.`;
 
 /**
  * THE MARKER A DIRECTORY-FLAVOR PLUGIN STANDS DOWN BY (`npm-live.ts`), written
@@ -1423,6 +1588,9 @@ export async function wire(input: WireInput): Promise<WireResult> {
  * copy then runs beside the settings wiring — a rare path, left as it is.
  */
 function noteWired(input: WireInput): void {
+  // The install's base directory, private (R1, `private-base.ts`): `connect` is
+  // the upgrade path an older install runs.
+  tightenInstallBase(input.configPath, input.store, { home: input.home });
   if ((input.env[PLUGIN_ROOT_ENV] ?? "").trim().length > 0) return;
   noteNpmLive({
     configPath: input.configPath,
@@ -1847,7 +2015,7 @@ export async function unwire(input: WireInput): Promise<WireResult> {
   // THE PLUGIN'S RULE (`onlyDead`): a hook that still runs stays.
   const dirs = input.onlyDead === true ? pluginDirs(env, home) : [];
   const spare = input.onlyDead === true ? (command: string): boolean => hookStillRuns(command, env, dirs) : undefined;
-  const merged = mergeHooks(sight.value, "", "unwire", spare);
+  const hooksPlan = mergeHooks(sight.value, "", "unwire", spare);
   const mcp = readMcp(home, env, input.store, input.custom, input.exe, MCP_SCRIPT, input.readsUserConfig);
 
   // `mcp.unreadable` is NOT "nothing there": that file is the host's own and a
@@ -1856,9 +2024,16 @@ export async function unwire(input: WireInput): Promise<WireResult> {
   // A file this build never opens (`notRead`) is no evidence either: the
   // removal below asks `claude`. A registration left alone (`onlyDead`, and
   // it still runs or cannot be told) is not ours to disconnect.
-  const why = input.onlyDead === true ? leftWhy(input, mcp, merged.spared > 0, dirs) : null;
+  const why = input.onlyDead === true ? leftWhy(input, mcp, hooksPlan.spared > 0, dirs) : null;
   const leave = why !== null;
-  if (!merged.changed && (leave || (!mcp.present && !mcp.unreadable && mcp.notRead !== true))) {
+  // THE DENY ENTRY GOES WITH THE LOCAL MEMORY, NOT BEFORE IT (R1). Under the
+  // plugin's rule, a hook or a registration that still runs is a live npm
+  // install's, and the entry is what keeps a hosted connector from becoming
+  // its second memory: it stays while anything of ours is left running.
+  const keepDeny = input.onlyDead === true && (hooksPlan.spared > 0 || (why !== null && why !== "absent"));
+  const plan = planSettings(sight.value, "", "unwire", spare, keepDeny);
+  const merged = plan.hooks;
+  if (!plan.changed && (leave || (!mcp.present && !mcp.unreadable && mcp.notRead !== true))) {
     u.ok(
       `nothing to disconnect: no Counterparts hooks${merged.spared > 0 ? " whose program is gone" : ""}` +
         `${leave ? "" : " and no memory server"} were found.`,
@@ -1883,6 +2058,7 @@ export async function unwire(input: WireInput): Promise<WireResult> {
     u.hint("dry run — nothing below has been written.");
     for (const e of merged.events) u.hint(`${e.event}: would remove ${e.was ?? "our hook"}`);
     if (merged.spared > 0) u.hint(`${String(merged.spared)} Counterparts hook(s) that still run would stay.`);
+    if (plan.deny.change === "removed") u.hint(`${DENY_KEY}: would remove Counterparts Online's entry`);
     if (!leave) u.hint(`would run: claude mcp remove ${MCP_SERVER_NAME} -s user`);
     if (merged.foreignKept > 0) {
       u.hint(
@@ -1906,7 +2082,7 @@ export async function unwire(input: WireInput): Promise<WireResult> {
       u,
       sight,
       home,
-      merged.changed ? "(backup first)" : "(none of ours are there)",
+      plan.changed ? "(backup first)" : "(none of ours are there)",
       leave ? "left as it is" : "removed via `claude mcp remove`",
     );
     const go = await confirm(io, leave ? "Remove the Counterparts hooks?" : "Remove the Counterparts hooks and the MCP server?", {
@@ -1920,25 +2096,28 @@ export async function unwire(input: WireInput): Promise<WireResult> {
 
   let backup: string | null = null;
   let hooksWord: WireResult["hooks"] = "none";
-  if (merged.changed) {
+  let deny: DenyResult["change"] = keepDeny ? "kept" : "none";
+  if (plan.changed) {
     const fresh = sightSettings(named, home);
     if (fresh.refusal !== null) {
       io.err(`refused after re-reading the file: ${fresh.refusal}`);
       return { outcome: "refused", hooks: "refused", mcp: "skipped", backup: null, mcpConfirmed: false };
     }
-    const again = mergeHooks(fresh.value, "", "unwire", spare);
+    const replan = planSettings(fresh.value, "", "unwire", spare, keepDeny);
+    const again = replan.hooks;
     // THE SAME RACE, THE OTHER WAY ROUND (review n3): the hooks went while the
     // question was up. Nothing to write, no backup, and the line says so.
-    if (!again.changed) {
+    if (!replan.changed) {
       u.ok(`no Counterparts hooks were left in ${tilde(fresh.target, home)} when it was read again.`);
     }
-    const wrote = again.changed ? writeSettings(fresh, again.value, now) : { backup: null, error: null };
+    const wrote = replan.changed ? writeSettings(fresh, replan.value, now) : { backup: null, error: null };
     backup = wrote.backup;
     if (wrote.error !== null) {
       io.err(`failed to write ${fresh.target}: ${wrote.error}`);
       io.err(backup === null ? "Nothing was changed." : `The backup taken first is at ${backup}.`);
       return { outcome: "failed", hooks: "refused", mcp: "skipped", backup, mcpConfirmed: false };
     }
+    const backupSaid = backup === null ? "" : ` (backup: ${basename(backup)})`;
     if (again.changed) {
       hooksWord = "removed";
       // THE BACKUP IS NAMED HERE, IN FULL, and not on `connect`'s line — the
@@ -1948,7 +2127,16 @@ export async function unwire(input: WireInput): Promise<WireResult> {
       // copy.
       u.ok(
         `${String(again.events.length)} hook${again.events.length === 1 ? "" : "s"} removed from ` +
-          `${tilde(fresh.target, home)}${backup === null ? "" : ` (backup: ${basename(backup)})`}`,
+          `${tilde(fresh.target, home)}${backupSaid}`,
+      );
+    }
+    if (replan.deny.changed) {
+      deny = replan.deny.change;
+      // Only the deny entry was there (the hooks taken out by hand): the
+      // backup is named on this line instead.
+      u.hint(
+        `Counterparts Online's entry, { "serverUrl": "${HOSTED_DENY_URL}" }, was taken out of ${DENY_KEY}` +
+          `${again.changed ? "" : ` in ${tilde(fresh.target, home)}${backupSaid}`}.`,
       );
     }
     if (again.foreignKept > 0) {
@@ -1970,7 +2158,7 @@ export async function unwire(input: WireInput): Promise<WireResult> {
   if (why !== null) {
     leftMcpNote(u, mcp, why, home);
     u.hint("An open Claude Code session keeps working until you close it.");
-    return { outcome: "ok", hooks: hooksWord, mcp: "skipped", backup, mcpConfirmed: false, mcpLeft: why };
+    return { outcome: "ok", hooks: hooksWord, mcp: "skipped", backup, mcpConfirmed: false, mcpLeft: why, deny };
   }
 
   // THE REMOVE IS ATTEMPTED WHETHER OR NOT OUR READ SAW A REGISTRATION.
@@ -2050,6 +2238,6 @@ export async function unwire(input: WireInput): Promise<WireResult> {
   }
 
   u.hint("An open Claude Code session keeps working until you close it.");
-  return { outcome: "ok", hooks: hooksWord, mcp: mcpWord, backup, mcpConfirmed };
+  return { outcome: "ok", hooks: hooksWord, mcp: mcpWord, backup, mcpConfirmed, deny };
 }
 

@@ -93,7 +93,7 @@ import { isModelId } from "../core/self/index.js";
 import { CACHE_SCHEMA_VERSION, SCHEMA_VERSION } from "../core/store/index.js";
 import type { Store } from "../core/store/index.js";
 
-import { DEFAULT_HOST, isHostName, isPseudoScope, wordingFor } from "./hosts.js";
+import { DEFAULT_HOST, isChatHost, isHostName, isPseudoScope, wordingFor } from "./hosts.js";
 import { packagePath } from "./runtime.js";
 
 /** The one directory name. Classified in `store/paths.ts` LAYOUT. */
@@ -441,6 +441,26 @@ export function isLive(
 ): boolean {
   if (record.endedAt !== null) return false;
   return now - record.lastBoundaryAt <= ttlMs;
+}
+
+/**
+ * HAS THE SESSION THAT REFLECTED LET GO OF ITS SHARE? (2026-10-26, OL1a.) A
+ * morning share the reflecting session never told is carried by another
+ * session only once this is true, so the two do not both tell it. True when
+ * that session has no record, has ended, or is quiet past the TTL — Claude
+ * Code's rule since v9 — or when it is a HOOKLESS CHAT's session (Desktop's
+ * chat, claude.ai): nothing ever ends one there (no Stop, no SessionEnd; its
+ * record is written once, at `wake`), so it counts as ended once its
+ * reflection has finished, which is the only kind a share is offered from
+ * (`Reflections.pendingShare` reads reflected rows). A claude.ai routine's
+ * share then reaches the next chat's wake instead of staying offered. The
+ * hookless wake's rule (`mcp/server.ts#wakeShareLine`); Claude Code's prompt
+ * keeps its own (`hooks.ts#dreamLines`: ended or quiet only), so a terminal
+ * prompt never claims a share a Desktop chat is about to tell.
+ */
+export function reflectorDone(record: SessionRecord | null, now: number, ttlMs: number = SESSION_TTL_MS): boolean {
+  if (record === null || !isLive(record, now, ttlMs)) return true;
+  return isChatHost(hostOf(record)) || isPseudoScope(record.scope);
 }
 
 export function readSession(dataDir: string, sessionId: string): SessionRecord | null {
@@ -1201,6 +1221,15 @@ export interface ServerRecord {
   readonly scope: string;
   readonly startedAt: number;
   readonly build: BuildStamp;
+  /**
+   * HOW THIS SERVER'S COPY CAME (U1a, review of #666): `npm`, `plugin` or
+   * `either` (`plugin.ts#installRoute`), and whether it runs in Claude
+   * Desktop's Code tab — so a newer window that finds it older can name the
+   * step for THAT window (`claude-code/stale-windows.ts`). Absent on records
+   * a build before this wrote: not known.
+   */
+  readonly route?: "npm" | "plugin" | "either";
+  readonly codeTab?: boolean;
 }
 
 /** A server record as read, with the file's mtime — its last heartbeat. */
@@ -1284,6 +1313,8 @@ export function recordServerLaunch(
     pid?: number;
     hostPid?: number;
     at?: number;
+    route?: ServerRecord["route"];
+    codeTab?: boolean;
   },
 ): ServerRecord | null {
   const pid = input.pid ?? process.pid;
@@ -1295,6 +1326,8 @@ export function recordServerLaunch(
     scope: canonicalScope(input.scope),
     startedAt: input.at ?? Date.now(),
     build: input.build,
+    ...(input.route === undefined ? {} : { route: input.route }),
+    ...(input.codeTab === true ? { codeTab: true } : {}),
   };
   try {
     mkdirSync(sessionsDir(dataDir), { recursive: true });
@@ -1376,7 +1409,16 @@ function parseServerRecord(raw: unknown): ServerRecord | null {
   if (typeof scope !== "string" || scope.length === 0) return null;
   if (typeof startedAt !== "number") return null;
   if (build === null) return null;
-  return { pid, hostPid, scope, startedAt, build };
+  const route = rec["route"];
+  return {
+    pid,
+    hostPid,
+    scope,
+    startedAt,
+    build,
+    ...(route === "npm" || route === "plugin" || route === "either" ? { route } : {}),
+    ...(rec["codeTab"] === true ? { codeTab: true } : {}),
+  };
 }
 
 /** Why the notice is, or is not, due this turn — for the hook's stderr line. */
@@ -1443,9 +1485,22 @@ export function decideUpdateNotice(
     /** Injected so a test can say which pids are running. */
     alive?: (pid: number) => boolean;
     now?: number;
+    /**
+     * The step that loads the newer build into this window, as a sentence
+     * (U1a, review of #666): absent, Claude Code's `/mcp` Reconnect — the npm
+     * install's, replaced in place. A plugin's server keeps its old folder,
+     * so its hook hands in `/reload-plugins` (`update-words.ts#windowStep`).
+     */
+    remedy?: string;
   },
 ): UpdateNoticeDecision {
   const hookPpid = input.hostPid ?? process.ppid;
+  const said = (older: boolean): string =>
+    input.remedy === undefined
+      ? older
+        ? CHANGED_NOTICE
+        : UPDATE_NOTICE
+      : `Counterparts was ${older ? "changed to an older version" : "updated"}. ${input.remedy}`;
   const quiet = (
     reason: UpdateNoticeReason,
     matchedBy: UpdateNoticeDecision["matchedBy"] = null,
@@ -1455,7 +1510,7 @@ export function decideUpdateNotice(
     compared: readonly ServerRecord[],
     matchedBy: NonNullable<UpdateNoticeDecision["matchedBy"]>,
   ): UpdateNoticeDecision => ({
-    message: compared.some((s) => serverIsNewer(s.build, input.installed)) ? CHANGED_NOTICE : UPDATE_NOTICE,
+    message: said(compared.some((s) => serverIsNewer(s.build, input.installed))),
     reason: "due",
     matchedBy,
     servers: compared.length,
@@ -1714,13 +1769,44 @@ function smallWriteUpDue(h: HeldSession, dataDir: string): boolean {
  * CAN THE POINTER EVER OFFER THIS DEBT? A full one, always; a small one only
  * as `smallWriteUpDue` says. Doctor's count reads it, so a debt the pointer
  * will never name is not reported as one waiting for it (review of #289).
+ *
+ * UNDER THE FLOOR (S2 review, 2026-10-26): a debt owed only because its
+ * session left no record of its own (`overFloor` false) is a person's short
+ * check-in — a session that is not a person's conversation (`claude -p`, the
+ * Agent SDK) is held to the floor as it was before S2, small or not. With no
+ * registry record (pruned 7 days after its last write, while an owed stretch
+ * is kept until it lapses) nobody can say whose it was, so an under-floor
+ * debt fails closed, as a small one always has. A caller that does not say
+ * (`overFloor` absent) is read as past it.
  */
-export function pointable(h: { readonly session: string; readonly small: boolean }, dataDir: string): boolean {
-  if (!h.small) return true;
+export function pointable(h: { readonly session: string; readonly small: boolean; readonly overFloor?: boolean }, dataDir: string): boolean {
+  return notPointableWhy(h, dataDir) === null;
+}
+
+/**
+ * WHY `pointable` SAYS NO (S2c, 2026-10-26), so a count of them can say what
+ * it counts: `headless` — a short debt from a session that is not a person's
+ * conversation (`claude -p`, the Agent SDK); `no-record` — a short debt whose
+ * session has no registry record, so nobody can say whose it was. Null: it
+ * is pointable. "Short" is small, or under the floor.
+ */
+export function notPointableWhy(
+  h: { readonly session: string; readonly small: boolean; readonly overFloor?: boolean },
+  dataDir: string,
+): "headless" | "no-record" | null {
+  if (!h.small && h.overFloor !== false) return null;
   const path = sessionPath(dataDir, h.session);
-  if (path === null || !existsSync(path)) return false;
+  if (path === null || !existsSync(path)) return "no-record";
   const entrypoint = readSession(dataDir, h.session)?.entrypoint;
-  return entrypoint === undefined || !NON_INTERACTIVE_ENTRYPOINTS.has(entrypoint);
+  return entrypoint !== undefined && NON_INTERACTIVE_ENTRYPOINTS.has(entrypoint) ? "headless" : null;
+}
+
+/** What a count of the debts `pointable` refuses says, by reason ("" when none). */
+export function lapsingWords(headless: number, noRecord: number): string {
+  const parts: string[] = [];
+  if (headless > 0) parts.push(`${String(headless)} short headless run${headless === 1 ? "" : "s"} (claude -p, the Agent SDK)`);
+  if (noRecord > 0) parts.push(`${String(noRecord)} short session${noRecord === 1 ? "" : "s"} with no session record`);
+  return parts.length === 0 ? "" : `${parts.join(" and ")}: not asked for a write-up, left to lapse`;
 }
 
 /**

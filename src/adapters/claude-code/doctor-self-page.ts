@@ -202,6 +202,8 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
   const fix =
     run.reason === "no-claude"
       ? "The headless run starts claude -p: put the claude command on the PATH the hooks see, or set dreaming to ask (counterparts dream --setting ask)."
+      : run.reason === "signed-out"
+        ? "Claude Code lost its sign-in while the run went (a switched account, an expired login). Once it is signed in, the next session asks: say dream there to run it."
       : run.reason === "quick-exit"
         ? "Run claude -p once by hand in a terminal to see why it stops (a login, an update prompt, or a claude too old for the night's flags — update it). Meanwhile the session asks instead."
         : run.reason === "nothing-ran"

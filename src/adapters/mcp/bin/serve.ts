@@ -52,7 +52,8 @@ import { loadConfig, withEmbedderDefault } from "../../config.js";
 import type { AdapterConfig } from "../../config.js";
 import { openEmbedder } from "../../claude-code/embed-client.js";
 import type { LiveEmbedder } from "../../claude-code/embed-client.js";
-import { SESSION_NOTICE_BUDGET_MS, doctorFindings, noticeMessage } from "../../claude-code/doctor.js";
+import { SESSION_NOTICE_BUDGET_MS, doctorFindings, noticeMessage, wakeMeaningLine } from "../../claude-code/doctor.js";
+import { staleWindowsLine } from "../../claude-code/stale-windows.js";
 import { SPAWN_REFUSAL_PREFIX, SPAWN_START_COUNT_KEY, SPAWN_START_DATE_KEY } from "../../lifecycle.js";
 import { WORKER_RUNNER_PATH } from "../../spawn.js";
 import { claudeCodeEnvMarker } from "../../hosts.js";
@@ -69,6 +70,7 @@ import { installedVersion } from "../../sessions.js";
 import { PLUGIN_ROOT_ENV, ensureFirstRun, installRoute, mcpGate, pluginOrigin, runningAsPlugin } from "../../plugin.js";
 import { DATA_DIR_ENV, describeGuardRefusal } from "../../../core/store/index.js";
 import { BINARY, scriptArgs } from "../../runtime.js";
+import { usePrivateUmask } from "../../private-umask.js";
 import type { Binary } from "../../runtime.js";
 import { OBSERVER_ENV, observerFromEnv, unreadableStanceLine } from "../../stance-env.js";
 
@@ -241,6 +243,50 @@ export function desktopDoctorNotice(input: {
   } catch {
     return null;
   }
+}
+
+/**
+ * WHAT A HOOKLESS `wake` CARRIES IN ITS NOTICE SLOT: doctor's red line
+ * (`desktopDoctorNotice`) and — when search by meaning is on and cannot run —
+ * the same line a Claude Code session start carries
+ * (`claude-code/doctor-meaning.ts#wakeMeaningLine`), with this copy's route.
+ * Null when neither has anything to say. Never throws. A night's own wake
+ * (`night`) carries no meaning line: no person reads it, and the `stopped`
+ * line's once-a-day would be spent on nobody. Since U1a it carries the
+ * older-windows line too (`claude-code/stale-windows.ts`), between the two.
+ */
+export function desktopWakeNotice(input: {
+  store: Store;
+  config: AdapterConfig;
+  configPath: string;
+  today: string;
+  night?: boolean;
+  env?: Record<string, string | undefined>;
+  /** This server's pid, whose own record is not an older window; absent, this process's. */
+  selfPid?: number;
+}): string | null {
+  let meaning: string | null = null;
+  let stale: string | null = null;
+  try {
+    const env = input.env ?? process.env;
+    meaning =
+      input.night === true
+        ? null
+        : wakeMeaningLine({ config: input.config, store: input.store, install: installRoute(env), env, today: input.today });
+    // OLDER WINDOWS AFTER AN UPGRADE (U1a, `claude-code/stale-windows.ts`):
+    // the same once-per-store-version line a Claude Code start carries, above
+    // W1's, and never on a night's own wake. A window whose record does not
+    // say its route gets both routes' steps: this server is Desktop's (npm),
+    // and says nothing about how those windows came (review of #666).
+    stale =
+      input.night === true
+        ? null
+        : (staleWindowsLine({ store: input.store, fallback: { route: "either", codeTab: false }, now: Date.now(), selfPid: input.selfPid ?? process.pid })?.line ?? null);
+  } catch {
+    meaning = null;
+  }
+  const lines = [desktopDoctorNotice(input), stale, meaning].filter((l): l is string => l !== null);
+  return lines.length === 0 ? null : lines.join("\n");
 }
 
 /**
@@ -445,13 +491,16 @@ async function main(): Promise<void> {
       args: scriptArgs(WORKER_RUNNER_PATH),
     },
     // Called only from a `wake`, long after `server` below is assigned.
-    wakeNotice: () => {
+    // Doctor's red line, and the line for search by meaning that cannot run
+    // (2026-10-27, W1), each when it has something to say.
+    wakeNotice: ({ night }) => {
       const store = server.counterpart.store;
-      return desktopDoctorNotice({
+      return desktopWakeNotice({
         store,
         config,
         configPath: choice.path,
         today: localDate(Date.now(), store.zone()),
+        night,
       });
     },
   });
@@ -523,6 +572,7 @@ export function isEntryPoint(argv1: string | undefined, url: string, binary: Bin
 /** Run the server until stdin closes — what this file does as a script, and
  *  what the single binary's `mcp` mode calls. */
 export function start(): void {
+  usePrivateUmask();
   void main().then(
     // `process.exitCode` is 1 when the launch refused a named configuration it
     // could not honour; every other path ends 0.

@@ -412,8 +412,63 @@ function pluginEnabled(id: string, input: { readonly home: string; readonly env:
   return enabled;
 }
 
+/**
+ * THE NEWEST COUNTERPARTS PLUGIN CLAUDE CODE HAS RECORDED FOR THIS FOLDER
+ * (U1a, 2026-10-27): the highest `x.y.z` among the `counterparts@…` records
+ * in `installed_plugins.json`, as a plain `x.y.z` — a `-<sha>` suffix (the
+ * marketplace's `0.3.37-14cfc833eed5`) is build metadata and dropped, and
+ * `resolvedVersion` stands in for a record whose `version` is not one. A
+ * project- or local-scope record counts only for its own folder (`cwd`, or
+ * any folder when `cwd` is null). It is what `/reload-plugins` would load, so
+ * an old window can be told "reload" only when this is newer than the code it
+ * runs (`update-words.ts#newerStoreStep`). READ-ONLY; null when nothing
+ * readable is recorded.
+ */
+export function pluginVersionRecorded(input: {
+  readonly home: string;
+  readonly env: Record<string, string | undefined>;
+  readonly cwd: string | null;
+  /** Only this record (`counterparts@<marketplace>`, the running copy's —
+   *  `plugin.ts#pluginOrigin`); absent, every `counterparts@` record. */
+  readonly id?: string;
+}): string | null {
+  try {
+    const moved = (input.env["CLAUDE_CONFIG_DIR"] ?? "").trim();
+    const configDir = moved.length > 0 ? moved : join(input.home, ".claude");
+    const cacheRoot = (input.env["CLAUDE_CODE_PLUGIN_CACHE_DIR"] ?? "").trim();
+    const pluginsRoot = cacheRoot.length > 0 ? cacheRoot : join(configDir, "plugins");
+    const plugins = readObject(join(pluginsRoot, "installed_plugins.json"))?.["plugins"];
+    if (!isRecord(plugins)) return null;
+    const here = input.cwd === null || input.cwd.length === 0 ? null : resolve(input.cwd);
+    let best: string | null = null;
+    for (const id of Object.keys(plugins)) {
+      if (!id.startsWith(`${NPM_MCP_NAME}@`)) continue;
+      if (input.id !== undefined && id !== input.id) continue;
+      const raw = plugins[id];
+      const records = Array.isArray(raw) ? (raw as unknown[]) : [raw];
+      for (const r of records) {
+        if (!isRecord(r)) continue;
+        const project = typeof r["projectPath"] === "string" && r["projectPath"].length > 0 ? resolve(r["projectPath"]) : null;
+        if (project !== null && here !== null && here !== project && !here.startsWith(`${project}/`)) continue;
+        const v = versionCore(r["version"]) ?? versionCore(r["resolvedVersion"]);
+        if (v !== null && (best === null || versionAtLeast(v, best))) best = v;
+      }
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+/** The `x.y.z` of a version string (`0.3.37`, `0.3.37-14cfc833eed5`), or null. */
+export function versionCore(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const m = /^(\d{1,6})\.(\d{1,6})\.(\d{1,6})(?:[-+][0-9A-Za-z.-]*)?$/.exec(v.trim());
+  return m === null ? null : `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}`;
+}
+
 /** `a` is `b` or later (`x.y.z`, a `-suffix` ignored); false when either is not a version. */
-function versionAtLeast(a: string, b: string): boolean {
+export function versionAtLeast(a: string, b: string): boolean {
   const parse = (v: string): number[] | null => {
     const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim());
     return m === null ? null : [Number(m[1]), Number(m[2]), Number(m[3])];

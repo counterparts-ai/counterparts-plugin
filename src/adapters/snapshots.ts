@@ -52,7 +52,7 @@
  * directory, a failed copy, a failed rename, an aborted run — is a
  * `snapshot.failed` row carrying its `reason` and the `step` it died at.
  */
-import { cpSync, mkdirSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
 
@@ -73,7 +73,7 @@ import {
   dateOf,
   isWithin,
 } from "../core/store/index.js";
-import { paths } from "../core/store/index.js";
+import { mkdirPrivate, paths } from "../core/store/index.js";
 import type { Store } from "../core/store/index.js";
 import { openDb } from "../core/store/db.js";
 
@@ -1119,7 +1119,7 @@ export function claimDay(dir: string, date: string, now: number): string | "held
   const path = join(dir, `${CLAIM_PREFIX}${date}`);
   try {
     // The first copy ever makes the folder; the claim needs it a moment sooner.
-    mkdirSync(dir, { recursive: true });
+    mkdirPrivate(dir);
   } catch {
     return null;
   }

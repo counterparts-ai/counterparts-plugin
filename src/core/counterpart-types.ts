@@ -449,6 +449,13 @@ export interface WakeSession {
   /** The model the host last saw in it, or null/absent (2026-10-20: the
    *  "Here, also open" clause names a session as "Last here" does). */
   readonly model?: string | null;
+  /**
+   * Nobody attends it: `claude -p`, an Agent SDK run, the like — the host's
+   * entrypoint says so (2026-10-26, review of #636). "Last here" never names
+   * one. Absent or false: a person's, the direction that keeps a session in
+   * view when nothing is known of it (a record pruned, a host that cannot tell).
+   */
+  readonly headless?: boolean;
 }
 
 /**

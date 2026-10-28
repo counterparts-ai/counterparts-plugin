@@ -361,6 +361,12 @@ export function sweepWake(cp: Counterpart, override?: number): SweepWake {
   if (cap === null || cap <= 0) return { ...empty, reason: "no-budget", omitted: 0 };
   let omitted = 0;
   try {
+    // ANOTHER FOLDER'S OPEN WORK stands aside too (review of O2, 2026-10-26):
+    // the same one-wake-for-every-folder reason, read as a reader that names
+    // no folder reads "Still open" (`Self#threadPlaceFor` with none): a thread
+    // written in a folder and marked work, or unmarked work by kind, is no
+    // crashed folder's to be shown. Personal and folderless threads stay.
+    const place = cp.self["threadPlaceFor"]({ folders: [] });
     const composed = cp.self.build({
       budgetBytes: cap,
       day: cp.store.livedDay(),
@@ -372,7 +378,7 @@ export function sweepWake(cp: Counterpart, override?: number): SweepWake {
       // `Counterpart#hintKeptOut` fails closed for a reader that names no
       // folder.
       omit: (s) => {
-        const hide = s.physics.protected || (s.source === "episode" && cp["hintKeptOut"](s.id, {}));
+        const hide = s.physics.protected || (s.source === "episode" && cp["hintKeptOut"](s.id, {})) || (s.unresolved && place(s) === "out");
         if (hide) omitted += 1;
         return hide;
       },

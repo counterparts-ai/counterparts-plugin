@@ -11,12 +11,11 @@ import { CONFIG_ENV, CONFIG_FLAG, defaultConfigPath } from "../config-path.js";
 import type { ConfigChoice } from "../config-path.js";
 // The local table's locator, for install's one check that the weights the new
 // configuration asks for are where the hooks will look.
-import {
-  MODEL_FILE,
-  STATIC_WEIGHTS_ENV,
-  STATIC_WEIGHTS_PACKAGE,
-  resolveStaticWeights,
-} from "../../core/embed/static.js";
+import { STATIC_WEIGHTS_ENV } from "../../core/embed/static.js";
+// The same look and the same route's step as doctor's Recall by meaning line
+// and the wake's (2026-10-27, review of #664).
+import { PLUGIN_TABLE_UPDATE, byRoute, npmTableCommand, tableOnDisk } from "../claude-code/doctor-meaning.js";
+import { installRoute } from "../plugin.js";
 import {
   installLayout,
   layoutRefusal,
@@ -46,7 +45,6 @@ import { tilde, realSpawner, realProcessLister, wire, unwire, sessionsNote, look
 import type { WireResult, Spawner, WireInput, ProcessLister } from "./wire.js";
 import { desktopUnavailable, connectDesktop, repairDesktop } from "./desktop.js";
 import type { DesktopRepair } from "./desktop.js";
-import { bundledModelDir } from "../runtime.js";
 import { DESKTOP_ALWAYS_ALLOW } from "../hosts.js";
 // `humanBytes` comes from `uninstall.ts` rather than from the private one
 // below: the two spell a size differently ("7.6 MB" against "7.6 MiB"), and
@@ -449,7 +447,8 @@ function printHostSteps(io: Io, resolved: string, custom: string | undefined, ho
   io.out("Two steps left, and they are the HOST'S files, so they are printed, not applied.");
   io.out("Nothing below has been written and no host configuration was read.");
   io.out("");
-  io.out("  1. Merge this into ~/.claude/settings.json (one script, five events):");
+  io.out("  1. Merge this into ~/.claude/settings.json (one script on five events, and one");
+  io.out("     deniedMcpServers entry that keeps Counterparts Online out of Claude Code):");
   io.out("");
   for (const line of settingsBlock(hookCommand(custom)).split("\n")) io.out(`     ${line}`);
   io.out("");
@@ -834,12 +833,11 @@ async function installConversation(
   // M1 named.
   //
   // Looked for the way the hooks will look (`resolveStaticWeights`: the
-  // environment variable, then the installed package), and then for the table
-  // FILE in what that found — a variable naming an empty folder is not a table.
-  const bundled = bundledModelDir();
-  const table = resolveStaticWeights({ env, ...(bundled === undefined ? {} : { packageDir: bundled }) });
+  // environment variable, then the installed package), and then for the
+  // table's two FILES in what that found — a variable naming an empty folder
+  // is not a table (`doctor-meaning.ts#tableOnDisk`, doctor's look too).
   const tableOn = config.embedder?.enabled === true;
-  const tableMissing = tableOn && (table === null || !existsSync(join(table.dir, MODEL_FILE)));
+  const tableMissing = tableOn && !tableOnDisk({ env }).complete;
   if (tableOn && !tableMissing) {
     io.out("Recall by meaning: on. A small model runs on your machine; nothing is sent anywhere.");
     u.blank();
@@ -853,7 +851,7 @@ async function installConversation(
   }
   if (tableMissing) {
     u.warn("recall by meaning is on, but its table was not found — recall will match on words only.");
-    u.hint(`Install it: bun add -g ${STATIC_WEIGHTS_PACKAGE} — or set ${STATIC_WEIGHTS_ENV} to a folder holding it.`);
+    u.hint(`Install it: ${byRoute(installRoute(env), npmTableCommand(), PLUGIN_TABLE_UPDATE)} — or set ${STATIC_WEIGHTS_ENV} to a folder holding it.`);
     u.blank();
   }
 

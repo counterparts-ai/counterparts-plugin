@@ -74,7 +74,6 @@ import {
   paths,
 } from "../../core/store/index.js";
 import { heldCorrections } from "../../core/reconsolidation.js";
-import { bundledModelDir } from "../runtime.js";
 import { CYCLE_LEASE_KEY, leaseStale, readLease, TUNABLES as SLEEP_TUNABLES, acceptsReflectedFeeling, laterFeelingWasAwake, laterFeelingWasReflections, selfRelevantFeeling } from "../../core/sleep/index.js";
 import { TUNABLES as ASSOCIATE_TUNABLES, isDead, pairKey } from "../../core/associate/index.js";
 import type { EventRow } from "../../core/store/index.js";
@@ -104,7 +103,7 @@ import {
 } from "../snapshots.js";
 import { TUNABLES, resolveEmbedder, retentionClocks, withEmbedderDefault } from "../config.js";
 import type { EmbedderSource } from "../config.js";
-import { MODEL_FILE, STATIC_WEIGHTS_ENV, STATIC_WEIGHTS_PACKAGE, resolveStaticWeights } from "../../core/embed/static.js";
+import { STATIC_WEIGHTS_ENV, STATIC_WEIGHTS_PACKAGE } from "../../core/embed/static.js";
 import { DATABASE_FILE, heldExits, readRollbackHold, rollbackHeld, runningBuild } from "../../core/store/index.js";
 // Retention's own reading and its own week, so the Raw transcripts line cannot
 // promise a different number from the job that does the deleting. READ-ONLY:
@@ -114,15 +113,20 @@ import type { LedgerEntry } from "../../core/coverage/index.js";
 import { DESKTOP_HOST } from "../hosts.js";
 import type { PluginInstallRead } from "../host-wiring.js";
 import type { InstallRoute } from "../plugin.js";
+import { recordedForThisCopy } from "../plugin.js";
 import { localStamp } from "../../core/time.js";
 import { CLAIMS_DIR, claimsSetAside } from "./claim.js";
 import type { AdapterConfig } from "../config.js";
 import { LOG_DAYS, logReading } from "../log/index.js";
 import { finding, tilde, payloadOf, str, num, off, newestRows, undetermined } from "./doctor-finding.js";
+import { PLUGIN_TABLE_UPDATE, PLUGIN_UPDATE, RELOAD_STEP, byRoute, npmTableCommand, tableOnDisk } from "./doctor-meaning.js";
+import { newerStoreWords } from "../update-words.js";
+import { installedVersion } from "../sessions.js";
 import type { Finding } from "./doctor-finding.js";
 import { checkoutFindings } from "./doctor-checkout.js";
 import type { CheckoutReading } from "./doctor-checkout.js";
 import { openFindings, journalFindings, journalCopyFindings, chapterSummaryFindings } from "./doctor-open.js";
+import { aheadWriter } from "./standdown.js";
 import type { OpenReading, MigrationReading } from "./doctor-open.js";
 import {
   metaJson,
@@ -143,9 +147,10 @@ import {
   dreamingFindings,
   nightRunFindings,
 } from "./doctor-self-page.js";
-import { hostFindings, runtimeFindings, desktopFindings } from "./doctor-host.js";
+import { denyFindings, hostFindings, runtimeFindings, desktopFindings } from "./doctor-host.js";
+import { modesFindings } from "./doctor-modes.js";
 import type { HostReading, DesktopReading } from "./doctor-host.js";
-import { readOwed, crashWriteUpFindings } from "./doctor-write-ups.js";
+import { readOwed, crashWriteUpFindings, overdueWords } from "./doctor-write-ups.js";
 import type { OwedSource, OwedReading } from "./doctor-write-ups.js";
 import { worstFirst } from "./doctor-report.js";
 import { feedbackLoopFindings } from "./doctor-feedback.js";
@@ -197,6 +202,16 @@ export {
   noticeMessage,
 } from "./doctor-report.js";
 export type { GradeWord } from "./doctor-report.js";
+export {
+  MEANING_FAILED_DATES,
+  MEANING_OFF_LEAD,
+  MEANING_OFF_WORDS,
+  MEANING_STOPPED_TOLD_KEY,
+  meaningOff,
+  npmTableCommand,
+  wakeMeaningLine,
+} from "./doctor-meaning.js";
+export type { MeaningOff, MeaningOffInput } from "./doctor-meaning.js";
 
 /**
  * How long the session-start reading may take before it stops and says so.
@@ -299,20 +314,45 @@ export interface DoctorInput {
    * its own environment. Absent: not known, and those lines name both routes.
    */
   readonly install?: InstallRoute;
+  /**
+   * What `/reload-plugins` would load for this copy
+   * (`plugin.ts#recordedForThisCopy`), asked only when the store is ahead of
+   * this build and the route is not npm (U1a). Injectable for a test;
+   * absent, read from this process's home and environment.
+   */
+  readonly pluginRecorded?: () => string | null;
 }
-
-/** The plugin's way to a newer or whole copy: Claude Code's plugin manager. */
-const PLUGIN_UPDATE = "in Claude Code, /plugin → Installed → counterparts → Update now (or uninstall it and install it again)";
 
 /**
  * A fix that installs something, in the words of the route this copy came
- * by: the npm command, the plugin's update, or — not known — both.
+ * by: the npm command, the plugin's update, or — not known — both. The rule
+ * lives in `doctor-meaning.ts#byRoute`, which the wake's meaning line uses too.
  */
 function byInstall(input: DoctorInput, npm: string, plugin: string = PLUGIN_UPDATE): string {
+  return byRoute(input.install, npm, plugin);
+}
+
+/**
+ * The Store open line's step for a store a newer copy upgraded, the hook's
+ * words (U1a). With the writer's version too (F1, after the review of #666):
+ * the wake's build stamp, read from the refused database on its own
+ * connection (`standdown.ts#aheadWriter`), so a plugin record newer than this
+ * copy but older than the writer says update, as the server does. Never throws.
+ */
+function aheadFix(input: DoctorInput): string {
   const route = input.install ?? "either";
-  if (route === "npm") return npm;
-  if (route === "plugin") return plugin;
-  return `npm: ${npm} · plugin: ${plugin}`;
+  const loaded = installedVersion();
+  let recorded: string | null = null;
+  let writer: string | null = null;
+  if (route !== "npm") {
+    try {
+      recorded = (input.pluginRecorded ?? (() => recordedForThisCopy({ home: homedir(), env: process.env, cwd: process.cwd() })))();
+    } catch {
+      recorded = null;
+    }
+    writer = aheadWriter(input.open?.path ?? join(input.dir, DATABASE_FILE), loaded);
+  }
+  return newerStoreWords({ route, who: "hook", loaded, recorded, writer });
 }
 
 // ── the groups ──────────────────────────────────────────────────────────────
@@ -715,7 +755,7 @@ function withdrawnFinding(input: DoctorInput): Finding | null {
       "amber",
       RECALL_TITLE,
       `off in this process — the store's cache was written by a newer Counterparts (cache v${v.found}; this build reads v${v.expected}). Recall still matches on words, but may miss words the newer build indexed in another form`,
-      `Either install the newer build again (${byInstall(input, "bun add -g counterparts@latest", "in Claude Code, /plugin → Installed → counterparts → Update now")}), or, to stay on this one, delete ${tilde(input.dir)}/cache/cache.sqlite* (the search cache alone; no memory is kept there) and run \`counterparts verify --rebuild --keep-vectors --dir ${tilde(input.dir)}\` to rebuild its word index — then in Claude Code run /mcp → Reconnect so the server opens it.`,
+      `Either install the newer build again (${byInstall(input, "bun add -g counterparts@latest", "in Claude Code, /plugin → Installed → counterparts → Update now")}), or, to stay on this one, delete ${tilde(input.dir)}/cache/cache.sqlite* (the search cache alone; no memory is kept there) and run \`counterparts verify --rebuild --keep-vectors --dir ${tilde(input.dir)}\` to rebuild its word index — then in Claude Code ${byInstall(input, "run /mcp → Reconnect", RELOAD_STEP)} so the server opens it.`,
       { cacheAhead: true, found: v.found, expected: v.expected },
     );
   }
@@ -733,7 +773,7 @@ function withdrawnFinding(input: DoctorInput): Finding | null {
  *     the first boundary will confirm it.
  */
 function staticFinding(input: DoctorInput, data: Record<string, string | number | boolean | null>): Finding {
-  const install = `Install the table: ${byInstall(input, `bun add -g ${STATIC_WEIGHTS_PACKAGE}`, `${PLUGIN_UPDATE}; the plugin installs the table with npm, so with no npm on this computer install Node.js (https://nodejs.org) first`)} — or set ${STATIC_WEIGHTS_ENV} in the environment Claude Code starts hooks with`;
+  const install = `Install the table: ${byInstall(input, npmTableCommand(), PLUGIN_TABLE_UPDATE)} — or set ${STATIC_WEIGHTS_ENV} in the environment Claude Code starts hooks with`;
   const row = newestBackfill(input);
   if (row !== null && str(row, "reason") === "embedder-unavailable") {
     const code = str(row, "codes") ?? "NO_WEIGHTS";
@@ -742,7 +782,7 @@ function staticFinding(input: DoctorInput, data: Record<string, string | number 
       "amber",
       RECALL_TITLE,
       `on (a local table), but the worker could not load its weights (${code}) — nothing is embedded; recall still matches on words`,
-      code === "HASH_MISMATCH" ? `The table on disk is not the one its package declares. Reinstall it: ${byInstall(input, `bun add -g ${STATIC_WEIGHTS_PACKAGE}`)}` : install,
+      code === "HASH_MISMATCH" ? `The table on disk is not the one its package declares. Reinstall it: ${byInstall(input, npmTableCommand())}` : install,
       { ...data, kind: "static", code },
     );
   }
@@ -756,12 +796,12 @@ function staticFinding(input: DoctorInput, data: Record<string, string | number 
       { ...data, kind: "static", weights: str(row, "weights") },
     );
   }
-  const bundled = bundledModelDir();
-  const found = resolveStaticWeights(bundled === undefined ? {} : { packageDir: bundled });
-  // THE TABLE FILE, not just a folder: a `COUNTERPARTS_STATIC_WEIGHTS_DIR`
+  // THE TABLE'S FILES, not just a folder: a `COUNTERPARTS_STATIC_WEIGHTS_DIR`
   // naming an empty or wrong folder is found by name and holds nothing, and a
-  // green here would last until the first worker row said NO_WEIGHTS.
-  if (found === null || !existsSync(join(found.dir, MODEL_FILE))) {
+  // green here would last until the first worker row said NO_WEIGHTS. The
+  // same look the wake's meaning line takes (`doctor-meaning.ts#tableOnDisk`).
+  const { found, complete } = tableOnDisk();
+  if (found === null || !complete) {
     return finding(
       "embedder",
       "amber",
@@ -1270,7 +1310,7 @@ function drewOnWeek(store: Store, livedDay: number): { calls: number; named: num
  *
  * GREEN, with counts: cap refusals and the sweep's share are not losses, and
  * the one loss it could name — a session that owes a write-up
- * (`core/coverage/`) from yesterday or earlier — is the `Write-ups` line's
+ * (`core/coverage/`) the catch-up had its chance at — is the `Write-ups` line's
  * amber. This line carries that count as detail, or says "unknown"
  * when it could not be read. The session-start reading does not read the owed
  * sessions (it walks every scope's words), so there the line omits them.
@@ -1510,7 +1550,7 @@ function authorshipFindings(input: DoctorInput, store: Store, owedReading: OwedS
         : owed.waiting === 0
           ? ""
           : `; ${plural(owed.waiting, "session", "sessions")} awaiting catch-up` +
-            (owed.stale === 0 ? "" : `, ${String(owed.stale)} from yesterday or earlier`);
+            (owed.stale === 0 ? "" : `, ${overdueWords(owed.stale)}`);
   const detail =
     `${windowPhrase(shown, input.today)}: invited to write ${plural(asked, "time", "times")}, ` +
     `${plural(paced, "Stop", "Stops")} paced out, ${String(capped)} over the day's allowance` +
@@ -3384,13 +3424,24 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     ...(input.checkout === undefined ? [] : checkoutFindings(input.checkout)),
     // Read by the caller for the same reason, and answered beside the `Store`
     // line it qualifies: "there is a store here" and "it opens" are two facts.
-    ...(input.open === undefined ? [] : openFindings(input.open)),
+    // A store a newer copy upgraded gets the hook's and the server's own step
+    // (U1a, constitution 16). This console runs the code installed at its path;
+    // the plugin record is read only for that line (review of #666).
+    ...(input.open === undefined
+      ? []
+      : openFindings(
+          input.open,
+          input.open.code === "SCHEMA_AHEAD" ? { aheadFix: aheadFix(input) } : {},
+        )),
     // A rollback's hold (2026-10-11): one file read, and only when it is there.
     ...rollbackFindings(input.dir),
+    // Who can read the store (R1): a few stats, no store read.
+    ...modesFindings(input.dir, process.platform, input.configPath),
     // DID THE HOST STEPS TAKE (finding 4). Also read by the caller — it is four
     // small file reads outside this store, and the hook does not pay for them.
     ...(input.host === undefined ? [] : hostFindings(input.host)),
     ...(input.host === undefined ? [] : runtimeFindings(input.host)),
+    ...(input.host === undefined ? [] : denyFindings(input.host)),
     // CLAUDE DESKTOP (2026-09-30): its config entry, and when it last woke.
     ...(input.desktop === undefined ? [] : desktopFindings(input.desktop, input.store, input.dir)),
   ];
@@ -3403,7 +3454,7 @@ export function doctorFindings(input: DoctorInput): Finding[] {
   let owedCache: { value: OwedReading | "failed" } | null = null;
   const owedReading: OwedSource = () => {
     if (!owedAllowed) return null;
-    owedCache ??= { value: readOwed(store, input.today) };
+    owedCache ??= { value: readOwed(store) };
     return owedCache.value;
   };
   const groups: (readonly [string, () => Finding[]])[] = [

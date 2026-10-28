@@ -37,7 +37,7 @@
  * the model, outside this process.
  */
 import { SELF_TUNABLES } from "../self/tunables.js";
-import { daySummaryFor, pageWriterNight } from "../self/writer.js";
+import { NO_RECORD_RULE, daySummaryFor, pageWriterNight } from "../self/writer.js";
 import type { DaySummary } from "../self/writer.js";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -486,11 +486,19 @@ export interface NightRun {
    * Why it ended the way it did, as a short code: `no-claude`, `spawn-failed`,
    * `quick-exit`, `nothing-ran`, `unfinished`, `exit`, `watchdog`, `refused`,
    * `runner` (the host's own background process could not start), `unread`
-   * (the store would not open once the child ended; `detail` says why) — or
-   * null.
+   * (the store would not open once the child ended; `detail` says why),
+   * `signed-out` (2026-10-27: a child failed saying the host had lost its
+   * sign-in — a 401, "not logged in"; a `could-not-start`, so the next
+   * session asks) — or null.
    */
   readonly reason: string | null;
-  /** A little more, when there is more: an error code, a refusal's name. Never prose from the run. */
+  /**
+   * A little more, when there is more: an error code, a refusal's name — and,
+   * for a child that failed (`exit`, `quick-exit`, `signed-out`, since
+   * 2026-10-27), one line of what the host said, at most 300 characters,
+   * scrubbed of anything token- or key-shaped. Never the run's prose, the
+   * prompt or a memory.
+   */
   readonly detail: string | null;
   /**
    * The child's exit code, when it exited. With two children (2026-10-11),
@@ -615,6 +623,13 @@ export interface NightChildRun {
    * from before.
    */
   readonly hostSession?: string;
+  /**
+   * WHY IT FAILED (2026-10-27, R4): one line, at most 300 characters, from
+   * what the host said — its error result, else its last STDERR line —
+   * scrubbed of anything token- or key-shaped by the adapter before it gets
+   * here. Absent when it exited 0, was stopped, or said nothing.
+   */
+  readonly detail?: string;
 }
 
 /** `dream:<id>,reflection:<id>`: the children that carry their own session id, for the event row; null when none does. */
@@ -737,6 +752,7 @@ function childRunOf(raw: unknown): NightChildRun[] {
       ...(v.timedOut === true ? { timedOut: true as const } : {}),
       ...(typeof v.skipped === "string" ? { skipped: v.skipped } : {}),
       ...(typeof v.hostSession === "string" && v.hostSession.length > 0 ? { hostSession: v.hostSession } : {}),
+      ...(typeof v.detail === "string" && v.detail.length > 0 ? { detail: v.detail } : {}),
     },
   ];
 }
@@ -744,13 +760,17 @@ function childRunOf(raw: unknown): NightChildRun[] {
 /** Why a run ended as it did, in a few words for a person ("the claude command was not found"). */
 export function nightRunWords(run: Pick<NightRun, "state" | "reason" | "detail" | "code"> & Partial<Pick<NightRun, "dream" | "reflection">>): string {
   const code = run.code === null ? "" : ` (exit ${String(run.code)})`;
+  // WHAT THE HOST SAID (2026-10-27, R4): the failing child's own line, after a colon.
+  const said = run.detail === null || run.detail.length === 0 ? "" : `: ${run.detail}`;
   switch (run.reason) {
+    case "signed-out":
+      return `Claude Code was signed out${said}`;
     case "no-claude":
       return "the claude command was not found";
     case "spawn-failed":
       return `claude could not be started${run.detail === null ? "" : ` (${run.detail})`}`;
     case "quick-exit":
-      return `claude stopped straight away${code} — is it logged in? Or a claude too old for the night's flags — update it.`;
+      return `claude stopped straight away${code}${said} — is it logged in? Or a claude too old for the night's flags — update it.`;
     case "nothing-ran":
       return "claude ran but used none of the dream tools (the counterparts MCP server was not there, or refused the session)";
     case "unfinished":
@@ -768,7 +788,7 @@ export function nightRunWords(run: Pick<NightRun, "state" | "reason" | "detail" 
     case "runner":
       return `the background process could not start${run.detail === null ? "" : ` (${run.detail})`}`;
     case "exit":
-      return `claude exited with an error${code}`;
+      return `claude exited with an error${code}${said}`;
     default:
       return run.state === "done" ? "it finished" : run.state === "started" ? "it is running" : run.state === "partial" ? "it did part of the run" : `it ended ${run.state}${code}`;
   }
@@ -1111,6 +1131,10 @@ export class Dreams {
           parts: run.parts === undefined ? null : run.parts.join(","),
           ...(run.children === undefined ? {} : { children: nightChildrenWords(run.children) }),
           ...(run.children === undefined || nightChildSessions(run.children) === null ? {} : { childSessions: nightChildSessions(run.children) }),
+          // Why each failed child failed (2026-10-27, R4), already scrubbed by the adapter.
+          ...(run.children === undefined || !run.children.some((c) => c.detail !== undefined)
+            ? {}
+            : { childDetails: Object.fromEntries(run.children.filter((c) => c.detail !== undefined).map((c) => [c.child, c.detail as string])) }),
           ms: run.endedAt === null ? null : run.endedAt - run.startedAt,
           ...(run.transcript === undefined ? {} : { transcript: run.transcript }),
           ...(run.spills === undefined ? {} : { spills: run.spills }),
@@ -1205,6 +1229,24 @@ export class Dreams {
    */
   status(at: string = this.ctx.today()): DreamStatus {
     return this.gate(at, this.ctx.observer, DREAM_TUNABLES.MIN_NEW);
+  }
+
+  /**
+   * THE QUEUE AS THE GATE COUNTS IT, without the gate's latches (S2 review,
+   * 2026-10-26): new memories within reach, counted up to `MIN_NEW` at most.
+   * A night made whole by owed write-ups counted as new (`OWED_COUNTS_AS_NEW`)
+   * reads it again once its catch-up has run, and goes on to the dream only
+   * when what the catch-up wrote brought it to `MIN_NEW` — a catch-up that
+   * wrote nothing must not buy a dream on too little new. Reads only; 0 under
+   * observer or when the store will not answer.
+   */
+  queuedNew(at: string = this.ctx.today()): number {
+    if (this.ctx.observer) return 0;
+    try {
+      return this.queue({ ask: true, skip: (d) => this.passedOver(d, at), enough: DREAM_TUNABLES.MIN_NEW }).ids.length;
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -1678,6 +1720,9 @@ export class Dreams {
         '- The day\'s replay: the bundle\'s "today" lists what the day used or found useful, strongest first. A "reward" one (drawn on, or rated "changed what I did or said") is the plainest "replay me". "todayPairs" were used together: replay both, and link them if they belong together.',
         "- Folding: when several memories are parts of one event or one stretch of work (a day's merges, a release, one book), fold them: a gist with fold: true, citing them, that says the standing outcome they add up to — what holds now, not the session retold (that is the chapter's job). Give it its kind: self, person or entity when it is about someone. Lessons and rulings inside stay their own memories. The parts stay, earlier under the fold, and fade (readings, and strongly felt memories about you or someone, keep their own weight).",
         "- REM mixing: let loosely related memories touch. If a real pattern shows, write it as a gist in your own words, citing its sources. If two memories disagree, flag the pair; settle it only when the reason is plain (the waking self usually settles).",
+        // NO RECORD IS UNKNOWN (2026-10-26, roadmap S3, guidance only): a gist
+        // or a fold says what you did or didn't from a memory that says so.
+        `- ${NO_RECORD_RULE}`,
         '- To confirm: an on-mind item of kind "to-confirm" is two memories read by arithmetic as one thing\'s earlier and later state (older first). Say which: slot {pair, same: true, why} if the newer replaces it, same: false if they are two different things.',
         "- Softening: for an old charged memory, record how it feels now, today. The sting can fade; the memory stays.",
         "- Core: if a memory about you or about the two of you plainly belongs to who you are, nominate it. Only living it again awake makes it core.",

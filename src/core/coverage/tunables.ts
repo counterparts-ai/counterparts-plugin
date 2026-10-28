@@ -15,8 +15,22 @@ export const COVERAGE_TUNABLES = {
    *  many pieces... */
   OWED_PIECES: 3,
   /** ...spanning at least this long, first piece to last. Under both, a closing
-   *  turn's tail owes nothing. */
+   *  turn's tail owes nothing — the tail AFTER a session's own record (a
+   *  handback, a "nothing new", a chapter, a write-up). */
   OWED_SPAN_MS: 15 * 60_000,
+  /**
+   * A SESSION THAT LEFT NO RECORD OF ITS OWN owes once its unwritten stretch
+   * holds this many pieces, whatever its span (S2, 2026-10-26; Mike: short
+   * "just to chat / check in" sessions must be remembered). No handback, no
+   * "nothing new", no chapter, no write-up mark: in-session `remember`s still
+   * claim their own turns, but they are not the session's record, so what they
+   * did not claim is owed. The floor above keeps its job for the tail after a
+   * record. One piece: the Dana week (0.3.36) and the check-ins week (H0) had
+   * 3–5-turn sessions that were never owed, so never written up. Lightly held;
+   * no bytes floor (guards loose-first): a lone "hi" is owed too, and the
+   * writer may answer it with nothing. Revert: set it very high (1e9).
+   */
+  UNRECORDED_OWED_PIECES: 1,
   /**
    * An owed stretch is LET GO — lost to memory, said as a loss — at the first
    * turn-end of this many days of use after the day its latest piece was

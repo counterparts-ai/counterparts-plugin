@@ -169,7 +169,13 @@ export function readCounterpartOpen(
   }
 }
 
-export function openFindings(reading: OpenReading): Finding[] {
+export function openFindings(
+  reading: OpenReading,
+  /** The fix for a store a newer Counterparts upgraded (`SCHEMA_AHEAD`), in
+   *  this copy's route's words (`update-words.ts#newerStoreWords`, U1a) — the
+   *  sentence the hook and the MCP server say. Absent: the general fix. */
+  opts: { readonly aheadFix?: string } = {},
+): Finding[] {
   // The Rollback line says it, with what to do (`rollbackFindings`).
   if (reading.code === "STORE_ROLLED_BACK") return [];
   const data: Record<string, string | number | boolean | null> = {
@@ -244,7 +250,11 @@ export function openFindings(reading: OpenReading): Finding[] {
       "red",
       "Store open",
       said,
-      reading.path !== null
+      // First: SCHEMA_AHEAD carries the database's own path, and "restore" it
+      // would be the wrong advice — the store is fine, this copy is old.
+      reading.code === "SCHEMA_AHEAD" && opts.aheadFix !== undefined
+        ? `Every session's hooks running this copy stand down here. ${opts.aheadFix}`
+        : reading.path !== null
         ? `Every session's hooks stand down here. Restore ${reading.path} — a row in this store points at it, and the read path chases it at every open.`
         : reading.id !== null
           ? // THE ROW, NAMED. On the file floor this said "restore <path>" and the

@@ -186,6 +186,13 @@ export const LEADS: Readonly<Record<string, readonly LeadCandidate[]>> = {
     lead(["faded"], "earlier memory faded under a newer one", "earlier memories faded under newer ones"),
   ],
   "episodic-semantic": [lead(["gist"], "pattern dreamed into a memory of its own", "patterns dreamed into memories of their own")],
+  // Beliefs formed first (2026-10-26), then the memories filed for them, then what is held.
+  schema: [
+    lead(["born", "adopted"], "belief formed", "beliefs formed"),
+    lead(["support"], "memory filed as support for a belief", "memories filed as support for beliefs"),
+    lead(["contrary"], "memory filed against a belief", "memories filed against beliefs"),
+    lead(["held"], "belief held", "beliefs held", false),
+  ],
 };
 
 /** The big number, from a verdict's parts (and the returns split, and what it holds). */
@@ -259,9 +266,14 @@ export function lightOf(v: Verdict, returns?: ReturnsBySource): MechanismLight {
       events: [],
     };
   }
+  // A mechanism read only off its rows (Schemas) keeps no firing day: with
+  // rows held it has fired before, so "no record of it firing" would be false.
+  const censusOnly = row.proofs.length === 0 && (v.held ?? 0) > 0;
   const evidence =
     v.lastFiredDay === null
-      ? `Built, and no record of it firing yet.`
+      ? censusOnly
+        ? `Built, but quiet for ${MECHANISM_DAYS} days of use.`
+        : `Built, and no record of it firing yet.`
       : `Built, but quiet for ${MECHANISM_DAYS} days of use (last fired on day ${v.lastFiredDay} of use).`;
   return { ...base, status: "amber", evidence: `${evidence}${heldLine}`, events: [] };
 }

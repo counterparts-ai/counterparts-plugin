@@ -43,9 +43,18 @@ export const ERROR_CODES = {
  * answers with our newest when we do not — never a hard failure on an unknown
  * string, which would make a newer client unable to talk to an older server for
  * no reason (the client decides whether our answer is acceptable).
+ *
+ * **2025-11-25 is echoed, not offered (2026-10-26, OL2 step 1).** claude.ai's
+ * connector client asks for it (the trial's call log; Desktop's chat too,
+ * `test/desktop-chat.test.ts`). Everything that revision added is optional for a
+ * server — icons, URL-mode elicitation, tasks, sampling with tools — and this
+ * server uses none of it, so a client that asks for it is answered in it. The
+ * answer to a version we do not know stays 2025-06-18, the revision every
+ * suite here was written against: `LATEST_PROTOCOL_VERSION` is named, not
+ * `PROTOCOL_VERSIONS[0]`.
  */
-export const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"] as const;
-export const LATEST_PROTOCOL_VERSION = PROTOCOL_VERSIONS[0];
+export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
+export const LATEST_PROTOCOL_VERSION = "2025-06-18";
 
 export type Id = string | number;
 

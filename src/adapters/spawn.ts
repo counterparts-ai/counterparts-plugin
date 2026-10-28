@@ -52,6 +52,7 @@ import { CONFIG_ENV as CONFIG_PATH_ENV } from "./config-path.js";
 import { TUNABLES } from "./config.js";
 import type { AdapterConfig } from "./config.js";
 import { entryScript } from "./runtime.js";
+import { withHostUmask } from "./private-umask.js";
 
 /**
  * THE WORKER SCRIPT, resolved from THIS file's location — never from a working
@@ -244,12 +245,18 @@ export function spawnDetached(
   const run =
     opts.spawner ??
     ((p: SpawnPlan) =>
-      spawn(p.command, [...p.args], {
-        detached: true,
-        stdio: "ignore",
-        env: { ...p.env },
-        timeout: p.timeoutMs,
-      }));
+      // UNDER THE HOST'S UMASK (review of #657): the child is ours and sets 077
+      // itself first thing (`private-umask.ts`), so it must START with the
+      // umask this process was given, or it would record 077 as the host's and
+      // hand it on to `claude -p`.
+      withHostUmask(() =>
+        spawn(p.command, [...p.args], {
+          detached: true,
+          stdio: "ignore",
+          env: { ...p.env },
+          timeout: p.timeoutMs,
+        }),
+      ));
   try {
     const child = run(plan);
     child.unref?.();
