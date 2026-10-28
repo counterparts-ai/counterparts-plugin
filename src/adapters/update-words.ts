@@ -44,8 +44,25 @@ import type { RuntimeKind } from "./runtime.js";
 
 // ── the install routes' steps (moved from doctor-meaning.ts, W1) ───────────
 
-/** The plugin's way to a newer or whole copy: Claude Code's plugin manager. */
-export const PLUGIN_UPDATE = "in Claude Code, /plugin → Installed → counterparts → Update now (or uninstall it and install it again)";
+/**
+ * The plugin's way to a newer or whole copy: Claude Code's plugin manager.
+ *
+ * **Update marketplace, not Update now** (U1b, 2026-10-28; Mike's Q11: "yes,
+ * after the one throwaway-home test"). Claude Code's docs say Update
+ * marketplace "refreshes the marketplace's listing, updates the plugins you
+ * installed from it" — core and sidebar both; nothing says Update now
+ * refreshes the listing first, so with auto-update off it may answer
+ * "already at the latest". UNVERIFIED in a throwaway home: if Update now does
+ * refresh, either wording works.
+ */
+export const PLUGIN_UPDATE_STEP = "in Claude Code, /plugin → Marketplaces → counterparts → Update marketplace";
+export const PLUGIN_UPDATE = `${PLUGIN_UPDATE_STEP} (or uninstall it and install it again)`;
+
+/** The same, for a copy that came through Anthropic's community marketplace (the directory listing). */
+export const PLUGIN_UPDATE_COMMUNITY = "in Claude Code, /plugin → Marketplaces → claude-community → Update marketplace";
+
+/** A copy Claude Code syncs from the claude.ai directory (`<name>@synced`): synced at each start. */
+export const PLUGIN_UPDATE_SYNCED = "restart Claude Code (it syncs the directory's copy at each start)";
 
 /**
  * THE NPM INSTALL'S WAY TO THE MEANING TABLE: install Counterparts again with
@@ -55,12 +72,15 @@ export const PLUGIN_UPDATE = "in Claude Code, /plugin → Installed → counterp
  * where that looks, so naming it was a fix that fixed nothing (review of #664).
  */
 export function npmTableCommand(runtime: RuntimeKind = currentRuntime()): string {
-  return runtime === "node" ? "npm install -g counterparts" : "bun add -g counterparts";
+  // `@latest` on npm (U1b rider, 2026-10-28): on Node 20 the bare form quietly
+  // installs 0.3.10, the last release whose engines it satisfies. bun has no
+  // such fallback, so its line stays the README's.
+  return runtime === "node" ? "npm install -g counterparts@latest" : "bun add -g counterparts";
 }
 
-/** The npm install's way to a NEWER copy: the same command, at `@latest`. */
+/** The npm install's way to a NEWER copy: `@latest` on both runtimes. */
 export function npmUpdateCommand(runtime: RuntimeKind = currentRuntime()): string {
-  return `${npmTableCommand(runtime)}@latest`;
+  return runtime === "node" ? "npm install -g counterparts@latest" : "bun add -g counterparts@latest";
 }
 
 /**

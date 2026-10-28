@@ -121,6 +121,31 @@ export const SESSION_TTL_MS = 4 * 60 * 60 * 1000;
  */
 export const SESSION_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * The store's handle salt (`expansions.ts#expansionSalt`), spelled here so the
+ * prune below can name it without importing the module that imports this one.
+ */
+export const EXPANSIONS_SALT_FILE = "expansions.salt";
+
+/**
+ * Plain files in `sessions/` that `pruneSessions` keeps whatever their age,
+ * because they are WRITTEN ONCE and only read after that, so their mtime says
+ * when they were made, not whether they are still in use (2026-10-28).
+ *
+ * - `expansions.salt`: minted at a store's first wake and never rewritten.
+ *   Pruned, the next wake mints another, which changes the store id
+ *   (`store-id.ts`, compared by the sidebar) and orphans every key in the
+ *   handle log.
+ *
+ * Everything else directly in `sessions/` is rewritten while it matters: session
+ * records at every boundary, stand-down markers per session, the handle log
+ * (`expansions.jsonl`, whose lines expire after a day anyway) at every
+ * resolution, the sidebar's pointer at every status write (`sidebar-status.ts
+ * #notePointer`). Server records go by liveness instead, and directories are
+ * never pruned here.
+ */
+export const KEPT_BY_NAME: ReadonlySet<string> = new Set([EXPANSIONS_SALT_FILE]);
+
 export type SessionPhase = "start" | "boundary" | "end";
 
 export interface SessionRecord {
@@ -959,6 +984,9 @@ export function pruneSessions(
         // throws on a directory, which is not a rule anybody wrote down.
         const st = statSync(full);
         if (st.isDirectory()) continue;
+        // A WRITTEN-ONCE FILE is kept by name (`KEPT_BY_NAME`): its age is
+        // its birthday, not a sign it was abandoned.
+        if (KEPT_BY_NAME.has(name)) continue;
         // A SERVER RECORD is kept for exactly as long as its server is
         // believed alive — its pid running AND its heartbeat fresh
         // (`serverBelieved`) — whatever its age: a session left open for a week

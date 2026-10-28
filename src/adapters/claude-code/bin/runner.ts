@@ -84,7 +84,8 @@ import { dataDir, describeGuardRefusal } from "../../../core/store/index.js";
 import type { Store } from "../../../core/store/index.js";
 import { hostSessionEvidence, installedVersion, writeUpSources } from "../../sessions.js";
 import { openLog } from "../../log/index.js";
-import { BINARY } from "../../runtime.js";
+import { BINARY, TRANSPILED } from "../../runtime.js";
+import { installRoute } from "../../plugin.js";
 import { usePrivateUmask } from "../../private-umask.js";
 import type { Binary } from "../../runtime.js";
 
@@ -106,6 +107,8 @@ import { DATA_DIR_ENV, SCOPE_ENV, SESSION_ENV, WATCHDOG_ENV } from "../../spawn.
 import { backfillVectors, laggedSemantic } from "../vectors.js";
 import type { BackfillReport, LagReport } from "../vectors.js";
 import { removeSidebarStatus, sidebarInstalled, writeSidebarStatus } from "../../sidebar-status.js";
+import { askedOff, claudeAutoUpdate, pluginMarket, runUpdateCheck } from "../../update-check.js";
+import type { FetchLike, UpdateCheckReport } from "../../update-check.js";
 import type { SidebarWrite } from "../../sidebar-status.js";
 import { runSnapshot } from "../../snapshots.js";
 import type { SnapshotRunReport } from "../../snapshots.js";
@@ -158,6 +161,9 @@ export interface RunReport {
   /** The sidebar's status file (`adapters/sidebar-status.ts`), written after the
    *  store closed; absent when the run was not asked to (no configuration path). */
   readonly sidebar?: SidebarWrite;
+  /** The daily update check (`adapters/update-check.ts`), after the store
+   *  closed; absent when the run was not asked to (no configuration path). */
+  readonly updates?: UpdateCheckReport;
 }
 
 /** What the retention step came to on one worker run. */
@@ -329,6 +335,17 @@ export async function runOnce(input: {
   /** The configuration this run read: the sidebar's status file is written
    *  beside it once the run is done (`adapters/sidebar-status.ts`). Absent: none. */
   sidebarConfigPath?: string;
+  /** THE DAILY UPDATE CHECK (U1b): the configuration this run read (its
+   *  `updates.json` goes beside it), the fetch to make the one request with,
+   *  and the environment its switches are read from. Absent: no check — a
+   *  test, an embedder, or the directory flavor (`runtime.ts#TRANSPILED`). */
+  updateCheck?: {
+    readonly configPath: string;
+    readonly fetch: FetchLike;
+    readonly env: Record<string, string | undefined>;
+    /** Claude Code keeps this plugin updated itself: no request. */
+    readonly autoUpdate?: boolean;
+  };
   onEvent?: (name: string, data: Record<string, string | number | boolean | null>) => void;
 }): Promise<RunReport> {
   const { config } = input;
@@ -367,6 +384,10 @@ export async function runOnce(input: {
   // or a replay with a pinned date would dedup against the wall clock instead.
   // The person's day, in the store's zone (docs/time.md; UTC before 2026-09-25).
   const today = input.date ?? counterpart.store.today();
+  // Read now, while the store is open: the update check runs after `close()`
+  // (it needs no store, and holds none open across its network wait).
+  // Fail closed: a store that will not say whether the person said stop is read as stop.
+  const updatesAsked = input.updateCheck === undefined ? false : askedOff(counterpart.store, { failClosed: true });
 
   let lag: LagReport | null = null;
   let backfill: BackfillReport | null = null;
@@ -577,7 +598,31 @@ export async function runOnce(input: {
     });
     emit("runner.sidebar", { written: sidebar.written, reason: sidebar.reason, bytes: sidebar.bytes, ms: sidebar.ms });
   }
-  return { ...result, snapshot: snapshotReport, retention: retentionReport, ...(sidebar === undefined ? {} : { sidebar }) };
+  // 6. THE DAILY UPDATE CHECK (U1b, 2026-10-28), after the store closed and
+  // beside the sidebar's file: at most one GET of npm's `/latest` a day,
+  // carrying nothing about the person (`adapters/update-check.ts`). It never
+  // throws, and the watchdog's signal ends it with the run.
+  let updates: UpdateCheckReport | undefined;
+  if (input.updateCheck !== undefined) {
+    updates = await runUpdateCheck({
+      configPath: input.updateCheck.configPath,
+      config,
+      asked: updatesAsked,
+      env: input.updateCheck.env,
+      date: today,
+      fetch: input.updateCheck.fetch,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+      ...(input.updateCheck.autoUpdate === true ? { autoUpdate: true } : {}),
+    });
+    emit("runner.updates", { reason: updates.reason, switch: updates.switch, code: updates.code ?? null, latest: updates.latest ?? null });
+  }
+  return {
+    ...result,
+    snapshot: snapshotReport,
+    retention: retentionReport,
+    ...(sidebar === undefined ? {} : { sidebar }),
+    ...(updates === undefined ? {} : { updates }),
+  };
 }
 
 /**
@@ -737,6 +782,9 @@ async function main(): Promise<void> {
       ...(pinnedScope() === null ? {} : { scope: pinnedScope() as string }),
       // Only where the sidebar is installed (the plugin); otherwise an old file goes.
       ...(sidebarWanted ? { sidebarConfigPath: choice.path } : {}),
+      // The update check: never in the directory flavor, which reads nothing
+      // of Claude Code's and sends nothing anywhere (`runtime.ts#TRANSPILED`).
+      ...(TRANSPILED ? {} : { updateCheck: workerUpdateCheck(choice.path) }),
       onEvent: (name, data) => log.event({ name, data }),
     });
     log.end(report.reason, { swept: report.swept, minted: report.minted, code: report.code });
@@ -746,6 +794,18 @@ async function main(): Promise<void> {
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
+}
+
+/**
+ * What this process's update check needs: the configuration's path, the
+ * runtime's own `fetch`, this environment, and whether Claude Code keeps this
+ * plugin updated itself (read only for a plugin copy).
+ */
+function workerUpdateCheck(configPath: string): NonNullable<Parameters<typeof runOnce>[0]["updateCheck"]> {
+  const env = process.env;
+  const market = installRoute(env) === "plugin" ? pluginMarket({ home: homedir(), env }) : null;
+  const autoUpdate = market !== null && market !== "synced" && claudeAutoUpdate({ home: homedir(), env, market });
+  return { configPath, fetch: (url, init) => fetch(url, init), env, ...(autoUpdate ? { autoUpdate: true } : {}) };
 }
 
 /** One worker run, then exit — what this file does as a script, and what the

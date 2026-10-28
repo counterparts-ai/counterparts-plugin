@@ -54,6 +54,7 @@ import { openEmbedder } from "../../claude-code/embed-client.js";
 import type { LiveEmbedder } from "../../claude-code/embed-client.js";
 import { SESSION_NOTICE_BUDGET_MS, doctorFindings, noticeMessage, wakeMeaningLine } from "../../claude-code/doctor.js";
 import { staleWindowsLine } from "../../claude-code/stale-windows.js";
+import { updateLineInputHere, updateNoticeLine, urgentUpdateLine } from "../../update-check.js";
 import { SPAWN_REFUSAL_PREFIX, SPAWN_START_COUNT_KEY, SPAWN_START_DATE_KEY } from "../../lifecycle.js";
 import { WORKER_RUNNER_PATH } from "../../spawn.js";
 import { claudeCodeEnvMarker } from "../../hosts.js";
@@ -66,7 +67,7 @@ import { serveStdio } from "../stdio.js";
 import { SidebarStatusWriter, keepPluginPresence, removeSidebarStatus, sidebarInstalled } from "../../sidebar-status.js";
 import { stoodDownServer } from "../stood-down.js";
 import { noteNpmLive, npmWiringForGate } from "../../npm-live.js";
-import { installedVersion } from "../../sessions.js";
+import { installedVersion, manifestVersionOnDisk } from "../../sessions.js";
 import { PLUGIN_ROOT_ENV, ensureFirstRun, installRoute, mcpGate, pluginOrigin, runningAsPlugin } from "../../plugin.js";
 import { DATA_DIR_ENV, describeGuardRefusal } from "../../../core/store/index.js";
 import { BINARY, scriptArgs } from "../../runtime.js";
@@ -264,9 +265,15 @@ export function desktopWakeNotice(input: {
   env?: Record<string, string | undefined>;
   /** This server's pid, whose own record is not an older window; absent, this process's. */
   selfPid?: number;
+  /** The home Claude Code's records are read under; absent, this process's. */
+  home?: string;
+  /** The package version on disk now; absent, `sessions.ts#manifestVersionOnDisk`. */
+  onDisk?: () => string | null;
 }): string | null {
   let meaning: string | null = null;
   let stale: string | null = null;
+  let urgent: string | null = null;
+  let update: string | null = null;
   try {
     const env = input.env ?? process.env;
     meaning =
@@ -282,10 +289,32 @@ export function desktopWakeNotice(input: {
       input.night === true
         ? null
         : (staleWindowsLine({ store: input.store, fallback: { route: "either", codeTab: false }, now: Date.now(), selfPid: input.selfPid ?? process.pid })?.line ?? null);
+    // UPDATES (U1b, `adapters/update-check.ts`): the same lines a Claude Code
+    // start carries, in the same order and under the same cap of three
+    // maintenance lines — never on a night's own wake.
+    // DESKTOP'S SERVER LIVES AS LONG AS THE APP (review of #672): the version
+    // it loaded is not necessarily the one installed now. When the package on
+    // disk differs from this process's, its own "was updated" line
+    // (`wakeUpdateLine`) is the one to say, and an update line would tell the
+    // person to install what they already have: none is said.
+    const onDisk = (input.onDisk ?? manifestVersionOnDisk)();
+    if (input.night !== true && onDisk === installedVersion()) {
+      const lineInput = updateLineInputHere({
+        store: input.store,
+        configPath: input.configPath,
+        config: input.config,
+        route: installRoute(env),
+        today: input.today,
+        env,
+        home: input.home ?? homedir(),
+      });
+      urgent = urgentUpdateLine(lineInput);
+      if ([stale, urgent, meaning].filter((l) => l !== null).length < 3) update = updateNoticeLine({ ...lineInput, urgentSaid: urgent !== null });
+    }
   } catch {
     meaning = null;
   }
-  const lines = [desktopDoctorNotice(input), stale, meaning].filter((l): l is string => l !== null);
+  const lines = [desktopDoctorNotice(input), stale, urgent, meaning, update].filter((l): l is string => l !== null);
   return lines.length === 0 ? null : lines.join("\n");
 }
 

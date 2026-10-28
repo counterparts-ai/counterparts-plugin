@@ -83,7 +83,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { SESSIONS_DIR, canonicalScope } from "./sessions.js";
+import { EXPANSIONS_SALT_FILE, SESSIONS_DIR, canonicalScope } from "./sessions.js";
 
 /** One file, inside the registry's directory — see the header on placement. */
 export const EXPANSIONS_FILE = "expansions.jsonl";
@@ -147,8 +147,9 @@ export function expansionsPath(dataDir: string): string {
   return join(dataDir, SESSIONS_DIR, EXPANSIONS_FILE);
 }
 
-/** The salt file, beside the log — see `expansionSalt`. */
-export const EXPANSIONS_SALT_FILE = "expansions.salt";
+/** The salt file, beside the log — see `expansionSalt`. Spelled in
+ *  `sessions.ts`, whose prune keeps it by name (`KEPT_BY_NAME`). */
+export { EXPANSIONS_SALT_FILE };
 
 /** 16 random bytes, hex. Long enough that guessing it is not the cheap attack. */
 const SALT_BYTES = 16;

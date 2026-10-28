@@ -119,9 +119,23 @@ import { CLAIMS_DIR, claimsSetAside } from "./claim.js";
 import type { AdapterConfig } from "../config.js";
 import { LOG_DAYS, logReading } from "../log/index.js";
 import { finding, tilde, payloadOf, str, num, off, newestRows, undetermined } from "./doctor-finding.js";
-import { PLUGIN_TABLE_UPDATE, PLUGIN_UPDATE, RELOAD_STEP, byRoute, npmTableCommand, tableOnDisk } from "./doctor-meaning.js";
+import { PLUGIN_TABLE_UPDATE, PLUGIN_UPDATE, RELOAD_STEP, byRoute, npmTableCommand, npmUpdateCommand, tableOnDisk } from "./doctor-meaning.js";
 import { newerStoreWords } from "../update-words.js";
 import { installedVersion } from "../sessions.js";
+import { TRANSPILED } from "../runtime.js";
+import {
+  NONESSENTIAL_TRAFFIC_ENV,
+  UPDATE_CHECK_ENV,
+  askedOff,
+  installedForRoute,
+  knownLatestFor,
+  pluginMarket,
+  readUpdateState,
+  updateSteps,
+  updateSwitch,
+  versionBelow,
+} from "../update-check.js";
+import type { UpdateSwitch } from "../update-check.js";
 import type { Finding } from "./doctor-finding.js";
 import { checkoutFindings } from "./doctor-checkout.js";
 import type { CheckoutReading } from "./doctor-checkout.js";
@@ -755,7 +769,7 @@ function withdrawnFinding(input: DoctorInput): Finding | null {
       "amber",
       RECALL_TITLE,
       `off in this process — the store's cache was written by a newer Counterparts (cache v${v.found}; this build reads v${v.expected}). Recall still matches on words, but may miss words the newer build indexed in another form`,
-      `Either install the newer build again (${byInstall(input, "bun add -g counterparts@latest", "in Claude Code, /plugin → Installed → counterparts → Update now")}), or, to stay on this one, delete ${tilde(input.dir)}/cache/cache.sqlite* (the search cache alone; no memory is kept there) and run \`counterparts verify --rebuild --keep-vectors --dir ${tilde(input.dir)}\` to rebuild its word index — then in Claude Code ${byInstall(input, "run /mcp → Reconnect", RELOAD_STEP)} so the server opens it.`,
+      `Either install the newer build again (${byInstall(input, npmUpdateCommand())}), or, to stay on this one, delete ${tilde(input.dir)}/cache/cache.sqlite* (the search cache alone; no memory is kept there) and run \`counterparts verify --rebuild --keep-vectors --dir ${tilde(input.dir)}\` to rebuild its word index — then in Claude Code ${byInstall(input, "run /mcp → Reconnect", RELOAD_STEP)} so the server opens it.`,
       { cacheAhead: true, found: v.found, expected: v.expected },
     );
   }
@@ -3497,6 +3511,9 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     ["dreaming", () => dreamingFindings(input, store)],
     // The headless nightly run (2026-09-29): one meta read.
     ["night-run", () => nightRunFindings(input, store)],
+    // The daily update check (U1b): one small file beside the configuration
+    // and one meta read. Never red, and makes no request: not at session start.
+    ...(input.budgetMs !== undefined ? [] : [["updates", (): Finding[] => updateFindings(input, store)] as const]),
     // v9 (2026-09-27): what the upgrade carried, and the reflection.
     ["upgrade-v9", () => upgradeV9Findings(store)],
     ["reflection", () => reflectionFindings(input, store)],
@@ -3555,4 +3572,112 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     );
   }
   return worstFirst(out);
+}
+
+// ── the daily update check (U1b, 2026-10-28) ───────────────────────────────
+
+const UPDATES_TITLE = "Updates";
+const UPDATES_ABOUT =
+  "Once a day Counterparts asks registry.npmjs.org for the newest version number; it sends nothing about you or your memory.";
+
+/**
+ * THE UPDATES LINE. Doctor makes no request: it reads what the worker last
+ * recorded (`updates.json`, beside the configuration) and the person's own
+ * switches. The configuration's `"updateCheck": false` and "you told your
+ * Claude to stop" (the store's setting) are read here directly; an
+ * environment switch only from the worker's record, because doctor in a
+ * terminal does not share the environment the worker ran in (review of the U1
+ * design, finding 9).
+ */
+export function updateFindings(input: DoctorInput, store: Store): Finding[] {
+  try {
+    if (TRANSPILED) {
+      return [
+        finding(
+          "updates",
+          "green",
+          UPDATES_TITLE,
+          "This copy makes no update check and sends nothing anywhere; 30 days after its release, the wake says once that a newer one may be out.",
+          "",
+          { switch: "none", transpiled: true },
+        ),
+      ];
+    }
+    const state = readUpdateState(input.configPath);
+    const here = updateSwitch({ config: input.config, asked: askedOff(store), env: {} });
+    const recorded: UpdateSwitch = state?.switch === "env" || state?.switch === "nonessential" ? state.switch : "none";
+    const sw = here !== "none" ? here : recorded;
+    const path = tilde(input.configPath);
+    if (sw !== "none") {
+      const why: Record<Exclude<UpdateSwitch, "none">, readonly [string, string]> = {
+        config: [
+          `The update check is off ("updateCheck": false in ${path}): nothing is asked of npm, and no session mentions updates.`,
+          `To turn it back on, remove "updateCheck": false from ${path}.`,
+        ],
+        asked: [
+          "The update check is off: you asked your Claude to stop. Nothing is asked of npm, and no session mentions updates.",
+          "To turn it back on, tell your Claude to check for updates again.",
+        ],
+        env: [
+          `The update check is off (${UPDATE_CHECK_ENV}=off where Counterparts runs): nothing is asked of npm, and no session mentions updates.`,
+          `To turn it back on, unset ${UPDATE_CHECK_ENV}.`,
+        ],
+        nonessential: [
+          `The update check is off (Claude Code's ${NONESSENTIAL_TRAFFIC_ENV} is set). 30 days after this copy's release, the wake says once that a newer one may be out.`,
+          `To turn it back on, unset ${NONESSENTIAL_TRAFFIC_ENV}.`,
+        ],
+      };
+      const [detail, fix] = why[sw];
+      return [off("updates", UPDATES_TITLE, detail, fix, { switch: sw })];
+    }
+    if (state?.autoUpdate === true) {
+      return [finding("updates", "green", UPDATES_TITLE, "Claude Code keeps this plugin updated (auto-update is on). No check needed.", "", { switch: "none", autoUpdate: true })];
+    }
+    const route = input.install ?? "either";
+    const installed = installedForRoute(route, installedVersion(), () =>
+      (input.pluginRecorded ?? (() => recordedForThisCopy({ home: homedir(), env: process.env, cwd: process.cwd() })))(),
+    );
+    const latest = state?.latest ?? null;
+    // The wake's own gate (`knownLatestFor`): a plugin install is not told of a
+    // version before the day after npm showed it, nor of a held plugin release.
+    const known = knownLatestFor(route, state, input.today);
+    if (known !== null && installed !== null && versionBelow(installed, known.latest)) {
+      const steps = updateSteps({ route, market: route === "npm" ? null : pluginMarket({ home: homedir(), env: process.env }) });
+      return [
+        finding("updates", "amber", UPDATES_TITLE, `${known.latest} is out (this is ${installed}).`, `To update: ${steps}.`, {
+          switch: "none",
+          latest: known.latest,
+          installed,
+          checked: state?.checkedDate ?? null,
+        }),
+      ];
+    }
+    // A day or two offline is nothing to say: amber only from the third failed
+    // day in a row (one try a day, so three failed requests; a laptop on a
+    // plane, or a week away, stays green).
+    if (state !== null && (state.failures ?? 0) >= 3) {
+      return [
+        finding(
+          "updates",
+          "amber",
+          UPDATES_TITLE,
+          `No successful update check since ${state.failingSince ?? "?"} (${state.failCode ?? "unreachable"}). Nothing else is affected.`,
+          "Counterparts can't reach registry.npmjs.org from here (a proxy or firewall?); nothing needs doing unless you want update notices.",
+          { switch: "none", failCode: state.failCode ?? null, failingSince: state.failingSince ?? null, failures: state.failures ?? 0 },
+        ),
+      ];
+    }
+    if (state?.checkedDate === undefined) {
+      return [finding("updates", "green", UPDATES_TITLE, `Not checked yet. ${UPDATES_ABOUT}`, "", { switch: "none" })];
+    }
+    return [
+      finding("updates", "green", UPDATES_TITLE, `Checked ${state.checkedDate}: ${latest === null ? "nothing newer" : `${latest} is the newest`}. ${UPDATES_ABOUT}`, "", {
+        switch: "none",
+        latest,
+        checked: state.checkedDate,
+      }),
+    ];
+  } catch {
+    return [];
+  }
 }

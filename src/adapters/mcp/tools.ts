@@ -1346,15 +1346,31 @@ const CHAPTER: ToolSpec = {
 };
 
 /**
+ * `scope`'s `updates` (U1b, 2026-10-28; Mike's must-have, Q4): "stop reminding
+ * me about updates" said to the AI must be enough. Not a tool of its own — a
+ * field on the door that already changes the host's settings — and passed
+ * alone. Stripped from claude.ai's list (`withoutUpdates`): the hosted memory
+ * is always current and makes no check.
+ */
+const UPDATES_PROPERTY = {
+  type: "string",
+  enum: ["off", "on"],
+  description:
+    "Pass alone. `off` when the person says to stop reminding them about updates or stop checking for them: Counterparts stops asking npm once a day for the newest version, and no wake mentions updates again. `on` turns that back on.",
+} as const;
+
+/**
  * `scope`'s privileges. Every one of them is about what this tool does NOT
  * touch: it is the only door here that writes no memory, and the only one that
  * answers at all in a directory that has been switched off.
  */
+const SCOPE_SUMMARY_BASE =
+  "Which directories this memory is for. Read what this one is set to — on, observer (reads only), off, paused, or unset — and set it when the user says. It changes the host's own configuration; it writes no memory and reads none.";
+
 const SCOPE: ToolSpec = {
   name: "scope",
   annotations: annotate("Directory scope", { readOnly: false }),
-  summary:
-    "Which directories this memory is for. Read what this one is set to — on, observer (reads only), off, paused, or unset — and set it when the user says. It changes the host's own configuration; it writes no memory and reads none.",
+  summary: `${SCOPE_SUMMARY_BASE} \`updates\` alone: off when they say stop reminding them about updates.`,
   admission:
     "Call it to READ when a session starts in a directory nothing is set for and the wake asks you to; call it to SET the moment the user answers 'remember here', 'just read', 'not here' or 'pause this'.",
   negativeExamples: [
@@ -1388,6 +1404,11 @@ const SCOPE: ToolSpec = {
         "A registry it cannot parse is never overwritten: it says what it could not read and changes nothing.",
       mechanizedBy: "src/adapters/scopes.ts#readScopes -> src/adapters/mcp/server.ts#scopeTool",
     },
+    {
+      claim:
+        "`updates: \"off\"` (the person saying stop): no daily request to npm and no update line in any wake or in doctor, until `updates: \"on\"`. One store setting, not about this directory; no memory. Not on claude.ai.",
+      mechanizedBy: "src/adapters/mcp/server.ts#updatesTool -> src/adapters/update-check.ts#askedOff (runUpdateCheck, updateNoticeLine, urgentUpdateLine)",
+    },
   ],
   inputSchema: {
     type: "object",
@@ -1403,6 +1424,7 @@ const SCOPE: ToolSpec = {
         description:
           "Optional: the user's own reason, recorded beside the setting. Omit it and the note already there is kept; pass an empty string to clear it — the same rule the console's --note follows.",
       },
+      updates: UPDATES_PROPERTY,
     },
     required: [],
     additionalProperties: false,
@@ -2238,6 +2260,8 @@ export const CLAUDE_AI_WORDS: Readonly<
     summary:
       "Search your long-term memory on purpose: what you remember about the person, past conversations, a project, a plan — beyond what the wake brought. Three kinds of ask, one per call — a question with a mode (facts or meaning), ids to read memories whole, or a handle (an id or an exact title) to read one.",
   },
+  // The every-host summary without its `updates` sentence: claude.ai's scope has no update check (`withoutUpdates`).
+  scope: { summary: SCOPE_SUMMARY_BASE },
   status: {
     summary:
       "Memory status: the census of long-term memory — how much is held, of what kinds, in which bands, how much has left, and how much was removed. Counts and dates only.",
@@ -2273,6 +2297,14 @@ export const CLAUDE_AI_WORDS: Readonly<
   },
 };
 
+/** claude.ai's `scope` has no `updates` (U1b): the hosted memory is always current. Its privilege stays, as every host's do (it says it is not offered there). */
+function withoutUpdates(spec: ToolSpec): ToolSpec {
+  if (spec.name !== "scope") return spec;
+  const schema = spec.inputSchema as { properties?: Record<string, unknown> };
+  const { updates: _updates, ...properties } = schema.properties ?? {};
+  return { ...spec, inputSchema: { ...spec.inputSchema, properties } };
+}
+
 function withClaudeAiWords(spec: ToolSpec): ToolSpec {
   const words = CLAUDE_AI_WORDS[spec.name as ToolName];
   return words === undefined ? spec : { ...spec, ...words };
@@ -2280,7 +2312,7 @@ function withClaudeAiWords(spec: ToolSpec): ToolSpec {
 
 /** The tools a claude.ai server offers: `wake` first, then every host's, each
  *  able to name its session, in the chat's words where those differ. */
-export const CLAUDE_AI_TOOLS: readonly ToolSpec[] = [CLAUDE_AI_WAKE, ...TOOLS.map((t) => withClaudeAiWords(withClaudeAiSession(t)))];
+export const CLAUDE_AI_TOOLS: readonly ToolSpec[] = [CLAUDE_AI_WAKE, ...TOOLS.map((t) => withoutUpdates(withClaudeAiWords(withClaudeAiSession(t))))];
 
 /**
  * WHICH LIST A SERVER OFFERS: a boolean is the old question (is this Desktop?),

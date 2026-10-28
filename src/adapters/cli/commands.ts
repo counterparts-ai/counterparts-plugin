@@ -348,7 +348,7 @@ export const BINARY_CONNECT_REFUSAL =
   "This is Counterparts' single program, the one the Claude Code plugin downloads when a computer has no Bun or Node.js. " +
   "It doesn't connect hosts itself: the plugin already runs the hooks and the memory server, and anything wired to this file " +
   "would stop working when the plugin is uninstalled. To wire Claude Code or Claude Desktop by hand, install Counterparts with " +
-  "npm (`npm i -g counterparts`) and run `counterparts connect` from that install.";
+  "npm (`npm i -g counterparts@latest`) and run `counterparts connect` from that install.";
 
 /**
  * THE CONSOLE'S MAP — about forty lines, grouped, one line per command.

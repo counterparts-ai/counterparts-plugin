@@ -816,6 +816,12 @@ export interface Ui {
   warning(text: string, ...more: readonly string[]): void;
   /** An aside under the line above it: dim, and indented into the gutter. */
   hint(text: string): void;
+  /**
+   * A paste-ready command, alone on its line and NEVER folded (W3, 10-28): a
+   * command broken across lines breaks when pasted. Indented under the hints
+   * around it; the prose around it may wrap, this may not.
+   */
+  command(text: string): void;
   /** A doctor-shaped line: the grade in colour, the label in its column, a
    *  SHORT message, and the fix on its own indented dim line. */
   statusLine(grade: Grade, label: string, message: string, fix?: string): void;
@@ -895,6 +901,10 @@ export function ui(io: Io, env: UiEnv, opts: InteractiveOptions = {}): Ui {
     hint(text: string): void {
       const cell = " ".repeat(MARK_COLUMN);
       for (const line of emit(cell, text, MARK_COLUMN)) io.out(p.dim(line));
+    },
+
+    command(text: string): void {
+      io.out(`${" ".repeat(MARK_COLUMN + 2)}${text}`);
     },
 
     statusLine(grade: Grade, label: string, message: string, fix?: string): void {

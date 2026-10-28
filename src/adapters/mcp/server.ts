@@ -87,6 +87,8 @@ import type { ScopeCommandContext, ScopeMode, ScopeRegistry, ScopeVerdict } from
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 
+import { NONESSENTIAL_TRAFFIC_ENV, UPDATE_CHECK_ENV, UPDATE_OFF_KEY, askedOff, updateSwitch } from "../update-check.js";
+import type { UpdateSwitch } from "../update-check.js";
 import { CLAUDE_AI_HOST, CODE_TAB_ENTRYPOINT, DEFAULT_HOST, DESKTOP_HOST, DESKTOP_SCOPE, chatScopeOf, claudeCodeEnvMarker, hostOfClient, isChatHost, isPseudoScope, wordingFor } from "../hosts.js";
 import { PLUGIN_ROOT_ENV, recordedForThisCopy } from "../plugin.js";
 import type { InstallRoute } from "../plugin.js";
@@ -1353,6 +1355,60 @@ export class McpServer {
     };
   }
 
+  /** The update check's switch as this server sees it: the config it read, the store, its environment. */
+  private updateCheckSwitch(): UpdateSwitch {
+    return updateSwitch({ config: this.lifecycleOpts.config ?? {}, asked: askedOff(this.counterpart.store), env: process.env });
+  }
+
+  /**
+   * `scope` with `updates` (U1b, 2026-10-28) — the person telling their Claude
+   * to stop (or start) Counterparts' daily update check. Mike's must-have
+   * (Q4): saying so to the AI is enough. Recorded as one store setting
+   * (`update-check.ts#UPDATE_OFF_KEY`), which the worker reads before it asks
+   * npm and every wake and doctor read before they say anything, wherever
+   * they run. Passed alone; refused under observer like any write; not on
+   * claude.ai, whose memory is always current and makes no check.
+   */
+  private updatesTool(args: Record<string, unknown>): ToolResult {
+    const value = args["updates"];
+    if (this.host === CLAUDE_AI_HOST) {
+      return this.refuse("scope", "updates-not-here", {
+        detail: "Counterparts Online is always current and checks for nothing, so there is no update check to switch here.",
+      });
+    }
+    if (args["mode"] !== undefined || args["note"] !== undefined) {
+      return this.refuse("scope", "updates-alone", { detail: "Pass `updates` on its own — not with `mode` or `note`." });
+    }
+    if (value !== "off" && value !== "on") {
+      return this.refuse("scope", "updates-unusable", { detail: "`updates` takes off or on." });
+    }
+    if (this.desktop && this.callAs === null ? this.storeObserver : this.observer) return this.standDown("scope");
+    const store = this.counterpart.store;
+    if (value === "off") store.setMeta(UPDATE_OFF_KEY, "off");
+    else store.updateMeta(UPDATE_OFF_KEY, (current) => (current === undefined ? undefined : null));
+    const sw = this.updateCheckSwitch();
+    this.emit("mcp.scope.updates", undefined, { updates: value, switch: sw });
+    const still =
+      value === "on" && sw === "config"
+        ? ` It is still off in the configuration: "updateCheck": false in ${this.lifecycleOpts.configPath ?? "claude-code.json"} — the person can remove that line.`
+        : value === "on" && sw === "env"
+          ? ` It is still off where Counterparts runs: ${UPDATE_CHECK_ENV}=off is set.`
+          : value === "on" && sw === "nonessential"
+            ? ` Claude Code's ${NONESSENTIAL_TRAFFIC_ENV} is set, so it still makes no request.`
+            : "";
+    return this.result(
+      {
+        updates: sw === "none" ? "on" : "off",
+        ...(sw === "none" || sw === "asked" ? {} : { offBy: sw }),
+        detail:
+          value === "off"
+            ? "Done: Counterparts no longer asks npm for the newest version, and no session will mention updates. Tell the person it's off, and that they can ask you to turn it back on."
+            : `Done: the daily check for a newer version is back on.${still}`,
+      },
+      false,
+    );
+  }
+
   /**
    * `scope` — read, or set, what this directory is for (owner asks G41–G43).
    *
@@ -1363,6 +1419,7 @@ export class McpServer {
    * under observer exactly as every other write does.
    */
   private scopeTool(args: Record<string, unknown>): ToolResult {
+    if (args["updates"] !== undefined) return this.updatesTool(args);
     const mode = args["mode"];
     const file = this.scopesFile;
     const verdict = this.scopeVerdict();
@@ -1380,6 +1437,8 @@ export class McpServer {
           ...(verdict.entry?.note === undefined ? {} : { note: verdict.entry.note }),
           ...(verdict.mode === "paused" ? { resumesTo: resumeTarget(verdict.entry) } : {}),
           ...(file === null ? {} : { registry: file }),
+          // Counterparts' daily update check (U1b), on or off, for "are you checking?".
+          ...(this.host === CLAUDE_AI_HOST ? {} : { updates: this.updateCheckSwitch() === "none" ? "on" : "off" }),
           // A registry in trouble is never silent, on any surface that has a
           // reader (#92 review, F2): entries nobody can honour read as unset,
           // which is ON, and this is the one place a model can see that.

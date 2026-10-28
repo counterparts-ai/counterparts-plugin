@@ -141,6 +141,16 @@ It fetches two things, both at install time or once:
   downloaded, and your memories never leave your computer. Set
   `COUNTERPARTS_BINARY_DOWNLOAD=off` to forbid the download.
 
+**Checking for updates.** Once a day, Counterparts asks the npm registry
+(`registry.npmjs.org`) for the newest version number, so it can tell you when an update is
+out. The request carries no memory, no conversation, no identifier, not even which version
+you have. Because it's daily, npm can see your computer's network address and that
+Counterparts checked that day. It doesn't run if you've told Claude Code to make no
+non-essential network requests (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`). To turn it
+off yourself, tell your Claude to stop checking for updates, or set `"updateCheck": false`
+in `~/.counterparts/claude-code.json` (or `COUNTERPARTS_UPDATE_CHECK=off` where
+Counterparts runs).
+
 The hooks and the memory server start through one small shell script,
 `src/adapters/plugin-run.sh`, whose only job is to find that runtime (Bun, then Node.js,
 then the downloaded program) and start the same entry points the npm package runs.

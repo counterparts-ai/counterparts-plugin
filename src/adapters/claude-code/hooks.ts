@@ -82,6 +82,7 @@ import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessa
 import type { CheckoutReading } from "./doctor.js";
 import { staleWindowsLine as staleWindowsSaid } from "./stale-windows.js";
 import { upperFirst, windowStep } from "../update-words.js";
+import { UPDATE_ROOM_MARGIN, updateLineInputHere, updateNoticeLine, urgentUpdateLine } from "../update-check.js";
 import { nightRowTimeoutMs, planNightRunner } from "./night-run.js";
 import { NOTHING_OWED_BEFORE_KEY, catchUpOf, catchUpWords, owedBefore } from "./night-catch-up.js";
 import type { NightKind } from "./night-run.js";
@@ -761,7 +762,30 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // once per store version by the first watched wake that finds older
       // servers still running (`stale-windows.ts`), under the same rule.
       const stale = resumed || !watched ? null : this.staleWindowsLine(input);
-      const leadLines = [codeTab, stale, meaning].filter((l): l is string => l !== null);
+      // UPDATES (2026-10-28, U1b), under the same rule, in the design's order
+      // (U1 note §3): older windows, then an URGENT update (short, above W1's
+      // line), then W1's, then ONE of tell/behind, the auto-update offer or the
+      // age line — at most three maintenance lines in a wake. A line past the
+      // cap is not composed, so not claimed: it waits for the next wake. When
+      // W1's step is the plugin's update, the fourth is skipped (doing W1's
+      // step updates).
+      //
+      // AND ONLY WHERE IT FITS (review of #672): lead lines are never deferred
+      // once composed, so a U1 line is composed only when the wake, the lines
+      // above it and itself stay `UPDATE_ROOM_MARGIN` under the host's ceiling
+      // (room left for the asks). One that does not fit is not claimed.
+      const fitsUnder = (above: readonly (string | null)[]) => (line: string): boolean => {
+        const lines = [codeTab, ...above, line].filter((l): l is string => l !== null);
+        const bytes = woke.bytes + Buffer.byteLength(`${this.nowLine()}\n${lines.join("\n")}\n${plain.context}`, "utf8");
+        return bytes <= TUNABLES.HOST_OUTPUT_CHARS - UPDATE_ROOM_MARGIN;
+      };
+      const urgent = resumed || !watched ? null : this.updateLine(input, "urgent", { fits: fitsUnder([stale, meaning]) });
+      const maintenance = [stale, urgent, meaning].filter((l) => l !== null).length;
+      const update =
+        resumed || !watched || maintenance >= 3 || (meaning !== null && this.install === "plugin")
+          ? null
+          : this.updateLine(input, "notice", { fits: fitsUnder([stale, urgent, meaning]), urgentSaid: urgent !== null });
+      const leadLines = [codeTab, stale, urgent, meaning, update].filter((l): l is string => l !== null);
       // THE FIRST MEETING'S MARKER (2026-10-11), on every session-start wake:
       // the state word only, for the mod, which cannot reach the dashboard
       // before somebody starts it. The store marker beside it (2026-10-12)
@@ -1891,6 +1915,47 @@ export class ClaudeCodeAdapter extends Lifecycle {
       return line;
     } catch (err) {
       this.emit("adapter.meaning.failed", { code: codeOf(err) });
+      return null;
+    }
+  }
+
+  /**
+   * AN UPDATE LINE (2026-10-28, U1b; `update-check.ts`), or null: `urgent`
+   * for a release this copy is below the urgent floor of, `notice` for the
+   * rest (tell, behind, the auto-update offer, the age line). Claimed when
+   * composed. An observer says nothing; a person who said no — `"updateCheck":
+   * false`, telling their Claude to stop, `COUNTERPARTS_UPDATE_CHECK=off` —
+   * hears nothing. Reads the worker's small `updates.json` and two meta keys;
+   * makes no request (a hook never does). Never throws.
+   */
+  updateLine(
+    input: HookInput,
+    which: "urgent" | "notice",
+    opts: { readonly fits?: (line: string) => boolean; readonly urgentSaid?: boolean } = {},
+  ): string | null {
+    if (this.observer) return null;
+    try {
+      const here = updateLineInputHere({
+        store: this.counterpart.store,
+        configPath: this.configPath,
+        config: this.config,
+        route: this.install ?? "either",
+        today: input.at ?? localDate(this.nowFn(), this.counterpart.store.zone()),
+        home: homedir(),
+        cwd: input.scope,
+        codeTab: input.entrypoint === CODE_TAB_ENTRYPOINT,
+        session: input.sessionId,
+      });
+      const lineInput = {
+        ...here,
+        ...(opts.fits === undefined ? {} : { fits: opts.fits }),
+        ...(opts.urgentSaid === true ? { urgentSaid: true } : {}),
+      };
+      const line = which === "urgent" ? urgentUpdateLine(lineInput) : updateNoticeLine(lineInput);
+      if (line !== null) this.emit("adapter.update.notice", { which });
+      return line;
+    } catch (err) {
+      this.emit("adapter.update.failed", { code: codeOf(err) });
       return null;
     }
   }
