@@ -5336,9 +5336,10 @@ export class Store {
 
   /** The open memories with the lived day each was last TOUCHED (born, used beyond a glimpse,
    *  revised — never a dream's or a reflection's return) and whether it is
-   *  dated or `asked` (2026-10-22, `reads-memories.ts#openThreadTouches`):
-   *  what the carry rule reads (`self/identity.ts#openCarry`). */
-  openThreadTouches(opts: { glimpses?: boolean } = {}): { id: string; touchedDay: number; dated: boolean; asked: boolean }[] {
+   *  dated, `asked`, or names what would settle it (2026-10-22; `settles`
+   *  P2 2026-10-28; `reads-memories.ts#openThreadTouches`): what the parking
+   *  rule reads (`self/identity.ts#openCarry`). */
+  openThreadTouches(opts: { glimpses?: boolean; at?: string } = {}): { id: string; touchedDay: number; dated: boolean; asked: boolean; settles: boolean }[] {
     return memoryReads.openThreadTouches(this, opts);
   }
 

@@ -14,6 +14,7 @@ import {
 import type { EventRow } from "../../core/store/index.js";
 import { BUSY_TIMEOUT_MS, journalModeOf } from "../../core/store/db.js";
 import { JOURNAL_COPY_FAILED_EVENT, JOURNAL_COPY_WRITTEN_EVENT } from "../../core/self/journal-file.js";
+import { SELF_TUNABLES, STILL_OPEN_HANDLE, openCarry } from "../../core/self/index.js";
 // The same vocabulary the hook's stand-down uses, so the terminal and the
 // console cannot end up with two answers to "why did it not open".
 import { describeFault, faultPath, faultId } from "./standdown.js";
@@ -383,6 +384,33 @@ export function chapterSummaryFindings(store: Store): Finding[] {
       `${String(written)} written by the session, ${String(automatic)} automatic (its opening lines, because the session gave none), over the last ${String(SUMMARY_WINDOW_DAYS)} days`,
       "",
       { written, automatic, days: SUMMARY_WINDOW_DAYS },
+    ),
+  ];
+}
+
+/**
+ * OPEN ITEMS, CARRIED AND PARKED (P2, 2026-10-28; roadmap 10-28, lightly
+ * held): how many open threads the store holds, how many the wake's "Still
+ * open" carries, and how many are parked — untouched `OPEN_CARRY_DAYS` lived
+ * days with no date and no `settlesWhen` (`self/identity.ts#openCarry`, the
+ * one rule). Green and informational: parking is not a fault, and nothing is
+ * closed by it. Silent with no open thread. One read of the open rows.
+ */
+export function openItemsFindings(store: Store): Finding[] {
+  const days = SELF_TUNABLES.OPEN_CARRY_DAYS;
+  const carry = openCarry(store, store.livedDay(), days, SELF_TUNABLES.OPEN_CARRY_GLIMPSE_TOUCH);
+  const carried = carry.carried.length;
+  const parked = carry.notCarried.size;
+  const open = carried + parked;
+  if (open === 0) return [];
+  return [
+    finding(
+      "open-items",
+      "green",
+      "Open items",
+      `${String(open)} open: ${String(carried)} carried in Still open, ${String(parked)} parked (untouched ${String(days)}+ lived days; not closed, and recall "${STILL_OPEN_HANDLE}" lists them)`,
+      "",
+      { open, carried, parked, days },
     ),
   ];
 }

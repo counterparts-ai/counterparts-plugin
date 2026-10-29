@@ -442,7 +442,8 @@ export interface ReflectBundle {
    * threads stopped being carried since the last reflection whose share reached a session —
    * untouched for `SELF_TUNABLES.OPEN_CARRY_DAYS`, so out of "Still open"
    * and `staleOpen` (`self/identity.ts#openCarry`). A count, never the list:
-   * the share says it once. Absent when none.
+   * the share says it once — as PARKED since P2 (2026-10-28), the word the
+   * wake's tail and `recall "still open"` use. Absent when none.
    */
   readonly noLongerCarried?: number;
   /**
@@ -1244,9 +1245,10 @@ export class Reflections {
           ]
         : []),
       // NO LONGER CARRIED (2026-10-22, the open-threads brief): the count, once, never the list.
+      // Said as PARKED since P2 (2026-10-28), the word the wake's tail and the handle use.
       ...(bundle.noLongerCarried !== undefined && bundle.noLongerCarried > 0
         ? [
-            `- noLongerCarried: ${String(bundle.noLongerCarried)}. Your share says it once, as a count and never a list: "${String(bundle.noLongerCarried)} open ${bundle.noLongerCarried === 1 ? "item nobody touched in" : "items nobody touched in"} ${String(SELF_TUNABLES.OPEN_CARRY_DAYS)} lived days ${bundle.noLongerCarried === 1 ? "is" : "are"} no longer carried; recall shows them." They are not closed: a touch carries one again.`,
+            `- noLongerCarried: ${String(bundle.noLongerCarried)}. Your share says it once, as a count and never a list: "${String(bundle.noLongerCarried)} open ${bundle.noLongerCarried === 1 ? "item nobody touched in" : "items nobody touched in"} ${String(SELF_TUNABLES.OPEN_CARRY_DAYS)} lived days ${bundle.noLongerCarried === 1 ? "is" : "are"} parked; recall "still open" lists them." Parked is not closed: a touch brings one back.`,
           ]
         : []),
       ...(bundle.feelingWeeks !== null

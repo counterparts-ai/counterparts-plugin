@@ -9,7 +9,7 @@ import type { LaneName, Ranked } from "./identity.js";
 import { byteLength } from "./identity.js";
 import { addDays, isDay } from "../time.js";
 import { TODAY_ELSEWHERE_MAX_BYTES } from "../handoff/last-here.js";
-import { LANE_ORDER, ROOM_ORDER, collapsedLine, compose, flatten, foldedLine, isNightLine, moreLine } from "./briefing.js";
+import { LANE_ORDER, ROOM_ORDER, collapsedLine, compose, flatten, foldedLine, isNightLine, moreLine, parkedLine } from "./briefing.js";
 import type { BriefingRequest, Composed, HorizonCounted, IdentityBlock, Resolve, RoomLane, TrimEvent } from "./briefing.js";
 
 
@@ -86,6 +86,8 @@ export function lendOf(n: number | undefined): number {
 /**
  * The count lines a composition carries for its pinned lanes: "N more", or —
  * a lane that lists nothing — its one collapsed line (`collapsedLine`).
+ * And "Still open"'s parked line when the lane has no count line of its own
+ * (`owedParked`, P2b): reserved like the others.
  */
 export function pinnedLines(
   pinned: Partial<Record<LaneName, readonly string[]>>,
@@ -93,13 +95,60 @@ export function pinnedLines(
   /** What "Coming up" counts rather than lists (`BriefingRequest.horizonLater`, `.horizonOverdue`). */
   counted?: HorizonCounted,
 ): Partial<Record<LaneName, string>> {
+  return withParked(countLines(pinned, kept, counted), pinned, kept, counted);
+}
+
+function countLines(
+  pinned: Partial<Record<LaneName, readonly string[]>>,
+  kept: Kept,
+  counted?: HorizonCounted,
+): Partial<Record<LaneName, string>> {
   const out: Partial<Record<LaneName, string>> = {};
   for (const lane of LANE_ORDER) {
     const ids = pinned[lane];
     if (ids === undefined || ids.length === 0) continue;
-    out[lane] = lane !== "identity" && kept[lane].length === 0 ? collapsedLine(lane, ids, counted) : moreLine(lane, ids, counted?.horizonOverdue);
+    out[lane] = lane !== "identity" && kept[lane].length === 0 ? collapsedLine(lane, ids, counted) : moreLine(lane, ids, counted?.horizonOverdue, counted?.threadsParked);
   }
   return out;
+}
+
+/**
+ * "STILL OPEN"'S PARKED, SAID WHEN THE LANE HAS NO COUNT LINE (P2b,
+ * 2026-10-28): the line `parkedLine` composes — under the items the lane
+ * lists, or the lane's one line when it lists nothing — when some threads are
+ * parked and the lane counts none it left out (`pinned.threads` empty; a lane
+ * that does carries ` · N parked` on its own line). Null otherwise.
+ */
+export function owedParked(
+  pinned: Partial<Record<LaneName, readonly string[]>>,
+  kept: Kept,
+  counted?: HorizonCounted,
+): string | null {
+  if ((pinned.threads?.length ?? 0) > 0) return null;
+  return parkedLine(kept.threads.length > 0, counted?.threadsParked);
+}
+
+/**
+ * The request with its parked count gone quiet (review of #675): no parked
+ * line, no ` · N parked` on a count line or the folded one. The render and
+ * `tellLost` compose with it once the parked count has given way — before a
+ * lane goes untold or an identity item is popped for it: an aside about what
+ * nobody touched in 14 lived days never costs a current lane its count.
+ */
+export function withoutParked(req: BriefingRequest): BriefingRequest {
+  if (req.threadsParked === undefined) return req;
+  const { threadsParked: _parked, ...rest } = req;
+  return rest;
+}
+
+function withParked(
+  lines: Partial<Record<LaneName, string>>,
+  pinned: Partial<Record<LaneName, readonly string[]>>,
+  kept: Kept,
+  counted?: HorizonCounted,
+): Partial<Record<LaneName, string>> {
+  const line = owedParked(pinned, kept, counted);
+  return line === null ? lines : { ...lines, threads: line };
 }
 
 /**
@@ -121,8 +170,11 @@ export function foldParts(
     if (lane !== "identity" && kept[lane].length === 0) empty[lane] = ids;
     else listing[lane] = ids;
   }
-  const fold = foldedLine(empty);
-  return fold === null ? { more: pinnedLines(listing, kept, counted) } : { more: pinnedLines(listing, kept, counted), fold };
+  const fold = foldedLine(empty, counted?.threadsParked);
+  // The parked line only for a lane neither listed nor folded (`owedParked`
+  // reads the whole of `pinned`, so a folded "Still open" is not said twice).
+  const more = withParked(countLines(listing, kept, counted), pinned, kept, counted);
+  return fold === null ? { more } : { more, fold };
 }
 
 /**
@@ -547,6 +599,9 @@ export function tellLost(ctx: {
   folded: boolean;
   untold: Partial<Record<LaneName, number>>;
   quiet: Partial<Record<LaneName, number>>;
+  /** Whether the composition says how many threads are parked (P2b): on
+   *  "Still open"'s own line or its parked line. False with none parked. */
+  parked: boolean;
 } {
   const at = (more: Partial<Record<LaneName, string>>, fold?: string): Composed =>
     compose(ctx.kept, ctx.req.day, ctx.resolve, ctx.coreName, ctx.identity, more, ctx.yesterday, ctx.elsewhere, fold);
@@ -559,51 +614,72 @@ export function tellLost(ctx: {
     return out;
   };
   const counts = countsOf(ctx.lost);
+  // Some threads parked: the tries below say so — on the lane's own line, in
+  // the folded one, or in its parked line (`pinnedLines`) — so a try that
+  // lost nothing must still fit (P2b). Then the same tries without it
+  // (`withoutParked`, review of #675): the parked count is the first of the
+  // lanes' words to give way, before a lane goes untold.
+  const parkedNow = (ctx.req.threadsParked ?? 0) >= 1;
+  const quietReq = withoutParked(ctx.req);
   const reserved = withoutNearby(ctx.lost);
   const hints = ctx.lost.hints?.length ?? 0;
   const quiet: Partial<Record<LaneName, number>> = hints > 0 ? { hints } : {};
-  const tries: { lost: Partial<Record<LaneName, readonly string[]>>; fold: boolean }[] = [
+  const base: { lost: Partial<Record<LaneName, readonly string[]>>; fold: boolean }[] = [
     { lost: ctx.lost, fold: false },
     { lost: ctx.lost, fold: true },
     ...(hints > 0 ? [{ lost: reserved, fold: false }, { lost: reserved, fold: true }] : []),
     ...(ctx.pinned === undefined ? [] : [{ lost: ctx.pinned, fold: false }, { lost: ctx.pinned, fold: true }]),
   ];
+  const tries = [
+    ...base.map((t) => ({ ...t, req: ctx.req, parked: parkedNow })),
+    ...(parkedNow ? base.map((t) => ({ ...t, req: quietReq, parked: false })) : []),
+  ];
   for (const t of tries) {
-    const parts = t.fold ? foldParts(t.lost, ctx.kept, ctx.req) : { more: pinnedLines(t.lost, ctx.kept, ctx.req) };
+    const parked = t.parked;
+    const parts = t.fold ? foldParts(t.lost, ctx.kept, t.req) : { more: pinnedLines(t.lost, ctx.kept, t.req) };
     if (t.fold && parts.fold === undefined) continue;
     const c = at(parts.more, parts.fold);
-    if (Object.keys(counts).length === 0 || c.bytes <= ctx.limit) {
+    if ((Object.keys(counts).length === 0 && !parked) || c.bytes <= ctx.limit) {
       const said = countsOf(t.lost);
       const untold: Partial<Record<LaneName, number>> = {};
       for (const lane of LANE_ORDER) {
         const n = counts[lane];
         if (n !== undefined && said[lane] === undefined && lane !== "hints") untold[lane] = n;
       }
-      return { composed: c, more: said, folded: parts.fold !== undefined, untold, quiet: said.hints === undefined ? quiet : {} };
+      return { composed: c, more: said, folded: parts.fold !== undefined, untold, quiet: said.hints === undefined ? quiet : {}, parked };
     }
   }
   // The last resort: what fits, lane by lane; the rest is untold ("Nearby": quiet).
   let current = at({});
   const lines: Partial<Record<LaneName, string>> = {};
   const more: Partial<Record<LaneName, number>> = {};
+  let saidParked = false;
   for (const lane of MORE_ORDER) {
     const ids = ctx.lost[lane];
-    if (ids === undefined || ids.length === 0) continue;
-    lines[lane] = lane !== "identity" && ctx.kept[lane].length === 0 ? collapsedLine(lane, ids, ctx.req) : moreLine(lane, ids, ctx.req.horizonOverdue);
+    // "Still open" with nothing it left out: its parked line, when owed (P2b).
+    const owed = lane === "threads" ? owedParked(ctx.lost, ctx.kept, ctx.req) : null;
+    if ((ids === undefined || ids.length === 0) && owed === null) continue;
+    lines[lane] =
+      ids === undefined || ids.length === 0
+        ? (owed ?? "")
+        : lane !== "identity" && ctx.kept[lane].length === 0
+          ? collapsedLine(lane, ids, ctx.req)
+          : moreLine(lane, ids, ctx.req.horizonOverdue, ctx.req.threadsParked);
     const candidate = at(lines);
     if (candidate.bytes > ctx.limit) {
       delete lines[lane];
       continue;
     }
     current = candidate;
-    more[lane] = ids.length;
+    if (lane === "threads" && parkedNow) saidParked = true;
+    if (ids !== undefined && ids.length > 0) more[lane] = ids.length;
   }
   const untold: Partial<Record<LaneName, number>> = {};
   for (const lane of LANE_ORDER) {
     const n = counts[lane];
     if (n !== undefined && more[lane] === undefined && lane !== "hints") untold[lane] = n;
   }
-  return { composed: current, more, folded: false, untold, quiet: more.hints === undefined ? quiet : {} };
+  return { composed: current, more, folded: false, untold, quiet: more.hints === undefined ? quiet : {}, parked: saidParked };
 }
 
 /** The lanes whose count is reserved: every lane but "Nearby" (2026-10-12). */

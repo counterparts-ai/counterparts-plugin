@@ -131,7 +131,9 @@ export interface SelfTunables {
    * beside `OPEN_CARRY_DAYS`, `briefing.ts#OPEN_TAIL_WORDS`.) "Untouched" is read as #489 D's `staleOpen`
    * reads it (born or used), but the thresholds differ: the nightly
    * close-offer looks from `REFLECT_TUNABLES.STALE_OPEN_DAYS` (4) and offers
-   * at most 5 a night, so it does not count what this counts. CAL.
+   * at most 5 a night, so it does not count what this counts. Since P2
+   * (2026-10-28) parks at the same 14, it orders only what is never parked:
+   * a thread that names what would settle it, or is `asked`. CAL.
    */
   STILL_OPEN_STALE_DAYS: number;
   /**
@@ -146,6 +148,14 @@ export interface SelfTunables {
    * the memory stays in the store (in no lane of the wake), recall shows it, and any touch carries it
    * again (`identity.ts#openCarry`, the one place the rule lives). Revert:
    * very large (`Infinity` carries everything, as before). CAL.
+   *
+   * PARKED AT 14 (P2, 2026-10-28; roadmap 10-28, Mike agreed the lean,
+   * lightly held): 21 until then. What this leaves out is now called PARKED
+   * where the owner or a model reads it — the wake's tail counts it (`· N
+   * parked`), `recall "still open"` lists it after the carried ones, marked,
+   * doctor's Open items line counts it — and an item with a `settlesWhen` is
+   * never parked (its door is the reflection's `settlesOpen`). Lived days, as
+   * "Still open" counts age. Revert: 21 (or `Infinity`, every item carried).
    */
   OPEN_CARRY_DAYS: number;
   /**
@@ -487,7 +497,7 @@ export const SELF_TUNABLES: SelfTunables = {
   THREADS_MAX: 5,
   RECONSIDERING_MAX: 1,
   STILL_OPEN_STALE_DAYS: 14,
-  OPEN_CARRY_DAYS: 21,
+  OPEN_CARRY_DAYS: 14,
   OPEN_CARRY_GLIMPSE_TOUCH: false,
   HINTS_MAX: 8,
   HORIZON_MAX: 6,

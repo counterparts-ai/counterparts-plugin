@@ -56,6 +56,8 @@ import type { SelfTunables } from "./tunables.js";
 import type { Kept, RescueCtx, Rescued } from "./briefing-room.js";
 import {
   foldParts,
+  owedParked,
+  withoutParked,
   withoutNearby,
   arrivingHead,
   arrivingNear,
@@ -525,7 +527,7 @@ export const STILL_OPEN_HANDLE = "still open";
  * The line it replaces — `(96 more still open, 15 untouched for 2+ weeks;
  * recall ids (the first 5): mem_…×5)` — read as guilt, and five bare ids said
  * nothing of what they were. Its "untouched" count was a third rule beside
- * the carry (`identity.ts#openCarry`: 21 lived days, a glimpse is not a
+ * the carry (`identity.ts#openCarry`: 21 lived days then, 14 since P2; a glimpse is not a
  * touch) and the order (`STILL_OPEN_STALE_DAYS`: 14, born or used), so it is
  * dropped rather than realigned; the order still puts the weeks-old last.
  *
@@ -550,11 +552,62 @@ export const OPEN_TAIL_WORDS = `kept quietly; recall "${STILL_OPEN_HANDLE}" list
 /** "Still open"'s tail words from #623 (2026-10-25, morning), read back off a bundle stored with them. */
 export const OPEN_TAIL_WORDS_BEFORE = "kept quietly; recall finds one by what it's about";
 
+/**
+ * WHAT "STILL OPEN" PARKED, COUNTED ON ITS TAIL (P2, 2026-10-28; roadmap
+ * 10-28, lightly held): `(5 more open, kept quietly; recall "still open"
+ * lists them) · 41 parked`. A parked thread (untouched `OPEN_CARRY_DAYS`
+ * lived days, `identity.ts#openCarry`) is in no lane and not in the "more"
+ * count; this says how many there are, after the paren so `countedLanes`
+ * reads the count as before, and the handle the tail names lists them,
+ * marked. It rides on the lane's own count line — the "more" line, the
+ * collapsed one, or the lane's part of the folded line (`foldedLine`).
+ *
+ * AND A LANE WITH NO COUNT LINE STILL SAYS IT (P2b, 2026-10-28; the brief:
+ * parked items are counted, not vanished, and a clean list for a new user in
+ * week 3 is its main aim): a lane that lists all it carries gets one short
+ * line under its items, `(3 parked; recall "still open" lists them)`, and a
+ * wake that carries no open item at all gets the lane as one line, `Still
+ * open: nothing current · 3 parked (recall "still open" lists them)`
+ * (`parkedLine`). Before this, on day 40 a store with 3 parked items and
+ * nothing carried woke with no word of them. Reserved like a lane's count
+ * line (`briefing-room.ts#pinnedLines`), never a second count: the lane's own
+ * line carries the tail when it has one. Nothing when none is parked.
+ * Revert: `parkedTail` returns "" and `parkedLine` null.
+ */
+export const PARKED_WORDS = "parked";
+
+/** ` · 41 parked`, or nothing for none. */
+export function parkedTail(parked: number | undefined): string {
+  return parked === undefined || !(parked >= 1) ? "" : ` · ${String(Math.floor(parked))} ${PARKED_WORDS}`;
+}
+
+/** "Still open" carrying nothing, said in its one line (`parkedLine`). */
+export const NOTHING_CURRENT_WORDS = "nothing current";
+
+/** Where the parked are listed, as the parked line says it. */
+export const PARKED_HANDLE_WORDS = `recall "${STILL_OPEN_HANDLE}" lists them`;
+
+/**
+ * "Still open"'s line when the lane has no count line of its own but some
+ * are parked (P2b, `PARKED_WORDS`): under the items it lists (`listing`),
+ * `(3 parked; recall "still open" lists them)`; with none listed, the lane
+ * as one line, `Still open: nothing current · 3 parked (recall "still open"
+ * lists them)`, which `collapsedLane` reads as the lane's. Null for none.
+ */
+export function parkedLine(listing: boolean, parked: number | undefined): string | null {
+  if (parked === undefined || !(parked >= 1)) return null;
+  const n = String(Math.floor(parked));
+  return listing
+    ? `(${n} ${PARKED_WORDS}; ${PARKED_HANDLE_WORDS})`
+    : `${laneHeading("threads")} ${NOTHING_CURRENT_WORDS}${parkedTail(parked)} (${PARKED_HANDLE_WORDS})`;
+}
+
 /** `(3 more might be relevant; recall ids: mem_…, mem_…, mem_…)`; for "Still
- *  open" `(56 more open, kept quietly; …)` (`OPEN_TAIL_WORDS`); for "Coming up"
+ *  open" `(56 more open, kept quietly; …)` (`OPEN_TAIL_WORDS`), and ` · N
+ *  parked` after it when some are (`parkedTail`); for "Coming up"
  *  `(2 overdue, 4 more coming up; recall ids: …)` or `(2 overdue; recall ids: …)`. */
-export function moreLine(lane: LaneName, ids: readonly string[], overdue?: readonly string[]): string {
-  if (lane === "threads") return `(${String(ids.length)} more open, ${OPEN_TAIL_WORDS})`;
+export function moreLine(lane: LaneName, ids: readonly string[], overdue?: readonly string[], parked?: number): string {
+  if (lane === "threads") return `(${String(ids.length)} more open, ${OPEN_TAIL_WORDS})${parkedTail(parked)}`;
   const late = overdueAmong(lane, ids, overdue);
   if (late === 0) return `(${String(ids.length)} more ${MORE_NOUN[lane]}; ${recallIds(ids)})`;
   const rest = ids.length - late;
@@ -579,14 +632,16 @@ const FOLD_ORDER: readonly LaneName[] = ["horizon", "threads", "identity", "craf
 /** How many ids each folded lane names — fewer than its own line's five. */
 export const FOLD_LINE_IDS = 3;
 
-/** `More than this wake lists: 7 coming up (recall ids: mem_…, mem_…, mem_…, and 4 more); 5 might be relevant (recall ids: …)` */
-export function foldedLine(lost: Partial<Record<LaneName, readonly string[]>>): string | null {
+/** `More than this wake lists: 7 coming up (recall ids: mem_…, mem_…, mem_…, and 4 more); 5 might be relevant (recall ids: …)`;
+ *  "Still open"'s part ends ` · N parked` when some are (`parkedTail`; P2b,
+ *  2026-10-28 — the folded line dropped it before). */
+export function foldedLine(lost: Partial<Record<LaneName, readonly string[]>>, parked?: number): string | null {
   const lanes = FOLD_ORDER.filter((l) => (lost[l]?.length ?? 0) > 0);
   if (lanes.length === 0) return null;
   const part = (l: LaneName): string => {
     const ids = lost[l] ?? [];
     const shown = ids.slice(0, FOLD_LINE_IDS);
-    return `${String(ids.length)} ${MORE_NOUN[l]} (recall ids: ${shown.join(", ")}${ids.length > shown.length ? `, and ${String(ids.length - shown.length)} more` : ""})`;
+    return `${String(ids.length)} ${MORE_NOUN[l]} (recall ids: ${shown.join(", ")}${ids.length > shown.length ? `, and ${String(ids.length - shown.length)} more` : ""})${l === "threads" ? parkedTail(parked) : ""}`;
   };
   return `${FOLDED_WORDS} ${lanes.map(part).join("; ")}`;
 }
@@ -612,7 +667,10 @@ export function countedLanes(text: string): Partial<Record<LaneName, number>> {
     const collapsed = collapsedLane(line);
     if (collapsed !== null) {
       const heading = headingsOf(collapsed).find((h) => line.startsWith(`${h} `)) ?? laneHeading(collapsed);
-      out[collapsed] = Number(/^\D*(\d+) — /.exec(line.slice(heading.length))?.[1] ?? 0);
+      // "Still open: nothing current · 3 parked (…)" (`parkedLine`) counts
+      // nothing the lane left out: the parked are not "more".
+      const n = /^\D*(\d+) — /.exec(line.slice(heading.length))?.[1];
+      if (n !== undefined) out[collapsed] = Number(n);
       continue;
     }
     // "Still open"'s calm tail (2026-10-25): `(96 more open, kept quietly; …)`,
@@ -680,12 +738,14 @@ export function collapsedLine(lane: LaneName, ids: readonly string[], counted?: 
   // Those past their date said as such (review of #511): `none due today, 2 overdue`.
   const late = none ? overdueAmong(lane, ids, counted?.horizonOverdue) : 0;
   const why = none ? `${NONE_TODAY_WORDS}${late === 0 ? "" : `, ${String(late)} ${OVERDUE_WORD}`}` : COLLAPSED_WORDS;
-  return `${laneHeading(lane)} ${String(ids.length)} — ${why}; ${recallIds(ids)}`;
+  // "Still open"'s parked, after the ids (P2, `parkedTail`).
+  return `${laneHeading(lane)} ${String(ids.length)} — ${why}; ${recallIds(ids)}${lane === "threads" ? parkedTail(counted?.threadsParked) : ""}`;
 }
 
 /** What "Coming up" counts rather than lists, as a composition's request
- *  carries it (`BriefingRequest.horizonLater`, `.horizonOverdue`). */
-export type HorizonCounted = Pick<BriefingRequest, "horizonLater" | "horizonOverdue">;
+ *  carries it (`BriefingRequest.horizonLater`, `.horizonOverdue`) — and
+ *  what "Still open" parked (`.threadsParked`, P2). */
+export type HorizonCounted = Pick<BriefingRequest, "horizonLater" | "horizonOverdue" | "threadsParked">;
 
 /** The lane a collapsed line (`collapsedLine`) speaks for, or null for any other line. */
 export function collapsedLane(line: string): LaneName | null {
@@ -693,6 +753,8 @@ export function collapsedLane(line: string): LaneName | null {
     for (const heading of headingsOf(lane)) {
       if (!line.startsWith(`${heading} `)) continue;
       if (new RegExp(`^ \\d+ — (?:${COLLAPSED_WORDS}|${NONE_TODAY_WORDS}(?:, \\d+ ${OVERDUE_WORD})?); recall ids`).test(line.slice(heading.length))) return lane;
+      // "Still open" carrying nothing, its parked counted (`parkedLine`, P2b).
+      if (lane === "threads" && new RegExp(`^ ${NOTHING_CURRENT_WORDS} · \\d+ ${PARKED_WORDS} `).test(line.slice(heading.length))) return lane;
     }
   }
   return null;
@@ -947,6 +1009,12 @@ export interface BriefingRequest {
   /** Those of `horizonLater` past their date (review of #511): the line
    *  counts them as overdue. Absent: none said so. */
   readonly horizonOverdue?: readonly string[];
+  /**
+   * HOW MANY OPEN THREADS ARE PARKED, for this reader (P2, 2026-10-28;
+   * `identity.ts#openCarry`): "Still open"'s count line says it after its
+   * paren (`parkedTail`). Absent or 0: nothing said.
+   */
+  readonly threadsParked?: number;
 }
 
 export interface TrimEvent {
@@ -1555,7 +1623,9 @@ export function render(
   // (`Self#composeLanes`), give it nothing. Not a lane: no trim row.
   const elsewhereForms = elsewhereFormsOf(req.elsewhere, req.elsewhereShorter);
   let elsewhere: string | undefined = elsewhereForms[0];
-  const ctx: RescueCtx = { req, resolve, coreName, identity, head: arrivingHead(lanes.horizon), elsewhereForms };
+  // `let`: once the parked count gives way (`hush` below), the rescues
+  // compose without it too.
+  let ctx: RescueCtx = { req, resolve, coreName, identity, head: arrivingHead(lanes.horizon), elsewhereForms };
   // "Still open"'s last item left is its first, which outranks the line
   // with its count (`openFirst`, as `keepFirstOpen` restores them): the line
   // finds room for itself beside both, or steps down, before the trim loop
@@ -1585,9 +1655,26 @@ export function render(
   // COUNTERPARTS, 2026-10-12, lightly held).
   let fold = false;
   let bare = false;
+  // THE PARKED COUNT GIVES WAY FIRST (review of #675, 2026-10-28): "Still
+  // open"'s parked words — its parked line, or ` · N parked` on its count
+  // line or in the folded line — are an aside about what nobody touched in 14
+  // lived days. They take room as the lanes' lines do, but before the loop
+  // pops a "Who I am" item for them, and before a floor goes bare (every lane
+  // untold) for them, they go quiet (`withoutParked`), and the loop composes
+  // without them. `tellLost` still says them when the room turns out to hold
+  // them. Without this, a folded line 12 bytes longer than the room went
+  // bare: "Still open" untold, and the parked unsaid as well.
+  let hushed = false;
+  const lineReq = (): BriefingRequest => (hushed ? withoutParked(req) : req);
+  const parkedIn = (lost: Partial<Record<LaneName, readonly string[]>>): boolean =>
+    !hushed && (req.threadsParked ?? 0) >= 1 && ((lost.threads?.length ?? 0) > 0 || owedParked(lost, kept, req) !== null);
+  const hush = (): void => {
+    hushed = true;
+    ctx = { ...ctx, req: withoutParked(req) };
+  };
   const lostNow = (): Partial<Record<LaneName, string[]>> => withoutNearby(lostByLane(lanes.overflow, trimmed, held, suppressList));
   const linesFor = (lost: Partial<Record<LaneName, readonly string[]>>, k: Kept, folded: boolean): { more: Partial<Record<LaneName, string>>; fold?: string } =>
-    folded ? foldParts(lost, k, req) : { more: pinnedLines(lost, k, req) };
+    folded ? foldParts(lost, k, lineReq()) : { more: pinnedLines(lost, k, lineReq()) };
 
   for (;;) {
     const lost = lostNow();
@@ -1633,6 +1720,12 @@ export function render(
             break;
           }
         }
+        // Not a "Who I am" item for the parked count (review of #675).
+        if (lane === "identity" && parkedIn(lost)) {
+          hush();
+          stepped = true;
+          break;
+        }
         const dropped = items.pop();
         if (dropped === undefined) continue;
         cut = { lane, id: dropped.id, strength: dropped.strength };
@@ -1644,7 +1737,11 @@ export function render(
         // `arrivingFirst`: "Work here", the Yesterday line's titles, the
         // handoffs' room, "Today, elsewhere", Arriving past its head) — and
         // only when even that finds none do the lanes go untold (`bare`).
-        const counting = Object.keys(lost).length > 0;
+        // "Still open"'s parked line is a lane's line like these (P2b): it
+        // takes room the same way; when none is found the parked words go
+        // quiet first (`hush`), and the lanes try again without them before
+        // a bare floor goes without all of them.
+        const counting = Object.keys(lost).length > 0 || owedParked(lost, kept, lineReq()) !== null;
         if (counting && !fold) {
           fold = true;
           continue;
@@ -1653,7 +1750,8 @@ export function render(
           const from: Rescued = { kept, trimmed: [...trimmed], yesterday, elsewhere, pinned: lost, composed: c, lent: base - req.budgetBytes, fold: true };
           const got = takeRoom("arrivingFirst", from, kept, lost, trimmed, ctx, true);
           if (got === null) {
-            bare = true;
+            if (parkedIn(lost)) hush();
+            else bare = true;
           } else {
             for (const l of LANE_ORDER) kept[l] = got.kept[l];
             trimmed.splice(0, trimmed.length, ...got.trimmed);
@@ -1767,6 +1865,7 @@ export function render(
         const next = tell();
         const same =
           next.folded === told.folded &&
+          next.parked === told.parked &&
           JSON.stringify([next.more, next.untold, next.quiet]) === JSON.stringify([told.more, told.untold, told.quiet]);
         if (same && next.composed.bytes <= budgetBytes) told = next;
         else kept[lane][0] = top;

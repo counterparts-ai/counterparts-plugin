@@ -1,8 +1,9 @@
 /** `Store`'s reads of memories — a row, its copies and versions, the candidates and lists its readers ask for, the nearest neighbours, the claims era (bodies moved out of `store/index.ts`, 2026-10-11; the class keeps a delegate, and its doc comment, for each). */
-import { calendarOverlaps, compareCalendarDates } from "../time.js";
+import { addDays, calendarOverlaps, compareCalendarDates, isDay, parseCalendarDate } from "../time.js";
 import { LATER_FEELING_SOURCES } from "./feelings.js";
 import { TUNABLES as PHYSICS_TUNABLES } from "../physics/index.js";
 import { StoreError } from "./errors.js";
+import { SETTLES_WHEN_META_KEY } from "../types.js";
 import {
   CLAIMS_ERA_CUTOFF_KEY,
   rowToPhysics,
@@ -423,18 +424,47 @@ function openTouchedSql(glimpses: boolean): string {
  * THE OPEN THREADS AND WHEN EACH WAS LAST TOUCHED (2026-10-22): every live
  * memory the loose `unresolved` match finds (`openThreadIds`'s match,
  * answered by `memories_open`), with the lived day it was last touched
- * (`openTouchedSql`) and the two facts the carry rule reads
- * (`self/identity.ts#openCarry`, which also decides which are threads at all).
+ * (`openTouchedSql`) and the facts the parking rule reads
+ * (`self/identity.ts#openCarry`, which also decides which are threads at all):
+ * dated, `asked`, and — since P2 (2026-10-28) — whether it names what would
+ * settle it (`meta.settlesWhen` as non-blank text, as `types.ts#settlesWhenOf`
+ * reads it). Meta is JSON on the row: no schema change.
+ *
+ * `at` (review of #674, 2026-10-28): the calendar day asked about. With it,
+ * `dated` means a date still to come — ahead of `at`, or inside its grace
+ * after (`HOLD_GRACE_DAYS`, the days "Coming up" still says it was due) — or
+ * one that repeats. A one-off whose date and grace are behind it is no
+ * longer dated here: "Coming up" has let it go, and without this it sat in
+ * "Still open" for good, never parked. An unreadable date stays dated.
+ * Without `at`, any date is dated, as before.
  */
-export function openThreadTouches(store: Store, opts: { glimpses?: boolean } = {}): { id: string; touchedDay: number; dated: boolean; asked: boolean }[] {
+export function openThreadTouches(
+  store: Store,
+  opts: { glimpses?: boolean; at?: string } = {},
+): { id: string; touchedDay: number; dated: boolean; asked: boolean; settles: boolean }[] {
+  const settles = `CASE WHEN json_valid(m.meta) AND json_type(m.meta, '$.${SETTLES_WHEN_META_KEY}') = 'text'
+                         AND TRIM(json_extract(m.meta, '$.${SETTLES_WHEN_META_KEY}')) <> '' THEN 1 ELSE 0 END`;
+  const at = opts.at !== undefined && isDay(opts.at) ? opts.at : null;
+  const behind = (date: string): boolean => {
+    if (at === null) return false;
+    const c = parseCalendarDate(date);
+    return c !== null && addDays(c.last, PHYSICS_TUNABLES.HOLD_GRACE_DAYS) < at;
+  };
   return store["ops"]
-    .all<{ id: string; touched: number; event_date: string | null; status: string | null }>(
-      `SELECT m.id AS id, m.event_date AS event_date, m.status AS status, ${openTouchedSql(opts.glimpses === true)} AS touched
+    .all<{ id: string; touched: number; event_date: string | null; status: string | null; settles: number; recurring: number }>(
+      `SELECT m.id AS id, m.event_date AS event_date, m.status AS status, ${openTouchedSql(opts.glimpses === true)} AS touched,
+              ${settles} AS settles, CASE WHEN m.meta LIKE '%"${RECURRING_META}":"%' THEN 1 ELSE 0 END AS recurring
          FROM memories m
         WHERE m.type = 'memory' AND m.archived = 0 AND m.meta LIKE '%"unresolved":true%'
         ORDER BY m.birth_day, m.id`,
     )
-    .map((r) => ({ id: r.id, touchedDay: r.touched, dated: r.event_date !== null, asked: r.status === "asked" }));
+    .map((r) => ({
+      id: r.id,
+      touchedDay: r.touched,
+      dated: r.event_date !== null && (r.recurring === 1 || !behind(r.event_date)),
+      asked: r.status === "asked",
+      settles: r.settles === 1,
+    }));
 }
 
 /**

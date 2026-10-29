@@ -281,7 +281,7 @@ export function openSettlesCounts(store: Store): { open: number; withSettlesWhen
  * WHICH OPEN THREADS ARE STILL CARRIED (2026-10-22, the open-threads brief;
  * the one place the rule lives — the wake's "Still open", built and
  * assembled, the reflection's `staleOpen` and its `noLongerCarried` count
- * all read it). Of the open threads (`openThread`), one with no `eventDate`,
+ * all read it). Of the open threads (`openThread`), one with no `eventDate` still to come,
  * not `asked`, untouched for `days` lived days or more
  * (`SelfTunables.OPEN_CARRY_DAYS`) is NOT carried: the wake shows it in no
  * lane ("Nearby" would read as carried still). It is not closed: the flag
@@ -291,6 +291,21 @@ export function openSettlesCounts(store: Store): { open: number; withSettlesWhen
  * bundle or glimpsed as a footnote writes none of what counts, so being shown
  * cannot keep it carried.
  *
+ * PARKED (P2, 2026-10-28; roadmap 10-28, Mike's "ok your lean sounds good",
+ * lightly held): what this rule leaves out is what the owner-facing words
+ * now call PARKED — after 14 lived days untouched (`OPEN_CARRY_DAYS`, 21
+ * until P2), the same lived days "Still open" and `recall "still open"` count
+ * age in. An item that names what would settle it (`meta.settlesWhen`, S1) is
+ * never parked either: it has its own door, the reflection's `settlesOpen`,
+ * which a parked item would leave. The wake's "Still open" tail counts the
+ * parked (`briefing.ts#PARKED_WORDS`), the handle lists them after the
+ * carried ones, marked, and doctor's Open items line counts them. The rule
+ * is read live, at every wake, from the store's own facts — no flag is
+ * written — so a touch un-parks at once and a host whose nights never run
+ * parks all the same; the night records what it parked on the reflection's
+ * row (`detail.notCarried`) and its share says the count. `notCarried` keeps
+ * its name: reflection rows written since 10-22 carry it.
+ *
  * `touched`: every open thread → the lived day it was last touched;
  * `carried` the ones still carried, in the store's order (oldest born first).
  * Fail-open for the wake: a store that cannot answer leaves all empty, and
@@ -299,24 +314,37 @@ export function openSettlesCounts(store: Store): { open: number; withSettlesWhen
 export interface OpenCarry {
   readonly touched: ReadonlyMap<string, number>;
   readonly carried: readonly string[];
-  /** Open threads no longer carried → lived days untouched. */
+  /** Open threads no longer carried — parked — → lived days untouched. */
   readonly notCarried: ReadonlyMap<string, number>;
 }
 
-/** The rule itself, on one thread's facts (see `openCarry`). */
-export function carriesOpen(f: { readonly touchedDay: number; readonly dated: boolean; readonly asked: boolean }, day: number, days: number): boolean {
-  if (f.dated || f.asked || !Number.isFinite(days)) return true;
+/** The rule itself, on one thread's facts (see `openCarry`): dated, asked or
+ *  naming what would settle it (`settles`, P2), never parked. */
+export function carriesOpen(
+  f: { readonly touchedDay: number; readonly dated: boolean; readonly asked: boolean; readonly settles?: boolean },
+  day: number,
+  days: number,
+): boolean {
+  if (f.dated || f.asked || f.settles === true || !Number.isFinite(days)) return true;
   return day - f.touchedDay < days;
 }
 
 /** `glimpses`: `SelfTunables.OPEN_CARRY_GLIMPSE_TOUCH` — true counts an
- *  unrated footnote as a touch again (the revert of the 10-22 call). */
-export function openCarry(store: Store, day: number, days: number, glimpses = false): OpenCarry {
+ *  unrated footnote as a touch again (the revert of the 10-22 call).
+ *
+ *  DATED MEANS STILL TO COME (review of #674, 2026-10-28; the brief: "dated
+ *  items (eventDate in the future) … probably never parked"): a date is
+ *  never parked while it is ahead, inside its grace after (the week "Coming
+ *  up" still says it was due) or repeating. A one-off whose date and grace
+ *  are behind `at` (the store's own day, `Store#today`, by default) is parked
+ *  like any open item once untouched for `days` lived days — before this it
+ *  sat in "Still open" for good, which "Coming up" had already let go. */
+export function openCarry(store: Store, day: number, days: number, glimpses = false, at?: string): OpenCarry {
   const touched = new Map<string, number>();
   const carried: string[] = [];
   const notCarried = new Map<string, number>();
   try {
-    for (const f of store.openThreadTouches({ glimpses })) {
+    for (const f of store.openThreadTouches({ glimpses, at: at ?? store.today() })) {
       if (!openThread(store, f.id)) continue;
       touched.set(f.id, f.touchedDay);
       if (carriesOpen(f, day, days)) carried.push(f.id);
@@ -523,6 +551,10 @@ export interface Lanes {
   later?: readonly string[];
   /** Those of `later` past their date (review of #511): counted as overdue. */
   overdue?: readonly string[];
+  /** How many open threads are parked for this composition's reader (P2,
+   *  2026-10-28, `openCarry`): "Still open"'s count line says it. Set by
+   *  `Self`, not by `rankLanes`. */
+  parked?: number;
 }
 
 /**

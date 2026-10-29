@@ -237,7 +237,7 @@ export function asksStillOpen(question: string): boolean {
   const folded = question.toLowerCase().replace(/[’']/g, "").replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
   return STILL_OPEN_QUESTIONS.has(folded);
 }
-import { openSettlesCounts, STILL_OPEN_HANDLE, WAKE_BUILD_KEY } from "../../core/self/index.js";
+import { openCarry, openSettlesCounts, STILL_OPEN_HANDLE, WAKE_BUILD_KEY } from "../../core/self/index.js";
 import type { PageWriterMode } from "../../core/self/index.js";
 import { canonicalToolName, toolDefinitions, toolSpec } from "./tools.js";
 import { writeUpDoor } from "./write-up.js";
@@ -2566,7 +2566,8 @@ export class McpServer {
    * on the owner's 10-25 snapshot, those matched none of 156 open threads.
    * For THIS folder since 2026-10-26 (O2), as its wake reads the lane: its
    * own threads first, the personal ones after, another folder's work not
-   * listed and not counted.
+   * listed and not counted. Then the parked ones (P2, 2026-10-28), listed
+   * last and marked `parked: true`, with `parked` their count.
    *
    * Reads only, like `last exchange`: no recall row, no credit, no seen set,
    * no quotable record — a ring event alone. Being listed is not a touch
@@ -2611,21 +2612,32 @@ export class McpServer {
     );
   }
 
+  /** How many open threads are parked, store-wide (P2, `self/identity.ts#openCarry`); 0 when the store cannot answer. */
+  private parkedCount(): number {
+    const t = this.counterpart.self.tunables;
+    const store = this.counterpart.store;
+    return openCarry(store, store.livedDay(), t.OPEN_CARRY_DAYS, t.OPEN_CARRY_GLIMPSE_TOUCH).notCarried.size;
+  }
+
   private stillOpenTool(page: number, routed: boolean): ToolResult {
     // For this folder, as its wake reads it (O2, 2026-10-26): its own first,
     // the personal ones after, another folder's work not listed or counted;
     // a joined folder the setting has off is not this one's (`folderOn`).
     const on = this.folderOn();
-    const { items, notCarried } = this.counterpart.stillOpen({ scope: this.scope, ...(on === undefined ? {} : { exportsFrom: on }) });
+    const { items, parked } = this.counterpart.stillOpen({ scope: this.scope, ...(on === undefined ? {} : { exportsFrom: on }) });
     const pages = Math.max(1, Math.ceil(items.length / STILL_OPEN_PAGE));
     const at = Math.min(page, pages);
     const shown = items.slice((at - 1) * STILL_OPEN_PAGE, at * STILL_OPEN_PAGE);
-    this.emit("mcp.recall.stillopen", undefined, { total: items.length, page: at, shown: shown.length, notCarried, routed });
+    this.emit("mcp.recall.stillopen", undefined, { total: items.length, page: at, shown: shown.length, parked, routed });
     const touched = (n: number): string => (n === 0 ? "this lived day" : n === 1 ? "1 lived day ago" : `${String(n)} lived days ago`);
-    const faded =
-      notCarried === 0
+    // THE PARKED, LISTED AND MARKED (P2, 2026-10-28): after every carried
+    // item, the open threads nobody touched in `OPEN_CARRY_DAYS` lived days —
+    // in no lane of the wake, not closed. Said once here, `parked: true` on each.
+    const carried = items.length - parked;
+    const parkedNote =
+      parked === 0
         ? ""
-        : ` Not listed: ${String(notCarried)} open ${notCarried === 1 ? "thread" : "threads"} untouched for ${String(this.counterpart.self.tunables.OPEN_CARRY_DAYS)}+ lived days, no longer carried — not closed; a question about the thing itself finds one, and a touch carries it again.`;
+        : ` ${carried === 0 ? (parked === 1 ? "It is" : "All are") : parked === 1 ? "The last one is" : `The last ${String(parked)} are`} parked (parked: true): open, untouched for ${String(this.counterpart.self.tunables.OPEN_CARRY_DAYS)}+ lived days, so left out of the wake's Still open — not closed. A touch (opened by id and used, quoted, drawn on, revised) brings one back.`;
     return this.result(
       {
         path: "handle",
@@ -2635,7 +2647,7 @@ export class McpServer {
         total: items.length,
         page: at,
         pages,
-        ...(notCarried === 0 ? {} : { notCarried }),
+        ...(parked === 0 ? {} : { parked }),
         items: shown.map((i) => ({
           id: i.id,
           title: i.title,
@@ -2643,11 +2655,12 @@ export class McpServer {
           ...(i.reconsidering === true ? { reconsidering: "a core memory being reconsidered: keep or retire it" } : {}),
           ...(i.date === undefined ? {} : { date: i.date }),
           ...(i.settlesWhen === undefined ? {} : { settlesWhen: i.settlesWhen }),
+          ...(i.parked === true ? { parked: true } : {}),
         })),
         note:
           (items.length === 0
             ? "Nothing is still open."
-            : `What "Still open" carries, in the wake's order: what is live first, newest touched first.${at < pages ? ` More on page ${String(at + 1)} (page: ${String(at + 1)}).` : ""} Recall an id to read it whole. A lived day is a day the memory was in use.`) + faded,
+            : `${carried === 0 ? `Nothing open is carried in the wake's "Still open" now.` : `What "Still open" carries, in the wake's order: what is live first, newest touched first.`}${at < pages ? ` More on page ${String(at + 1)} (page: ${String(at + 1)}).` : ""} Recall an id to read it whole. A lived day is a day the memory was in use.`) + parkedNote,
       },
       false,
     );
@@ -3576,7 +3589,12 @@ export class McpServer {
       // WHAT WOULD SETTLE THEM (2026-10-27, S1): every open item, carried or
       // not, and how many name a trigger — counted so a "let it go" offer
       // for the rest can be decided later. Nothing acts on it yet.
-      openItems: { ...openSettlesCounts(store), note: "Open items (unresolved), carried or not: how many name what would settle them (settlesWhen), how many have only a date (eventDate), and how many have neither." },
+      // And how many are parked (P2, 2026-10-28, `openCarry`).
+      openItems: {
+        ...openSettlesCounts(store),
+        parked: this.parkedCount(),
+        note: `Open items (unresolved), carried or not: how many name what would settle them (settlesWhen), how many have only a date (eventDate), and how many have neither. parked: untouched for ${String(this.counterpart.self.tunables.OPEN_CARRY_DAYS)}+ lived days with no date still to come and no settlesWhen, so left out of the wake's Still open — not closed; recall "still open" lists them last.`,
+      },
       stance: { observer: this.observer },
     };
   }

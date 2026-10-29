@@ -351,6 +351,10 @@ export interface StillOpenItem {
   readonly date?: string;
   /** What would settle it, when one was named (`meta.settlesWhen`, S1 2026-10-27). */
   readonly settlesWhen?: string;
+  /** Parked (P2, 2026-10-28): untouched `OPEN_CARRY_DAYS` lived days, so in
+   *  no lane of the wake; not closed, and a touch un-parks it. Listed after
+   *  every carried item. */
+  readonly parked?: true;
 }
 
 /** The most characters of a title the `still open` handle gives. */
@@ -1107,10 +1111,13 @@ export class Self {
       ...supplied.filter((r) => r.due !== true && r.near === true),
       ...supplied.filter((r) => r.due !== true && r.near !== true),
     ];
+    // Which open threads are still carried (2026-10-22, `openCarry`), and
+    // how many are parked — counted on "Still open"'s tail (P2, 2026-10-28).
+    const carry = openCarry(this.store, req.day, this.tunables.OPEN_CARRY_DAYS, this.tunables.OPEN_CARRY_GLIMPSE_TOUCH);
     const lanes: Lanes = {
+      ...(req.omit === undefined && carry.notCarried.size > 0 ? { parked: carry.notCarried.size } : {}),
       ...rankLanes(scanned, horizon, this.tunables, {
-        // Which open threads are still carried (2026-10-22, `openCarry`).
-        carry: openCarry(this.store, req.day, this.tunables.OPEN_CARRY_DAYS, this.tunables.OPEN_CARRY_GLIMPSE_TOUCH),
+        carry,
         settledOver: settledOver(this.store),
         // "Still open"'s unsettled ones rank after the rest (2026-10-18): one
         // read of the pairs, for the open candidates only.
@@ -1173,11 +1180,15 @@ export class Self {
    * only: no stamp, no return, no seen set — being listed is not a touch
    * (`openCarry`), so the handle cannot keep a thread carried.
    *
+   * THEN THE PARKED (P2, 2026-10-28): every open thread the carry leaves out,
+   * listed after the carried ones and marked `parked` — not closed, findable
+   * here as well as by what it is about. `parked` counts them.
+   *
    * `reader` (O2, 2026-10-26): the folder asking, as the wake assembled there
    * reads it — its threads first, the personal ones after, another folder's
-   * work neither listed nor counted in `notCarried`. Absent: every thread.
+   * work neither listed nor counted as parked. Absent: every thread.
    */
-  stillOpen(day: number, reader?: ThreadReader): { items: StillOpenItem[]; notCarried: number } {
+  stillOpen(day: number, reader?: ThreadReader): { items: StillOpenItem[]; parked: number } {
     const { open, carry } = this.openScanned(day);
     const settled = settledOver(this.store);
     const place = reader === undefined ? undefined : this.threadPlaceFor(reader);
@@ -1189,35 +1200,51 @@ export class Self {
       ...(place === undefined ? {} : { threadPlace: place }),
     });
     const byId = new Map(open.map((s) => [s.id, s] as const));
-    const out: StillOpenItem[] = [];
-    for (const id of [...lanes.threads.map((r) => r.id), ...(lanes.overflow?.threads ?? [])]) {
-      const s = byId.get(id);
-      if (s === undefined) continue;
+    const item = (s: Scanned, parked: boolean): StillOpenItem => {
       const first = s.doc.body.split("\n").find((l) => l.trim().length > 0) ?? "";
       const whole = flatten((s.doc.title ?? "").trim() || first);
       const title = whole.length <= STILL_OPEN_TITLE_CHARS ? whole : `${whole.slice(0, STILL_OPEN_TITLE_CHARS - 1).trimEnd()}…`;
-      const touched = carry.touched.get(id) ?? Math.max(s.doc.bornDay, s.physics.lastUsedDay);
+      const touched = carry.touched.get(s.id) ?? Math.max(s.doc.bornDay, s.physics.lastUsedDay);
       const settles = s.unresolved ? settlesWhenOf(s.doc.meta) : null;
-      out.push({
-        id,
+      return {
+        id: s.id,
         title,
         livedDaysSinceTouched: Math.max(0, day - touched),
         ...(s.reconsidering === true ? { reconsidering: true } : {}),
         ...(s.doc.eventDate === undefined ? {} : { date: s.doc.eventDate }),
         ...(settles === null ? {} : { settlesWhen: settles }),
-      });
+        ...(parked ? { parked: true } : {}),
+      };
+    };
+    const out: StillOpenItem[] = [];
+    for (const id of [...lanes.threads.map((r) => r.id), ...(lanes.overflow?.threads ?? [])]) {
+      const s = byId.get(id);
+      if (s !== undefined) out.push(item(s, false));
     }
-    // What the carry no longer keeps, counted as the list is: another
-    // folder's work is not this reader's to count (O2). One row read each.
-    let notCarried = carry.notCarried.size;
-    if (place !== undefined) {
-      notCarried = 0;
-      for (const id of carry.notCarried.keys()) {
-        const s = scanOne(this.store, id, day);
-        if (s !== null && place(s) !== "out") notCarried += 1;
-      }
+    // THE PARKED, AFTER THE CARRIED (P2, 2026-10-28): listed and marked, the
+    // most recently touched first; another folder's work is not this
+    // reader's (O2), as the wake's count reads them (`parkedOf`).
+    const parked = this.parkedOf(carry, day, place);
+    for (const s of parked) out.push(item(s, true));
+    return { items: out, parked: parked.length };
+  }
+
+  /**
+   * THE PARKED OPEN THREADS FOR ONE READER (P2, 2026-10-28): what the carry
+   * leaves out (`openCarry`'s `notCarried`), less another folder's work when
+   * a reader's place is given (O2), the most recently touched first, then by
+   * id. One row read each; reads only.
+   */
+  private parkedOf(carry: OpenCarry, day: number, place?: (s: Scanned) => "here" | "personal" | "out"): Scanned[] {
+    const ids = [...carry.notCarried.entries()].sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([id]) => id);
+    const out: Scanned[] = [];
+    for (const id of ids) {
+      const s = scanOne(this.store, id, day);
+      if (s === null || !s.unresolved) continue;
+      if (place !== undefined && place(s) === "out") continue;
+      out.push(s);
     }
-    return { items: out, notCarried };
+    return out;
   }
 
   /**
@@ -1300,6 +1327,9 @@ export class Self {
     // reconsidered, which wait on a decision (2026-10-11).
     const { open: openRead, carry, flagged } = this.openScanned(day);
     const open = openRead.map(note);
+    const place = req.reader === undefined ? undefined : this.threadPlaceFor(req.reader);
+    // How many are parked for this reader (P2, 2026-10-28): its tail says so.
+    const parked = carry.notCarried.size === 0 ? 0 : this.parkedOf(carry, day, place).length;
     const fresh = rankLanes(open, horizon, this.tunables, {
       carry,
       settledOver: settled,
@@ -1307,7 +1337,7 @@ export class Self {
       waiting: waitingIds(this.store, day),
       workAtDelivery: this.tunables.CRAFT_AT_DELIVERY,
       craftSince: craftSince(this.store),
-      ...(req.reader === undefined ? {} : { threadPlace: this.threadPlaceFor(req.reader) }),
+      ...(place === undefined ? {} : { threadPlace: place }),
       ...(coming.more.length === 0 ? {} : { horizonMore: coming.more }),
       ...(coming.later.length === 0 ? {} : { later: coming.later }),
     });
@@ -1352,6 +1382,7 @@ export class Self {
       },
       ...(coming.later.length === 0 ? {} : { later: coming.later }),
       ...(coming.overdue.length === 0 ? {} : { overdue: coming.overdue }),
+      ...(parked === 0 ? {} : { parked }),
     };
     return this.composeLanes(lanes, docs, sources, {
       day,
@@ -1516,6 +1547,8 @@ export class Self {
           ...(lanes.later === undefined || lanes.later.length === 0 || req.omit !== undefined ? {} : { horizonLater: lanes.later }),
           // And which of them are past their date, so it says "overdue" (review of #511).
           ...(lanes.overdue === undefined || lanes.overdue.length === 0 || req.omit !== undefined ? {} : { horizonOverdue: lanes.overdue }),
+          // How many open threads are parked: "Still open"'s count line says so (P2, 2026-10-28).
+          ...(lanes.parked === undefined || lanes.parked === 0 || req.omit !== undefined ? {} : { threadsParked: lanes.parked }),
           ...(req.elsewhereShorter === undefined || req.elsewhere === undefined || req.omit !== undefined
             ? {}
             : { elsewhereShorter: req.elsewhereShorter }),

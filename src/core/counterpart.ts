@@ -1556,18 +1556,19 @@ export class Counterpart {
    * EVERYTHING "STILL OPEN" CARRIES, today (2026-10-25, the O1 builder;
    * `Self#stillOpen`): what the `still open` recall handle lists — the open
    * threads the carry rule keeps (`self/identity.ts#openCarry`) and the core
-   * memories being reconsidered, in the wake's order; and how many open
-   * threads the carry no longer keeps (`notCarried`), counted, not listed.
+   * memories being reconsidered, in the wake's order; then the parked ones
+   * (P2, 2026-10-28: untouched `OPEN_CARRY_DAYS` lived days), listed after
+   * and marked, and `parked` counts them.
    * Reads only: nothing it lists is touched, so listing cannot keep a thread
    * carried. Empty on a store that cannot answer; never throws. `here` (O2,
    * 2026-10-26): the folder asking and the host's setting, read as the wake
    * there reads them (`threadReader`); absent, every folder's threads.
    */
-  stillOpen(here?: { scope?: string; exportsFrom?: (scope: string) => boolean }): { items: StillOpenItem[]; notCarried: number } {
+  stillOpen(here?: { scope?: string; exportsFrom?: (scope: string) => boolean }): { items: StillOpenItem[]; parked: number } {
     try {
       return this.self.stillOpen(this.store.livedDay(), here === undefined ? undefined : this.threadReader(here.scope, here.exportsFrom));
     } catch {
-      return { items: [], notCarried: 0 };
+      return { items: [], parked: 0 };
     }
   }
 
