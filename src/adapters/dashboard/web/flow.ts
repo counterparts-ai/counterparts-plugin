@@ -389,6 +389,8 @@ export const EVENT_NODE = {
   // The wake's "Work here" lines, and what an envelope could not carry
   // (2026-10-02): all of it is the wake's delivery.
   "self.work.overflow": "wake",
+  // The wake's project line (the 10-29 read): the wake's delivery too.
+  "self.project.line": "wake",
   "adapter.envelope.overcap": "wake",
   "adapter.notice.dropped": "wake",
   "adapter.envelope.gave-way": "wake",

@@ -123,6 +123,7 @@ export const LANES = {
   "handoff.refused": "flow",
   "handoff.lasthere.noroom": "flow",
   "self.work.overflow": "flow",
+  "self.project.line": "flow",
   "adapter.envelope.overcap": "flow",
   "adapter.notice.dropped": "flow",
   "adapter.envelope.gave-way": "flow",

@@ -105,8 +105,14 @@ export interface CandidateVerdict {
   /** `"link"` for a QUIET POINTER — a memory only links reached (2026-09-28,
    *  `activate.ts#Candidate.linkOnly`). Its verdict is one of the ordinary ones;
    *  this says which lane it came by. Absent for everything the conversation
-   *  reached. */
-  readonly via?: "link";
+   *  reached. `"see-also"` (2026-10-29, `activate.ts#seeAlso`): brought along because
+   *  a memory the turn shows NAMES its id; `seeAlso.by` is that memory. */
+  readonly via?: "link" | "see-also";
+  /** SEE-ALSO (2026-10-29): the shown memory whose text named this one. Set
+   *  only with `via: "see-also"`; its verdict is then `footnoted`, whatever
+   *  the gate said of it on its own (the number fields are the gate's, or 0
+   *  for a memory no channel reached). */
+  readonly seeAlso?: { readonly by: string };
   /** HABITUATED (2026-10-19, `habituation.ts`): rated 0 in enough recent
    *  sessions that the bar it faced (`bar`) was raised. Absent otherwise. */
   readonly habituated?: true;

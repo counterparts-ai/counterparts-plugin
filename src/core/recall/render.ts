@@ -72,6 +72,12 @@ export const FRAMING = {
    */
   linked: "Linked:",
   /**
+   * ONE LABEL, IN FRONT OF A MEMORY ANOTHER NAMED (see-also, 2026-10-29): it
+   * is here because a memory this turn shows names its id, not because the
+   * turn's words or meaning reached it. Same shape and reason as `linked`.
+   */
+  seeAlso: "See also:",
+  /**
    * THE BELIEFS SLOT'S HEADER (wave 2 lane E, 2026-10-22; design §7): what
    * the subjects this turn named are held to be, in a slot of their own, so
    * a belief never reads as a footnote and a reader knows it may rate one.
@@ -130,6 +136,12 @@ export interface Resolved {
   /** True for a quiet pointer (`Candidate.linkOnly`), which renders with
    *  `FRAMING.linked` in front of it. Absent reads as false. */
   readonly linked?: boolean;
+  /** True for a memory a shown one named (`activate.ts#seeAlso`), which renders with
+   *  `FRAMING.seeAlso` in front of it. Absent reads as false. */
+  readonly seeAlso?: boolean;
+  /** A tighter title clip for this line (see-also's `SEE_ALSO_TITLE_BYTES`);
+   *  the render's `titleBytes` when absent, never wider than it. */
+  readonly titleBytes?: number;
   /**
    * The memory's STANDING in a contradiction (2026-09-29, `standing.ts`): a
    * qualifier in front (`Earlier (now [id]): `, `Unsettled — may be out of
@@ -208,7 +220,7 @@ export function clip(text: string, maxBytes: number): string {
  * belongs.
  */
 function label(r: Resolved): string {
-  return `${r.linked === true ? `${FRAMING.linked} ` : ""}${r.journal === true ? `${FRAMING.journal} ` : ""}${r.standing?.prefix ?? ""}`;
+  return `${r.linked === true ? `${FRAMING.linked} ` : ""}${r.seeAlso === true ? `${FRAMING.seeAlso} ` : ""}${r.journal === true ? `${FRAMING.journal} ` : ""}${r.standing?.prefix ?? ""}`;
 }
 
 /** The standing's pointer, after the text and outside the clip, like the label. */
@@ -261,7 +273,8 @@ function compose(
     // Pointers with short titles, NEVER bodies (§9 OUTPUTS).
     for (const id of footnotes) {
       const r = resolve(id);
-      lines.push(`- ${label(r)}${clip(r.title, input.titleBytes)} [${id}]${after(r)}`);
+      const titleBytes = r.titleBytes === undefined ? input.titleBytes : Math.min(input.titleBytes, r.titleBytes);
+      lines.push(`- ${label(r)}${clip(r.title, titleBytes)} [${id}]${after(r)}`);
     }
   }
   // THE BELIEFS SLOT (lane E), after the footnotes, in its own labelled block.

@@ -163,7 +163,7 @@ export interface ShownEntry {
  * `beliefs` the slot's (`GateState.beliefs`, belief id → turn; lane E).
  */
 export function rateableSet(
-  surfaced: Readonly<Record<string, { turn: number; tier: "surfaced" | "footnoted"; via?: "link" }>>,
+  surfaced: Readonly<Record<string, { turn: number; tier: "surfaced" | "footnoted"; via?: "link" | "see-also" }>>,
   asked: Iterable<string>,
   opened: Iterable<string>,
   beliefs: Readonly<Record<string, number>> = {},

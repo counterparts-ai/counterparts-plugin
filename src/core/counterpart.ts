@@ -165,6 +165,7 @@ import {
   spliceBeforeSentinel,
   withHeadFields,
   WORK_OVERFLOW_EVENT,
+  PROJECT_LINE_EVENT,
   rotateWork,
   workHere,
   workHereBlock,
@@ -192,6 +193,7 @@ import type {
   PageWriterOutcome,
   PageWriterRun,
   PageWriterStatus,
+  ProjectLineReason,
   SelfPage,
   StillOpenItem,
   ThreadReader,
@@ -1716,40 +1718,96 @@ export class Counterpart {
    * naming the project. Spliced LAST, above the sentinel, in the room the
    * delivery left: widest first, inside `WAKE_PROJECT_LINE_BYTES` and the
    * reported ceiling; when not one line fits, the wake goes without it and a
-   * ring event says so (`counterpart.project.noroom`). Reads only; never throws.
+   * ring event says so (`counterpart.project.noroom`). Reads only, but for
+   * its own durable row (`PROJECT_LINE_EVENT`, the 10-29 read): one per wake
+   * delivered in a project's folder, shown or not and why. Never throws.
    */
   private withProjectLine(result: WakeResult, here?: WakeHere): WakeResult {
     const t = this.self.tunables;
     const scope = here?.scope?.trim() ?? "";
     if (!t.WAKE_PROJECT_LINE || !result.ok || scope.length === 0 || !isDirectoryScope(scope)) return result;
     let name = "";
-    let lines: string[] = [];
+    let projectId = "";
+    let held = 0;
+    let picked: { id: string; line: string }[] = [];
     try {
       const project = projectsPart.projectOf(this.store, scope);
       if (project === null) return result;
       name = project.name;
+      projectId = project.id;
       const day = this.store.livedDay();
-      lines = this.schemas
-        .beliefStanding(project.id, day)
+      const standing = this.schemas.beliefStanding(project.id, day);
+      held = standing.length;
+      picked = standing
         .filter((b) => b.strength > t.WAKE_PROJECT_LINE_FLOOR)
         .slice(0, Math.max(0, Math.floor(t.WAKE_PROJECT_LINE_MAX)))
-        .map((b) => `- ${beliefLine({ ...b, subject: "" }, this.recall.tunables.BELIEF_LINE_BYTES)}`);
+        .map((b) => ({ id: b.id, line: `- ${beliefLine({ ...b, subject: "" }, this.recall.tunables.BELIEF_LINE_BYTES)}` }));
     } catch {
       return result;
     }
-    if (lines.length === 0) return result;
     const budget = this.reportedBudget;
+    const note = (shown: { k: number; bytes: number } | null, reason: ProjectLineReason): void =>
+      this.noteProjectLine({ scope, project: projectId, session: here?.session ?? null, reason, lines: shown?.k ?? 0, of: picked.length, held, bytes: shown?.bytes ?? 0, budget, was: result.bytes, ids: shown === null ? [] : picked.slice(0, shown.k).map((p) => p.id) });
+    if (picked.length === 0) {
+      note(null, "below-floor");
+      return result;
+    }
+    const lines = picked.map((p) => p.line);
     for (let k = lines.length; k > 0; k--) {
       const block = [projectLineHeading(name), ...lines.slice(0, k)].join("\n");
       if (byteLength(block) > t.WAKE_PROJECT_LINE_BYTES) continue;
       const s = spliceBeforeSentinel(result.text, block);
-      if (!s.applied) return result;
+      if (!s.applied) {
+        note(null, "no-sentinel");
+        return result;
+      }
       if (budget !== null && s.bytes > budget) continue;
       this.emit("counterpart.project.shown", undefined, { lines: k, of: lines.length, bytes: s.bytes - result.bytes });
+      note({ k, bytes: s.bytes - result.bytes }, "shown");
       return { ...result, text: s.text, bytes: s.bytes, sentinel: s.sentinel };
     }
     this.emit("counterpart.project.noroom", undefined, { lines: lines.length, budget, was: result.bytes });
+    note(null, "no-room");
     return result;
+  }
+
+  /** The project line's durable row (`PROJECT_LINE_EVENT`). Never under observer; an append that fails costs the row, never the wake. */
+  private noteProjectLine(p: {
+    scope: string;
+    project: string;
+    session: string | null;
+    reason: ProjectLineReason;
+    lines: number;
+    of: number;
+    held: number;
+    bytes: number;
+    budget: number | null;
+    was: number;
+    ids: readonly string[];
+  }): void {
+    if (this.observer) return;
+    try {
+      this.store.appendEvent({
+        name: PROJECT_LINE_EVENT,
+        day: this.store.livedDay(),
+        ref: p.project,
+        payload: {
+          scope: p.scope,
+          ...(p.session === null || p.session.length === 0 ? {} : { session: p.session }),
+          shown: p.reason === "shown",
+          reason: p.reason,
+          lines: p.lines,
+          of: p.of,
+          held: p.held,
+          bytes: p.bytes,
+          budget: p.budget ?? 0,
+          was: p.was,
+          ids: [...p.ids],
+        },
+      });
+    } catch {
+      /* a line that cannot be recorded still showed, or did not */
+    }
   }
 
   /**

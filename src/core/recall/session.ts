@@ -144,6 +144,8 @@ export const SCALAR_REF = "state";
 export const SEMANTIC_REF = "lag";
 /** A `surfaced` row's `value` when the memory was a quiet pointer (2026-09-28). */
 export const POINTER_VALUE = "link";
+/** A `surfaced` row's `value` when a shown memory's text named it (see-also, 2026-10-29). */
+export const SEE_ALSO_VALUE = "see-also";
 
 /** What a memory got, the turn it got it, and whether it may ever train. */
 export interface SurfaceRecord {
@@ -153,8 +155,10 @@ export interface SurfaceRecord {
   trains: boolean;
   /** `"link"` when it was a QUIET POINTER — reached only through links
    *  (2026-09-28). Kept in the row's otherwise unused `value` column, so the
-   *  credit pass can count pointers that were later expanded. No schema change. */
-  via?: "link";
+   *  credit pass can count pointers that were later expanded. No schema change.
+   *  `"see-also"` (2026-10-29) when a shown memory's text named it; the same
+   *  column. Either way an ordinary footnote to credit and to rate. */
+  via?: "link" | "see-also";
 }
 
 export interface CreditRecord {
@@ -263,7 +267,7 @@ export function loadGateState(store: Store, sessionId: string, max = Infinity): 
         turn: row.turn,
         tier: row.tier === "footnoted" ? "footnoted" : "surfaced",
         trains: row.trains !== 0,
-        ...(row.value === POINTER_VALUE ? { via: "link" as const } : {}),
+        ...(row.value === POINTER_VALUE ? { via: "link" as const } : row.value === SEE_ALSO_VALUE ? { via: "see-also" as const } : {}),
       };
     } else if (row.kind === "credited") {
       credited[row.ref] = { turn: row.turn, tier: (row.tier ?? "referenced") as UseTier, day: row.last_day };
@@ -332,7 +336,7 @@ export function saveGateState(store: Store, state: GateState, max: number, extra
       lastDay: state.lastDay,
       tier: rec.tier,
       trains: rec.trains,
-      ...(rec.via === "link" ? { value: POINTER_VALUE } : {}),
+      ...(rec.via === "link" ? { value: POINTER_VALUE } : rec.via === "see-also" ? { value: SEE_ALSO_VALUE } : {}),
     });
   }
   const keptSurfaced = bound(state.surfaced, max);

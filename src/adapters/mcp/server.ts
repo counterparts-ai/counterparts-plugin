@@ -97,11 +97,14 @@ import { coreNewer, newerStoreRemedy } from "../update-words.js";
 import type { NewerStoreInput } from "../update-words.js";
 import {
   MEET_STEPS,
+  ANSWER_STEPS,
+  MEET_NO_ANSWER,
   STYLE_CHOICES,
   addressMemory,
   answerText,
   finishText,
   meetState,
+  meetStepOf,
   meetingHold,
   meetingInstructions,
   noteActive,
@@ -1556,7 +1559,7 @@ export class McpServer {
    * script and the state, and the offer is recorded (`offered`), so neither
    * the wake's line nor the mod offers it again today. With a step:
    *
-   *   - an answer (name, work, loved, problem, peeves, outside) becomes ONE
+   *   - an answer (name, week, work, love, saturday, origin) becomes ONE
    *     memory through `remember`'s own door — about the owner, said by the
    *     owner, marked "(from onboarding)" — and its id is kept for the second
    *     session's line; a skipped question is never sent, so nothing is stored;
@@ -1585,7 +1588,8 @@ export class McpServer {
     const named = typeof args["session"] === "string" ? args["session"].trim() : "";
     const session = (named.length > 0 && this.corroborate(named) ? named : null) ?? this.session ?? this.hostSession() ?? UNBOUND_SESSION;
     const on = this.today();
-    const step = args["step"];
+    // An old step name is served as its new one (`started` is `origin`, H1).
+    const step = meetStepOf(args["step"]);
     // EVERY CALL IS THE MEETING STILL GOING (2026-10-12, onboarding round 1, A):
     // while it is, this session's write-up ask and the day's dream wait.
     if (!this.observer && session !== UNBOUND_SESSION) {
@@ -1622,11 +1626,18 @@ export class McpServer {
     if (typeof step !== "string" || !(MEET_STEPS as readonly string[]).includes(step)) {
       return this.refuse("meet", "step-unknown", { detail: `step is one of ${MEET_STEPS.join(", ")} — or omit it for the script.` });
     }
+    const answer = typeof args["answer"] === "string" ? args["answer"].trim() : "";
+    // AN ANSWER STEP WITH NO ANSWER (H1b): not an error (claude.ai draws those
+    // as a red Failed card), and not progress either: it comes before the
+    // offer mark, so it moves no meeting state, and nothing is written.
+    if (answer.length === 0 && (ANSWER_STEPS as readonly string[]).includes(step as string)) {
+      this.emit("mcp.meet.unanswered", undefined, { step });
+      return { content: [{ type: "text", text: MEET_NO_ANSWER }], structuredContent: { step, stored: 0, ...onboardingView(store), next: MEET_NO_ANSWER } };
+    }
     // A step taken is an offer made: the mod and the wake stop offering.
     // An answer after a "later" is the meeting resumed: offered again, so it holds.
     const before = meetState(store);
     if (before === "not_started" || (before === "later" && step !== "later" && step !== "skipped" && step !== "done")) noteOffered(store, { on, session, state: true });
-    const answer = typeof args["answer"] === "string" ? args["answer"].trim() : "";
     const done = (extra: Record<string, unknown>): ToolResult => {
       this.emit("mcp.meet.step", undefined, { step, stored: typeof extra["stored"] === "number" ? extra["stored"] : null });
       return this.result({ recorded: step, ...onboardingView(store), ...extra }, false);
@@ -1684,10 +1695,7 @@ export class McpServer {
         return done({ stored: ids.length, ids });
       }
       default: {
-        // An answer: name, work, loved, problem, peeves, outside.
-        if (answer.length === 0) {
-          return this.refuse("meet", "answer-required", { detail: "Send the answer, in your words. A skipped question is never sent: nothing is stored for it." });
-        }
+        // An answer: name, week, work, love, saturday, origin (a bare one was answered above).
         const text = step === "name" ? `They like to be called ${answer}.` : answer;
         const ids = await this.meetWrite([answerText(text)]);
         if (ids[0] !== undefined) recordAnswer(store, step as AnswerStep, ids[0]);

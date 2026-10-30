@@ -63,7 +63,7 @@ import { PLUGIN_UPDATE_COMMUNITY, PLUGIN_UPDATE_STEP, PLUGIN_UPDATE_SYNCED, npmU
  * 30 days old from this alone, with nothing fetched. `test/update-check.test.ts`
  * holds it to CHANGELOG's heading for `SERVER_VERSION` once there is one.
  */
-export const RELEASE_DATE = "2026-10-29";
+export const RELEASE_DATE = "2026-10-30";
 
 export const UPDATE_CHECK_ENV = "COUNTERPARTS_UPDATE_CHECK";
 export const NONESSENTIAL_TRAFFIC_ENV = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";

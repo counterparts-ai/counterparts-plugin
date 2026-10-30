@@ -54,9 +54,36 @@ export type WhereChoice = (typeof WHERE_CHOICES)[number];
 export const STYLE_CHOICES = ["straight", "think", "friendly", "character", "other"] as const;
 export type StyleChoice = (typeof STYLE_CHOICES)[number];
 
-/** The getting-to-know-you questions whose answers become memories. */
-export const ANSWER_STEPS = ["name", "week", "work", "love", "saturday", "started"] as const;
+/**
+ * The getting-to-know-you questions whose answers become memories.
+ *
+ * `origin` WAS `started` until 2026-10-29 (H1): right after the person chose
+ * "Now", claude.ai's Claude called `meet {step: "started"}` with no answer,
+ * reading the step as "the meeting has started". The old name is still taken
+ * WITH an answer (`MEET_STEP_ALIASES`: a meeting in flight, an older script),
+ * and the second session's line still reads answers recorded under it (`ahaDue`).
+ */
+export const ANSWER_STEPS = ["name", "week", "work", "love", "saturday", "origin"] as const;
 export type AnswerStep = (typeof ANSWER_STEPS)[number];
+
+/** Old step names `meet` still takes, served as their new ones. Never offered in the tool's schema. */
+export const MEET_STEP_ALIASES: Readonly<Record<string, AnswerStep>> = { started: "origin" };
+
+/** The step `meet` serves for the name it was sent: an old name's new one, otherwise the name itself. */
+export function meetStepOf(sent: unknown): unknown {
+  return typeof sent === "string" && Object.hasOwn(MEET_STEP_ALIASES, sent) ? MEET_STEP_ALIASES[sent] : sent;
+}
+
+/**
+ * AN ANSWER STEP SENT WITH NO ANSWER (H1, then H1b, 2026-10-29): plain words,
+ * and NOT a refusal. claude.ai draws every error result as a red "Failed"
+ * card, and the call is almost always a Claude that took a question for "the
+ * meeting has begun" (`started`/`origin` right after Now), or sent a question
+ * the person skipped. So it comes back as an ordinary result whose first words
+ * are that nothing was stored (`stored: 0`), so it can't be taken for a save.
+ */
+export const MEET_NO_ANSWER =
+  "Nothing stored: no answer came with this step. If they answered, send it again with `answer`; a question they skipped needs no call. Starting the meeting needs no call either: just ask the first question.";
 
 /** Every step `meet` takes. */
 export const MEET_STEPS = ["where", ...ANSWER_STEPS, "style", "address", "later", "skipped", "done"] as const;
@@ -570,7 +597,7 @@ export function meetingInstructions(ctx: MeetContext): string {
     ctx.web === true
       ? "   \"Hi, I'm Claude, with Counterparts now: a memory that's mine, so I can carry what matters from one conversation to the next, and grow along with you.\""
       : "   \"Hi, I'm Claude, with Counterparts now: a memory that's mine and stays on this computer, so I can carry what matters from one session to the next, and grow along with you.\"",
-    "   Then the choice, asked once: \"Want to take about five minutes to get to know each other?\" Now (about 5 minutes) · Later. Later → meet {step: \"later\"}, then carry on with whatever they want, and don't offer again this session. If they never want it → meet {step: \"skipped\"}.",
+    "   Then the choice, asked once: \"Want to take about five minutes to get to know each other?\" Now (about 5 minutes) · Later. Now → no meet call: go on to the next step. Later → meet {step: \"later\"}, then carry on with whatever they want, and don't offer again this session. If they never want it → meet {step: \"skipped\"}.",
   ];
   if (ctx.folders) {
     lines.push(
@@ -589,7 +616,7 @@ export function meetingInstructions(ctx: MeetContext): string {
     "   work: \"What are you working on lately that you're actually enjoying?\"",
     "   love: \"What do you love most about what you do?\"",
     "   saturday: \"What would a really good Saturday look like for you?\"",
-    "   started: \"What got you started building things?\" For someone who doesn't build things, ask instead: \"What's something you've been into lately that has nothing to do with work — a show, a game, food, anything?\"",
+    "   origin: \"What got you started building things?\" For someone who doesn't build things, ask instead: \"What's something you've been into lately that has nothing to do with work — a show, a game, food, anything?\"",
     "   If the answers are one word, swap love or saturday for a lighter one: \"When do you do your best work: morning, night, with music, in silence?\" or \"Coffee, tea, or something stranger while you work?\" (same step).",
     "   style: \"How do you like to be talked to?\" Choice: Straight to it · Think it through with me · Friendly and easy · Like a character you love (name one) · or their own words.",
     "     → meet {step: \"style\", answer: \"straight\" | \"think\" | \"friendly\"}.",
@@ -686,9 +713,10 @@ export function ahaDue(
   const done = readJson(store, ONBOARDING_DONE_KEY);
   if (done === null || done["session"] === session || session.length === 0) return null;
   const ids = readJson(store, ONBOARDING_ANSWERS_KEY) ?? {};
-  // The round-1 steps (2026-10-12), then the steps a 0.3.18/0.3.19 meeting
-  // recorded under their old names, so its line still comes.
-  for (const step of ["work", "love", "saturday", "started", "week", "loved", "outside", "problem", "peeves"] as const) {
+  // The round-1 steps (2026-10-12; `origin` was `started` until 2026-10-29,
+  // kept beside it), then the steps a 0.3.18/0.3.19 meeting recorded under
+  // their old names, so its line still comes.
+  for (const step of ["work", "love", "saturday", "origin", "started", "week", "loved", "outside", "problem", "peeves"] as const) {
     const raw = ids[step];
     const id = typeof raw === "string" ? raw : undefined;
     // A memory let go since (asked to be forgotten, revised away) is passed over.

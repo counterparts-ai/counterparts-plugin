@@ -33,7 +33,7 @@ import { TUNABLES as PHYSICS, USE_TIER_WEIGHT, strength } from "../physics/index
 import type { CreditOutcome, UseTier } from "../physics/index.js";
 import type { ProseDoc, Store } from "../store/index.js";
 import { isChapterSummary, stemTerm, tokenize } from "../store/index.js";
-import { activate, isBeliefRow, primeOf } from "./activate.js";
+import { activate, isBeliefRow, primeOf, seeAlso } from "./activate.js";
 import type { Candidate, LearnedCuesFn, SpreadFn, SpreadStats } from "./activate.js";
 import type { FeelingAskInput } from "./feeling-ask.js";
 import { buildCues, detectAffect, stripBoilerplate } from "./cues.js";
@@ -82,6 +82,8 @@ export * from "./habituation.js";
 export * from "./prime.js";
 export * from "./render.js";
 export * from "./session.js";
+export { SEE_ALSO_NAMES_READ, namedIds, recallableRow, seeAlso } from "./activate.js";
+export type { SeeAlso, SeeAlsoInput } from "./activate.js";
 export * from "./standing.js";
 export * from "./recency-ask.js";
 export * from "./time-ask.js";
@@ -750,8 +752,45 @@ export class Recall {
 
     if (this.now() - started > budgetMs) return quiet("latency-abort");
 
+    // SEE-ALSO FROM NAMED IDS (PP1, 2026-10-29, an experiment): a shown
+    // memory whose text names another's id brings it along, one each,
+    // `SEE_ALSO_MAX` a turn, after everything the gate admitted (so the byte
+    // budget trims them first among footnotes; a belief line goes before). Its verdict becomes an ordinary footnote's,
+    // `trains` true, marked `via: "see-also"` — the record step and the
+    // credit pass then treat it as any footnote: a use trains this turn's
+    // words to it. Off, or nothing named: the turn is as before.
+    const byId = new Map(candidates.map((c) => [c.id, c]));
+    const along = seeAlso({
+      store: this.store,
+      day,
+      shown: [...gated.surfaced, ...gated.footnotes].map((c) => c.id),
+      namers: [...gated.surfaced, ...gated.footnotes].filter((c) => c.linkOnly !== true).map((c) => c.id),
+      candidates: byId,
+      verdicts: gated.verdicts,
+      seen: state.surfaced,
+      ...(turn.echo === undefined ? {} : { echo: turn.echo }),
+      // Never another project's work, under the hard filter OR the higher bar
+      // (review of #681): a named id is no way round Mike's "slightly higher
+      // bar" for crossing work; personal memories cross as ever.
+      ...(turn.elsewhere !== undefined && (this.tunables.RECALL_BY_PROJECT || this.tunables.CROSS_PROJECT_BAR_LIFT > 1)
+        ? { elsewhere: turn.elsewhere }
+        : {}),
+      ...(habituated.size === 0 ? {} : { habituated }),
+      background: gated.background.bar,
+      t: this.tunables,
+    });
+    const alongIds = new Set(along.map((x) => x.id));
+    // The turn's verdicts from here on: a brought-along candidate's own
+    // (below its bar, say) is replaced by its see-also one; one no channel
+    // reached is added.
+    const verdicts: CandidateVerdict[] = along.length === 0 ? gated.verdicts : [
+      ...gated.verdicts.map((v) => along.find((x) => x.id === v.id)?.verdict ?? v),
+      ...along.filter((x) => !gated.verdicts.some((v) => v.id === x.id)).map((x) => x.verdict),
+    ];
+
     const docs = new Map<string, ProseDoc>();
     for (const c of candidates) docs.set(c.id, c.doc);
+    for (const x of along) docs.set(x.id, x.doc);
     // Quiet pointers render with their one-word label (`FRAMING.linked`).
     const linked = new Set(candidates.filter((c) => c.linkOnly === true).map((c) => c.id));
     const lifted = new Set(candidates.filter((c) => c.lifted === true).map((c) => c.id));
@@ -774,6 +813,7 @@ export class Recall {
       const r = resolveDoc(docs.get(id), id);
       const st = standing(id);
       const withStanding = st === null ? r : { ...r, standing: { prefix: st.prefix, suffix: st.suffix } };
+      if (alongIds.has(id)) return { ...withStanding, seeAlso: true, titleBytes: this.tunables.SEE_ALSO_TITLE_BYTES };
       return linked.has(id) ? { ...withStanding, linked: true } : withStanding;
     };
 
@@ -782,7 +822,7 @@ export class Recall {
         turn: turnNo,
         affectFlag: gated.affectFlag,
         surfaced: gated.surfaced.map((c) => c.id),
-        footnotes: gated.footnotes.map((c) => c.id),
+        footnotes: [...gated.footnotes.map((c) => c.id), ...along.map((x) => x.id)],
         ...(beliefPicks === null || beliefPicks.lines.length === 0 ? {} : { beliefs: beliefPicks.lines }),
         budgetBytes,
         gistBytes: this.tunables.GIST_BYTES,
@@ -808,12 +848,12 @@ export class Recall {
 
     // The admitted memories the mood lifted, by id (2026-10-14): `moodMatched`
     // counts them all, `moodMatchedIds` names the first MOOD_MATCHED_IDS_CAP.
-    const moodLifted = gated.verdicts
+    const moodLifted = verdicts
       .filter((v) => (v.verdict === "surfaced" || v.verdict === "footnoted") && (v.mood ?? 0) > 0)
       .map((v) => v.id);
     // What priming did to what was SHOWN (after the render's trim).
     const shownSet = new Set([...rendered.surfaced, ...rendered.footnotes]);
-    const shownPrimed = gated.verdicts.filter((v) => v.primed !== undefined && shownSet.has(v.id) && (v.verdict === "surfaced" || v.verdict === "footnoted"));
+    const shownPrimed = verdicts.filter((v) => v.primed !== undefined && shownSet.has(v.id) && (v.verdict === "surfaced" || v.verdict === "footnoted"));
     const primed: PrimeSummary | null =
       plan === null
         ? null
@@ -848,17 +888,18 @@ export class Recall {
       semanticSource,
       semanticFromTurn,
       candidates: act.candidates.length,
-      verdicts: gated.verdicts,
+      verdicts,
       surfaced: rendered.surfaced,
       footnotes: rendered.footnotes,
       affectFlag: rendered.affectFlag,
       affectReason: gated.affectReason,
       moodMatched: moodLifted.length,
       moodMatchedIds: moodLifted.slice(0, MOOD_MATCHED_IDS_CAP),
-      echoSkipped: gated.verdicts.filter((v) => v.verdict === "echo-skipped").length,
-      projectSkipped: gated.verdicts.filter((v) => v.verdict === "project-skipped").length,
-      crossProjectLifted: gated.crossLifted.length,
-      ...this.stops(turn.sessionId, () => stopCounts(gated.verdicts, gated.crossLifted, rendered.trimmed, this.tunables)),
+      echoSkipped: verdicts.filter((v) => v.verdict === "echo-skipped").length,
+      projectSkipped: verdicts.filter((v) => v.verdict === "project-skipped").length,
+      // What the lift alone kept back, less what see-also then showed.
+      crossProjectLifted: alongIds.size === 0 ? gated.crossLifted.length : gated.crossLifted.filter((id) => !alongIds.has(id)).length,
+      ...this.stops(turn.sessionId, () => stopCounts(verdicts, gated.crossLifted, rendered.trimmed, this.tunables)),
       ...(competing === null ? {} : { pairsCompeted: gated.competed.length }),
       primed,
       beliefs: beliefPicks === null ? null : { offered: beliefPicks.offered, shown: rendered.beliefs, bytes: rendered.beliefBytes },
@@ -871,7 +912,7 @@ export class Recall {
               ...act.spread,
               pointersShown: rendered.footnotes.filter((id) => linked.has(id)).length,
               liftedShown: [...rendered.surfaced, ...rendered.footnotes].filter((id) => lifted.has(id)).length,
-              pointersUnanchored: gated.verdicts.filter((v) => v.via === "link" && v.verdict === "dark-uncued").length,
+              pointersUnanchored: verdicts.filter((v) => v.via === "link" && v.verdict === "dark-uncued").length,
             },
       dropped: act.dropped,
       bytes: rendered.bytes,
@@ -935,7 +976,7 @@ export class Recall {
         turn: d.turn,
         tier: "footnoted",
         trains: trainsOf(d.verdicts, id),
-        ...(via === "link" ? { via } : {}),
+        ...(via === "link" || via === "see-also" ? { via } : {}),
       };
     }
     // THE BELIEFS THE SLOT SHOWED (lane E): their own records, so the slot

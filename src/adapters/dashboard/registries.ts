@@ -91,6 +91,7 @@ import {
   SELF_PAGE_REVISED_EVENT,
   SELF_PAGE_WRITER_EVENT,
   WORK_OVERFLOW_EVENT,
+  PROJECT_LINE_EVENT,
 } from "../../core/self/index.js";
 // The per-directory handoff's four, from `handoff/` itself (2026-09-20, E1):
 // working context for a place is not a memory, so its rows are its own.
@@ -222,6 +223,7 @@ export type DurableEventName =
   | typeof ENVELOPE_GAVE_WAY_EVENT
   | typeof INJECTION_OVERBUDGET_EVENT
   | typeof WORK_OVERFLOW_EVENT
+  | typeof PROJECT_LINE_EVENT
   | typeof CHECKOUT_EVENT
   | typeof SNAPSHOT_TAKEN_EVENT
   | typeof SNAPSHOT_FAILED_EVENT
@@ -339,6 +341,7 @@ export const DURABLE_EVENTS = {
   "handoff.lasthere.noroom": "a session start had no room for the \"Last here\" line naming the chapter last written in that project, or the later session that wrote none (the bundle's bytes, the ceiling, and whether a handoff was carried in its place)",
   // Durable since 2026-10-02: "Work here" had more lines than the wake carried.
   "self.work.overflow": "a session start had more \"Work here\" lines for its project than it carried — more than the wake shows, so they rotate, or fewer fitted the room (how many, how many shown)",
+  "self.project.line": "a session start in a project's folder had the wake's project line to give: whether it showed, and if not why (no belief above the floor, no room), its bytes and the beliefs it showed",
   "recall.credit": "a boundary decided which memories the replies actually used, and credited them",
   // Ratings (2026-10-14; Mike's call). Since 2026-10-19 an experiment counts them as use.
   "recall.rated": "a session scored the memories it was shown, 0 to 3 (by lane, whether each was also drawn on, and how many of the footnotes since its last rating it scored) — and, an experiment since 2026-10-19, what the scores credited and linked",

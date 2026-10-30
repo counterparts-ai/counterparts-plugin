@@ -763,6 +763,22 @@ export const NARRATORS = {
     return calm(`This project has more work than one wake shows: ${num(shown, 0)} of ${num(found, 0)} "Work here" lines shown, and the rest take turns.`);
   },
 
+  "self.project.line": (t) => {
+    const lines = n(t, "lines") ?? 0;
+    const why = s(t, "reason") ?? "shown";
+    if (why === "shown") return calm(`This wake carried the project line: ${num(lines, 0)} ${lines === 1 ? "belief" : "beliefs"} about this folder's project.`);
+    const held = n(t, "held") ?? 0;
+    if (why === "below-floor") {
+      if (held === 0) return calm("This folder's project holds no beliefs yet, so the wake had no project line to give.");
+      return calm(`This folder's project holds ${num(held, 0)} ${held === 1 ? "belief" : "beliefs"}, none strong enough yet for the wake's project line.`);
+    }
+    // No room: at the reported ceiling, or inside the line's own byte budget
+    // (`WAKE_PROJECT_LINE_BYTES`); a wake with no reported ceiling records 0.
+    const budget = n(t, "budget") ?? 0;
+    if (why === "no-room") return calm(`There was no room in this wake for the project line, so it was left off${budget > 0 ? ` (the wake was ${num(n(t, "was") ?? 0, 0)} bytes, its ceiling ${num(budget, 0)})` : ""}.`);
+    return calm("The wake's project line had nowhere to go in this wake, so it was left off.");
+  },
+
   // ── what a delivery could not carry (durable since 2026-10-02) ─────────────
   "adapter.envelope.overcap": (t) =>
     amber(`A hook's output came to ${num(n(t, "chars") ?? 0, 0)} characters, past the host's cap of ${num(n(t, "limitChars") ?? 0, 0)}, so the host showed only a preview of it.`),
@@ -1249,6 +1265,9 @@ export const REF_KIND = {
   "adapter.injection.overbudget": "none",
   // A directory's work lines are counted; the row names no memory.
   "self.work.overflow": "none",
+  // The project line's ref is the project card, not a memory; the belief ids
+  // it showed are in its payload.
+  "self.project.line": "none",
   // Both prospective rows point at the MEMORY whose window it is: the window
   // key is a derived address on that row, not an entity of its own.
   "prospective.fire": "memory",

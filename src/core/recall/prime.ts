@@ -1,7 +1,8 @@
 /**
  * CONTEXT PRIMING — an experiment, 2026-10-19 (check ~10-22, two lived days
  * after install; revert by setting `PRIME_LINK_UNITS` and `PRIME_TRAIN_SHARE`
- * to 0, or by reverting the PR). Brief:
+ * to 0, or by reverting the PR; the train's share is 0 since the 10-29 read,
+ * so only links and tags prime now). Brief:
  * `~/counterparts-notes/2026-10-19-context-priming-brief.md`.
  *
  * Walk into the kitchen and kitchen things come to mind more easily. Until
@@ -484,6 +485,11 @@ export function planPrime(input: {
     }
   }
 
+  // THE TRAIN'S SHARE AT 0 (the 10-29 read) IS OFF, NOT JUST WEIGHTLESS: no
+  // train is handed to scoring, so no candidate's vector is read for it and
+  // the turn's row says `train: false`. The train itself is still kept (the
+  // `next` below), so turning the share back on starts warm.
+  if (!(t.PRIME_TRAIN_SHARE > 0)) scoring = null;
   return {
     activation: { link, train: scoring, trainWeight: scoring === null ? 0 : Math.min(1, scoringMass), exclude: input.echo ?? new Set<string>() },
     sources,

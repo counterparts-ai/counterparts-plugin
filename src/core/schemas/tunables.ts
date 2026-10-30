@@ -114,10 +114,15 @@ export const TUNABLES = {
    * THE NIGHT'S TAGGING ASK (`dream/tags.ts`), per night: untagged memories
    * shown (recent and strong first), look-alike tag pairs asked "same?", and
    * cards with no subject kind asked which kind. CAL: starting points.
+   * KINDS 10 → 30 (the 10-29 read, `docs/decisions.d/chore-read-1029-knobs.md`):
+   * 144 of 207 live cards were kindless, ~10 born kindless a day against ~7
+   * set a night, so the backlog only grew. At 30 the ask's card lines are
+   * ~10.3 KB (from ~3.4 KB; the whole read ~23.7 KB on that store), inside
+   * the tool result's ceiling (`fit/TOOL_RESULT_CEILING`) even at its widest.
    */
   TAGS_BACKFILL_PER_NIGHT: 40,
   TAGS_MERGE_ASKS_PER_NIGHT: 10,
-  TAGS_KINDS_PER_NIGHT: 10,
+  TAGS_KINDS_PER_NIGHT: 30,
 
   /** Box-2 meta key prefix for a card's calendar anchor (`{ day, date }`): a
    *  lived day and the calendar date the fade sweep saw it on. NOTES §14. */

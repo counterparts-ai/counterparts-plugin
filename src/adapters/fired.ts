@@ -954,7 +954,7 @@ export const MECHANISMS: readonly Mechanism[] = [
     // A "Last here" line dropped for room (durable since 2026-10-01) rides with
     // the delivery it was turned away from, as `no-room` rides with writing;
     // so does a "Work here" overflow (2026-10-02).
-    covers: ["handoff.lasthere.noroom", "self.work.overflow"],
+    covers: ["handoff.lasthere.noroom", "self.work.overflow", "self.project.line"],
     since: "2026-09-20",
   },
   {

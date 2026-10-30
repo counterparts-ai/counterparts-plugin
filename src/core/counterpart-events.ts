@@ -961,7 +961,8 @@ function tierRows(
   id: string;
   sal: number | null;
   activation: number | null;
-  via?: "link";
+  via?: "link" | "see-also";
+  seeAlso?: { readonly by: string };
   habituated?: true;
   competed?: { readonly with: string; readonly factor: number };
   primed?: { link: number; train: number; from: readonly string[]; lifted?: true; tag?: number; by?: "link" | "tag" | "train"; top?: string };
@@ -977,6 +978,9 @@ function tierRows(
       sal: v?.sal ?? null,
       activation: v?.activation ?? null,
       ...(v?.via === undefined ? {} : { via: v.via }),
+      // And a memory brought along because a shown one names its id
+      // (see-also, 2026-10-29): which one named it, so a rating joins to it.
+      ...(v?.seeAlso === undefined ? {} : { seeAlso: v.seeAlso }),
       ...(v?.habituated === true ? { habituated: true as const } : {}),
       // And the older of an unsettled pair shown although it competed (E3,
       // 2026-10-24): which newer, and the weight its activation counted at.

@@ -188,7 +188,9 @@ export interface ToolSpec {
  * them for safety — but they are kept true to the code:
  *
  * - `readOnlyHint` is true only for a tool that never changes the store, a file
- *   or a setting. Diagnostic events (the ring, the adapter-event telemetry
+ *   or a setting. A chat host's copy of a tool takes `session`, and a call that
+ *   names it touches that session's record, so no chat copy is read-only
+ *   (`chatAnnotations`). Diagnostic events (the ring, the adapter-event telemetry
  *   rows every tool may leave) do not count as a change; anything a later
  *   strengthening, fading or wake reads does — so `recall` is NOT read-only:
  *   what it delivers is recorded for this session (`Counterpart#noteAsked`, a
@@ -956,8 +958,11 @@ const STATUS: ToolSpec = {
   ],
   privileges: [
     {
-      claim: "It writes nothing and trains nothing.",
-      mechanizedBy: "src/adapters/mcp/server.ts#census (Store reads only)",
+      // Not "writes nothing" (review of #679): on a chat host a call naming its
+      // session refreshes that session's record, which is why the chat copy is
+      // not read-only (`chatAnnotations`). The claim is every host's, so it says that.
+      claim: "It writes no memory and trains nothing; on a chat host, a call naming its session refreshes that session's record.",
+      mechanizedBy: "src/adapters/mcp/server.ts#census (Store reads only) + src/adapters/mcp/server.ts#afterDesktopCall -> src/adapters/sessions.ts#touchDesktopSession",
     },
     {
       claim:
@@ -2096,11 +2101,24 @@ const DESKTOP_SESSION_PROPERTY = {
     "This chat's session id from the wake tool — or, in a Claude Code session (Desktop's Code tab), the id your wake or Stop ask names. Pass it on every call, so the call is filed under your own session and not the most recent Desktop chat's.",
 };
 
+/**
+ * A CHAT'S COPY OF A READ-ONLY TOOL IS NOT READ-ONLY (H1, 2026-10-29). A call
+ * that names its chat session refreshes that session's record and moves its
+ * write-up pacer (`mcp/server.ts#afterDesktopCall` -> `sessions.ts#touchDesktopSession`),
+ * a file a later call reads (whether it carries the write-up ask). So the copy
+ * that gains `session` loses `readOnlyHint` (and `idempotentHint`: each named
+ * call counts). Only `status` is read-only to begin with; Claude Code's `status`,
+ * which takes no session, keeps it.
+ */
+function chatAnnotations(a: ToolAnnotations): ToolAnnotations {
+  return a.readOnlyHint ? { ...a, readOnlyHint: false, idempotentHint: false } : a;
+}
+
 function withDesktopSession(spec: ToolSpec): ToolSpec {
   const schema = spec.inputSchema as { properties?: Record<string, unknown> };
   const properties = schema.properties ?? {};
   if ("session" in properties) return spec;
-  return { ...spec, inputSchema: { ...spec.inputSchema, properties: { ...properties, session: DESKTOP_SESSION_PROPERTY } } };
+  return { ...spec, annotations: chatAnnotations(spec.annotations), inputSchema: { ...spec.inputSchema, properties: { ...properties, session: DESKTOP_SESSION_PROPERTY } } };
 }
 
 /**
@@ -2221,7 +2239,7 @@ function withClaudeAiSession(spec: ToolSpec): ToolSpec {
   const schema = spec.inputSchema as { properties?: Record<string, unknown> };
   const properties = schema.properties ?? {};
   if ("session" in properties) return spec;
-  return { ...spec, inputSchema: { ...spec.inputSchema, properties: { ...properties, session: CLAUDE_AI_SESSION_PROPERTY } } };
+  return { ...spec, annotations: chatAnnotations(spec.annotations), inputSchema: { ...spec.inputSchema, properties: { ...properties, session: CLAUDE_AI_SESSION_PROPERTY } } };
 }
 
 /**
