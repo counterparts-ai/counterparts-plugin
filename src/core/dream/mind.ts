@@ -117,6 +117,8 @@ interface MindInput {
   readonly day: number;
   /** Recall's gates for this session: could this row surface here? */
   readonly showable: (row: MemoryRow) => boolean;
+  /** What a night may not read (`dream/slices.ts`): a handoff has no `showable`, so it asks here. */
+  readonly closed?: ReadonlySet<string>;
   /** The dream's bundle: the slot proposals to confirm, beside the ranked items (2026-10-11). */
   readonly slots?: boolean;
 }
@@ -203,7 +205,7 @@ export function mindRanked(store: Store, input: MindInput): { items: MindItem[];
   // OPEN LOOPS: where the work stands, one per directory.
   try {
     for (const h of newestPerScope(liveHandoffRows(store)).values()) {
-      if (h.writtenDay === null) continue;
+      if (h.writtenDay === null || input.closed?.has(h.id) === true) continue;
       const left = daysLeft(h.writtenDay, input.day, HANDOFF_LIFE_DAYS);
       if (left <= 0) continue;
       const row = store.row(h.id);

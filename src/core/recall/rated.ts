@@ -126,6 +126,8 @@ export interface RatedUseSummary {
   readonly credited: { readonly shown: number; readonly ontopic: number; readonly useful: number; readonly referenced: number };
   /** Uses not credited, by reason (once-a-day, birth day, archived, …). */
   readonly notCredited: Readonly<Record<string, number>>;
+  /** Uses credited whose RETURN was refused, by physics' reason (F1, 2026-10-30): the use counted, the return did not. */
+  readonly returnRefused: Readonly<Record<string, number>>;
   /** The stretch's co-used set, and the pairs it sent to be linked at `CO_USE_DEPOSIT`. */
   readonly coUse: {
     readonly members: number;
@@ -144,6 +146,7 @@ export interface RatedUseSummary {
 export const NO_RATED_USE: RatedUseSummary = {
   credited: { shown: 0, ontopic: 0, useful: 0, referenced: 0 },
   notCredited: {},
+  returnRefused: {},
   coUse: { members: 0, capped: 0, pairs: 0, ids: [] },
   together: 0,
   habituated: null,

@@ -40,7 +40,7 @@ export type { Hero, OverviewView, Tile } from "./views/overview.js";
 export { archiveWords } from "./views/archive-words.js";
 export { LIST_MAX, memoriesView, memoryListView } from "./views/memories.js";
 export type { KindRow, ListRow, ListState, MemoriesView, MemoryListView } from "./views/memories.js";
-export { coreRoad, memoryDetail } from "./views/memory.js";
+export { coreRoad, memoryDetail, memoryWords } from "./views/memory.js";
 export type { CoreRoad, MemoryDetail } from "./views/memory.js";
 export { searchView } from "./views/search.js";
 export type { SearchView } from "./views/search.js";

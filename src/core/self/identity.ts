@@ -629,6 +629,9 @@ export function rankLanes(
     /** "Coming up"'s later dates (`Lanes.later`, 2026-10-16): counted under
      *  that lane, so in no other — as a listed arriving item is in none. */
     readonly later?: readonly string[];
+    /** This store has no self page yet: the hints lane is what its wake has
+     *  (`HINTS_IN_WAKE`, WK1). */
+    readonly noPage?: boolean;
     /** Open ids that would show as "Unsettled — may be out of date"
      *  (`recall/standing.ts#unsettledAmong`, 2026-10-18): ranked after the
      *  rest of "Still open", the core memories being reconsidered included. */
@@ -716,6 +719,8 @@ export function rankLanes(
       if (t.CRAFT_IN_WAKE) craft.push(rankedAs(s, "craft"));
       continue;
     }
+    // Out of the wake once a page holds it (`HINTS_IN_WAKE`, WK1 2026-10-30): in no lane.
+    if (!t.HINTS_IN_WAKE && opts.noPage !== true) continue;
     // What the page already says is not "nearby" (2026-10-01, `covered.ts`).
     if (opts.coveredByPage?.has(s.id) === true) continue;
     hints.push(rankedAs(s, "hints", hintReading(s.physics, s.display, s.day ?? s.doc.bornDay, t)));

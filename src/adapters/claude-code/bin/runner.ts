@@ -64,6 +64,9 @@
  * run says so where tomorrow can read it, and the others still run.
  *
  * It exits 0 on every path. Nothing about a failed run may reach the host.
+ *
+ * **IT SAYS WHERE ITS TIME WENT** (2026-10-30, `stepClock`): one `runner.steps`
+ * row in the process log, last before the end.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -158,6 +161,9 @@ export interface RunReport {
   /** The word index's re-stem (v7 cache, 2026-10-19, an experiment), when this
    *  run did any: absent on an index that was already stemmed. */
   readonly terms?: { readonly ready: boolean; readonly examined: number; readonly changed: number; readonly ms: number };
+  /** The covering index on the word index (LT1, 2026-10-30), when this run built
+   *  it: absent on every run but the one. */
+  readonly postings?: { readonly ms: number };
   /** The sidebar's status file (`adapters/sidebar-status.ts`), written after the
    *  store closed; absent when the run was not asked to (no configuration path). */
   readonly sidebar?: SidebarWrite;
@@ -314,6 +320,45 @@ export function retentionJob(input: {
   }
 }
 
+/** A step's CPU goes on the row only when the step took this long: the row stays short. */
+const STEP_CPU_FROM_MS = 5;
+
+/**
+ * THE WORKER'S OWN CLOCK (2026-10-30). Wall ms per step, CPU ms for the steps
+ * long enough to ask about, and the process's whole CPU and its largest resident
+ * size seen at a lap: one `runner.steps` row per run in the process log, so the
+ * next read of "what does a worker spend its time on" needs nobody to measure it.
+ * Wall alone can't tell work from waiting: a step whose wall is far above its
+ * CPU was queued behind something else.
+ */
+export function stepClock(): {
+  lap: (step: string) => void;
+  row: () => Record<string, number>;
+} {
+  const out: Record<string, number> = {};
+  let wallAt = performance.now();
+  let cpuAt = process.cpuUsage();
+  let peak = 0;
+  return {
+    lap(step: string): void {
+      const wall = performance.now();
+      const cpu = process.cpuUsage();
+      const ms = Math.round(wall - wallAt);
+      out[step] = ms;
+      if (ms >= STEP_CPU_FROM_MS) {
+        out[`cpu.${step}`] = Math.round((cpu.user - cpuAt.user + cpu.system - cpuAt.system) / 1000);
+      }
+      peak = Math.max(peak, process.memoryUsage().rss);
+      wallAt = wall;
+      cpuAt = cpu;
+    },
+    row(): Record<string, number> {
+      const cpu = process.cpuUsage();
+      return { ...out, cpu: Math.round((cpu.user + cpu.system) / 1000), rssMb: Math.round(peak / 1_048_576) };
+    },
+  };
+}
+
 /**
  * One run. Exported and injectable so the whole worker is testable without a
  * process, a socket, or a real data directory.
@@ -346,10 +391,13 @@ export async function runOnce(input: {
     /** Claude Code keeps this plugin updated itself: no request. */
     readonly autoUpdate?: boolean;
   };
+  /** How long this process took to reach `main()`, for the `runner.steps` row. */
+  bootMs?: number;
   onEvent?: (name: string, data: Record<string, string | number | boolean | null>) => void;
 }): Promise<RunReport> {
   const { config } = input;
   const emit = input.onEvent ?? ((): void => {});
+  const steps = stepClock();
   if (config.dataDir === undefined || config.dataDir.trim().length === 0) {
     emit("runner.refused", { reason: "no-data-dir" });
     return { ran: false, reason: "no-data-dir", swept: 0, minted: 0, code: null, lag: null, backfill: null, snapshot: null, retention: null };
@@ -365,6 +413,7 @@ export async function runOnce(input: {
   // so an embedder wired only into `openAdapter` would be one the memories
   // never meet.
   const embedder = input.embedder !== undefined ? input.embedder : openEmbedder(config, { onEvent: emit });
+  steps.lap("embedder");
 
   const counterpart = Counterpart.open({
     dir: config.dataDir,
@@ -388,6 +437,7 @@ export async function runOnce(input: {
   // (it needs no store, and holds none open across its network wait).
   // Fail closed: a store that will not say whether the person said stop is read as stop.
   const updatesAsked = input.updateCheck === undefined ? false : askedOff(counterpart.store, { failClosed: true });
+  steps.lap("open");
 
   let lag: LagReport | null = null;
   let backfill: BackfillReport | null = null;
@@ -411,6 +461,7 @@ export async function runOnce(input: {
         onEvent: emit,
       });
     }
+    steps.lap("lag");
     // 0b. One bounded batch, before the variable-length sweep, so a long sweep
     // (or the watchdog that ends one) cannot starve the store's blind memories.
     backfill = await backfillVectors({ counterpart, embedder, onEvent: emit });
@@ -423,6 +474,7 @@ export async function runOnce(input: {
     // stdio is ignored on this path by construction.
     noteFailure(counterpart, emit, code, "vectors", today);
   }
+  steps.lap("backfill");
 
   // 0c. THE WORD INDEX RE-STEM (v7 cache, 2026-10-19, an experiment; check
   // ~10-22). A cache migrated from v6 holds surface words until this step
@@ -439,6 +491,22 @@ export async function runOnce(input: {
   } catch (err) {
     noteFailure(counterpart, emit, err instanceof Error ? err.name : "UNKNOWN", "terms", today);
   }
+  steps.lap("terms");
+
+  // 0d. THE COVERING INDEX ON THE WORD INDEX (LT1, 2026-10-30). Once, in one
+  // transaction, never at open: a hook cannot pay for it. A lock it loses is the
+  // next run's to try.
+  let postings: RunReport["postings"];
+  try {
+    const r = counterpart.store.coverPostingsIndex();
+    if (r.built) {
+      postings = { ms: r.ms };
+      emit("runner.postings", { ms: r.ms });
+    }
+  } catch (err) {
+    noteFailure(counterpart, emit, err instanceof Error ? err.name : "UNKNOWN", "postings", today);
+  }
+  steps.lap("postings");
 
   // Step 4's answer, filled in the `finally` below and joined to whichever of
   // the two results the boundary produced. A `let` rather than a fourth return
@@ -457,6 +525,7 @@ export async function runOnce(input: {
       // Whose boundary this is, for the `associate.flush` rows (2026-10-11).
       ...(input.session === undefined ? {} : { session: input.session }),
     });
+    steps.lap("cycle");
     const swept = report.sweeps.reduce((n, s) => n + s.spansSwept, 0);
     const minted = report.sweeps.reduce((n, s) => n + s.proposals, 0);
     emit("runner.done", {
@@ -485,6 +554,7 @@ export async function runOnce(input: {
     } catch {
       /* the held page stays on its refusal row for the next boundary */
     }
+    steps.lap("held");
     // NOT WHEN THE CYCLE STOOD ASIDE (`sleep/lease.ts`, review of #581): the
     // cycle holding the store renders the wake, and this worker's refresh
     // would render it a second time beside it.
@@ -498,6 +568,7 @@ export async function runOnce(input: {
     } else {
       emit("runner.wake", { reason: "held-elsewhere", triggers: "", bytes: 0 });
     }
+    steps.lap("wake");
     result = {
       ran: true,
       reason: "ran",
@@ -509,6 +580,7 @@ export async function runOnce(input: {
       snapshot: null,
       retention: null,
       ...(terms === undefined ? {} : { terms }),
+      ...(postings === undefined ? {} : { postings }),
     };
   } catch (err) {
     const code =
@@ -521,6 +593,9 @@ export async function runOnce(input: {
     // tomorrow, and this process's stderr goes nowhere (I32).
     noteFailure(counterpart, emit, code, "sessionEnd", today);
     result = { ran: false, reason: "failed", swept: 0, minted: 0, code, lag, backfill, snapshot: null, retention: null };
+    // The boundary that threw is the step that took this time, or the first lap
+    // in the `finally` would carry it under `coverage`.
+    steps.lap("cycle");
   } finally {
     // 3b. WHAT IS NOT WRITTEN UP (2026-09-30, `core/coverage/`): one row per
     // stretch per state — owed, written up, lapsed — at every turn-end, keyless.
@@ -537,6 +612,7 @@ export async function runOnce(input: {
     } catch (err) {
       emit("coverage.threw", { code: err instanceof Error ? err.name : "UNKNOWN" });
     }
+    steps.lap("coverage");
     // 3c. RETENTION — on the failed path as well as the good one (a day whose
     // sweep broke still ages the text of sessions that owe nothing), with the
     // configuration's clocks. Its own try: a retention pass may not cost the
@@ -549,6 +625,7 @@ export async function runOnce(input: {
     } catch (err) {
       emit("retention.threw", { code: err instanceof Error ? err.name : "UNKNOWN" });
     }
+    steps.lap("retention");
     // 3d. TYPED WORDS LEAVE QUIET SESSIONS (2026-10-13): recall's carried cue
     // tokens are emptied in every session idle past the same ceiling, so a
     // session that ended or was killed does not keep them, and the copy below
@@ -560,6 +637,7 @@ export async function runOnce(input: {
     } catch (err) {
       emit("carries.threw", { code: err instanceof Error ? err.name : "UNKNOWN" });
     }
+    steps.lap("carries");
     // 4. THE DAY'S COPY OF THE STORE — after everything above has written, on
     // the failed path as well as the good one, and before the store is closed.
     // It never throws by construction (`adapters/snapshots.ts`); the try is
@@ -583,7 +661,9 @@ export async function runOnce(input: {
     } catch (err) {
       emit("snapshot.threw", { code: err instanceof Error ? err.name : "UNKNOWN" });
     }
+    steps.lap("snapshot");
     counterpart.close();
+    steps.lap("close");
   }
   // 5. THE SIDEBAR'S STATUS FILE (2026-10-14), last: what the Claude Code
   // sidebar shows, from what every step above left, through a handle of its
@@ -598,6 +678,7 @@ export async function runOnce(input: {
     });
     emit("runner.sidebar", { written: sidebar.written, reason: sidebar.reason, bytes: sidebar.bytes, ms: sidebar.ms });
   }
+  steps.lap("sidebar");
   // 6. THE DAILY UPDATE CHECK (U1b, 2026-10-28), after the store closed and
   // beside the sidebar's file: at most one GET of npm's `/latest` a day,
   // carrying nothing about the person (`adapters/update-check.ts`). It never
@@ -616,6 +697,8 @@ export async function runOnce(input: {
     });
     emit("runner.updates", { reason: updates.reason, switch: updates.switch, code: updates.code ?? null, latest: updates.latest ?? null });
   }
+  steps.lap("updates");
+  emit("runner.steps", { ...(input.bootMs === undefined ? {} : { boot: input.bootMs }), ...steps.row() });
   return {
     ...result,
     snapshot: snapshotReport,
@@ -726,6 +809,7 @@ export function runnerConfig(
 }
 
 async function main(): Promise<void> {
+  const bootMs = Math.round(process.uptime() * 1000);
   const choice = runnerConfigChoice();
   // The second refusal is the explicit-dir guard (`config-path.ts#implicitConfigRefusal`):
   // armed, an UNNAMED configuration stands the worker down too, because the
@@ -777,6 +861,7 @@ async function main(): Promise<void> {
   try {
     const report = await runOnce({
       config,
+      bootMs,
       signal: controller.signal,
       ...(pinnedSession() === null ? {} : { session: pinnedSession() as string }),
       ...(pinnedScope() === null ? {} : { scope: pinnedScope() as string }),

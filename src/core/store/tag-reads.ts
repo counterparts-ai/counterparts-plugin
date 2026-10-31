@@ -145,7 +145,7 @@ export interface UnkindedCard {
 }
 
 /** Live named cards whose `subject_kind` is unset, most-linked first, each with up to `titles` titles (or openings) of its newest memories. */
-export function unkindedCards(store: Store, limit: number, titles = 4): { cards: UnkindedCard[]; total: number } {
+export function unkindedCards(store: Store, limit: number, titles = 4, closed?: ReadonlySet<string>): { cards: UnkindedCard[]; total: number } {
   if (!store.hasColumn("memories", "subject_kind") || !has(store, "memory_subjects")) return { cards: [], total: 0 };
   const rows = ops(store).all<{ id: string; kind: string; meta: string; links: number }>(
     `SELECT c.id AS id, c.kind AS kind, c.meta AS meta,
@@ -154,20 +154,29 @@ export function unkindedCards(store: Store, limit: number, titles = 4): { cards:
       WHERE c.type = 'schema' AND c.archived = 0 AND c.body != '' AND c.kind != 'self' AND c.subject_kind IS NULL
       ORDER BY links DESC, c.id`,
   );
+  // `closed` (a night's reader, `dream/slices.ts`): a card only closed rows name is that
+  // folder's word and isn't listed; under the rest, only what the night may read.
+  const shut = closed !== undefined && closed.size > 0;
   const named = rows.flatMap((r) => {
     const name = nameOf(r.meta);
-    return name === null ? [] : [{ id: r.id, kind: r.kind, name }];
+    if (name === null) return [];
+    if (shut && r.links > 0) {
+      const linked = ops(store).all<{ id: string }>("SELECT memory_id AS id FROM memory_subjects WHERE subject_id = ?", r.id);
+      if (linked.every((m) => closed.has(m.id))) return [];
+    }
+    return [{ id: r.id, kind: r.kind, name }];
   });
   const cards = named.slice(0, Math.max(0, Math.floor(limit))).map((c) => ({
     ...c,
     titles: ops(store)
-      .all<{ title: string | null; body: string }>(
-        `SELECT m.title AS title, m.body AS body FROM memory_subjects s JOIN memories m ON m.id = s.memory_id
+      .all<{ id: string; title: string | null; body: string }>(
+        `SELECT m.id AS id, m.title AS title, m.body AS body FROM memory_subjects s JOIN memories m ON m.id = s.memory_id
           WHERE s.subject_id = ? AND m.archived = 0 AND m.body != ''
-          ORDER BY m.birth_day DESC, m.id LIMIT ?`,
-        c.id,
-        titles,
+          ORDER BY m.birth_day DESC, m.id${shut ? "" : " LIMIT ?"}`,
+        ...(shut ? [c.id] : [c.id, titles]),
       )
+      .filter((m) => !shut || !closed.has(m.id))
+      .slice(0, titles)
       .map((m) => (m.title ?? m.body).replace(/\s+/g, " ").slice(0, 120)),
   }));
   return { cards, total: named.length };

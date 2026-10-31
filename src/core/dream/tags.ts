@@ -21,7 +21,7 @@
  * Here and not in the reflection's finish: the asks are small work for a
  * small model, and a child of their own keeps the reflection's file to lane C.
  */
-import { lookAlikePairs, notSameKey, resolveTag, mergeMap, SUBJECT_KIND_BY_PREFIX, TUNABLES as SCHEMAS } from "../schemas/index.js";
+import { lookAlikePairs, notSameKey, resolveTag, mergeMap, SUBJECT_KIND_BY_PREFIX, tallyTags, TUNABLES as SCHEMAS } from "../schemas/index.js";
 import type { LookAlike } from "../schemas/index.js";
 import { normalizeTag, SUBJECT_KINDS } from "../store/index.js";
 import type { Store, SubjectKind } from "../store/index.js";
@@ -65,10 +65,15 @@ export interface TagsBundle {
 }
 
 /** What the night is asked tonight. Reads only. */
-export function tagsBundle(store: Store): TagsBundle {
+export function tagsBundle(store: Store, closed?: ReadonlySet<string>): TagsBundle {
   if (!SCHEMAS.TAGS_NIGHT) return { on: false, memories: [], untagged: 0, vocabulary: [], pairs: [], cards: [], unkinded: 0 };
-  const untagged = store.untaggedMemories(SCHEMAS.TAGS_BACKFILL_PER_NIGHT);
-  const cards = store.unkindedCards(SCHEMAS.TAGS_KINDS_PER_NIGHT);
+  // What the night may not read (`dream/slices.ts`) is asked past, so it never holds a night's places.
+  const asked = store.untaggedMemories(SCHEMAS.TAGS_BACKFILL_PER_NIGHT + (closed?.size ?? 0));
+  const untagged = { total: asked.total, memories: asked.memories.filter((m) => closed?.has(m.id) !== true).slice(0, SCHEMAS.TAGS_BACKFILL_PER_NIGHT) };
+  const cards = store.unkindedCards(SCHEMAS.TAGS_KINDS_PER_NIGHT, undefined, closed);
+  // A tag only closed rows carry is that folder's word: in neither list.
+  const shut = closed !== undefined && closed.size > 0;
+  const openWords = shut ? new Set(tallyTags(store).flatMap((t) => (t.memories.some((id) => !closed.has(id)) ? t.words : []))) : null;
   return {
     on: true,
     memories: untagged.memories.map((m) => {
@@ -76,8 +81,8 @@ export function tagsBundle(store: Store): TagsBundle {
       return { id: m.id, title: m.title, excerpt: body.length > TAGS_EXCERPT_CHARS ? `${body.slice(0, TAGS_EXCERPT_CHARS)}…` : body, chars: body.length };
     }),
     untagged: untagged.total,
-    vocabulary: store.tagCounts({ limit: TAGS_VOCABULARY }).map((t) => t.tag),
-    pairs: lookAlikePairs(store, SCHEMAS.TAGS_MERGE_ASKS_PER_NIGHT),
+    vocabulary: (openWords === null ? store.tagCounts({ limit: TAGS_VOCABULARY }) : store.tagCounts().filter((t) => openWords.has(t.tag)).slice(0, TAGS_VOCABULARY)).map((t) => t.tag),
+    pairs: lookAlikePairs(store, SCHEMAS.TAGS_MERGE_ASKS_PER_NIGHT, closed),
     cards: cards.cards,
     unkinded: cards.total,
   };
@@ -97,8 +102,8 @@ interface AskRecord {
  * in the same run replaces the record, and a new run's read removes the last
  * run's: one record is kept, the latest.
  */
-export function askTags(store: Store, run: string): TagsBundle {
-  const b = tagsBundle(store);
+export function askTags(store: Store, run: string, closed?: ReadonlySet<string>): TagsBundle {
+  const b = tagsBundle(store, closed);
   if (b.on) {
     // ONE ASK KEPT (re-review of #576): an answer belongs to the run that just
     // asked, so an earlier run's record goes when a new one is written — the

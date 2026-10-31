@@ -546,7 +546,12 @@ export function hintsForReader(text: string, listed: readonly string[] | null, k
       const heading = heads.find((x) => head.startsWith(`${x} `)) ?? FRAMING.hints;
       const m = collapsedRe(heading).exec(head);
       const got = m === null ? null : less(Number(m[1]), (m[3] ?? "").split(", "));
-      if (m === null) {
+      // A count with no ids (WK1, 2026-10-30) names nothing a reader may not
+      // see: it stands, and there is nothing in it to take out.
+      const counted = m === null && new RegExp(`^${escapeRe(heading)} \\d+ — `).test(head) && !head.includes("recall ids");
+      if (counted) {
+        /* as it is */
+      } else if (m === null) {
         blind = true;
         drop.add(h - 1).add(h);
       } else if (got !== null) {
@@ -570,7 +575,13 @@ export function hintsForReader(text: string, listed: readonly string[] | null, k
       // The lane's "N more" line, under its items.
       const moreRe = new RegExp(`^\\((\\d+) more ${nounRe}; ${RECALL_IDS_RE}: (.+)\\)$`);
       let more: { n: number; named: string[]; noun: string } | null = null;
+      const countedRe = new RegExp(`^\\(\\d+ more ${nounRe}\\)$`);
       for (const i of counts) {
+        // A count with no ids (WK1): it stands while the lane lists something.
+        if (countedRe.test(lines[i] ?? "")) {
+          if (kept === 0 && bullets.length > 0) drop.add(i);
+          continue;
+        }
         const m = moreRe.exec(lines[i] ?? "");
         if (m === null) {
           blind = true;

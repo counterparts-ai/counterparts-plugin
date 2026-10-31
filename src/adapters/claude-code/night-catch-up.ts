@@ -41,6 +41,16 @@
  * parts — is one durable row (`NIGHT_WRITE_UP_EVENT`), and a line in the
  * process log.
  *
+ * **Only from a folder that is on now** (2026-10-30). Until then this read no
+ * folder setting at all, so a night wrote memories from sessions in a folder
+ * turned off since they were captured. Every batch reads the setting afresh
+ * (`scopes.ts#foldersOn`, beside the configuration) and a session whose folder
+ * is off, observer or paused is no part of what is owed here: not planned, not
+ * counted in `left`, starts no night. Nothing about it is written, so its text
+ * goes with ordinary retention (`remember/owes.ts`, at most 14 days from its
+ * last activity) and a paused folder resumed before then is owed again. A
+ * folder turned off while a batch runs is left out from the next batch.
+ *
  * Proved against an injected starter and a stub executable only, like the
  * night itself.
  */
@@ -52,6 +62,7 @@ import type { Counterpart, CounterpartEvent, Seat } from "../../core/counterpart
 import { calendarDate } from "../../core/self/index.js";
 import { TUNABLES } from "../config.js";
 import type { AdapterConfig } from "../config.js";
+import { foldersOn, scopesPath } from "../scopes.js";
 import {
   NIGHT_RUNNER_PREFIX,
   WRITE_UP_CLAIM_MS,
@@ -70,7 +81,7 @@ import {
   writeUpPlan,
   writeUpStanding,
 } from "../sessions.js";
-import type { WriteUpProgress } from "../sessions.js";
+import type { FolderOn, WriteUpProgress } from "../sessions.js";
 import type { HeldSession } from "../../core/remember/index.js";
 
 /** The one tool the catch-up child may call, as the host names it. */
@@ -133,11 +144,12 @@ export function plannedParts(plan: Pick<CatchUpPlan, "subjects">): number {
 
 /**
  * WHAT THE CATCH-UP TAKES: every session owing a write-up a person's
- * conversation left (`pointable`, the pointer's own test). One definition, for
- * the batch's plan and for the hook's question below.
+ * conversation left (`pointable`, the pointer's own test), in a folder that is
+ * on (`folders`; absent, every folder). One definition, for the batch's plan,
+ * for what the run says is left, and for the hook's question below.
  */
-export function catchUpOwing(plan: readonly HeldSession[], dataDir: string): HeldSession[] {
-  return plan.filter((h) => h.owes && pointable(h, dataDir));
+export function catchUpOwing(plan: readonly HeldSession[], dataDir: string, folders?: FolderOn): HeldSession[] {
+  return plan.filter((h) => h.owes && pointable(h, dataDir, folders));
 }
 
 /**
@@ -151,10 +163,10 @@ export function catchUpOwing(plan: readonly HeldSession[], dataDir: string): Hel
  * size, review of #426 — hence `NOTHING_OWED_BEFORE_KEY`). Never throws: null
  * when it could not read.
  */
-export function owedBefore(c: Counterpart, date: string): number | null {
+export function owedBefore(c: Counterpart, date: string, folders?: FolderOn): number | null {
   try {
     const zone = c.store.zone();
-    return catchUpOwing(writeUpPlan({ store: c.store, spans: c.spans }), c.store.dir).filter((h) => calendarDate(h.clockFrom, zone) < date).length;
+    return catchUpOwing(writeUpPlan({ store: c.store, spans: c.spans }), c.store.dir, folders).filter((h) => calendarDate(h.clockFrom, zone) < date).length;
   } catch {
     return null;
   }
@@ -165,7 +177,9 @@ export function owedBefore(c: Counterpart, date: string): number | null {
  * calendar date on which `owedBefore` last read a real zero. Within one day
  * the earlier days' debt only shrinks — a session's last activity moves only
  * later, and write-ups only take sessions away — so the hook asks once a day,
- * not at every prompt. A meta row, no schema.
+ * not at every prompt. (A folder resumed later the same day is the exception:
+ * its debt waits for the next day's asking, or a night already due.) A meta
+ * row, no schema.
  */
 export const NOTHING_OWED_BEFORE_KEY = "night.nothing-owed-before";
 
@@ -180,7 +194,7 @@ export const NOTHING_OWED_BEFORE_KEY = "night.nothing-owed-before";
  */
 export function planCatchUp(
   c: Counterpart,
-  opts: { run: string; now: number; runner?: string; sessions?: number; bytes?: number; parts?: number; room?: number },
+  opts: { run: string; now: number; runner?: string; sessions?: number; bytes?: number; parts?: number; room?: number; folders?: FolderOn },
 ): CatchUpPlan {
   const runner = opts.runner ?? catchUpRunner(opts.run);
   const maxSessions = opts.sessions ?? Number.POSITIVE_INFINITY;
@@ -190,7 +204,7 @@ export function planCatchUp(
   const zone = c.store.zone();
   const plan = writeUpPlan({ store: c.store, spans: c.spans });
   const progress = readWriteUpProgress(c.store);
-  const owing = catchUpOwing(plan, dir).sort((a, b) => a.clockFrom - b.clockFrom || (a.session < b.session ? -1 : 1));
+  const owing = catchUpOwing(plan, dir, opts.folders).sort((a, b) => a.clockFrom - b.clockFrom || (a.session < b.session ? -1 : 1));
   const subjects: CatchUpSubject[] = [];
   let busy = 0;
   let bounded = 0;
@@ -288,13 +302,12 @@ export function planCatchUp(
  * conversation left, the parts not yet written in each directory it owes in.
  * What the row's `partsLeft` says. Reads every owed session's words once.
  */
-export function owedParts(c: Counterpart, now: number): number {
+export function owedParts(c: Counterpart, now: number, folders?: FolderOn): number {
   const dir = c.store.dir;
   const plan = writeUpPlan({ store: c.store, spans: c.spans });
   const progress = readWriteUpProgress(c.store);
   let n = 0;
-  for (const h of plan) {
-    if (!h.owes || !pointable(h, dir)) continue;
+  for (const h of catchUpOwing(plan, dir, folders)) {
     for (const scope of h.scopes) {
       const s = writeUpStanding(plan, dir, h.session, scope, now, { progress });
       if (s.status !== "owed") continue;
@@ -492,6 +505,7 @@ function measure(
   c: Counterpart,
   subjects: readonly (Granted & Partial<Pick<CatchUpSubject, "served" | "passed">>)[],
   now: number,
+  folders?: FolderOn,
 ): { written: number; parts: number; left: number; allowed: number; passed: number; unread: number } {
   const after = writeUpPlan({ store: c.store, spans: c.spans });
   const progress = readWriteUpProgress(c.store);
@@ -530,13 +544,16 @@ function measure(
     if (p !== undefined && p.done >= s.upTo && p.done > s.done) allowed += 1;
     tally(s, Math.min(Math.max(p?.done ?? s.done, s.done), s.upTo));
   }
-  const left = after.filter((h) => h.owes && pointable(h, c.store.dir)).length;
+  const left = catchUpOwing(after, c.store.dir, folders).length;
   return { written, parts, left, allowed, passed, unread };
 }
 
 export interface CatchUpInput {
   readonly open: () => Counterpart;
   readonly config: AdapterConfig;
+  /** The configuration this process read: the folder setting sits beside it
+   *  (`scopes.ts#scopesPath`). Absent (a store named with `--dir`): none is read. */
+  readonly configPath?: string;
   /** The run's id: the night's `nrn_…`, or the command's `cup_…`. */
   readonly run: string;
   /** Where the runners' records are filed: the launching session's directory,
@@ -590,6 +607,10 @@ async function runChild(input: CatchUpInput, plan: CatchUpPlan, prompt: string):
  */
 export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | null> {
   const startedAt = input.now();
+  // Read afresh for each plan, and for what is left: a long run sees a folder
+  // turned off in the middle of it from its next batch on.
+  const folders = (): FolderOn | undefined =>
+    input.configPath === undefined || input.configPath.length === 0 ? undefined : foldersOn(scopesPath(input.configPath));
   const deadline = startedAt + (input.totalMs ?? TUNABLES.NIGHT_WRITE_UP_TOTAL_MS);
   let room = input.parts ?? TUNABLES.NIGHT_WRITE_UP_PARTS;
   const granted = new Map<string, Granted>();
@@ -625,7 +646,8 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
       const c = input.open();
       try {
         if (batches === 0) endStaleRunners(c.store.dir, at);
-        plan = planCatchUp(c, { run: input.run, runner: catchUpRunner(input.run, batches + 1), now: at, room });
+        const on = folders();
+        plan = planCatchUp(c, { run: input.run, runner: catchUpRunner(input.run, batches + 1), now: at, room, ...(on === undefined ? {} : { folders: on }) });
         if (batches === 0) {
           if (plan.owed === 0) return null;
           owed = plan.owed;
@@ -732,8 +754,9 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
   try {
     const c = input.open();
     try {
-      const m = measure(c, [...granted.values()], endedAt);
-      const partsLeft = m.left === 0 ? 0 : owedParts(c, endedAt);
+      const on = folders();
+      const m = measure(c, [...granted.values()], endedAt, on);
+      const partsLeft = m.left === 0 ? 0 : owedParts(c, endedAt, on);
       const stopped = m.left > 0 ? limit : null;
       return record(input, report({ written: m.written, left: m.left, partsLeft, limit: stopped, bounded: stopped === null ? 0 : Math.max(0, m.left - busy) }), c);
     } finally {

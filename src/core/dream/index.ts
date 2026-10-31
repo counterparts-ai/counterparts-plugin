@@ -46,7 +46,7 @@ import { AliasMap, FIT_TUNABLES, clipWire, fidelityOf, fit, leanNumber, lineOf, 
 import type { Fidelity, FitCandidate, Placed } from "../fit/index.js";
 import { belowReach, curveSal, emotionalIntensity, strength } from "../physics/index.js";
 import type { MemoryPhysics } from "../physics/index.js";
-import { earlierMark, headOf, isHandoff, isSelfPage } from "../recall/index.js";
+import { SEE_ALSO_NAMES_READ, earlierMark, headOf, isHandoff, isSelfPage, namedIds, recallableRow } from "../recall/index.js";
 import { namesOwner, ownerNames } from "../sleep/index.js";
 import {
   CARRIED_BY_MAX_CHARS,
@@ -73,6 +73,7 @@ import { TUNABLES as PHYSICS } from "../physics/index.js";
 import { addDays, isDay } from "../time.js";
 import { livedOn } from "../types.js";
 import type { Kind } from "../types.js";
+import { NOTHING_CLOSED, namesClosed } from "./slices.js";
 import { DREAM_MARK, carriesDreamMark } from "./mark.js";
 import { pairsAmong, readDay, strongerMark } from "./day.js";
 import type { DayMark, DayRead } from "./day.js";
@@ -336,6 +337,8 @@ export interface DreamContext {
    * Never a gendered pronoun.
    */
   readonly ownerName?: () => string | null;
+  /** What the night may not read (`dream/slices.ts`): not shown, not merged, not folded. */
+  readonly closed?: () => ReadonlySet<string>;
 }
 
 /** One proposed change, as the tool receives it. */
@@ -489,7 +492,8 @@ export interface NightRun {
    * (the store would not open once the child ended; `detail` says why),
    * `signed-out` (2026-10-27: a child failed saying the host had lost its
    * sign-in — a 401, "not logged in"; a `could-not-start`, so the next
-   * session asks) — or null.
+   * session asks), `folder-setting` (2026-10-30: the folder setting would not
+   * read, so the night held; also a `could-not-start`) — or null.
    */
   readonly reason: string | null;
   /**
@@ -785,6 +789,8 @@ export function nightRunWords(run: Pick<NightRun, "state" | "reason" | "detail" 
       return "it never reported back (its process went away — a sleep, a restart, a kill)";
     case "refused":
       return `it was refused before it started${run.detail === null ? "" : ` (${run.detail})`}`;
+    case "folder-setting":
+      return "the folder setting would not read, so it held: no page, no dream, no reflection";
     case "runner":
       return `the background process could not start${run.detail === null ? "" : ` (${run.detail})`}`;
     case "exit":
@@ -1401,6 +1407,11 @@ export class Dreams {
     return row.day >= this.store.livedDay() - 1;
   }
 
+  /** Is a dream under way in this session: begun by it, and not left behind? */
+  busyIn(session: string): boolean {
+    return this.store.dreams({ limit: 5 }).some((d) => d.state === "begun" && d.session === session && !this.abandoned(d));
+  }
+
   /** Begun, not journaled, and quiet — no change — for longer than `ABANDONED_AFTER_MS`. */
   private abandoned(row: Pick<DreamRow, "id" | "state" | "started_at">): boolean {
     if (row.state !== "begun") return false;
@@ -1489,7 +1500,9 @@ export class Dreams {
     if (fell !== null) {
       // THE HEADLESS RUN COULD NOT START: ask, here, and say why in one line.
       const words = nightRunWords(fell);
-      const notice = `Counterparts: I couldn't start dreaming on my own: ${words}${/[.?!]$/.test(words) ? "" : "."} Say "dream" to do it here.`;
+      // A held night's door refuses "dream" too until the file is fixed, so the line says that first.
+      const next = fell.reason === "folder-setting" ? '`counterparts doctor` says which file to fix or remove; then say "dream".' : 'Say "dream" to do it here.';
+      const notice = `Counterparts: I couldn't start dreaming on my own: ${words}${/[.?!]$/.test(words) ? "" : "."} ${next}`;
       const start = s.reflectOnly !== null ? reflect : launch;
       return {
         ...base,
@@ -1868,6 +1881,7 @@ export class Dreams {
     const b = c.bundle;
     return {
       fresh: b.fresh.length,
+      freshCutP: c.freshCutP,
       shown: c.shown.length,
       chapters: b.chapters.length,
       queue: b.queue.new,
@@ -2219,10 +2233,11 @@ export class Dreams {
         const saidBy = saidByOf(best.r.said_by);
         const status = statusOf(best.r.status);
         const occurredOn = occurredOnOf(best.r.occurred_on);
+        const names = this.namesToKeep(rs, words.text, change.title, day);
         const newId = this.store.put({
           type: "memory",
           kind: best.r.kind,
-          body: words.text,
+          body: withNames(words.text, names.kept),
           ...(change.title !== undefined && change.title.trim().length > 0 ? { title: change.title.trim().slice(0, DREAM_TUNABLES.MAX_TITLE_CHARS) } : {}),
           salience: { ...best.p.salience },
           physics: {
@@ -2314,7 +2329,8 @@ export class Dreams {
         }
         // FIDELITY (2026-09-28): what the dream had of each original when it
         // merged them — whole, an excerpt, a line (or whole, fetched since).
-        this.store.recordDreamChange(dream.id, { action, ref: newId, detail: { from: ids, fidelity: fidelityOf(readIndex(this.store, "dream"), dream.id, ids) } });
+        this.store.recordDreamChange(dream.id, { action, ref: newId, detail: { from: ids, fidelity: fidelityOf(readIndex(this.store, "dream"), dream.id, ids), ...namesDetail(names) } });
+        if (names.past > 0) notes.push(namesPastNote(names));
         shown.add(newId);
         return { action, ok: true, reason: "merged", id: newId, ...(notes.length > 0 ? { note: notes.join(" ") } : {}) };
       }
@@ -2393,13 +2409,16 @@ export class Dreams {
         // decided by random-06, 2026-10-11, lightly held): me/us only when most
         // of its parts are, since it summarises many, not one said again.
         const about = isFold ? foldMarkFrom(sourceRows as MemoryRow[]) : inheritFrom(sourceRows as MemoryRow[]).about;
+        // A plain gist's sources stay as they were, each still naming what it
+        // names; a fold's fade and stand behind it, so it keeps their names.
+        const names = isFold ? this.namesToKeep(sourceRows as MemoryRow[], words.text, change.title, day) : NO_NAMES;
         const id = this.store.put({
           type: "memory",
           kind,
           // A fold's title is its own (review 11 C4): it states what lived
           // memories add up to; `source` and `meta.fold` keep where it came from.
           title: isFold ? (title.length > 0 ? title : firstLine(words.text)) : `Dreamed: ${title.length > 0 ? title : firstLine(words.text)}`,
-          body: words.text,
+          body: withNames(words.text, names.kept),
           salience: isFold
             ? { novelty: null, relevance: claim, emotional: 0, predictive: claim, claimed: claim }
             : {
@@ -2463,6 +2482,7 @@ export class Dreams {
             frozen: ties.frozen,
             linkReason: ties.reason,
             ...(isFold ? { fold: true, claimed: claim, faded, exempt } : {}),
+            ...namesDetail(names),
           },
         });
         shown.add(id);
@@ -2470,6 +2490,7 @@ export class Dreams {
           ...(words.cut ? [`text was kept to its first ${String(DREAM_TUNABLES.MAX_TEXT_CHARS)} characters.`] : []),
           ...facts.notes,
           ...((change.title ?? "").trim().length > DREAM_TUNABLES.MAX_TITLE_CHARS ? [titleNote()] : []),
+          ...(names.past > 0 ? [namesPastNote(names)] : []),
           ...(ties.reason === "failed" || ties.reason === "observer"
             ? [`its ties to its sources were not written (${ties.reason}).`]
             : ties.noRoom + ties.frozen > 0
@@ -2922,6 +2943,7 @@ export class Dreams {
     if (row.type !== "memory") return false;
     if (row.protected === 1) return false;
     if (row.body === "") return false;
+    if (this.ctx.closed?.().has(row.id) === true) return false;
     return true;
   }
 
@@ -3111,6 +3133,7 @@ export class Dreams {
       today: at,
       day,
       showable: (row) => !denied.has(row.id) && this.showable(row),
+      ...(this.ctx.closed === undefined ? {} : { closed: this.ctx.closed() }),
       slots: true,
     });
     const mindAll = mindRead.items;
@@ -3252,7 +3275,11 @@ export class Dreams {
     // TONIGHT'S ROOM for the memories' words: what the journal, the page and
     // the wake left.
     const page = this.ctx.page();
-    const wake = this.ctx.wake();
+    // THE PUBLISHED WAKE was composed for no reader: on a night it names a row
+    // of a closed folder (`dream/slices.ts`), the dream goes without it.
+    const published = this.ctx.wake();
+    const closed = this.ctx.closed?.() ?? NOTHING_CLOSED;
+    const wake = published !== null && namesClosed(this.store, published, closed) ? null : published;
     // Kept by what they cost on the wire (a page in another script costs more
     // per character); their whole lengths are said, and the self_page tool
     // reads the page whole.
@@ -3286,6 +3313,11 @@ export class Dreams {
     }
     const fresh = freshOut.filter((f) => !left.has(f.id)).map((f) => ({ id: f.id, neighbours: f.neighbours.filter((n) => !left.has(n)) }));
     const tonight = fresh.length;
+    // HOW FAR DOWN THE QUEUE TONIGHT REACHED (F1, 2026-10-30): the priority of
+    // the last memory taken, in the order they were taken (a carried fold's
+    // parts go first, so with one in the queue this need not be the lowest).
+    const lastTaken = fresh[fresh.length - 1];
+    const freshCutP = lastTaken === undefined ? null : round(priority.get(lastTaken.id) ?? 0);
     const notShown = [...left].filter((mid) => role.get(mid) !== "new").length + chaptersFit.notShown;
 
     const owner = ownerNames(this.store);
@@ -3350,6 +3382,7 @@ export class Dreams {
       reads: chaptersFit.reads,
       unread: chaptersFit.unread,
       lineCap: chaptersFit.summaryBytes,
+      freshCutP,
       freshMarked: fresh.filter((f) => dayRead.marks.has(f.id)).length,
     };
   }
@@ -3382,7 +3415,9 @@ export class Dreams {
     const extent = last !== null && prev !== null && prev.ref === last.id ? (prev.entries ?? {}) : {};
     const unread = last !== null && prev !== null && prev.ref === last.id ? (prev.unread ?? {}) : {};
     const episodes: EpisodeInView[] = [];
+    const closed = this.ctx.closed?.();
     for (const eid of this.store.list({ type: "episode", archived: false })) {
+      if (closed?.has(eid) === true) continue;
       const row = this.store.row(eid);
       if (row === undefined) continue;
       const at = row.updated_at ?? row.created_at ?? 0;
@@ -3608,7 +3643,7 @@ export class Dreams {
         continue;
       }
       const [, eid, at] = key.split(":") as [string, string, string];
-      const row = this.store.row(eid);
+      const row = this.ctx.closed?.().has(eid) === true ? undefined : this.store.row(eid);
       const ch = chapters.get(eid) ?? { id: eid, title: row?.title ?? null, entries: [] };
       chapters.set(eid, ch);
       const raw = row === undefined ? undefined : chapterEntries(row.body)[Number(at)];
@@ -3655,6 +3690,41 @@ export class Dreams {
     const newest = this.lastDream();
     if (newest !== null && newest.id !== dream.id) return { ok: false, reason: "dream-closed" };
     return { ok: true, dream };
+  }
+
+  /**
+   * THE IDS A FOLD OR MERGE KEEPS (FI1, 2026-10-30): what its sources' texts
+   * name and its own words don't, each as the memory that holds now. Not a
+   * source or a source's head (those are linked as earlier versions already),
+   * not removed, archived or anything recall couldn't show, and never closed to
+   * the night: a named id must not carry a closed folder's memory across. Below
+   * reach still counts: it can rise. At most `SEE_ALSO_NAMES_READ` named in all,
+   * the words' own first, since recall reads no further; the dream's source
+   * order, first mention first. Reads only. Never throws: the memory stands
+   * without them.
+   */
+  private namesToKeep(sources: readonly MemoryRow[], text: string, title: string | undefined, day: number): KeptNames {
+    try {
+      const own = new Set(sources.flatMap((r) => [r.id, headOf(this.store, r.id) ?? r.id]));
+      const said = namedIds(`${title ?? ""}\n${text}`);
+      const saidNow = new Set(said.map((n) => headOf(this.store, n) ?? n));
+      const closed = this.ctx.closed?.() ?? NOTHING_CLOSED;
+      const denied = new Set(this.store.deniedIds());
+      const found: string[] = [];
+      for (const r of sources) {
+        for (const named of namedIds(`${r.title ?? ""}\n${r.body}`)) {
+          const id = headOf(this.store, named) ?? named;
+          if (own.has(id) || own.has(named) || saidNow.has(id) || found.includes(id) || closed.has(id)) continue;
+          const row = recallableRow(this.store, id, { denied, ambient: false, day });
+          if (row === undefined || row === "below-reach") continue;
+          found.push(id);
+        }
+      }
+      const room = Math.max(0, SEE_ALSO_NAMES_READ - said.length);
+      return { kept: found.slice(0, room), past: Math.max(0, found.length - room) };
+    } catch {
+      return NO_NAMES;
+    }
   }
 
   /**
@@ -3877,6 +3947,8 @@ interface Composed {
   readonly unread: Record<string, number[]>;
   /** The longest a chapter's summary was as a line (2026-10-15), so `part` renders what the fit measured. */
   readonly lineCap: number;
+  /** The priority of the last new memory taken (F1, `dream.begun`); null when none was. */
+  readonly freshCutP: number | null;
   /** Of tonight's fresh, how many the day marked (used, rated or shown; part E). */
   readonly freshMarked: number;
 }
@@ -3899,7 +3971,7 @@ const PART_FURNITURE = 1_500;
 export const DREAM_LOOKUP =
   'Every memory shown has a line at least; the most important come whole. "fidelity" says which: whole, excerpt or line; "chars" is the whole text\'s length. ' +
   "Read any you have only in part with the recall tool, ids: [...] — several at once — before you merge, gist or feel it. A journal entry shown as a line is read the same way, by its chapter's id. " +
-  'The self page is read whole with the self_page tool ("selfPageChars" is its length). The wake is the page first, then its lanes — craft, open threads, what is coming, hints.';
+  'The self page is read whole with the self_page tool ("selfPageChars" is its length). The wake is the page first, then its lanes — craft, open threads, what is coming.';
 
 /**
  * THE LOOKUP WHILE THE PAGE IS SPLIT (2026-10-23, `self.PAGE_SPLIT`): the
@@ -3931,7 +4003,7 @@ export const DREAM_LEAN_LEGEND =
   "Words shown in part (fidelity line or excerpt) end with the whole length (chars) in parentheses — (1005) is a line of a 1,005-character memory, (excerpt of 5000) an excerpt; no parentheses: whole. " +
   "Read any shown in part with the recall tool, ids: [...] — several at once — before you merge, gist or feel it. " +
   "A journal is a c line and its chapters, each by its summary — or a shorter line, marked (line; N), when the room is short — ending with the chapter's whole length; read a chapter whole with recall, ids: [\"c2#3\"], or a journal's every chapter with ids: [\"c2\"]. \"summary mX\": that summary is memory mX too. " +
-  "The self page is read whole with the self_page tool. The wake is the page first, then its lanes — craft, open threads, what is coming, hints.";
+  "The self page is read whole with the self_page tool. The wake is the page first, then its lanes — craft, open threads, what is coming.";
 
 /** The lean legend while the page is split: as `DREAM_LOOKUP_SPLIT`, no pointer at a tool the dream's child is not given. */
 export const DREAM_LEAN_LEGEND_SPLIT = DREAM_LEAN_LEGEND.replace("The self page is read whole with the self_page tool.", "The self page is shown as far as it fits.");
@@ -4112,6 +4184,29 @@ function foldExemption(store: Store, r: MemoryRow): string | null {
 
 function titleNote(): string {
   return `title was kept to its first ${String(DREAM_TUNABLES.MAX_TITLE_CHARS)} characters.`;
+}
+
+/** What a fold or merge keeps of the ids its sources named (`namesToKeep`). */
+interface KeptNames {
+  readonly kept: readonly string[];
+  /** Found, past the cap. */
+  readonly past: number;
+}
+
+const NO_NAMES: KeptNames = { kept: [], past: 0 };
+
+/** The memory's words, and the ids it keeps on a last line of their own, as recall's see-also reads them. */
+function withNames(text: string, names: readonly string[]): string {
+  return names.length === 0 ? text : `${text}\n\nNames: ${names.join(", ")}`;
+}
+
+/** On the change's row, so a later read can find them. Nothing when none. */
+function namesDetail(names: KeptNames): { names?: readonly string[]; namesPast?: number } {
+  return { ...(names.kept.length > 0 ? { names: names.kept } : {}), ...(names.past > 0 ? { namesPast: names.past } : {}) };
+}
+
+function namesPastNote(names: KeptNames): string {
+  return `Its sources named ${String(names.past)} more ids than it has room to keep (${String(SEE_ALSO_NAMES_READ)} named in all, its own words' first).`;
 }
 
 function firstLine(text: string): string {

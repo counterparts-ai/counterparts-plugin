@@ -147,6 +147,13 @@ export const LANE_ORDER: readonly LaneName[] = [
 export const BRIEFING_TRIM_LOG_CAP = 64;
 
 /**
+ * How many KEPT ids per lane the same row carries (F1, 2026-10-30): what a wake
+ * room listed, so it can be scored without a transcript. The lane's `counts`
+ * stand beside it, so a capped list is never mistaken for the whole of it.
+ */
+export const BRIEFING_KEPT_LOG_CAP = 16;
+
+/**
  * The declared trim order — v1's, verbatim (contract §3): hints → craft →
  * threads → horizon → identity LAST. Craft before threads so craft can never
  * displace core; identity last because identity is the thing the briefing is for.
@@ -200,11 +207,11 @@ export const TRIM_ORDER: readonly LaneName[] = [
  *   - `lastHere`, `handoffs` — the delivery's room for "Last here" and this
  *     directory's handoffs (`handoffLendBytes`), less the newest handoff's
  *     own block (`handoffsKept`, below): the delivery drops "Last here"
- *     first and then shows fewer handoffs in full, the rest by id while
- *     there is room for that line (`counterpart.ts#addHandoffPointer`,
- *     `handoff/#pointerLadder`). "Last said here" (2026-10-11) is the first
- *     thing each "Last here" block gives up there; its room is held in
- *     `work`'s, the room the page borrows before it steps down;
+ *     first and then shows fewer handoffs in full, the rest by count and
+ *     the `handoffs here` handle (`counterpart.ts#addHandoffPointer`,
+ *     `handoff/#standsLadder`, one block since WK1). "Last said here" (2026-10-11) is
+ *     the first thing that line gives up after the about-me line; its room is
+ *     held in `work`'s, the room the page borrows before it steps down;
  *   - `elsewhere` — the "Today, elsewhere" line (2026-10-10, composed at
  *     session start only, `BriefingRequest.elsewhere`; at most
  *     `TODAY_ELSEWHERE_MAX_BYTES`, b2 + random-f8, lightly held; placed here
@@ -473,10 +480,9 @@ export function headingsOf(lane: LaneName): string[] {
  * reserved: the least of the lanes, its count takes only room nothing else
  * wants, and is otherwise `quiet` (`tellLost`; COUNTERPARTS, 2026-10-12).
  *
- * How many ids one line names. `recall` takes up to ten at once; five keeps the
- * line near 120 bytes, and the count says when there are more than it names.
+ * Until WK1 (2026-10-30) each line also named up to five ids (`MORE_LINE_IDS`)
+ * and the folded line three a lane; now none (`HANDLE_WORDS`, below).
  */
-export const MORE_LINE_IDS = 5;
 
 /** What each lane's line calls the rest — the lane's heading, as a phrase
  *  (2026-10-12: "coming up" and "might be relevant", as the headings say). */
@@ -602,16 +608,45 @@ export function parkedLine(listing: boolean, parked: number | undefined): string
     : `${laneHeading("threads")} ${NOTHING_CURRENT_WORDS}${parkedTail(parked)} (${PARKED_HANDLE_WORDS})`;
 }
 
-/** `(3 more might be relevant; recall ids: mem_…, mem_…, mem_…)`; for "Still
- *  open" `(56 more open, kept quietly; …)` (`OPEN_TAIL_WORDS`), and ` · N
- *  parked` after it when some are (`parkedTail`); for "Coming up"
- *  `(2 overdue, 4 more coming up; recall ids: …)` or `(2 overdue; recall ids: …)`. */
+/**
+ * TITLES OR NOTHING (WK1, 2026-10-30; ROADMAP's call, for Mike's review): no
+ * wake line lists bare ids. The count lines, the collapsed lines and the
+ * folded line used to name up to five ids each ("recall ids (the first 5):
+ * mem_…") — the complaint that came back in the 10-20, 10-22, 10-25 and
+ * 10-30 wake reads: five ids say nothing of what they are. Now a lane that
+ * cannot show a title says how many and names the door that lists them by
+ * title: "Still open" and "Coming up" the `still open` handle
+ * (`STILL_OPEN_HANDLE`, which lists "Coming up"'s dated items too since
+ * WK1), and a lane with no such door — "Who I am" without a page, "How I
+ * work", "Might be relevant" — its count alone (each is off or empty on a
+ * store with a page; recall reaches them by what they are about). An id
+ * still follows a TITLE as its handle (`- Oct 20 · Title [mem_…]`); that is
+ * not a bare id. Revert: the lines as they were before this PR.
+ */
+export const HANDLE_WORDS = PARKED_HANDLE_WORDS;
+
+/** The lanes whose rest the `still open` handle lists (WK1, 2026-10-30). */
+const HANDLE_FOR: ReadonlySet<LaneName> = new Set<LaneName>(["threads", "horizon"]);
+
+/** `; recall "still open" lists them` for a lane the handle lists, else nothing. */
+function handleTail(lane: LaneName): string {
+  return HANDLE_FOR.has(lane) ? `; ${HANDLE_WORDS}` : "";
+}
+
+/** For "Still open" `(56 more open, kept quietly; …)` (`OPEN_TAIL_WORDS`),
+ *  and ` · N parked` after it when some are (`parkedTail`); for "Coming up"
+ *  `(2 overdue, 4 more coming up; recall "still open" lists them)` — `2 more
+ *  overdue` when some overdue are listed above it (WK1: the oldest one or
+ *  two are); for a lane with no door, `(3 more on how I work)` (WK1, no
+ *  ids: `HANDLE_WORDS`). */
 export function moreLine(lane: LaneName, ids: readonly string[], overdue?: readonly string[], parked?: number): string {
   if (lane === "threads") return `(${String(ids.length)} more open, ${OPEN_TAIL_WORDS})${parkedTail(parked)}`;
   const late = overdueAmong(lane, ids, overdue);
-  if (late === 0) return `(${String(ids.length)} more ${MORE_NOUN[lane]}; ${recallIds(ids)})`;
+  if (late === 0) return `(${String(ids.length)} more ${MORE_NOUN[lane]}${handleTail(lane)})`;
   const rest = ids.length - late;
-  return `(${String(late)} ${OVERDUE_WORD}${rest === 0 ? "" : `, ${String(rest)} more ${MORE_NOUN[lane]}`}; ${recallIds(ids)})`;
+  // Some overdue listed above the line (the oldest, WK1): the count is of the rest.
+  const listedLate = (overdue?.length ?? 0) > late;
+  return `(${String(late)} ${listedLate ? "more " : ""}${OVERDUE_WORD}${rest === 0 ? "" : `, ${String(rest)} more ${MORE_NOUN[lane]}`}${handleTail(lane)})`;
 }
 
 /**
@@ -629,21 +664,21 @@ export const FOLDED_WORDS = "More than this wake lists:";
 /** Who the folded line names first: dated items, then what is open, then the rest. */
 const FOLD_ORDER: readonly LaneName[] = ["horizon", "threads", "identity", "craft", "hints"];
 
-/** How many ids each folded lane names — fewer than its own line's five. */
-export const FOLD_LINE_IDS = 3;
-
-/** `More than this wake lists: 7 coming up (recall ids: mem_…, mem_…, mem_…, and 4 more); 5 might be relevant (recall ids: …)`;
- *  "Still open"'s part ends ` · N parked` when some are (`parkedTail`; P2b,
- *  2026-10-28 — the folded line dropped it before). */
+/** `More than this wake lists: 7 coming up, 20 still open · 3 parked (recall "still open" lists them); 2 on how I work`
+ *  — counts, no ids (WK1, 2026-10-30, `HANDLE_WORDS`): the lanes the `still
+ *  open` handle lists first, joined, with the handle's words after them; a
+ *  lane with no door after them, its count alone. "Still open"'s part ends
+ *  ` · N parked` when some are (`parkedTail`; P2b, 2026-10-28). */
 export function foldedLine(lost: Partial<Record<LaneName, readonly string[]>>, parked?: number): string | null {
   const lanes = FOLD_ORDER.filter((l) => (lost[l]?.length ?? 0) > 0);
   if (lanes.length === 0) return null;
-  const part = (l: LaneName): string => {
-    const ids = lost[l] ?? [];
-    const shown = ids.slice(0, FOLD_LINE_IDS);
-    return `${String(ids.length)} ${MORE_NOUN[l]} (recall ids: ${shown.join(", ")}${ids.length > shown.length ? `, and ${String(ids.length - shown.length)} more` : ""})${l === "threads" ? parkedTail(parked) : ""}`;
-  };
-  return `${FOLDED_WORDS} ${lanes.map(part).join("; ")}`;
+  const part = (l: LaneName): string => `${String(lost[l]?.length ?? 0)} ${MORE_NOUN[l]}${l === "threads" ? parkedTail(parked) : ""}`;
+  const handled = lanes.filter((l) => HANDLE_FOR.has(l));
+  const parts = [
+    ...(handled.length === 0 ? [] : [`${handled.map(part).join(", ")} (${HANDLE_WORDS})`]),
+    ...lanes.filter((l) => !HANDLE_FOR.has(l)).map(part),
+  ];
+  return `${FOLDED_WORDS} ${parts.join("; ")}`;
 }
 
 /** True for the folded line (`foldedLine`), which belongs to no one lane. */
@@ -689,24 +724,37 @@ export function countedLanes(text: string): Partial<Record<LaneName, number>> {
       continue;
     }
     // "Coming up"'s overdue (review of #511): `(2 overdue, 4 more coming up; …)`, `(2 overdue; …)`.
-    const late = new RegExp(`^\\((\\d+) ${OVERDUE_WORD}(?:, (\\d+) more ${MORE_NOUN.horizon})?; recall ids`).exec(line);
+    // Since WK1 `(2 more overdue, …)` when the oldest are listed above it, and the handle's words after.
+    const late = new RegExp(`^\\((\\d+) (?:more )?${OVERDUE_WORD}(?:, (\\d+) more ${MORE_NOUN.horizon})?(?:; recall ids|; ${escapeRe(HANDLE_WORDS)}\\))`).exec(line);
     if (late !== null) {
       out.horizon = Number(late[1]) + Number(late[2] ?? 0);
       continue;
     }
+    // A count with no ids (WK1, 2026-10-30): `(4 more coming up; recall "still open" lists them)`, `(3 more on how I work)`.
+    const bare = new RegExp(`^\\((\\d+) more (.+?)(?:; ${escapeRe(HANDLE_WORDS)})?\\)$`).exec(line);
+    const bareLane = bare === null ? undefined : byNoun.get(bare[2] ?? "");
+    if (bare !== null && bareLane !== undefined) {
+      out[bareLane] = Number(bare[1]);
+      continue;
+    }
     if (!isFoldedLine(line)) continue;
-    for (const m of line.slice(FOLDED_WORDS.length + 1).matchAll(/(\d+) ([^;(]+?) \(recall ids: /g)) {
+    const folded = line.slice(FOLDED_WORDS.length + 1);
+    // Before WK1: `7 coming up (recall ids: …); 5 might be relevant (recall ids: …)`.
+    for (const m of folded.matchAll(/(\d+) ([^;(]+?) \(recall ids: /g)) {
       const l = byNoun.get(m[2] ?? "");
       if (l !== undefined) out[l] = Number(m[1]);
+    }
+    // Since WK1: `7 coming up, 20 still open · 3 parked (recall "still open" lists them); 2 on how I work`.
+    for (const m of folded.matchAll(/(?:^|; |, )(\d+) ([a-zA-Z' ]+?)(?= · \d| \(|, \d|;|$)/g)) {
+      const l = byNoun.get(m[2] ?? "");
+      if (l !== undefined && out[l] === undefined) out[l] = Number(m[1]);
     }
   }
   return out;
 }
 
-function recallIds(ids: readonly string[]): string {
-  const shown = ids.slice(0, MORE_LINE_IDS);
-  const which = ids.length > shown.length ? `recall ids (the first ${String(shown.length)})` : "recall ids";
-  return `${which}: ${shown.join(", ")}`;
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -738,8 +786,9 @@ export function collapsedLine(lane: LaneName, ids: readonly string[], counted?: 
   // Those past their date said as such (review of #511): `none due today, 2 overdue`.
   const late = none ? overdueAmong(lane, ids, counted?.horizonOverdue) : 0;
   const why = none ? `${NONE_TODAY_WORDS}${late === 0 ? "" : `, ${String(late)} ${OVERDUE_WORD}`}` : COLLAPSED_WORDS;
-  // "Still open"'s parked, after the ids (P2, `parkedTail`).
-  return `${laneHeading(lane)} ${String(ids.length)} — ${why}; ${recallIds(ids)}${lane === "threads" ? parkedTail(counted?.threadsParked) : ""}`;
+  // No ids (WK1): the handle's words for a lane it lists, else the count
+  // alone. "Still open"'s parked after them (P2, `parkedTail`).
+  return `${laneHeading(lane)} ${String(ids.length)} — ${why}${handleTail(lane)}${lane === "threads" ? parkedTail(counted?.threadsParked) : ""}`;
 }
 
 /** What "Coming up" counts rather than lists, as a composition's request
@@ -752,7 +801,8 @@ export function collapsedLane(line: string): LaneName | null {
   for (const lane of LANE_ORDER) {
     for (const heading of headingsOf(lane)) {
       if (!line.startsWith(`${heading} `)) continue;
-      if (new RegExp(`^ \\d+ — (?:${COLLAPSED_WORDS}|${NONE_TODAY_WORDS}(?:, \\d+ ${OVERDUE_WORD})?); recall ids`).test(line.slice(heading.length))) return lane;
+      // Before WK1 `…; recall ids …`; since, the handle's words or the count alone, then any parked.
+      if (new RegExp(`^ \\d+ — (?:${COLLAPSED_WORDS}|${NONE_TODAY_WORDS}(?:, \\d+ ${OVERDUE_WORD})?)(?:; recall ids|; ${escapeRe(HANDLE_WORDS)}(?: · \\d+ ${PARKED_WORDS})?$|$)`).test(line.slice(heading.length))) return lane;
       // "Still open" carrying nothing, its parked counted (`parkedLine`, P2b).
       if (lane === "threads" && new RegExp(`^ ${NOTHING_CURRENT_WORDS} · \\d+ ${PARKED_WORDS} `).test(line.slice(heading.length))) return lane;
     }
@@ -854,6 +904,12 @@ export interface Resolved {
    * line says `(was due …)` rather than reading as still to come.
    */
   readonly duePast?: boolean;
+  /**
+   * How many days past `due` it is, when it is overdue and listed (WK1,
+   * 2026-10-30): `(was due Oct 12, 18 days ago)`. From two days: the day after,
+   * the delivery says "was due yesterday" (`arrivingTense`).
+   */
+  readonly duePastDays?: number;
   /**
    * True when the encode date is only an UPPER BOUND — the element was known BY
    * then, not learned then. Set for migrated elements, whose `learned_on` is
@@ -1220,11 +1276,13 @@ export function datePrefix(r: Resolved): string {
     // "Arriving:" for its grace days (`prospective/` GRACE_DAYS), and
     // "(due 2026-10-08)" read on the 9th reads as still to come.
     const word = r.duePast === true ? DUE_PAST_WORD : DUE_WORD;
+    const days = r.duePastDays ?? 0;
+    const ago = r.duePast === true && days >= 2 ? `, ${String(days)} ${days === 1 ? "day" : "days"} ago` : "";
     // DUE ON THE DAY IT WAS LEARNED: the one date, stated once — as the DUE
     // date (2026-10-09), so the line still says when, and the delivery can
     // put it in the past tense the morning after (`arrivingTense`).
-    if (learned === "" || (due === learned && often === "")) return `${word} ${short(due)}${often}${DATE_SEP}`;
-    return `${r.boundedDate === true ? DATE_BOUND : ""}${short(learned)} (${word} ${short(due)}${often})${DATE_SEP}`;
+    if (learned === "" || (due === learned && often === "")) return `${word} ${short(due)}${often}${ago}${DATE_SEP}`;
+    return `${r.boundedDate === true ? DATE_BOUND : ""}${short(learned)} (${word} ${short(due)}${often}${ago})${DATE_SEP}`;
   }
   if (learned === "") return "";
   const happened = (r.happenedOn ?? "").trim();
@@ -1861,6 +1919,8 @@ export function render(
       for (const lane of ["threads", "horizon"] as const) {
         const top = kept[lane][0];
         if (top === undefined || !asLine(top, resolve(top.id))) continue;
+        // An overdue item is its title and age (WK1, 2026-10-30), not a late item's whole text.
+        if (lane === "horizon" && resolve(top.id).duePast === true) continue;
         kept[lane][0] = { ...top, whole: true };
         const next = tell();
         const same =

@@ -19,7 +19,8 @@ import type { Store } from "../../core/store/index.js";
 import { localDate, localStamp, readableDate } from "../../core/time.js";
 import { catchUpOf } from "../claude-code/night-catch-up.js";
 import { DESKTOP_HOST } from "../hosts.js";
-import { hostOf, hostSessionEvidence, listSessions, pointable } from "../sessions.js";
+import { hostOf, hostSessionEvidence, listSessions, notPointableWhy, pointable } from "../sessions.js";
+import type { FolderOn } from "../sessions.js";
 
 /** How far back the closing line counts lapses, in days. */
 export const COVERAGE_LAPSE_WINDOW_DAYS = 7;
@@ -40,18 +41,19 @@ function place(scopes: readonly string[]): string {
 
 const plural = (n: number, one: string, many: string): string => `${String(n)} ${n === 1 ? one : many}`;
 
-/** What is not written up in one session, and what that means now. `person`:
- *  whether a write-up is ever asked for it (`sessions.ts#pointable`, the filter
- *  the catch-up and doctor read) — a small stretch from `claude -p` or the SDK
- *  is not. */
-function standing(e: LedgerEntry, zone: string, auto: boolean, person: boolean): string {
+/** What is not written up in one session, and what that means now. `whyNot`:
+ *  why no write-up is asked for it (`sessions.ts#notPointableWhy`, the filter
+ *  the catch-up and doctor read) — a small stretch from `claude -p` or the SDK,
+ *  or a session in a folder that is not on. */
+function standing(e: LedgerEntry, zone: string, auto: boolean, whyNot: ReturnType<typeof notPointableWhy>): string {
   const s = e.stretch;
   if (s === null) return "all written up";
   const what = `not yet written up: ${plural(s.pieces, "piece", "pieces")} over ${lengthWords(s.minutes)}, since ${localStamp(s.firstAt, zone)}`;
   if (e.lapsed) {
     return `${what} — let go after ${plural(e.daysOfUseSince, "day", "days")} of use unwritten: lost to memory, no longer owed, nothing deleted`;
   }
-  if (e.owed && !person) return `${what} — left to lapse (short, and headless or with no session record): nothing asks for its write-up`;
+  if (e.owed && whyNot === "folder-off") return `${what} — its folder is off, observer or paused: not written up while it stays so, and let go with ordinary retention`;
+  if (e.owed && whyNot !== null) return `${what} — left to lapse (short, and headless or with no session record): nothing asks for its write-up`;
   if (e.owed) {
     const why = e.state === "ended" ? "it ended" : "it has been quiet since the date changed";
     // WHO CATCHES IT UP (2026-10-11): under dreaming `auto` the nightly run
@@ -88,12 +90,13 @@ export type CoverageRow = LedgerEntry & {
  * harness's scripted week). The same reading and the same filter as
  * `coverageLines`. Read-only.
  */
-export function coverageReading(store: Store): CoverageRow[] {
-  return ledgerNow(store).map((e) => ({ ...e, person: pointable(e, store.dir) }));
+export function coverageReading(store: Store, folders?: FolderOn): CoverageRow[] {
+  return ledgerNow(store).map((e) => ({ ...e, person: pointable(e, store.dir, folders) }));
 }
 
-/** The lines `counterparts coverage` prints for `date`. */
-export function coverageLines(input: { store: Store; date: string; today: string }): string[] {
+/** The lines `counterparts coverage` prints for `date`. `folders`: the folder
+ *  setting, when this store has one to read. */
+export function coverageLines(input: { store: Store; date: string; today: string; folders?: FolderOn }): string[] {
   const { store, date } = input;
   const zone = store.zone();
   const now = store.now();
@@ -101,14 +104,14 @@ export function coverageLines(input: { store: Store; date: string; today: string
   // ONE FILTER for "is a write-up ever asked for it" (2026-10-11): the one
   // the catch-up and doctor read, so this command never lists as owed what
   // they rightly let lapse.
-  const persons = new Map<string, boolean>();
-  const person = (e: LedgerEntry): boolean => {
-    let p = persons.get(e.session);
-    if (p === undefined) {
-      p = pointable(e, store.dir);
-      persons.set(e.session, p);
+  const whys = new Map<string, ReturnType<typeof notPointableWhy>>();
+  const whyNot = (e: LedgerEntry): ReturnType<typeof notPointableWhy> => {
+    let w = whys.get(e.session);
+    if (w === undefined) {
+      w = notPointableWhy(e, store.dir, input.folders);
+      whys.set(e.session, w);
     }
-    return p;
+    return w;
   };
   const on = entries.filter((e) => e.perDate[date] !== undefined);
   const said = readableDate(date) || date;
@@ -132,7 +135,7 @@ export function coverageLines(input: { store: Store; date: string; today: string
       const cell = e.perDate[date] ?? { pieces: 0, written: 0 };
       out.push(
         `  ${e.session}  ${place(e.scopes)}`,
-        `    that day: ${String(cell.written)} of ${plural(cell.pieces, "piece", "pieces")} written up; now ${standing(e, zone, auto, person(e))}`,
+        `    that day: ${String(cell.written)} of ${plural(cell.pieces, "piece", "pieces")} written up; now ${standing(e, zone, auto, whyNot(e))}`,
       );
     }
   }
@@ -149,8 +152,9 @@ export function coverageLines(input: { store: Store; date: string; today: string
       `Claude Desktop: ${plural(desktop.length, "session", "sessions")} that day — unmeasured: Desktop chat keeps no transcript, so what ${desktop.length === 1 ? "it" : "they"} did not write up cannot be counted (not lost; what was written through the tools is kept).`,
     );
   }
-  const owed = entries.filter((e) => e.owed && person(e));
-  const lapsing = entries.filter((e) => e.owed && !person(e));
+  const owed = entries.filter((e) => e.owed && whyNot(e) === null);
+  const lapsing = entries.filter((e) => e.owed && (whyNot(e) === "headless" || whyNot(e) === "no-record"));
+  const setAside = entries.filter((e) => e.owed && whyNot(e) === "folder-off");
   out.push(
     "",
     owed.length === 0
@@ -165,6 +169,9 @@ export function coverageLines(input: { store: Store; date: string; today: string
         .map((e) => `${e.session} (${plural(e.stretch?.pieces ?? 0, "piece", "pieces")})`)
         .join(", ")}.`,
     );
+  }
+  if (setAside.length > 0) {
+    out.push(`Not asked for (folder off, observer or paused): ${plural(setAside.length, "session", "sessions")} — ${setAside.map((e) => e.session).join(", ")}.`);
   }
   // PARTS A CATCH-UP LEFT UNREAD (2026-10-11): handed to its reader and not
   // brought back — an empty answer with no reason, or never reached. They stay

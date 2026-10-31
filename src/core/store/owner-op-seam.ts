@@ -531,6 +531,16 @@ function redactDreamJournals(db: Db, id: string, title: string | null, body: str
 const REDACTED_REFLECTION =
   "[This reflection was redacted: it was shown, cited or quoted a memory the owner removed.]";
 
+/** A reflection's `detail` and its own line (NL1), when the line holds words. */
+function ownLineOf(json: string): { detail: Record<string, unknown>; line: string } | null {
+  try {
+    const detail = JSON.parse(json) as Record<string, unknown>;
+    return typeof detail["line"] === "string" && detail["line"].length > 0 ? { detail, line: detail["line"] } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A JSON id list without `id`, and whether it had it. */
 function without(json: string, id: string): { json: string; had: boolean } {
   try {
@@ -546,7 +556,8 @@ function without(json: string, id: string): { json: string; had: boolean } {
 /**
  * Redact every reflection (v9) that was shown, cited or quotes memory `id`:
  * its entry and share become a line saying so (a share not yet told is not
- * told), and the id leaves its `shown`, `cites` and `share_cites`. The row,
+ * told), its own line (`detail.line`, NL1) goes empty, and the id leaves its
+ * `shown`, `cites` and `share_cites`. The row,
  * its date and its dream stay. Returns how many were redacted. Inside the
  * caller's transaction.
  */
@@ -560,26 +571,30 @@ function redactReflections(db: Db, id: string, title: string | null, body: strin
     entry_id: string | null;
     share: string | null;
     share_state: string;
-  }>("SELECT id, shown, cites, share_cites, entry, entry_id, share, share_state FROM reflections");
+    detail: string;
+  }>("SELECT id, shown, cites, share_cites, entry, entry_id, share, share_state, detail FROM reflections");
   const named = title !== null && title.trim().length >= 8 ? title.trim().toLowerCase() : null;
   let n = 0;
   for (const r of rows) {
     const shown = without(r.shown, id);
     const cites = without(r.cites, id);
     const shareCites = without(r.share_cites, id);
-    const text = `${r.entry ?? ""}\n${r.share ?? ""}`;
-    const quoted = r.entry !== REDACTED_REFLECTION && (quotes(body, text) || (named !== null && text.toLowerCase().includes(named)));
+    const own = ownLineOf(r.detail);
+    const text = `${r.entry ?? ""}\n${r.share ?? ""}\n${own?.line ?? ""}`;
+    // A row already redacted is read again only for a line sent since (a later `finish`).
+    const quoted = (r.entry !== REDACTED_REFLECTION || own !== null) && (quotes(body, text) || (named !== null && text.toLowerCase().includes(named)));
     if (!shown.had && !cites.had && !shareCites.had && !quoted) continue;
     db.run(
       `UPDATE reflections
           SET entry = ?, share = ?, share_state = CASE WHEN share_state IN ('offered', 'carried') THEN 'none' ELSE share_state END,
-              shown = ?, cites = ?, share_cites = ?
+              shown = ?, cites = ?, share_cites = ?, detail = ?
         WHERE id = ?`,
       r.entry === null ? null : REDACTED_REFLECTION,
       r.share === null ? null : REDACTED_REFLECTION,
       shown.json,
       cites.json,
       shareCites.json,
+      own === null ? r.detail : JSON.stringify({ ...own.detail, line: "" }),
       r.id,
     );
     // THE ENTRY'S MEMORY TOO (owner ruling D4 on #256, as #251's Q6 does for

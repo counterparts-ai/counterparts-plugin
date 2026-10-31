@@ -232,7 +232,7 @@ export const DREAM_TUNABLES = {
   /**
    * The self page and the wake as the bundle carries them, by wire cost
    * (`fit/wireChars`); their whole lengths are said. The wake is the page
-   * first, then its lanes (craft, open threads, what's coming, hints): the
+   * first, then its lanes (craft, open threads, what's coming): the
    * page part mostly repeats `selfPage`.
    */
   PAGE_CHARS: 6_000,

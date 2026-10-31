@@ -384,6 +384,16 @@ export interface WakeOutcome extends WakeResult {
   readonly threads?: readonly string[];
   /** The head tag carries `WakeHere.headFields` (2026-10-20, ONE TAG). */
   readonly tagged?: boolean;
+  /**
+   * WHAT THIS DELIVERY CAME TO (F1, 2026-10-30; `counterpart-boundary.ts#wakeShape`):
+   * bytes per section, the page's rung, and whether it was assembled here or is
+   * the published bundle. Only on a delivery. The host writes it on its row.
+   */
+  readonly shape?: {
+    readonly sections: Readonly<Record<string, number>>;
+    readonly page: string | null;
+    readonly assembled: boolean;
+  };
 }
 
 /**

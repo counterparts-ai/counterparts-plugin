@@ -27,7 +27,9 @@ import { CORE_ABOUT_MARKS } from "../store/index.js";
 import type { Store } from "../store/index.js";
 import { localDate, localStamp, readableDate } from "../time.js";
 import { isKnownSession, isModelId } from "../types.js";
-import { HANDOFF_EXCERPT_BYTES, HANDOFF_LIFE_DAYS, excerpt, flatten, sessionWords } from "./index.js";
+import { LAST_HERE_TITLE_BYTES, HANDOFF_EXCERPT_BYTES, HANDOFF_LIFE_DAYS, excerpt, flatten, sessionWords } from "./index.js";
+
+export { LAST_HERE_TITLE_BYTES };
 
 /**
  * How long a chapter is "last here", in LIVED days since it was written — the
@@ -35,15 +37,8 @@ import { HANDOFF_EXCERPT_BYTES, HANDOFF_LIFE_DAYS, excerpt, flatten, sessionWord
  */
 export const LAST_HERE_LIFE_DAYS = HANDOFF_LIFE_DAYS;
 
-/** How many sessions the line names in full (the newest with its first
- *  sentence, the one before it by title); the rest of that day by id. */
-export const LAST_HERE_SHOWN = 2;
 
-/** How many further chapters "+N more" names by id; past it, a count. */
-export const LAST_HERE_LISTED = 3;
 
-/** The title's cap in the line. The id is the door to the whole chapter. */
-export const LAST_HERE_TITLE_BYTES = 100;
 
 /**
  * THE DURABLE ROW A "LAST HERE" LINE DROPPED FOR ROOM LEAVES (2026-10-01, the
@@ -54,6 +49,24 @@ export const LAST_HERE_TITLE_BYTES = 100;
  * and whether a handoff was carried in its place. Never under observer.
  */
 export const LAST_HERE_NOROOM_EVENT = "handoff.lasthere.noroom";
+
+/**
+ * THE DURABLE ROW FOR A DAY'S SUMMARY HELD BACK (2026-10-30). The 10-29 summary
+ * was written and no wake showed it, and nothing said why. One per date and
+ * cause (`dedupKey`), written by `Counterpart#daySummaryShown`'s gate at a
+ * session start: the date it is about, what held it and why, in kinds only (no
+ * words of it, no folder, no id). Never under observer.
+ */
+export const DAY_SUMMARY_HELD_EVENT = "handoff.daysummary.held";
+/** What held it: a chapter or a memory of that day, one of its cites, or a store that would not answer. */
+export type DaySummaryHeldWhat = "chapter" | "memory" | "cite" | "store";
+/**
+ * Why: `folder-closed` (a folder set off, paused or to observe), `no-folder`
+ * (none recorded), `no-setting` (no scope setting to ask), `night-origins` (a
+ * night's row whose originals cannot be told), `denied` and `gone` (a cite),
+ * `unreadable` (the store).
+ */
+export type DaySummaryHeldWhy = "folder-closed" | "no-folder" | "no-setting" | "night-origins" | "denied" | "gone" | "unreadable";
 
 /** One session's latest chapter, as the line reads it. */
 export interface ChapterHere {
@@ -280,55 +293,6 @@ export function chaptersHere(
   return out.sort((a, b) => b.chapter.writtenAt - a.chapter.writtenAt || (a.chapter.id < b.chapter.id ? 1 : -1));
 }
 
-/** `— "Title" (epi_…)`, or `— epi_…` when the chapter has no title. The count
- *  of chapters inside the episode is not printed (2026-10-12, plain words):
- *  the id is what `recall` opens, and a person reading the line has no use
- *  for the numbering. */
-function named(c: ChapterHere): string {
-  return c.title === null ? `— ${c.id}` : `— "${excerpt(c.title, LAST_HERE_TITLE_BYTES)}" (${c.id})`;
-}
-
-/**
- * THE LINES, for the newest `shown` sessions here (1 or 2): the newest with the
- * first sentence of its first chapter, the one before it by title, and the rest written THAT DAY by
- * id. `more` false leaves the "+N more" line off — the narrowest rung.
- *
- * `named` (2026-10-20, Mike's go, lightly held: each episode once in the
- * wake): an episode the wake's body already names — the Yesterday line, by
- * title — is left out of "Before it" and "+N more", which would only repeat
- * it (the second by bare id). The newest is never left out: "Last here" is
- * the line that says when, and the session-start Yesterday line leaves it to
- * this one (`Counterpart#yesterdayFor`).
- */
-export function lastHereBlock(
-  entries: readonly LastHere[],
-  opts: {
-    readonly shown?: number;
-    readonly more?: boolean;
-    readonly reader?: string | null;
-    readonly named?: (id: string) => boolean;
-  } = {},
-): string | null {
-  const first = entries[0];
-  if (first === undefined) return null;
-  const reader = opts.reader ?? null;
-  const said = opts.named;
-  const sameDay = entries.filter((e, i) => e.date === first.date && (i === 0 || said === undefined || !said(e.chapter.id)));
-  const shown = Math.max(1, Math.min(opts.shown ?? LAST_HERE_SHOWN, sameDay.length));
-  const who = (e: LastHere): string => sessionWords(e.chapter.session, e.chapter.model, reader);
-  const lines = [
-    `Last here: ${who(first)}, ${first.when} ${named(first.chapter)}.${first.chapter.excerpt.length > 0 ? ` ${excerpt(first.chapter.excerpt, HANDOFF_EXCERPT_BYTES)}` : ""}`,
-  ];
-  for (const e of sameDay.slice(1, shown)) lines.push(`Before it: ${who(e)}, ${e.when} ${named(e.chapter)}.`);
-  const rest = sameDay.slice(shown);
-  if (opts.more !== false && rest.length > 0) {
-    const ids = rest.slice(0, LAST_HERE_LISTED).map((e) => e.chapter.id);
-    const unnamed = rest.length - ids.length;
-    lines.push(`+${rest.length} more here on ${first.date}: ${ids.join(", ")}${unnamed > 0 ? `, and ${unnamed} more` : ""}.`);
-  }
-  return lines.map(flatten).join("\n");
-}
-
 /**
  * A SESSION HERE NEWER THAN EVERY CHAPTER HERE, with none of its own (S2,
  * 2026-10-26): what "Last here" names first when the folder's newest session
@@ -352,33 +316,8 @@ export interface LaterHere {
    * (L2, 2026-10-26). The id is the door to the rest.
    */
   readonly memory: { readonly id: string; readonly title: string } | null;
-}
-
-/**
- * THE LINE FOR A LATER SESSION, widest first (`lastHereLadder`'s shape): the
- * session with its newest memory and the chapter before it by title (`Before
- * it:`, left out when the wake's body already names it, `named`), then the
- * session alone. It says only what is true of it: no chapter, and what of it
- * is written up — "Last said here" beside it quotes its last words while they
- * are inside a day. Pure.
- */
-export function laterHereLadder(
-  later: LaterHere,
-  before: LastHere | null,
-  reader: string | null = null,
-  said?: (id: string) => boolean,
-): string[] {
-  const what =
-    later.memory === null
-      ? ", no chapter, not written up yet."
-      : `, no chapter — "${excerpt(later.memory.title, LAST_HERE_TITLE_BYTES)}" (${later.memory.id}).`;
-  const head = flatten(`Last here: ${sessionWords(later.session, null, reader)}, ${later.when}${what}`);
-  const out: string[] = [];
-  if (before !== null && said?.(before.chapter.id) !== true) {
-    out.push(`${head}\n${flatten(`Before it: ${sessionWords(before.chapter.session, before.chapter.model, reader)}, ${before.when} ${named(before.chapter)}.`)}`);
-  }
-  out.push(head);
-  return out;
+  /** Epoch ms of its last turn-end here (WK1: the "where this folder stands" order). */
+  readonly at?: number;
 }
 
 /** How many of yesterday's chapters the "Yesterday" line names by title. */
@@ -756,33 +695,18 @@ export function placeWords(scope: string): string {
  * another project: session …, Oct 19 in ~/x — "…"" read as a teaser in a
  * folder that cannot follow it. Now it says what it is and where first: "A
  * chapter about me from ~/x: session …, Oct 19 — "…" (epi_…)." Left out when
- * the wake's body already names that episode (`Counterpart#lastHereLadder`).
+ * the wake's body already names that episode (`Counterpart#lastHereFacts`).
+ * An untitled chapter goes by its first words, never by its id alone (WK1).
  */
 export function elsewhereLine(chapter: ChapterHere, date: string, reader: string | null = null): string {
   const where = chapter.scope === null ? "another project" : placeWords(chapter.scope);
-  return flatten(`${ELSEWHERE_HEAD} ${where}: ${sessionWords(chapter.session, chapter.model, reader)}, ${date} ${named(chapter)}.`);
+  const words = (chapter.title ?? "").trim() || chapter.excerpt.trim();
+  const named = words.length === 0 ? "" : ` — "${excerpt(words, LAST_HERE_TITLE_BYTES)}" (${chapter.id})`;
+  return flatten(`${ELSEWHERE_HEAD} ${where}: ${sessionWords(chapter.session, chapter.model, reader)}, ${date}${named}.`);
 }
 
 /** How the "about me, from another folder" line opens (`elsewhereLine`). */
 export const ELSEWHERE_HEAD = "A chapter about me from";
-
-/**
- * THE BLOCKS A DELIVERY MAY TRY, widest first — `pointerLadder`'s shape: every
- * session of that day shown, then the newest with the count of the rest, then
- * the newest alone. Duplicates dropped.
- */
-export function lastHereLadder(entries: readonly LastHere[], reader: string | null = null, named?: (id: string) => boolean): string[] {
-  const out: string[] = [];
-  const also = named === undefined ? {} : { named };
-  for (const block of [
-    lastHereBlock(entries, { reader, ...also }),
-    lastHereBlock(entries, { reader, shown: 1, ...also }),
-    lastHereBlock(entries, { reader, shown: 1, more: false, ...also }),
-  ]) {
-    if (block !== null && !out.includes(block)) out.push(block);
-  }
-  return out;
-}
 
 /**
  * HOW MANY DIRECTORIES THE "TODAY, ELSEWHERE" LINE NAMES AT MOST (2026-10-10):
@@ -959,7 +883,8 @@ export function todayElsewhereLines(
         : d.live
           ? ` open since ${start(d.firstAt, d.lastAt)}${hush.length > 0 ? hush : " (live)"}`
           : ` ${start(d.firstAt, d.lastAt)}–${clock(d.lastAt ?? d.firstAt)}`;
-    const chapter = !chapters || d.chapter === null ? "" : ` — ${chapterWords(d.chapter)}`;
+    const named = !chapters || d.chapter === null ? "" : chapterWords(d.chapter);
+    const chapter = named.length === 0 ? "" : ` — ${named}`;
     return `${placeWords(d.scope)}${when}${chapter}${countWords(d.memories, d.titles, titles)}`;
   };
   const oneHere = (h: HereSession, titles: number): string =>
@@ -1077,9 +1002,10 @@ function sum(xs: readonly number[]): number {
   return xs.reduce((n, x) => n + x, 0);
 }
 
-/** A gated chapter as an elsewhere line names it: its title and id, or the id alone. */
+/** A gated chapter as an elsewhere line names it: its title, or its first words, and id; with neither, nothing (no bare ids, WK1). */
 function chapterWords(c: ChapterHere): string {
-  return c.title === null ? c.id : `"${excerpt(c.title, LAST_HERE_TITLE_BYTES)}" (${c.id})`;
+  const words = (c.title ?? "").trim() || c.excerpt.trim();
+  return words.length === 0 ? "" : `"${excerpt(words, LAST_HERE_TITLE_BYTES)}" (${c.id})`;
 }
 
 /**
@@ -1167,7 +1093,8 @@ export function sinceElsewhereLines(
           : d.endedAt !== null
             ? ` ended ${when(d.endedAt)}`
             : "";
-    const chapter = !chapters || d.chapter === null ? "" : `, chapter ${chapterWords(d.chapter)}`;
+    const named = !chapters || d.chapter === null ? "" : chapterWords(d.chapter);
+    const chapter = named.length === 0 ? "" : `, chapter ${named}`;
     return `${placeWords(d.scope)}${state}${chapter}${countWords(d.memories, d.titles, titles)}`;
   };
   const head = since.started ? `Since you started (${when(since.at)}):` : `Since ${when(since.at)}:`;

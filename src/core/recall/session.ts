@@ -671,9 +671,9 @@ function rankedUnder(store: Store, model: string, dim: number): boolean {
  * question, so the lagged profile's caution about the previous subject does not
  * apply.
  *
- * GUARDED BY COUNT, BEFORE THE RANK: the rank runs inside `activate()`, ahead of
- * `build()`'s first time check, so a clock could only notice an overrun after it
- * had already aborted the turn. Above `maxVectors` it answers `skipped`, and the
+ * GUARDED BY COUNT, BEFORE THE RANK: the rank runs inside `activate()`, and a
+ * clock could only say afterwards that it ran long (`lateMs`; until LT1, 2026-10-30,
+ * the turn was dropped). Above `maxVectors` it answers `skipped`, and the
  * turn records `in-line-skipped` by name.
  */
 export function inLineSemantic(

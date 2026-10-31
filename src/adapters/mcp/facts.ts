@@ -252,6 +252,8 @@ export interface FactsContext {
   readonly semantic: SemanticSource;
   /** Not read by facts mode; here so one context object serves both modes. */
   readonly asker?: FeelingWhose;
+  /** What a night's reader may not be shown (`core/dream/slices.ts`): read as removed. */
+  readonly closed?: ReadonlySet<string>;
 }
 
 export type FactWay = "words" | "meaning" | "subject" | "time" | "session";
@@ -574,7 +576,7 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
   const page = opts.page !== undefined && Number.isInteger(opts.page) && opts.page >= 1 ? opts.page : 1;
 
   // ── the rows, once ──────────────────────────────────────────────────────
-  const denied = new Set(safe(() => store.deniedIds(), [] as string[]));
+  const denied = new Set([...safe(() => store.deniedIds(), [] as string[]), ...(ctx.closed ?? [])]);
   const rows = new Map<string, RecallRow>();
   for (const r of safe(() => store.recallRows(), [] as RecallRow[])) {
     if (denied.has(r.id)) continue;

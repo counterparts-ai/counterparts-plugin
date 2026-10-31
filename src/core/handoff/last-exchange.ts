@@ -6,8 +6,8 @@
  * was doing, and the last thing said to it, with its last reply, is often the
  * best pointer to where things stood. Two readers of one answer:
  *
- *   - the wake's ONE LINE, beside "Last here" (`lastExchangeLine`):
- *     `Last said here, 18:42 (session 3fa9c1d2): "<first words>…" — recall "last exchange"`;
+ *   - the wake's "where this folder stands" line (`standsLadder`, WK1 2026-10-30):
+ *     `Last said 18:42: "<first words>…" — recall "last exchange".`;
  *   - the recall handle `last exchange` (`lastExchangeAnswer`): both messages,
  *     with their times and the session, each cut at a sentence.
  *
@@ -55,9 +55,10 @@ export const LAST_EXCHANGE_WINDOW_MS = 24 * 60 * 60_000;
 export const LAST_EXCHANGE_WORDS = 10;
 export const LAST_EXCHANGE_QUOTE_BYTES = 72;
 
-/** The widest the line can be — the bound the boundary reserves for it: 49 bytes
- *  before the quote (with a date), the quote and its `…`, 28 after. */
-export const LAST_EXCHANGE_LINE_MAX_BYTES = 152;
+/** The widest it can be, as the whole of `standsLadder`'s line (WK1, 2026-10-30; 152 as
+ *  a line of its own) — the bound the boundary reserves for it: 69 bytes before the
+ *  quote (with a date), the quote and its `…`, 29 after, and a few to spare. */
+export const LAST_EXCHANGE_LINE_MAX_BYTES = 176;
 
 /** Each message the handle returns, at most, in characters (cut at a sentence). */
 export const LAST_EXCHANGE_TEXT_MAX_CHARS = 1200;
@@ -270,19 +271,6 @@ export function lastExchange(opts: {
 }
 
 /**
- * THE BLOCKS ABOVE THE HANDOFF, WITH THE LINE (the delivery's ladder,
- * `Counterpart#addHandoffPointer`): each of "Last here"'s blocks, widest
- * first, tried with the line at its foot and then without it — so the line is
- * the first thing each width gives up, and it never narrows "Last here" or
- * the About-me line. With no block, the line alone. Pure.
- */
-export function withExchange(blocks: readonly string[], line: string | null): string[] {
-  if (line === null) return [...blocks];
-  if (blocks.length === 0) return [line];
-  return blocks.flatMap((b) => [`${b}\n${line}`, b]);
-}
-
-/**
  * WAS A SESSION AT WORK IN THIS DIRECTORY INSIDE THE WINDOW, by its turn-ends
  * (`boundaries.jsonl`: small, and never struck)? What the boundary asks to
  * reserve the line's bound (`LAST_EXCHANGE_LINE_MAX_BYTES`) — a bound, the way
@@ -305,7 +293,7 @@ export function exchangeLikely(buffer: SpanBuffer, scope: string, now: number, w
 const ELLIPSIS = "…";
 
 /** The first `LAST_EXCHANGE_WORDS` words, within the quote's bytes, with `…` when cut. */
-function quoteOf(text: string): string {
+export function quoteOf(text: string): string {
   const words = flatten(text).replace(/"/g, "'").split(" ").filter((w) => w.length > 0);
   let out = "";
   let i = 0;
@@ -323,16 +311,6 @@ function quoteOf(text: string): string {
     return `${out}${ELLIPSIS}`;
   }
   return i < words.length ? `${out}${ELLIPSIS}` : out;
-}
-
-/**
- * THE WAKE'S LINE: when, which session, the owner's first words, and the
- * door. Furniture, like "Last here": no bullet, no element. At most
- * `LAST_EXCHANGE_LINE_MAX_BYTES`.
- */
-export function lastExchangeLine(ex: LastExchange, opts: { readonly zone?: string; readonly now: number }): string {
-  const when = localStampAfter(ex.said.at, opts.now, opts.zone);
-  return `Last said here, ${when} (session ${flatten(ex.session).slice(0, 8)}): "${quoteOf(ex.said.text)}" — recall "${LAST_EXCHANGE_HANDLE}"`;
 }
 
 /** The head of `text`, at most `max` characters, cut after a sentence when one ends in it. */

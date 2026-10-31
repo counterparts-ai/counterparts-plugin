@@ -269,6 +269,41 @@ function subjectOf(store: DashboardSource["store"], id: string, meta: Record<str
   return null;
 }
 
+/**
+ * THE WORDS OF ONE MEMORY AND NOTHING ELSE (2026-10-30): the head of its chain,
+ * its title and text, its kind, the day it was learned. For a surface that
+ * carries a memory rather than opening its card, the sidebar's status file above
+ * all. `memoryDetail` reads the same three things the same way and then the
+ * whole card: its `useDays` read up to `LOG_CEILING` `recall.credit` rows and its
+ * `timelineOf` every archived row, each time, about 30 ms a card on the owner's
+ * store, 1.85 s of the 2.45 s the status file took for its 60 memories, at every
+ * turn's end. Null: nothing there to show, the case `memoryDetail` says `found: false`.
+ * One difference, on a damaged row only: a card that throws further down (a `kind`
+ * physics doesn't know, which no write path makes) has no answer, and this still
+ * has the words.
+ */
+export function memoryWords(
+  src: DashboardSource,
+  id: string,
+): { readonly title: string; readonly text: string; readonly kind: Kind; readonly learnedOn: string; readonly journal: boolean } | null {
+  const store = src.store;
+  const r = reveal(store, id, 120);
+  if (!r.present || r.headId === null) return null;
+  try {
+    const doc = store.readProse(r.headId);
+    const row = store.row(r.headId);
+    return {
+      title: doc.title ?? "",
+      text: doc.body.trim(),
+      kind: store.physicsOf(r.headId).kind,
+      learnedOn: doc.learnedOn,
+      journal: row === undefined ? false : isJournal(row),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function memoryDetail(src: DashboardSource, id: string): MemoryDetail {
   const store = src.store;
   const day = store.livedDay();

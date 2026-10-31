@@ -517,13 +517,12 @@ export function mechanismsLines(report: FiredReport, verdicts: readonly Verdict[
  *   that loses (the winner revised in turn — X, then Y, then Z — is the
  *   ordinary revision chain and is not counted at all).
  * - SHOWN ONLY — the loser shown (a `recall.decision` loud line or footnote,
- *   a `recall_turns` row, a rating below 3) or opened (an `expanded` credit),
- *   and not drawn on.
+ *   a rating below 3) or opened (an `expanded` credit), and not drawn on.
  *
  * BY BUILD: a row that carries JSON says its build at write time (#591):
  * event payloads and `memories.meta`; a row from before the stamp says none
- * (`pre-stamp`). A pair (no JSON column) and a `recall_turns` row take the
- * build that had the store on their lived day, from the build log. Each build
+ * (`pre-stamp`). A pair (no JSON column) takes the build that had the store
+ * on its lived day, from the build log. Each build
  * carries its exposure beside its counts — its recall turns in the window and
  * the lived days they fell on — so two builds' numbers can be read side by
  * side. A build's shown-only is what it showed and did not itself draw on.
@@ -596,7 +595,7 @@ const SETTLED_EXAMPLES = 5;
 
 type SettledStore = Pick<
   ReadOnlyStore,
-  "contradictions" | "contradictionSettles" | "eventLog" | "list" | "row" | "recallTurns" | "buildLog" | "livedDay" | "zone"
+  "contradictions" | "contradictionSettles" | "eventLog" | "list" | "row" | "buildLog" | "livedDay" | "zone"
 >;
 
 interface SettledPair {
@@ -805,21 +804,6 @@ export function settledReading(store: SettledStore, today: string, window: numbe
       exposure.set(build, x);
       for (const id of [...idList(p["surfaced"]), ...idList(p["footnotes"])]) loserHit("shown", id, e.day, e.at, build, `ev:${String(e.seq)}`);
     }
-    try {
-      for (const t of store.recallTurns({ sinceDay })) {
-        if (!inWindow(t.at)) continue;
-        let shown: unknown = [];
-        try {
-          shown = JSON.parse(t.shown);
-        } catch {
-          shown = [];
-        }
-        for (const id of idList(shown)) loserHit("shown", id, t.day, t.at, buildOnDay(t.day), `turn:${t.session_id}#${String(t.turn)}`);
-      }
-    } catch {
-      /* a store before v14 keeps no per-turn rows: the decision rows above stand */
-    }
-
     // Newer pairs naming either side.
     for (const n of store.contradictions({ limit: Number.MAX_SAFE_INTEGER })) {
       if (n.state === "withdrawn" || !inWindow(n.created_at)) continue;

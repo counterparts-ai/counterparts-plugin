@@ -1,5 +1,6 @@
 /** The composition root's event names, their field lists, and the builders of the records it files under them (moved out of `counterpart.ts`, 2026-10-11). */
 import { TERMINAL_ARCHIVE_LATCHES } from "./associate/index.js";
+import { whyShown } from "./recall/index.js";
 import type { CandidateVerdict, RecallDecision } from "./recall/index.js";
 import type { ProposalSource } from "./remember/index.js";
 import type {
@@ -907,6 +908,7 @@ export const RECALL_DECISION_FIELDS = [
   "surfaced",
   "footnotes",
   "elapsedMs",
+  "lateMs",
   "aborted",
   // Association build 1 (2026-09-28): what spreading did, and the cut's count.
   "spread",
@@ -961,6 +963,11 @@ function tierRows(
   id: string;
   sal: number | null;
   activation: number | null;
+  cue?: number;
+  sem?: number;
+  pair?: number;
+  bar?: number;
+  standsFor?: string;
   via?: "link" | "see-also";
   seeAlso?: { readonly by: string };
   habituated?: true;
@@ -977,6 +984,13 @@ function tierRows(
       id,
       sal: v?.sal ?? null,
       activation: v?.activation ?? null,
+      // WHY IT SHOWED (F1, 2026-10-30): what the words gave, what meaning gave,
+      // the part of the words' that learned pairs gave, and the bar it cleared.
+      // Copied off the verdict, rounded; ids and numbers only, like the rest.
+      ...(v === undefined ? {} : whyShown(v)),
+      // A head standing in for the earlier memory the turn reached: which one.
+      // The render says so in its `(earlier: …)`; until F1 the row did not.
+      ...(v?.standsFor === undefined ? {} : { standsFor: v.standsFor }),
       ...(v?.via === undefined ? {} : { via: v.via }),
       // And a memory brought along because a shown one names its id
       // (see-also, 2026-10-29): which one named it, so a rating joins to it.
@@ -1063,11 +1077,10 @@ export function recallDecisionRecord(
     surfaced: tierRows(d.surfaced, d.verdicts),
     footnotes: tierRows(d.footnotes, d.verdicts),
     // The surfacing race, as the decision itself reports it. `aborted` is always
-    // false in a written row — an abort writes nothing at all (recall §5 G2) —
-    // and the field stays so the asymmetry is legible rather than assumed: the
-    // timeout arm is counted where a timeout is still allowed to be seen, the
-    // adapter's own `adapter.recall {reason: "latency-abort"}`.
+    // false, and since LT1 (2026-10-30) a slow turn is written too, with how far
+    // past the line it ran: `lateMs` is what the old `latency-abort` counted.
     elapsedMs: d.elapsedMs,
+    lateMs: d.lateMs,
     aborted: d.aborted,
     // What spreading did this turn and how many scored candidates the cut left
     // out — counts only (association build 1, 2026-09-28). `spread` is null on

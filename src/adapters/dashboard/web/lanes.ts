@@ -122,6 +122,7 @@ export const LANES = {
   "associate.flush": "flow",
   "handoff.refused": "flow",
   "handoff.lasthere.noroom": "flow",
+  "handoff.daysummary.held": "flow",
   "self.work.overflow": "flow",
   "self.project.line": "flow",
   "adapter.envelope.overcap": "flow",

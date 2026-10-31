@@ -10,6 +10,7 @@ import { SpanBuffer } from "../../core/remember/index.js";
 import { COVERAGE_TUNABLES, lapsesSince, ledger } from "../../core/coverage/index.js";
 import type { LedgerEntry } from "../../core/coverage/index.js";
 import {
+  folderSetAside,
   hostOf,
   hostSessionEvidence,
   listSessions,
@@ -22,6 +23,8 @@ import {
   writeUpEntries,
   writeUpPlan,
 } from "../sessions.js";
+import type { FolderOn } from "../sessions.js";
+import { foldersOn, readScopes, scopesPath } from "../scopes.js";
 import { DESKTOP_HOST } from "../hosts.js";
 import { catchUpOf, CATCH_UP_RUN_PREFIX, catchUpWords } from "./night-catch-up.js";
 import type { DoctorInput } from "./doctor.js";
@@ -70,6 +73,8 @@ export interface OwedReading {
   readonly unpointedNoRecord: number;
   /** The newest catch-up row's time (`catchUpOf`, any age), or null. */
   readonly lastCatchUpAt: number | null;
+  /** The folder setting these counts were read under, when one was. */
+  readonly folders?: FolderOn;
 }
 
 /** "1 overdue (a catch-up has run since, or 2 days of use)": the clause the
@@ -116,9 +121,23 @@ function lastCatchUpAt(store: Store): number | null {
   }
 }
 
+/**
+ * THE FOLDER SETTING DOCTOR COUNTS UNDER. A file that will not read is no
+ * setting here: the catch-up takes nothing while it is broken (`scopes.ts#foldersOn`),
+ * and a count of what it can't take is what shows that, rather than a reading of
+ * "nothing owed" over a night that could not run. `counterparts coverage` reads
+ * the same.
+ */
+export function owedFolders(configPath: string): FolderOn | undefined {
+  const file = scopesPath(configPath);
+  return readScopes(file).error === null ? foldersOn(file) : undefined;
+}
+
 /** `failed` when it cannot be read. It reads every scope's captured words, so
- *  the budgeted session-start reading never calls it. */
-export function readOwed(store: Store): OwedReading | "failed" {
+ *  the budgeted session-start reading never calls it. `folders`: the folder
+ *  setting. A session whose folder is off, observer or paused is no debt the
+ *  catch-up could clear, so it is in none of these counts (2026-10-30). */
+export function readOwed(store: Store, folders?: FolderOn): OwedReading | "failed" {
   try {
     const now = store.now();
     // READ-ONLY by construction: an observer buffer writes nothing, and it
@@ -129,13 +148,25 @@ export function readOwed(store: Store): OwedReading | "failed" {
     const host = hostSessionEvidence(store);
     const entries = ledger(spans, { now, zone, host: (s) => ({ endedAt: host(s).endedAt }) });
     const all = entries.filter((e) => e.owed);
-    const why = new Map(all.map((e) => [e.session, notPointableWhy(e, store.dir)]));
+    const why = new Map(all.map((e) => [e.session, notPointableWhy(e, store.dir, folders)]));
     const owed = all.filter((e) => why.get(e.session) === null);
     const night = lastCatchUpAt(store);
     const stale = owed.filter((e) => overdue(e, zone, night)).length;
     const headless = all.filter((e) => why.get(e.session) === "headless").length;
     const noRecord = all.filter((e) => why.get(e.session) === "no-record").length;
-    return { spans, plan, entries, now, waiting: owed.length, stale, unpointed: headless + noRecord, unpointedHeadless: headless, unpointedNoRecord: noRecord, lastCatchUpAt: night };
+    return {
+      spans,
+      plan,
+      entries,
+      now,
+      waiting: owed.length,
+      stale,
+      unpointed: headless + noRecord,
+      unpointedHeadless: headless,
+      unpointedNoRecord: noRecord,
+      lastCatchUpAt: night,
+      ...(folders === undefined ? {} : { folders }),
+    };
   } catch {
     return "failed";
   }
@@ -144,6 +175,18 @@ export function readOwed(store: Store): OwedReading | "failed" {
 /** The shared owed reading as a line asks for it: `null` when this reading
  *  does not take it (the budgeted session-start reading). */
 export type OwedSource = () => OwedReading | "failed" | null;
+
+/**
+ * THE NIGHT, HELD (2026-10-30): red for as long as the folder setting won't read,
+ * because the night isn't running at all (`night-run.ts`, the door's `nightHeld`):
+ * no page, no dream, no reflection. Read from the file, so it clears when it's fixed.
+ */
+export function nightHeldFindings(configPath: string): Finding[] {
+  const file = scopesPath(configPath);
+  const read = readScopes(file);
+  if (read.error === null) return [];
+  return [finding("night-held", "red", "The night", `held: ${tilde(file)} will not read (${read.error}), so there is no page, dream or reflection until it does`, `Fix or remove ${tilde(file)}.`, { path: file })];
+}
 
 export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReading: OwedSource): Finding[] {
   const title = "Catch-up";
@@ -197,6 +240,7 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
       const here = key.slice(bar + 1);
       const h = plan.find((x) => x.session === session);
       if (h === undefined || !h.owes) continue;
+      if (reading.folders !== undefined && folderSetAside(h, store.dir, reading.folders)) continue;
       const elsewhere = h.scopes.filter(
         (scope) =>
           !sameScope(scope, here) &&
@@ -252,6 +296,12 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
       .filter((w) => w.length > 0)
       .join("; ");
   const pointer = readWriteUpPointer(store);
+  // A FOLDER SETTING THAT WILL NOT READ takes nothing from the catch-up, so the
+  // advice below would send a person to a command that can't help while the
+  // text goes on aging. Said at once, not when it goes overdue. Asked only when
+  // something is owed, so the budgeted session-start reading never reads it.
+  const scopesFile = (waiting ?? 0) > 0 && input.configReason !== "not-read" ? scopesPath(input.configPath) : null;
+  const scopes = scopesFile === null ? null : readScopes(scopesFile);
   const data = {
     mode: "next-session",
     waiting,
@@ -272,6 +322,18 @@ export function crashWriteUpFindings(input: DoctorInput, store: Store, owedReadi
     // they stay owed, so `waiting` already counts their sessions.
     nightUnread: night?.unread ?? null,
   };
+  if (scopes !== null && scopes.error !== null) {
+    return [
+      finding(
+        "crash-write-up",
+        "amber",
+        title,
+        `${detail} — no write-ups are being taken: ${tilde(scopesFile ?? "")} will not read (${scopes.error})`,
+        `Fix or remove ${tilde(scopesFile ?? "")}; the night and counterparts catch-up take nothing until then, and text that ages out meanwhile is lost.`,
+        data,
+      ),
+    ];
+  }
   // THE POINTER IS NOT GETTING OUT (PR #192 review, MAJOR 1 and m4): opening a
   // session there would only defer again, so the advice says why and by how much.
   if (!auto && pointer !== null && pointer.outcome === "deferred" && (waiting ?? 0) > 0) {

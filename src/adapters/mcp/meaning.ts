@@ -128,6 +128,8 @@ export interface MeaningContext {
   readonly asker?: FeelingWhose;
   /** The lived day, for a test; the store's own otherwise. */
   readonly day?: number;
+  /** What a night's reader may not be shown (`core/dream/slices.ts`): read as removed. */
+  readonly closed?: ReadonlySet<string>;
 }
 
 /** What the arc is about. */
@@ -389,7 +391,7 @@ export function meaningRecall(ctx: MeaningContext, question: string, opts: { pag
     owner: asker === "owner" ? "mine" : ownerName === null ? "the owner's" : `${ownerName}'s`,
   };
   const page = Number.isInteger(opts.page) && (opts.page as number) >= 1 ? (opts.page as number) : 1;
-  const denied = new Set(safe(() => store.deniedIds(), [] as string[]));
+  const denied = new Set([...safe(() => store.deniedIds(), [] as string[]), ...(ctx.closed ?? [])]);
   const rows = new Map<string, MemoryRow | null>();
   /** A memory row the asker may see, or null: live, not superseded, not removed. */
   const usable = (id: string): MemoryRow | null => {

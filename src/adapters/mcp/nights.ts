@@ -110,6 +110,8 @@ export interface ReflectionSummary {
   /** The memory its entry became. */
   readonly entryId: string | null;
   readonly share: string | null;
+  /** The night's own line (`Reflections#finish`'s `line`, NL1): absent on an older row and on a night that left it empty. */
+  readonly line?: string;
   /** `none`, `offered`, `carried`, `told`. */
   readonly shareState: string;
   readonly told: boolean;
@@ -235,6 +237,7 @@ function reflectionSummary(store: Store, r: ReflectionRow, entryMax: number = NI
     ...(entry?.chars === undefined ? {} : { entryChars: entry.chars }),
     entryId: r.entry_id,
     share: r.share,
+    ...(typeof d["line"] === "string" && d["line"].length > 0 ? { line: d["line"] } : {}),
     shareState: r.share_state,
     told: r.share_state === "told",
     cites: capped(ids(r.cites)),
@@ -300,6 +303,7 @@ export interface ReflectionPointer {
   readonly id: string;
   readonly date: string | null;
   readonly title: string | null;
+  readonly line?: string;
   readonly shareState: string;
   readonly told: boolean;
 }
@@ -337,7 +341,7 @@ export function readLastNight(counterpart: Counterpart, room: number = LAST_NIGH
     if (r === null || after === undefined || fits(r)) return { dream: d, reflection: r };
     const summary = reflectionSummary(store, after);
     if (fits(summary)) return { dream: d, reflection: summary, reflectionCut: "summary" };
-    const pointer: ReflectionPointer = { kind: "reflection", id: r.id, date: r.date, title: r.title, shareState: r.shareState, told: r.told };
+    const pointer: ReflectionPointer = { kind: "reflection", id: r.id, date: r.date, title: r.title, ...(r.line === undefined ? {} : { line: r.line }), shareState: r.shareState, told: r.told };
     return { dream: d, reflection: pointer, reflectionCut: "pointer" };
   } catch {
     return { dream: null, reflection: null };

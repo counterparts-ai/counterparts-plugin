@@ -167,6 +167,22 @@ export interface SelfTunables {
    * the revert: every credited use carries it (`Store#openThreadTouches`).
    */
   OPEN_CARRY_GLIMPSE_TOUCH: boolean;
+  /**
+   * "MIGHT BE RELEVANT" IN THE WAKE (WK1, 2026-10-30; ROADMAP's call, for
+   * Mike's review). Off: on a store with a self page the hints lane is empty in
+   * every composition — the turn-end's and the session start's — so the wake has
+   * no "Might be relevant:" list and no count or "no room to list them" line
+   * for it. A store with no page yet keeps the lane: it is all that store's
+   * wake has of its memories, its first days, and the room it was crowding is
+   * the page's.
+   * Ambient recall does that job on every turn, with ratings; measured on the
+   * owner's store the lane showed on 4 of 29 days since 10-02 and its
+   * tombstone line ("Might be relevant: 8 — no room to list them") on most of
+   * the rest. A publish with the lane empty closes every open `wake_display`
+   * showing (`Store#recordHintDisplay`), so a later use is organic again.
+   * On: the lane as before (`HINTS_MAX`, `hintReading`).
+   */
+  HINTS_IN_WAKE: boolean;
   /** Most warm-shelf hints considered. CAL. */
   HINTS_MAX: number;
   /** Most arriving occasions considered. CAL. */
@@ -185,6 +201,15 @@ export interface SelfTunables {
    * the lane as before, its first `HORIZON_ITEMS` by date.
    */
   COMING_UP_TODAY_ONLY: boolean;
+  /**
+   * HOW MANY OVERDUE ITEMS "COMING UP" LISTS (WK1, 2026-10-30; ROADMAP's
+   * call, for Mike's review): the oldest past their date, each by title and
+   * its "was due" date, after what is due today; the rest are counted, and
+   * the `still open` handle lists them. They take room like any of the
+   * lane's lines past its first (`ROOM_ORDER`'s `arriving`). 0: every
+   * overdue item counted, as before. CAL.
+   */
+  COMING_UP_OVERDUE_LISTED: number;
   /** A non-identity element must reach this decayed strength to be craft or a
    *  hint. Identity elements are constitutive and face no floor (contract §3:
    *  "identity is re-inhabited, not retrieved"). CAL. */
@@ -477,6 +502,15 @@ export interface SelfTunables {
    * history is in self NOTES, "The cap moved off the lived day"). CAL.
    */
   MAX_ASKS_PER_SESSION: number;
+  /**
+   * WHAT A NEW UNMARKED OR WORK CHAPTER SUMMARY IS BORN CLAIMING (F1,
+   * 2026-10-30; decided by ROADMAP, marked for Mike's review; was the self-kind
+   * default, 0.4, which a summary marked me, us or owner keeps). New rows only:
+   * a summary already written keeps its claim. On the 10-30 copy: 324 of 464
+   * live summaries below reach, no use-days lost in the 15-day replay.
+   * `docs/CHECK-AFTER.md`. Back to 0.4 to revert. CAL.
+   */
+  CHAPTER_SUMMARY_CLAIM: number;
 }
 
 export const SELF_TUNABLES: SelfTunables = {
@@ -499,9 +533,11 @@ export const SELF_TUNABLES: SelfTunables = {
   STILL_OPEN_STALE_DAYS: 14,
   OPEN_CARRY_DAYS: 14,
   OPEN_CARRY_GLIMPSE_TOUCH: false,
+  HINTS_IN_WAKE: false,
   HINTS_MAX: 8,
   HORIZON_MAX: 6,
   COMING_UP_TODAY_ONLY: true,
+  COMING_UP_OVERDUE_LISTED: 2,
   WARM_FLOOR: 0.35,
 
   HINT_STEP: 1,
@@ -520,6 +556,7 @@ export const SELF_TUNABLES: SelfTunables = {
   PAGE_WRITER_MEMORY_MAX: 40,
   DAYS_END_INPUT: true,
   DAYS_END_MEMORIES: 12,
+  CHAPTER_SUMMARY_CLAIM: 0.25,
   DAY_SUMMARY: true,
   DAY_SUMMARY_CHARS: 600,
   PAGE_WRITER_ASKS_PER_DAY: 2,

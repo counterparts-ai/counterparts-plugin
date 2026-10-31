@@ -34,6 +34,7 @@ import { parseArgs } from "node:util";
 
 import { CLAIMED_DEFAULT_META_KEY } from "../../core/mint.js";
 import {
+  DATA_DIR_ENV,
   ID_PREFIX,
   Store,
   storeExists,
@@ -54,6 +55,9 @@ import {
   resolveConfigPath,
 } from "../config-path.js";
 import { OBSERVER_ENV, observerFromEnv, unreadableStanceLine } from "../stance-env.js";
+import { owedFolders } from "../claude-code/doctor-write-ups.js";
+import { describeScopeTrouble, readScopes, scopesPath } from "../scopes.js";
+import type { FolderOn } from "../sessions.js";
 import type { LogEntry } from "../log/index.js";
 import { zoneBeside } from "../config.js";
 // The one answer to "is there an embedder", shared with the hook, the worker and
@@ -98,7 +102,7 @@ import {
   requireDirFlagForBulkWrite,
   openStoreAt,
 } from "./commands-shared.js";
-import type { Io, RunOptions } from "./commands-shared.js";
+import type { Io, Parsed, RunOptions } from "./commands-shared.js";
 import {
   doctorCommand,
   statusCommand,
@@ -1188,6 +1192,23 @@ export function unknownFlag(command: Command, argv: readonly string[]): string |
   return null;
 }
 
+/**
+ * THE FOLDER SETTING `coverage` READS (2026-10-30): the one beside the
+ * configuration, for the default store. A store named by `--dir` or its
+ * variable has no configuration read for it, so no setting either. A setting
+ * that will not read is doctor's case (`owedFolders`): the debts stay counted
+ * and listed, not filed under "folder off", and the trouble is said.
+ */
+function coverageFolders(parsed: Parsed, io: Io, env: Record<string, string | undefined>, opts: RunOptions): FolderOn | undefined {
+  if (typeof parsed.flags["dir"] === "string" || (env[DATA_DIR_ENV] ?? "").length > 0) return undefined;
+  const choice = resolveConfigPath([], env, opts.home ?? homedir());
+  if (choice.refusal !== null) return undefined;
+  const file = scopesPath(choice.path);
+  const read = readScopes(file);
+  if (read.error !== null) io.err(describeScopeTrouble(read, file) ?? "");
+  return owedFolders(choice.path);
+}
+
 export async function run(argv: readonly string[], opts: RunOptions): Promise<number> {
   const { io } = opts;
   const env = opts.env ?? process.env;
@@ -1730,7 +1751,7 @@ export async function run(argv: readonly string[], opts: RunOptions): Promise<nu
       case "project":
         return projectCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string", opts.home ?? homedir());
       case "coverage":
-        return coverageCommand(dir, io, parsed, now, typeof parsed.flags["dir"] === "string");
+        return coverageCommand(dir, io, parsed, now, typeof parsed.flags["dir"] === "string", coverageFolders(parsed, io, env, opts));
     }
   } catch (err) {
     io.err(upgradePending(err) ?? `${command} failed: ${describeDirRefusal(err)}`);

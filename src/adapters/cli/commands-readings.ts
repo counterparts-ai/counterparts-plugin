@@ -28,6 +28,7 @@ import {
   storeExists,
 } from "../../core/store/index.js";
 import type { Band, Kind } from "../../core/types.js";
+import type { FolderOn } from "../sessions.js";
 // The ONE rule for "which host configuration": the console resolves it with the
 // same function the hook, the worker and the MCP server do.
 import { defaultConfigPath } from "../config-path.js";
@@ -304,7 +305,7 @@ export function logEntryLine(entry: LogEntry, zone: string, said: string | null 
  * (2026-09-30). Read-only: the store and the span buffer open as instruments,
  * and every decision is `core/coverage/`'s (`coverage.ts` prints it).
  */
-export function coverageCommand(dir: string, io: Io, parsed: Parsed, now: () => number, namedDir: boolean): number {
+export function coverageCommand(dir: string, io: Io, parsed: Parsed, now: () => number, namedDir: boolean, folders?: FolderOn): number {
   if (!storeExists(dir)) {
     io.err(`No store at ${dir}. Run 'counterparts init${namedDir ? ` --dir ${dir}` : ""}' to create one.`);
     return EXIT.usage;
@@ -323,7 +324,7 @@ export function coverageCommand(dir: string, io: Io, parsed: Parsed, now: () => 
   }
   try {
     const today = localDate(now(), store.zone());
-    for (const line of coverageLines({ store, date: typeof asked === "string" ? asked : today, today })) io.out(line);
+    for (const line of coverageLines({ store, date: typeof asked === "string" ? asked : today, today, ...(folders === undefined ? {} : { folders }) })) io.out(line);
     return EXIT.ok;
   } finally {
     store.close();

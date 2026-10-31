@@ -877,6 +877,9 @@ export const TUNABLES: RecallTunables = {
   // cold case with headroom. The structural fix (why the index churns after each
   // cycle) is the day-1 watch; this is the calibration that makes recall exist
   // in the meantime. CAL.
+  // SINCE LT1 (2026-10-30) NOTHING STOPS AT THIS LINE. It only names a turn late
+  // (`lateMs` on the decision row). Both checks came after the slow work, so an
+  // abort threw away a finished answer to save about 5 ms: 5.5% of turns.
   BUDGET_MS: 1200,
 
   MAX_SESSION_RECORDS: 200,

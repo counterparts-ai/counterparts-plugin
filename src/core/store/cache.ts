@@ -64,7 +64,10 @@ const DDL: readonly string[] = [
      tf        INTEGER NOT NULL,
      PRIMARY KEY (memory_id, token)
    )`,
-  `CREATE INDEX IF NOT EXISTS doc_tokens_token ON doc_tokens (token)`,
+  // The index a word is looked up by is NOT here, on purpose: `POSTINGS_COVER`,
+  // below, made only on an empty table or by the worker, so a cache migrated at
+  // open on the hook path never builds it there.
+  //
   // Document length, in indexed tokens — SUM(tf) over the row's `doc_tokens`.
   //
   // It is DERIVED FROM `doc_tokens` AND NOTHING ELSE, which is the whole reason
@@ -125,6 +128,45 @@ const DDL: readonly string[] = [
    )`,
   `CREATE INDEX IF NOT EXISTS neighbours_neighbour ON neighbours (neighbour_id)`,
 ];
+
+/**
+ * THE COVERING INDEX ON THE POSTINGS (LT1, 2026-10-30). A lookup by word needs
+ * `memory_id` and `tf`. With an index on `token` alone each posting is a random
+ * trip back to the table, so a word on 4,926 documents is 4,926 trips.
+ *
+ * NOT A FORMAT CHANGE, and no version moves. Every build reads and maintains
+ * either index the same way (the planner finds them by table, not by name), so
+ * an older build on a covered cache works and a rebuild there puts the old index
+ * back; `coverPostings` then swaps it again. Keyed on its NAME in `sqlite_master`,
+ * so a later change to its columns needs a new name.
+ */
+const POSTINGS_COVER = "doc_tokens_cover";
+/** What it replaces: every query it served, the covering index serves. */
+const POSTINGS_TOKEN_ONLY = "doc_tokens_token";
+
+function makePostingsCover(db: Db): void {
+  db.exec(`CREATE INDEX IF NOT EXISTS ${POSTINGS_COVER} ON doc_tokens (token, memory_id, tf)`);
+  db.exec(`DROP INDEX IF EXISTS ${POSTINGS_TOKEN_ONLY}`);
+}
+
+/** True when the postings already have their covering index. */
+export function postingsCovered(db: Db): boolean {
+  return db.get<{ one: number }>("SELECT 1 AS one FROM sqlite_master WHERE type = 'index' AND name = ?", POSTINGS_COVER) !== undefined;
+}
+
+/**
+ * Build the covering index on a cache that has words already, and drop the one it
+ * replaces, in one transaction. The worker's: on a large store this is seconds
+ * of writing, and a hook cannot pay for it. False when another process built it
+ * while this one waited for the lock, so only the one that built it says it did.
+ */
+export function coverPostings(db: Db): boolean {
+  return db.transaction(() => {
+    if (postingsCovered(db)) return false;
+    makePostingsCover(db);
+    return true;
+  });
+}
 
 const TABLES = ["doc_tokens", "doc_lens", "embeddings", "cache_meta", "ranking", "neighbours"] as const;
 
@@ -306,6 +348,9 @@ export function openCache(path: string): Db {
       // (`restemBatch`); lookups ask for both forms meanwhile (and after).
       if (db.get<{ one: number }>("SELECT 1 AS one FROM doc_tokens LIMIT 1") === undefined) {
         db.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", TERMS_META_KEY, STEMMER_VERSION);
+        // Nothing to index yet, so the covering index costs nothing here. A cache
+        // with words keeps the index it has until the worker's `coverPostings`.
+        makePostingsCover(db);
       }
       // v5: a tag found on a cache stamped BELOW 5 means a v5 build tagged it
       // and an OLDER build then stamped the version down (any 0.2.0 process,
@@ -808,6 +853,7 @@ export function resetCache(db: Db, opts: { keepEmbeddings?: boolean } = {}): voi
       : [];
     for (const t of drop) db.exec(`DROP TABLE IF EXISTS ${t}`);
     for (const sql of DDL) db.exec(sql);
+    makePostingsCover(db);
     db.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('schemaVersion', ?)", String(CACHE_SCHEMA_VERSION));
     // The index is empty now, and everything a rebuild writes is stemmed (v7).
     db.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", TERMS_META_KEY, STEMMER_VERSION);
@@ -1356,9 +1402,9 @@ export function searchIndex(
  * test and grew with the store.
  *
  * `doc_tokens` is keyed `(memory_id, token)`, so `COUNT(*)` per token IS the
- * document count — no `DISTINCT` needed, and the `doc_tokens_token` index
- * covers it. One grouped query for the whole turn: measured 8–36 ms cold and
- * 2–4 ms warm for 72 tokens on that same index.
+ * document count — no `DISTINCT` needed, and the index on the token covers it.
+ * One grouped query for the whole turn: measured 8–36 ms cold and 2–4 ms warm for
+ * 72 tokens on that same index.
  */
 export function docFrequency(db: Db, tokens: readonly string[]): Map<string, number> {
   // v7: each KEY is read as a cue — one word, or several surface words that

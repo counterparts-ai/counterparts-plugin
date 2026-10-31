@@ -22,7 +22,9 @@
  * mechanism's panel, and the memories those rows name — title, kind, the date
  * it was learned, and the first {@link TEXT_CAP} characters of its text.
  * Capped throughout; measured on the demo store it is
- * well under 256 KiB.
+ * well under 256 KiB. The memories come from `memoryWords`, never `memoryDetail`:
+ * a full card a memory was most of what every turn's worker cost (2026-10-30,
+ * `claude-code/NOTES.md`).
  *
  * **When.** Never on a hook's path. The detached worker writes it after every
  * boundary (Stop, SessionEnd: `claude-code/bin/runner.ts`), and the MCP server
@@ -58,7 +60,7 @@ import { feltDetail, narrate } from "./dashboard/web/narrate.js";
 import { mechanismActivity } from "./dashboard/web/views/mechanism-panel.js";
 import { mechanismsView } from "./dashboard/web/views/mechanisms.js";
 import { memoriesHeld } from "./dashboard/web/views/shared.js";
-import { memoryDetail } from "./dashboard/web/views.js";
+import { memoryWords } from "./dashboard/web/views.js";
 import { pluginInstall } from "./host-wiring.js";
 import { FELT_EVENTS, feltScope, payloadOf, primeFelt } from "./mechanism-evidence.js";
 import { PLUGIN_ROOT_ENV } from "./plugin.js";
@@ -367,12 +369,12 @@ function statusOf(src: DashboardSource, now: number, build: string | null, dashb
   const memories: Record<string, SidebarMemory | null> = {};
   for (const id of ids) {
     try {
-      const d = memoryDetail(src, id);
-      if (!d.found) {
+      const d = memoryWords(src, id);
+      if (d === null) {
         memories[id] = null;
         continue;
       }
-      const text = d.text.trim();
+      const text = d.text;
       memories[id] = {
         title: d.title,
         text: text.length > TEXT_CAP ? `${text.slice(0, TEXT_CAP).trimEnd()}…` : text,

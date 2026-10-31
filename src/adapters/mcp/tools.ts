@@ -62,6 +62,7 @@
  */
 import { CORE_EMOTIONS } from "../../core/feelings-wheel.js";
 import { LAST_EXCHANGE_HANDLE } from "../../core/handoff/last-exchange.js";
+import { HANDOFFS_HERE_HANDLE } from "../../core/handoff/index.js";
 import { RECALL_MAX_IDS } from "./deliberate.js";
 import { FACTS_MEANING_CAP, FACTS_PAGE_SIZE, FACTS_TAIL_SIZE } from "./facts.js";
 import { RECURRENCES } from "../../core/time.js";
@@ -924,7 +925,7 @@ const RECALL: ToolSpec = {
       },
       handle: {
         type: "string",
-        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads that night whole, read-only. Or "last dream" (or "last night"): the newest dream whole — title, journal, what it did — and the reflection after it, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page).`,
+        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads that night whole, read-only. Or "last dream" (or "last night"): the newest dream whole — title, journal, what it did — and the reflection after it, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page) — and what its Coming up lists or counts, by title and date. Or "${HANDOFFS_HERE_HANDLE}": this folder's live handoffs, newest first, each by first sentence and id, to expand or retire.`,
       },
       ids: {
         type: "array",
@@ -1124,8 +1125,8 @@ const SESSION_END: ToolSpec = {
     },
     {
       claim:
-        "A finished session that wrote a chapter needs no handoff to be found: the next session in this directory is shown a \"Last here\" line naming the session that last wrote a chapter here, when it was here, the chapter's title and id and its first sentence — worked out from the chapter when the next session starts, never stored. A session that wrote no chapter leaves no such line.",
-      mechanizedBy: "src/core/counterpart.ts#addHandoffPointer -> src/core/handoff/last-here.ts#lastHereLadder",
+        "A finished session that wrote a chapter needs no handoff to be found: the next session in this directory is shown a \"Where this folder stands\" block naming the session that last wrote a chapter here, when it was here, the chapter's title and id and its first sentence — worked out from the chapter when the next session starts, never stored. A session that wrote no chapter leaves no such line.",
+      mechanizedBy: "src/core/counterpart.ts#addHandoffPointer -> src/core/handoff/index.ts#standsLadder",
     },
     {
       claim:
@@ -1877,6 +1878,10 @@ const REFLECT: ToolSpec = {
         description: "`finish`, optional: two or three sentences for the owner this morning, and the memory ids they rest on.",
         properties: { text: { type: "string" }, cites: { type: "array", items: { type: "string" } } },
       },
+      line: {
+        type: "string",
+        description: "`finish`, optional: one or two whole sentences under 300 bytes, for whoever wakes tomorrow. Never cut: past 300 bytes it comes back once, then stays empty.",
+      },
       feelings: {
         type: "array",
         description: "`finish`, optional: how a memory feels to you now.",
@@ -2052,7 +2057,7 @@ export const WAKE: ToolSpec = {
   name: "wake",
   annotations: annotate("Wake", { readOnly: false }),
   summary:
-    "Start here in Claude Desktop: wakes this chat's memory. Returns the same briefing a Claude Code session gets when it starts — who I am, what is nearby and arriving, any reminder due today — and a session id for this chat.",
+    "Start here in Claude Desktop: wakes this chat's memory. Returns the same briefing a Claude Code session gets when it starts — who I am, what is still open and coming up, any reminder due today — and a session id for this chat.",
   admission:
     "Call it first in every new chat, once, before answering anything — above all anything about the person, the past, or work in progress. Then pass the session id it returns as `session` on session_end, chapter, dream and reflect in this chat; a call that leaves it out is filed under the most recent Desktop session, and says so.",
   negativeExamples: [

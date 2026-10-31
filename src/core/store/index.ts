@@ -148,8 +148,10 @@ import {
   nearestVectors,
   heldExits,
   cacheAhead,
+  coverPostings,
   heldEmbedder,
   openCache,
+  postingsCovered,
   searchRefusal,
   reconcileEmbedder,
   recordedEmbedder,
@@ -511,6 +513,8 @@ export const WRITE_METHODS = [
   "pruneDeadIndex",
   // v7 cache (2026-10-19, an experiment): the worker's re-stem of the word index.
   "restemIndex",
+  // The worker's covering index on the word index (LT1, 2026-10-30).
+  "coverPostingsIndex",
   "embedOne",
   // v8 (2026-09-26, dreaming + consolidation).
   "replayReturn",
@@ -4818,8 +4822,8 @@ export class Store {
   }
 
   /** Live named cards with no subject kind, most-linked first, with a few titles each, and how many there are. */
-  unkindedCards(limit: number, titles?: number): { cards: UnkindedCard[]; total: number } {
-    return tagReads.unkindedCards(this, limit, titles);
+  unkindedCards(limit: number, titles?: number, closed?: ReadonlySet<string>): { cards: UnkindedCard[]; total: number } {
+    return tagReads.unkindedCards(this, limit, titles, closed);
   }
 
   /** The topic cards, by the tag each was promoted from (archived ones too). */
@@ -5514,6 +5518,20 @@ export class Store {
     const ms = Math.round(performance.now() - started);
     this.emit("cache.terms.restem", undefined, { ready, examined, changed, ms });
     return { ready, examined, changed, ms };
+  }
+
+  /**
+   * THE WORKER'S COVERING INDEX (LT1, 2026-10-30; `cache.ts#POSTINGS_COVER`):
+   * once, on a cache that has words and an index on the token alone. Never at
+   * open: a hook cannot pay for it. A no-op on a covered cache and on one from a
+   * newer build, which is only read here.
+   */
+  coverPostingsIndex(): { built: boolean; ms: number } {
+    this.assertWritable("coverPostingsIndex");
+    if (postingsCovered(this.cache) || cacheAhead(this.cache) !== null) return { built: false, ms: 0 };
+    const started = performance.now();
+    if (!coverPostings(this.cache)) return { built: false, ms: 0 };
+    return { built: true, ms: Math.round(performance.now() - started) };
   }
 
   nearestTo(vec: readonly number[], limit = 10, opts: { minStrength?: number } = {}): Hit[] {

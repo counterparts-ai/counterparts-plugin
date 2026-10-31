@@ -109,6 +109,7 @@ import { NIGHT_DEBUG_DIR, NIGHT_TRANSCRIPT_NAME, TUNABLES, nightDebugDir } from 
 import type { AdapterConfig } from "../config.js";
 import { DEFAULT_HOST_COMMAND, KILL_GRACE_MS, PERMISSION_MODE, REAP_GRACE_MS, startChild } from "./child.js";
 import { runCatchUp } from "./night-catch-up.js";
+import { foldersOn, readScopes, scopesPath } from "../scopes.js";
 import type { CatchUpReport } from "./night-catch-up.js";
 import { childFailure } from "./child-error.js";
 import type { ChildFailure } from "./child-error.js";
@@ -707,6 +708,7 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
     const report = await runCatchUp({
       open: input.open,
       config: input.config,
+      ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
       run: input.run,
       scope: input.scope,
       seat,
@@ -732,6 +734,12 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
     }
   }
 
+  // A FOLDER SETTING THAT WON'T READ HOLDS THE NIGHT (2026-10-30): every folder is
+  // closed to it then (`scopes.ts#foldersOn`), and a page, dream or reflection written
+  // from what's left would be thin and say nothing. No child runs; the row says why
+  // (a `could-not-start`, so the next session asks and its door says the same), and
+  // doctor is red for as long as the file stays broken.
+  const settingBroken = input.configPath !== undefined && input.configPath.length > 0 && readScopes(scopesPath(input.configPath)).error !== null;
   // A STORE THAT WILL NOT OPEN is not opened a second time just to say so:
   // the row stays `started`, and past its watchdog the gate reads it as LOST
   // and asks instead (review of #282, finding 4).
@@ -745,22 +753,25 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
     const c = first;
     try {
       if (date.length === 0) date = c.store.today();
-      // THE WHOLE NIGHT'S FIRST CHILD stops at the dream's journal
-      // (2026-10-11): the reflection is its own child, below.
-      prompt =
-        input.kind.kind === "night"
-          ? c.dreams.launchPrompt({ session: input.session, reflect: false, ...(split ? { parts: ["dream"] as const } : {}) })
-          : c.reflections.launchPrompt({ session: input.session, dream: input.kind.dream });
-      if (split) writerPrompt = c.dreams.launchPrompt({ session: input.session, reflect: false, parts: ["writer"] });
-      // STARTED, by this process, before the child: the hook wrote `started`
-      // when it launched this process; this row carries the same run on.
-      c.dreams.recordNightRun({ ...base(c), state: "started", endedAt: null, reason: null, detail: null, code: null, dream: null, reflection: null });
+      if (!settingBroken) {
+        // THE WHOLE NIGHT'S FIRST CHILD stops at the dream's journal
+        // (2026-10-11): the reflection is its own child, below.
+        prompt =
+          input.kind.kind === "night"
+            ? c.dreams.launchPrompt({ session: input.session, reflect: false, ...(split ? { parts: ["dream"] as const } : {}) })
+            : c.reflections.launchPrompt({ session: input.session, dream: input.kind.dream });
+        if (split) writerPrompt = c.dreams.launchPrompt({ session: input.session, reflect: false, parts: ["writer"] });
+        // STARTED, by this process, before the child: the hook wrote `started`
+        // when it launched this process; this row carries the same run on.
+        c.dreams.recordNightRun({ ...base(c), state: "started", endedAt: null, reason: null, detail: null, code: null, dream: null, reflection: null });
+      }
     } finally {
       c.close();
     }
   } catch (err) {
     return ended({ state: "could-not-start", reason: "refused", detail: err instanceof Error ? err.name : "UNKNOWN", code: null });
   }
+  if (settingBroken) return ended({ state: "could-not-start", reason: "folder-setting", detail: null, code: null });
   // The night's own turn ceiling and watchdog on every ask: the row's watchdog
   // is computed from the same two (`nightChildrenTimeoutMs`), whoever answers.
   const limits = { turns: nightMaxTurns(input.config), ms: nightTimeoutMs(input.config) };
@@ -843,7 +854,7 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   // exit never becomes the run's: a night is its dream and its reflection.
   // Nothing to ask is no child and no line on the row.
   if (input.kind.kind === "night") {
-    const tags = await tagsAfter(input.open, seat, (text) => seatAsk("tags", { prompt: text, run: input.run, session: input.session, scope: input.scope, limits: { turns: TUNABLES.NIGHT_TAGS_MAX_TURNS, ms: TUNABLES.NIGHT_TAGS_MS } }), input.session);
+    const tags = await tagsAfter(input.open, seat, (text) => seatAsk("tags", { prompt: text, run: input.run, session: input.session, scope: input.scope, limits: { turns: TUNABLES.NIGHT_TAGS_MAX_TURNS, ms: TUNABLES.NIGHT_TAGS_MS } }), input.session, input.configPath);
     if (tags !== null) children.push(tags);
   }
   // THE RUN'S EXIT, from its children: stopped if any was stopped; the first
@@ -1336,13 +1347,14 @@ async function writerFirst(
  * night's row reads as it did before the child existed. Skipped and said when
  * the store will not open. Otherwise one ask to the seat. Never throws.
  */
-async function tagsAfter(open: () => Counterpart, seat: Seat<NightAnswer>, ask: (prompt: string) => SeatAsk, session: string): Promise<NightChildRun | null> {
+async function tagsAfter(open: () => Counterpart, seat: Seat<NightAnswer>, ask: (prompt: string) => SeatAsk, session: string, configPath?: string): Promise<NightChildRun | null> {
   if (!SCHEMAS_TUNABLES.TAGS_NIGHT) return null;
   let prompt: string;
   try {
     const c = open();
     try {
-      const b = tagsBundle(c.store);
+      // What its door will ask (`dream/slices.ts`): rows it may not read stay untagged, and aren't a night's tagging.
+      const b = tagsBundle(c.store, configPath === undefined || configPath.length === 0 ? undefined : c.fenceNight(foldersOn(scopesPath(configPath))));
       if (b.memories.length === 0 && b.pairs.length === 0 && b.cards.length === 0) return null;
       prompt = tagsPrompt({ session });
     } finally {

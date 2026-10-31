@@ -598,9 +598,10 @@ function verifyRebuild(dir: string, io: Io, dropVectors: boolean, keepVectors: b
       io.out(`Canonical rows: ${canonical}`);
       io.out(`Re-indexed: ${report.indexed}`);
       io.out(`Skipped as removed (deny-list): ${report.skippedDenied}`);
+      io.out(`Skipped as not live (archived or superseded): ${report.skippedArchived}`);
       io.out(`Vectors kept: ${report.keptVectors}   dropped as no longer canonical: ${report.droppedVectors}`);
       io.out(`Not recomputed: ${report.unrecomputed}`);
-      const accounted = report.indexed + report.skippedDenied;
+      const accounted = report.indexed + report.skippedDenied + report.skippedArchived;
       if (accounted !== canonical) {
         io.err(`MISMATCH: ${canonical} canonical rows, ${accounted} accounted for.`);
         return EXIT.failed;

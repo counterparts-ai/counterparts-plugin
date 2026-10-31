@@ -16,6 +16,7 @@
  */
 import { CATCH_UP_RUN_PREFIX, catchUpWords, newCatchUpRunId, plannedParts, runCatchUp } from "../claude-code/night-catch-up.js";
 import { applyReowe, reoweLine, reowePlan } from "../claude-code/reowe.js";
+import { describeScopeTrouble, readScopes, scopesPath } from "../scopes.js";
 import type { Io } from "./commands.js";
 import { typed } from "./ui.js";
 import type { CatchUpPlan, CatchUpReport } from "../claude-code/night-catch-up.js";
@@ -38,7 +39,8 @@ export interface CatchUpCommandInput {
 }
 
 /** The exit: 0 when it did what it could (or there was nothing), 3 when a
- *  child failed, timed out, could not start or stopped short. */
+ *  child failed, timed out, could not start or stopped short, or the folder
+ *  setting will not read, so it could not take anything. */
 export async function catchUpCommand(input: CatchUpCommandInput): Promise<number> {
   const { config } = input;
   const run = newCatchUpRunId();
@@ -61,6 +63,7 @@ export async function catchUpCommand(input: CatchUpCommandInput): Promise<number
     report = await runCatchUp({
       open: () => openNightCounterpart(config, log.event),
       config,
+      ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
       run,
       scope,
       seat: claudeCodeSeat({
@@ -83,6 +86,15 @@ export async function catchUpCommand(input: CatchUpCommandInput): Promise<number
     return 3;
   }
   if (report === null) {
+    // A FOLDER SETTING THAT WILL NOT READ takes nothing (`scopes.ts#foldersOn`),
+    // which is not "nothing owed": doctor sends a person here for those debts,
+    // and their text is on a clock. Said, and not a success.
+    const scopes = input.configPath === undefined ? null : readScopes(scopesPath(input.configPath));
+    if (input.configPath !== undefined && scopes !== null && scopes.error !== null) {
+      log.end("scopes-unreadable", { run });
+      input.err(`Nothing was caught up. ${describeScopeTrouble(scopes, scopesPath(input.configPath)) ?? ""} What is owed waits, and text that ages out meanwhile is lost.`);
+      return 3;
+    }
     log.end("nothing-owed", { run });
     input.out("Nothing to catch up: every ended session is written up.");
     return 0;

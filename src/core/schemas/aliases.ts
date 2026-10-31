@@ -22,6 +22,40 @@
 
 import { nameRegex, occursAsName, unpossessed, wordTokens } from "../encode/words.js";
 
+/**
+ * THE PREFILTER'S TWO SIDES (LT1, 2026-10-30): which words of a text a term's
+ * first word could be, and which term's first word can be looked up at all. It
+ * may try a term that does not match (the whole-word rule then says no) and must
+ * never skip one that does.
+ *
+ * `nameRegex` matches by the `iu` flags' case folding and `wordTokens` by
+ * `toLowerCase`, and those two disagree: a final sigma, a long s, a micro sign.
+ * Exactly one non-ASCII character folds onto an ASCII letter and survives
+ * `toLowerCase` (the long s; the Kelvin sign lower-cases to `k`), so a term in plain
+ * ASCII is safe once that one is mapped. A term with anything else in it is simply
+ * always tried, which is what every term cost before: that also covers U+0345,
+ * which folds to iota and is no word character.
+ *
+ * One input where the hits do move, on no real card or text so far. Under bun,
+ * `nameRegex`'s lookbehind doesn't see a letter outside the BMP as a word character,
+ * so the rule alone finds "kim" in "\u{10400}kim". Node's doesn't, and now neither
+ * does bun for a plain ASCII term, since that text's word is the whole run.
+ */
+function wordsIn(text: string): Set<string> {
+  return new Set(wordTokens(text.replace(/\u017f/gu, "s")).flatMap((t) => [t, unpossessed(t)]));
+}
+
+/** The word to look a term up by; null means try it on every text. */
+function firstWordKey(term: string): string | null {
+  if (!/^[\x00-\x7f]*$/.test(term)) return null;
+  return wordTokens(term)[0] ?? null;
+}
+
+function mayOccur(words: ReadonlySet<string>, term: string): boolean {
+  const key = firstWordKey(term);
+  return key === null || words.has(key);
+}
+
 export interface AliasHit {
   id: string;
   /** The registered term that matched, verbatim as registered. */
@@ -111,13 +145,18 @@ export class AliasIndex {
    * definition — a trailing possessive ("Han's", "James'") read as the name
    * (`encode/words.ts#nameRegex`). Subject links and the crediting of a card a
    * memory names both read this.
+   *
+   * It runs on every prompt, in a fresh process, so it compiles only the terms
+   * whose first word the text holds (LT1, 2026-10-30). The hits are the same:
+   * `mayOccur` only skips work.
    */
   matchesIn(text: string): AliasHit[] {
     const hits: AliasHit[] = [];
+    const words = wordsIn(text);
     for (const [id, reg] of this.byId) {
-      if (occursAsName(text, reg.name)) hits.push({ id, term: reg.name, source: "name" });
+      if (mayOccur(words, reg.name) && occursAsName(text, reg.name)) hits.push({ id, term: reg.name, source: "name" });
       for (const alias of reg.aliases) {
-        if (occursAsName(text, alias)) hits.push({ id, term: alias, source: "alias" });
+        if (mayOccur(words, alias) && occursAsName(text, alias)) hits.push({ id, term: alias, source: "alias" });
       }
     }
     return hits.sort((a, b) => a.id.localeCompare(b.id) || a.term.localeCompare(b.term));
@@ -144,15 +183,17 @@ export class AliasIndex {
    * and anything else that reads the whole store at once.
    */
   scanner(): (text: string) => AliasHit[] {
-    const byFirst = new Map<string, { id: string; term: string; source: "name" | "alias"; re: RegExp }[]>();
-    const always: { id: string; term: string; source: "name" | "alias"; re: RegExp }[] = [];
+    type Entry = { id: string; term: string; source: "name" | "alias"; re: RegExp; order: number };
+    const byFirst = new Map<string, Entry[]>();
+    const always: Entry[] = [];
+    let order = 0;
     for (const [id, reg] of this.byId) {
       const terms: [string, "name" | "alias"][] = [[reg.name, "name"], ...reg.aliases.map((a): [string, "alias"] => [a, "alias"])];
       for (const [term, source] of terms) {
         if (term.trim().length === 0) continue;
-        const entry = { id, term, source, re: nameRegex(term) };
-        const first = wordTokens(term)[0];
-        if (first === undefined) always.push(entry);
+        const entry = { id, term, source, re: nameRegex(term), order: order++ };
+        const first = firstWordKey(term);
+        if (first === null) always.push(entry);
         else {
           const list = byFirst.get(first) ?? [];
           list.push(entry);
@@ -161,12 +202,14 @@ export class AliasIndex {
       }
     }
     return (text: string): AliasHit[] => {
-      const tried = new Set<(typeof always)[number]>(always);
+      const tried = new Set<Entry>(always);
       // A possessive's token ("han's") tries the name it ends ("han") too.
-      const tokens = new Set(wordTokens(text).flatMap((t) => [t, unpossessed(t)]));
-      for (const token of tokens) for (const e of byFirst.get(token) ?? []) tried.add(e);
+      for (const token of wordsIn(text)) for (const e of byFirst.get(token) ?? []) tried.add(e);
       const hits: AliasHit[] = [];
-      for (const e of tried) if (e.re.test(text)) hits.push({ id: e.id, term: e.term, source: e.source });
+      // In registration order, so a tie in the sort below lands as `matchesIn`'s does.
+      for (const e of [...tried].sort((a, b) => a.order - b.order)) {
+        if (e.re.test(text)) hits.push({ id: e.id, term: e.term, source: e.source });
+      }
       return hits.sort((a, b) => a.id.localeCompare(b.id) || a.term.localeCompare(b.term));
     };
   }

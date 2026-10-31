@@ -61,6 +61,7 @@ import { localDate, todayIn } from "../../core/time.js";
 import type { Recurrence } from "../../core/time.js";
 import type { Counterpart, DepositResult } from "../../core/counterpart.js";
 import { LAST_EXCHANGE_HANDLE, lastExchangeAnswer } from "../../core/handoff/last-exchange.js";
+import { HANDOFFS_HERE_HANDLE } from "../../core/handoff/index.js";
 import { loadGateState } from "../../core/recall/index.js";
 import type { SemanticSource } from "../../core/recall/index.js";
 import { AUTHOR_DIMENSIONS } from "../../core/remember/index.js";
@@ -72,7 +73,9 @@ import { UNBOUND_SESSION, isKnownSession } from "../../core/types.js";
 import { recordHandleResolution } from "../expansions.js";
 import {
   canonicalScopePath,
+  foldersOn,
   lookupScope,
+  nightHeldWords,
   readScopes,
   ownEntry,
   resumeTarget,
@@ -123,6 +126,7 @@ import type { AdapterConfig } from "../config.js";
 import { Lifecycle, plainContextLine } from "../lifecycle.js";
 import type { SessionInput } from "../lifecycle.js";
 import { ONE_TAG_LINE, tagLead } from "../store-id.js";
+import { NOTHING_CLOSED } from "../../core/dream/slices.js";
 import { NIGHT_CHILD_ENV, NIGHT_RUN_ENV, WORKER_RUNNER_PATH } from "../spawn.js";
 import type { Spawner } from "../spawn.js";
 import {
@@ -1313,16 +1317,18 @@ export class McpServer {
    * none. Read once per call.
    */
   private folderOn(): ((scope: string) => boolean) | undefined {
-    const file = this.scopesFile;
-    if (file === null) return undefined;
-    let read: ReturnType<typeof readScopes>;
-    try {
-      read = readScopes(file);
-    } catch {
-      return () => false;
-    }
-    if (read.error !== null) return () => false;
-    return (scope) => stanceOfMode(lookupScope(read.registry, scope).mode) === "on";
+    return this.scopesFile === null ? undefined : foldersOn(this.scopesFile);
+  }
+
+  /**
+   * A NIGHT'S DOOR WHILE THE FOLDER SETTING WON'T READ (2026-10-30): the refusal,
+   * or null. Everything with a folder is closed to the night then, so it holds
+   * rather than write the page or a dream from what's left (`nightHeldWords`).
+   */
+  private nightHeld(tool: string, phase: unknown): ToolResult | null {
+    if (this.scopesFile === null) return null;
+    const read = readScopes(this.scopesFile);
+    return read.error === null ? null : this.refuse(tool, "folder-setting-unreadable", { phase, detail: nightHeldWords(this.scopesFile, read.error) });
   }
 
   /** The named refusal every tool but `scope` gets in a directory set `off`. */
@@ -2374,6 +2380,31 @@ export class McpServer {
     return pick === null || pick.aliases === undefined ? null : new AliasMap(pick.aliases);
   }
 
+  /**
+   * WHAT THIS RECALL MAY NOT OPEN, when the asker is the night (2026-10-30,
+   * `core/dream/slices.ts`): a child of the nightly run, a session with a dream or
+   * a reflection under way, or one holding day's end's claim. They write what every
+   * session reads. Empty for anyone else: an ordinary session's recall is not
+   * fenced. Asked once per recall.
+   */
+  private nightClosed(): ReadonlySet<string> {
+    return this.nightReading() ? this.counterpart.fenceNight(this.folderOn()) : NOTHING_CLOSED;
+  }
+
+  private nightReading(): boolean {
+    if (this.nightRun()) return true;
+    const session = this.session;
+    if (session === null) return false;
+    try {
+      // A marker left by a run that crashed doesn't fence the session for good: quiet past
+      // `ABANDONED_AFTER_MS`, it's a dream left behind, as `Dreams.begin` reads it. A reflection
+      // reads the same, and counts on past its first `finish` while a part sent back is still out.
+      return this.counterpart.dreams.busyIn(session) || this.counterpart.reflections.busyIn(session) || this.counterpart.nightClaimFor(session) !== null;
+    } catch {
+      return false;
+    }
+  }
+
   private async recallTool(sent: Record<string, unknown>): Promise<ToolResult> {
     if (this.observer) return this.standDown("recall");
     // `query` IS `question` (2026-10-14, lightly held): the model sent `query`
@@ -2391,6 +2422,11 @@ export class McpServer {
     if (typeof handle === "string" && handle.trim().toLowerCase() === LAST_EXCHANGE_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
       return this.lastExchangeTool();
     }
+    // THIS FOLDER'S HANDOFFS (WK1, 2026-10-30): the door the wake's line counts
+    // the rest behind, to expand or retire one, with no bare ids in the wake.
+    if (typeof handle === "string" && handle.trim().toLowerCase() === HANDOFFS_HERE_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
+      return this.handoffsHereTool();
+    }
     // WHAT'S STILL OPEN (2026-10-25): the list "Still open" carries, by the
     // handle, or by a facts question that asks for exactly that.
     const stillOpenAsked =
@@ -2405,7 +2441,7 @@ export class McpServer {
       if (page !== undefined && (typeof page !== "number" || !Number.isInteger(page) || page < 1)) {
         return this.refuse("recall", "page-not-a-positive-integer", {});
       }
-      return this.stillOpenTool(typeof page === "number" ? page : 1, handle === undefined);
+      return this.stillOpenTool(typeof page === "number" ? page : 1, handle === undefined, this.nightClosed());
     }
     const question = args["question"];
     const ids = args["ids"];
@@ -2453,7 +2489,7 @@ export class McpServer {
         ...(typeof question === "string" ? { question } : {}),
         ...(askedIds.length > 0 ? { ids: askedIds } : {}),
       },
-      { sessionId: this.session ?? key },
+      { sessionId: this.session ?? key, closed: this.nightClosed() },
     );
     const resolved = this.noteHandleResolution(handle, result);
     // THE MEASUREMENT (2026-09-28): did this lookup fetch what a mechanism's
@@ -2509,6 +2545,7 @@ export class McpServer {
       result.reason === "no-argument" ||
       result.reason === "both-arguments" ||
       result.reason === "handle-unknown" ||
+      result.reason === "closed-to-the-night" ||
       result.reason === "ids-too-many";
     return this.result(payload, bad);
   }
@@ -2627,12 +2664,41 @@ export class McpServer {
     return openCarry(store, store.livedDay(), t.OPEN_CARRY_DAYS, t.OPEN_CARRY_GLIMPSE_TOUCH).notCarried.size;
   }
 
-  private stillOpenTool(page: number, routed: boolean): ToolResult {
+  private handoffsHereTool(): ToolResult {
+    const listed = this.counterpart.handoffsHere(this.scope ?? "");
+    this.emit("mcp.recall.handoffshere", undefined, { total: listed.length });
+    return this.result(
+      {
+        path: "handle",
+        reason: "handoffs-here",
+        handle: HANDOFFS_HERE_HANDLE,
+        total: listed.length,
+        handoffs: listed.map((h) => ({
+          id: h.id,
+          writtenOn: h.writtenOn,
+          ...(h.session === null ? {} : { session: h.session.slice(0, 8) }),
+          ...(h.model === null ? {} : { model: h.model }),
+          excerpt: h.excerpt,
+          daysLeft: h.daysLeft,
+        })),
+        note:
+          listed.length === 0
+            ? "No live handoff in this folder."
+            : "This folder's live handoffs, newest first. Recall an id to read one whole; retire one whose work is done with session_end's retireHandoff: [id]. daysLeft is the lived days until it stops showing.",
+      },
+      false,
+    );
+  }
+
+  private stillOpenTool(page: number, routed: boolean, closed: ReadonlySet<string> = NOTHING_CLOSED): ToolResult {
     // For this folder, as its wake reads it (O2, 2026-10-26): its own first,
     // the personal ones after, another folder's work not listed or counted;
     // a joined folder the setting has off is not this one's (`folderOn`).
     const on = this.folderOn();
-    const { items, parked } = this.counterpart.stillOpen({ scope: this.scope, ...(on === undefined ? {} : { exportsFrom: on }) });
+    const open = this.counterpart.stillOpen({ scope: this.scope, ...(on === undefined ? {} : { exportsFrom: on }) });
+    const items = closed.size === 0 ? open.items : open.items.filter((i) => !closed.has(i.id));
+    const parked = closed.size === 0 ? open.parked : items.filter((i) => i.parked === true).length;
+    const comingUp = closed.size === 0 ? open.comingUp : open.comingUp.filter((i) => !closed.has(i.id));
     const pages = Math.max(1, Math.ceil(items.length / STILL_OPEN_PAGE));
     const at = Math.min(page, pages);
     const shown = items.slice((at - 1) * STILL_OPEN_PAGE, at * STILL_OPEN_PAGE);
@@ -2665,10 +2731,28 @@ export class McpServer {
           ...(i.settlesWhen === undefined ? {} : { settlesWhen: i.settlesWhen }),
           ...(i.parked === true ? { parked: true } : {}),
         })),
+        // "COMING UP", BY TITLE (WK1, 2026-10-30): the wake lists what is due
+        // today and the oldest overdue and counts the rest, naming this
+        // handle as their door. On the first page only; it is short.
+        ...(comingUp.length === 0 || at !== 1
+          ? {}
+          : {
+              comingUp: comingUp.map((c) => ({
+                id: c.id,
+                title: c.title,
+                ...(c.due === undefined ? {} : { due: c.due }),
+                ...(c.every === undefined ? {} : { every: c.every }),
+                ...(c.overdue === true ? { overdue: true } : {}),
+              })),
+            }),
         note:
           (items.length === 0
             ? "Nothing is still open."
-            : `${carried === 0 ? `Nothing open is carried in the wake's "Still open" now.` : `What "Still open" carries, in the wake's order: what is live first, newest touched first.`}${at < pages ? ` More on page ${String(at + 1)} (page: ${String(at + 1)}).` : ""} Recall an id to read it whole. A lived day is a day the memory was in use.`) + parkedNote,
+            : `${carried === 0 ? `Nothing open is carried in the wake's "Still open" now.` : `What "Still open" carries, in the wake's order: what is live first, newest touched first.`}${at < pages ? ` More on page ${String(at + 1)} (page: ${String(at + 1)}).` : ""} Recall an id to read it whole. A lived day is a day the memory was in use.`) +
+          parkedNote +
+          (comingUp.length === 0 || at !== 1
+            ? ""
+            : ` comingUp: what the wake's "Coming up" lists or counts, the overdue first (overdue: true; the longest past its date first), then by date.`),
       },
       false,
     );
@@ -2697,6 +2781,7 @@ export class McpServer {
       vector: embedded.vector,
       semantic: embedded.semantic,
       asker: "self" as const,
+      closed: this.nightClosed(),
     };
     let answer: string;
     let ids: readonly string[];
@@ -3181,6 +3266,9 @@ export class McpServer {
       // A NIGHT asked for by its id (2026-10-20, `nights.ts`): a read-only
       // summary beside the memories. Opening one credits nothing.
       ...(nights.length > 0 ? { nights: nights.map((n) => ({ ...n })), nightsGloss: NIGHTS_GLOSS } : {}),
+      ...(result.reason === "closed-to-the-night"
+        ? { refused: "That was written in a folder that doesn't export, so the night doesn't read it." }
+        : {}),
       ...(result.reason === "both-arguments"
         ? { refused: "One kind of ask per call: a question (with a mode), ids, or a handle." }
         : {}),

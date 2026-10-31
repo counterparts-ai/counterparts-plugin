@@ -386,6 +386,7 @@ export const EVENT_NODE = {
   "handoff.refused": "wake",
   "handoff.cleared": "wake",
   "handoff.lasthere.noroom": "wake",
+  "handoff.daysummary.held": "wake",
   // The wake's "Work here" lines, and what an envelope could not carry
   // (2026-10-02): all of it is the wake's delivery.
   "self.work.overflow": "wake",

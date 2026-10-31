@@ -85,6 +85,10 @@ export interface CandidateVerdict {
   readonly temporal: number;
   readonly semantic: number;
   readonly arrival: number;
+  /** The part of `cue` learned pairs gave (`Candidate.pair`). Absent: none. */
+  readonly pair?: number;
+  /** A head standing in: the earlier memory the turn reached (`Candidate.standsFor`). Absent otherwise. */
+  readonly standsFor?: string;
   /** Spreading activation (SEAMS item L) — in `activation`, not in cues. */
   readonly hops: number;
   readonly cueFraction: number;
@@ -422,6 +426,8 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
       temporal: c.temporal,
       semantic: c.semantic,
       arrival: c.arrival,
+      ...(c.pair === undefined ? {} : { pair: c.pair }),
+      ...(c.standsFor === undefined ? {} : { standsFor: c.standsFor }),
       hops: c.hops,
       cueFraction: c.cueFraction,
       sal: c.sal,

@@ -1225,6 +1225,9 @@ export function lastRender(src: DashboardSource): LastRender | null {
       const lane = t !== null && typeof t === "object" ? (t as { lane?: unknown }).lane : undefined;
       if (typeof lane === "string" && !lanes.includes(lane)) lanes.push(lane);
     }
+    // A `refresh` row carries no list since F1 (2026-10-30), only the count per lane.
+    const perLane = p["trimmedLanes"];
+    if (list.length === 0 && perLane !== null && typeof perLane === "object") lanes.push(...Object.keys(perLane));
     return {
       budget: typeof budget === "number" && budget > 0 ? budget : null,
       day: typeof day === "number" ? day : null,

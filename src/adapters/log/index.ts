@@ -111,6 +111,8 @@ export const LOGGED: { readonly names: ReadonlySet<string>; readonly suffixes: r
     "counterpart.sleep.cycle",
     "runner.retention",
     "runner.done",
+    // ...and where its time went, step by step (2026-10-30).
+    "runner.steps",
     // Refusals a process or a tool made by name.
     "runner.refused",
     "mcp.refused",

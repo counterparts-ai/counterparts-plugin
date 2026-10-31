@@ -229,10 +229,13 @@ function editDistance(a: string, b: string, cap: number): number {
  * "colour"; two letters on eight or more) — that no merge joins and no earlier answer called
  * different. Most-carried first; at least one of the two on two memories.
  */
-export function lookAlikePairs(store: Store, limit: number): LookAlike[] {
+export function lookAlikePairs(store: Store, limit: number, closed?: ReadonlySet<string>): LookAlike[] {
   if (limit <= 0) return [];
   const notSame = store.metaWithPrefix(NOT_SAME_PREFIX);
-  const tallies = tallyTags(store);
+  // `closed` (`dream/slices.ts`): only what the night may read counts toward a tag.
+  const tallies = tallyTags(store)
+    .map((t) => (closed === undefined || closed.size === 0 ? t : { ...t, memories: t.memories.filter((id) => !closed.has(id)) }))
+    .filter((t) => t.memories.length > 0);
   const counts = new Map(tallies.map((t) => [t.tag, t.memories.length]));
   const tags = tallies.map((t) => t.tag);
   const pairs: LookAlike[] = [];

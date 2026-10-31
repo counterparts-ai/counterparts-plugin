@@ -4,7 +4,10 @@ import type { PairDelta, FlushReport } from "./associate/index.js";
 import { selfRenderer } from "./briefing.js";
 import { ASKED_KIND, askedAt } from "./recall/index.js";
 import { errCode } from "./remember/index.js";
-import { isHandoffRow } from "./handoff/index.js";
+import { STANDS_HEAD, isHandoffRow } from "./handoff/index.js";
+import { ELSEWHERE_HEAD, HERE_ALSO_OPEN, TODAY_SO_FAR_HEAD } from "./handoff/last-here.js";
+import { FRAMING, NIGHT_LINE_HEAD, PAGE_END_LINES, isPageFrameLine, readPageTopLine } from "./self/briefing.js";
+import { WORK_HERE_HEADING } from "./self/work.js";
 import {
   wakeBehind,
   noteWakeCaught,
@@ -892,6 +895,61 @@ export function recordSleepCycle(
   });
 }
 
+/** The line that opens each section of a delivered wake, first match wins. */
+const WAKE_SECTION_HEADS: readonly (readonly [string, string])[] = [
+  ["<!-- counterparts:wake/end", "end"],
+  ["Yesterday", "yesterday"],
+  [TODAY_SO_FAR_HEAD, "yesterday"],
+  [NIGHT_LINE_HEAD, "night"],
+  ["The night of ", "night"],
+  [FRAMING.identity, "page"],
+  [FRAMING.threads, "threads"],
+  [FRAMING.hints, "hints"],
+  [FRAMING.horizon, "horizon"],
+  ["Today, elsewhere:", "elsewhere"],
+  [HERE_ALSO_OPEN, "elsewhere"],
+  [WORK_HERE_HEADING, "work"],
+  [STANDS_HEAD, "stands"],
+  [ELSEWHERE_HEAD, "aboutMe"],
+];
+
+/**
+ * WHERE A DELIVERED WAKE'S BYTES WENT (F1, 2026-10-30): bytes per section and
+ * the rung the page printed on, read once off the text at session start, so a
+ * census of the wake no longer has to be scraped from transcripts. A line opens
+ * a section by its head, and the page's own lines are never read as heads; what
+ * no head names goes to `head` before the page and `other` after it. The numbers
+ * sum to the text's bytes. Numbers and a closed set of names, never a word of
+ * the wake. Pure, no store read. WK2 rebuilds the composer that owns these heads.
+ */
+export function wakeShape(text: string): { readonly sections: Readonly<Record<string, number>>; readonly page: string | null } {
+  const sections: Record<string, number> = {};
+  if (text.length === 0) return { sections, page: null };
+  const ends = Object.values(PAGE_END_LINES) as readonly string[];
+  let section = "head";
+  let inPage = false;
+  const lines = text.split("\n");
+  lines.forEach((line, i) => {
+    let closes = false;
+    if (inPage) closes = ends.includes(line.trim());
+    else if (isPageFrameLine(line)) {
+      section = "page";
+      // Every rung but the one line ends on a line of its own.
+      inPage = readPageTopLine(line)?.rung !== "line";
+      closes = !inPage;
+    } else {
+      const head = WAKE_SECTION_HEADS.find(([h]) => line.startsWith(h));
+      if (head !== undefined) section = head[1];
+    }
+    sections[section] = (sections[section] ?? 0) + Buffer.byteLength(line, "utf8") + (i < lines.length - 1 ? 1 : 0);
+    if (closes) {
+      inPage = false;
+      section = "other";
+    }
+  });
+  return { sections, page: readPageTopLine(text)?.rung ?? null };
+}
+
 /**
  * ONE durable row per wake render (`SELF_BRIEFING_EVENT`, IMPROVEMENTS U9).
  *
@@ -916,6 +974,10 @@ export function recordSelfBriefing(
   if (rendered === null) return;
   const trims = briefing.filter((e) => e.name === TRIM_EVENT);
   const bytes = numberField(rendered, "bytes") ?? 0;
+  const kept = LANE_ORDER.flatMap((lane) => {
+    const ids = stringField(rendered, `kept:${lane}`) ?? "";
+    return ids === "" ? [] : [[lane, ids.split(",")] as const];
+  });
   let durable = true;
   try {
     // Same rule as the cycle row above: every store read is inside the try,
@@ -938,10 +1000,19 @@ export function recordSelfBriefing(
         counts: Object.fromEntries(
           LANE_ORDER.map((lane) => [lane, numberField(rendered, lane) ?? 0]),
         ),
-        trimmed: trims.slice(0, BRIEFING_TRIM_LOG_CAP).map((e) => ({
-          id: e.ref ?? null,
-          lane: stringField(e, "lane"),
-        })),
+        // WHICH IDS THE LANES KEPT (F1, 2026-10-30), each lane capped beside
+        // its count above: what the room listed, ids only.
+        ...(kept.length === 0 ? {} : { kept: Object.fromEntries(kept) }),
+        // The trim list is for a boundary's and a rebrief's row. A `refresh`
+        // (81 a day, 526 of its 823 bytes) keeps the total and the lanes below.
+        ...(reason === "refresh"
+          ? {}
+          : {
+              trimmed: trims.slice(0, BRIEFING_TRIM_LOG_CAP).map((e) => ({
+                id: e.ref ?? null,
+                lane: stringField(e, "lane"),
+              })),
+            }),
         trimmedTotal: trims.length,
         // COUNTED AND UNTOLD (2026-10-12, `self/briefing.ts#tellLost`): ids
         // the wake said by count (a step-down), and ids no line named (a

@@ -1807,21 +1807,42 @@ function smallWriteUpDue(h: HeldSession, dataDir: string): boolean {
  * debt fails closed, as a small one always has. A caller that does not say
  * (`overFloor` absent) is read as past it.
  */
-export function pointable(h: { readonly session: string; readonly small: boolean; readonly overFloor?: boolean }, dataDir: string): boolean {
-  return notPointableWhy(h, dataDir) === null;
+export function pointable(h: PointableSession, dataDir: string, folders?: FolderOn): boolean {
+  return notPointableWhy(h, dataDir, folders) === null;
+}
+
+/** What `pointable` reads of a session. A held one and a ledger entry both are. */
+type PointableSession = { readonly session: string; readonly small: boolean; readonly overFloor?: boolean; readonly scopes?: readonly string[] };
+
+/** The folder setting's word on one directory: `scopes.ts#foldersOn`. */
+export type FolderOn = (scope: string) => boolean;
+
+/**
+ * IS THIS SESSION'S FOLDER NOW OFF, OBSERVER OR PAUSED (2026-10-30)? The hook's
+ * own rule (`scopes.ts#mostRestrictiveVerdict`), with what a later reader has
+ * to go on: any directory the session left words in, and the one it is filed
+ * under. One that is not on sets the whole session aside: the hook goes quiet
+ * for a session whose folder is off wherever it stands, and a write-up is read
+ * from all of it. Read off the setting as it is now, nothing is written, so a
+ * paused folder resumed is owed again as if nothing had happened.
+ */
+export function folderSetAside(h: { readonly session: string; readonly scopes?: readonly string[] }, dataDir: string, folders: FolderOn): boolean {
+  if ((h.scopes ?? []).some((s) => !folders(s))) return true;
+  const filed = readSession(dataDir, h.session)?.scope;
+  return filed !== undefined && filed.length > 0 && !folders(filed);
 }
 
 /**
  * WHY `pointable` SAYS NO (S2c, 2026-10-26), so a count of them can say what
  * it counts: `headless` — a short debt from a session that is not a person's
  * conversation (`claude -p`, the Agent SDK); `no-record` — a short debt whose
- * session has no registry record, so nobody can say whose it was. Null: it
- * is pointable. "Short" is small, or under the floor.
+ * session has no registry record, so nobody can say whose it was;
+ * `folder-off` — its folder is off, observer or paused, when the caller read
+ * the setting (`folderSetAside`), whatever its size. Null: it is pointable.
+ * "Short" is small, or under the floor.
  */
-export function notPointableWhy(
-  h: { readonly session: string; readonly small: boolean; readonly overFloor?: boolean },
-  dataDir: string,
-): "headless" | "no-record" | null {
+export function notPointableWhy(h: PointableSession, dataDir: string, folders?: FolderOn): "folder-off" | "headless" | "no-record" | null {
+  if (folders !== undefined && folderSetAside(h, dataDir, folders)) return "folder-off";
   if (!h.small && h.overFloor !== false) return null;
   const path = sessionPath(dataDir, h.session);
   if (path === null || !existsSync(path)) return "no-record";
@@ -1953,9 +1974,14 @@ export function owedWriteUps(
     progress?: Readonly<Record<string, WriteUpProgress>>;
     /** Was this hand-over time on the caller's today? Absent: never. */
     pointedToday?: (handedAt: number) => boolean;
+    /** The folder setting: a session whose folder is not on is no debt here,
+     *  and holds no small one back (`folderSetAside`). Absent: every folder. */
+    folders?: FolderOn;
   } = {},
 ): { held: HeldSession; here: string; short: boolean }[] {
   const out: { held: HeldSession; here: string; short: boolean }[] = [];
+  const folders = opts.folders;
+  const setAside = (h: HeldSession): boolean => folders !== undefined && folderSetAside(h, dataDir, folders);
   const pointedToday = (session: string): boolean =>
     Object.entries(opts.progress ?? {}).some(
       ([key, p]) => key.startsWith(`${session}|`) && p.handedAt > 0 && opts.pointedToday?.(p.handedAt) === true,
@@ -1967,7 +1993,8 @@ export function owedWriteUps(
       h.session !== opts.exclude &&
       waitingForWriteUp(h) &&
       !pointedToday(h.session) &&
-      claimedByOther(opts.progress ?? {}, h.session, opts.exclude, now) === null,
+      claimedByOther(opts.progress ?? {}, h.session, opts.exclude, now) === null &&
+      !setAside(h),
   );
   for (const h of plan) {
     if (h.session === opts.exclude) continue;
@@ -1976,6 +2003,8 @@ export function owedWriteUps(
     if (claimedByOther(opts.progress ?? {}, h.session, opts.exclude, now) !== null) continue;
     const eligible = waitingForWriteUp(h) || (!fullFirst && smallWriteUpDue(h, dataDir));
     if (!eligible) continue;
+    // Last of these: it reads the session's record, and most of a plan owes nothing.
+    if (setAside(h)) continue;
     const standing = writeUpStanding(plan, dataDir, h.session, scope, now, {
       ...(opts.progress === undefined ? {} : { progress: opts.progress }),
     });

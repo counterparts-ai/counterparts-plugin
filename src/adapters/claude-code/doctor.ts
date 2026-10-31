@@ -164,7 +164,7 @@ import {
 import { denyFindings, hostFindings, runtimeFindings, desktopFindings } from "./doctor-host.js";
 import { modesFindings } from "./doctor-modes.js";
 import type { HostReading, DesktopReading } from "./doctor-host.js";
-import { readOwed, crashWriteUpFindings, overdueWords } from "./doctor-write-ups.js";
+import { owedFolders, readOwed, crashWriteUpFindings, nightHeldFindings, overdueWords } from "./doctor-write-ups.js";
 import type { OwedSource, OwedReading } from "./doctor-write-ups.js";
 import { worstFirst } from "./doctor-report.js";
 import { feedbackLoopFindings } from "./doctor-feedback.js";
@@ -3451,6 +3451,7 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     ...rollbackFindings(input.dir),
     // Who can read the store (R1): a few stats, no store read.
     ...modesFindings(input.dir, process.platform, input.configPath),
+    ...(input.configReason === "not-read" ? [] : nightHeldFindings(input.configPath)),
     // DID THE HOST STEPS TAKE (finding 4). Also read by the caller — it is four
     // small file reads outside this store, and the hook does not pay for them.
     ...(input.host === undefined ? [] : hostFindings(input.host)),
@@ -3468,7 +3469,8 @@ export function doctorFindings(input: DoctorInput): Finding[] {
   let owedCache: { value: OwedReading | "failed" } | null = null;
   const owedReading: OwedSource = () => {
     if (!owedAllowed) return null;
-    owedCache ??= { value: readOwed(store) };
+    // No folder setting read for a store named with `--dir`, as no configuration is.
+    owedCache ??= { value: readOwed(store, input.configReason === "not-read" ? undefined : owedFolders(input.configPath)) };
     return owedCache.value;
   };
   const groups: (readonly [string, () => Finding[]])[] = [

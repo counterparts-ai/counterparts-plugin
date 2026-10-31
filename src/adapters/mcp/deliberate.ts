@@ -260,6 +260,8 @@ export type DeliberateReason =
   | "expanded"
   | "handle-unknown"
   | "handle-ambiguous"
+  /** The night asked for a row from a folder that doesn't export (`core/dream/slices.ts`). */
+  | "closed-to-the-night"
   | "no-argument"
   | "both-arguments"
   | "ids-too-many"
@@ -318,6 +320,8 @@ export interface DeliberateInput {
 
 export interface DeliberateOptions {
   readonly sessionId: string;
+  /** What a night's reader may not open (`core/dream/slices.ts`); absent for everyone else. */
+  readonly closed?: ReadonlySet<string>;
 }
 
 /**
@@ -463,7 +467,7 @@ export function expandHandle(
     const wanted = handle.toLowerCase();
     for (const id of store.list({ archived: false })) {
       const row = store.row(id);
-      if (row === undefined || row.superseded_by !== null) continue;
+      if (row === undefined || row.superseded_by !== null || opts.closed?.has(id) === true) continue;
       let title: string | null = null;
       try {
         title = store.readProse(id).title ?? null;
@@ -490,6 +494,7 @@ export function expandHandle(
   }
 
   const id = matches[0] as string;
+  if (opts.closed?.has(id) === true) return { ...base, reason: "closed-to-the-night", memories: [], considered: 0 };
   const read = store.read(id);
   // THE SELF PAGE IS NOT EXPANDED HERE either (2026-09-18). It is excluded from
   // activation, so it never appears in a result to be followed up — and the one
@@ -535,6 +540,7 @@ function expandChapter(
   const got = resolveChapter(store, address);
   if (!got.ok) return { ...base, reason: "handle-unknown", memories: [], considered: 0 };
   const c = got.chapter;
+  if (opts.closed?.has(c.episodeId) === true) return { ...base, reason: "closed-to-the-night", memories: [], considered: 0 };
   let read;
   try {
     read = store.read(c.episodeId);

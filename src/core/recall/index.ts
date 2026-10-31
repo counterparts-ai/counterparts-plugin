@@ -30,7 +30,7 @@
  */
 import type { Kind } from "../types.js";
 import { TUNABLES as PHYSICS, USE_TIER_WEIGHT, strength } from "../physics/index.js";
-import type { CreditOutcome, UseTier } from "../physics/index.js";
+import type { CreditOutcome, ReturnOutcome, UseTier } from "../physics/index.js";
 import type { ProseDoc, Store } from "../store/index.js";
 import { isChapterSummary, stemTerm, tokenize } from "../store/index.js";
 import { activate, isBeliefRow, primeOf, seeAlso } from "./activate.js";
@@ -57,6 +57,9 @@ import type { RecallTunables } from "./tunables.js";
 /** At most this many mood-lifted ids on a decision (`moodMatchedIds`) — the
  *  same cap the credit row puts on `shownNotUsed` (2026-10-14). */
 export const MOOD_MATCHED_IDS_CAP = 64;
+
+/** How many near misses a decision row names (`stopCounts`, F1, 2026-10-30); `nearMiss.count` is the whole of them. */
+export const NEAR_MISS_IDS_CAP = 3;
 
 /** A turn priming ran on and touched nothing (a quiet turn's numbers). */
 const NO_PRIME: PrimeSummary = {
@@ -107,7 +110,7 @@ export interface RecallOptions {
   tunables?: Partial<RecallTunables>;
   /** The host's injection ceiling (scar §2.18 — the ceiling is a host capability). */
   budgetBytes?: number;
-  /** Latency budget for the build pass, ms. */
+  /** The latency line for the build pass, ms: past it a turn reads as late (`lateMs`), and is shown all the same. */
   budgetMs?: number;
   onEvent?: (e: RecallEvent) => void;
   /** Injectable clock, so the latency budget is testable without sleeping. */
@@ -161,14 +164,9 @@ export interface Turn {
   day?: number;
   budgetBytes?: number;
   /**
-   * Per-turn override of the LATENCY budget. It exists for one caller: the
-   * deliberate ask, which is "a deeper effort with different thresholds, on
-   * purpose" (§9.1) and has no host turn waiting on it. The ambient budget is a
-   * promise to a person mid-sentence; a question someone typed and is waiting
-   * for is a different promise. (It was written when the semantic channel's
-   * vector scan cost 590-1040 ms on a live-sized index; that scan is now tens
-   * of ms — see `semanticHits` above — and the deliberate ask's longer budget
-   * stands on its deeper effort, not on the scan.)
+   * Per-turn override of the LATENCY line, which since LT1 (2026-10-30) only
+   * decides what `lateMs` reads: nothing is given up past it. No live path sets
+   * this today.
    */
   budgetMs?: number;
   /**
@@ -197,6 +195,13 @@ export interface Turn {
    * `CROSS_PROJECT_BAR_LIFT` above 1, it faces that lift on its bars.
    */
   elsewhere?: (id: string) => boolean;
+  /**
+   * A FOLDER THAT DOESN'T EXPORT (FI1, 2026-10-30): is this id closed by the
+   * host's folder setting? Asked of what see-also would bring, and of nothing
+   * else: a memory the turn's own words reach isn't fenced. Ambient only —
+   * bound by `Counterpart#recallForTurn`. Absent: a host with no setting.
+   */
+  namedClosed?: (id: string) => boolean;
   /**
    * CONTEXT PRIMING (an experiment, 2026-10-19; `prime.ts`): this turn's own
    * vector for the train of thought, one hop along links, and what is open in
@@ -276,8 +281,7 @@ export type DecisionReason =
   | "empty-turn"
   | "no-candidates"
   | "all-gated"
-  | "budget-quiet"
-  | "latency-abort";
+  | "budget-quiet";
 
 /**
  * The per-turn surfacing decision record — content-by-reference from day one
@@ -291,7 +295,12 @@ export interface RecallDecision {
   readonly day: number;
   readonly observer: boolean;
   readonly reason: DecisionReason;
-  readonly aborted: boolean;
+  /**
+   * Always false since 2026-10-30 (LT1): a slow turn no longer gives up. The
+   * field stays because the row has always carried it and readers name it.
+   * Rows and logs from before then can say `latency-abort`; none is written now.
+   */
+  readonly aborted: false;
   readonly storeSize: number;
   readonly background: Background;
   /** Which boilerplate strippers fired, by NAME (§9 G3). */
@@ -356,8 +365,8 @@ export interface RecallDecision {
    * mechanism kept from showing this turn, so "why did fewer memories show"
    * is a query over the rows. Every count is read off `verdicts` and the
    * render's `trimmed` after the turn was decided: nothing here is judged by
-   * them, and nothing more is read from the store (`stopCounts`). Counts
-   * only, no ids. All 0 on a quiet turn. All five absent when `STOP_COUNTS`
+   * them, and nothing more is read from the store (`stopCounts`). Counts,
+   * and since F1 the closest near misses' ids. All 0 on a quiet turn. All five absent when `STOP_COUNTS`
    * is off, so an off turn's row is the row before them.
    *
    * `habituationCut`: turned away `below-bar` that the bar habituation's lift
@@ -367,8 +376,9 @@ export interface RecallDecision {
   readonly habituationCut?: number;
   /** `below-bar` within `margin` of the bar it faced (activation ≥ (1 − margin)
    *  × bar; `NEAR_MISS_MARGIN`, the value used recorded here), not already
-   *  counted in `habituationCut` or `crossProjectLifted`. */
-  readonly nearMiss?: { readonly margin: number; readonly count: number };
+   *  counted in `habituationCut` or `crossProjectLifted`. `ids` (F1, 2026-10-30):
+   *  the closest to their bars, at most `NEAR_MISS_IDS_CAP`; absent when none. */
+  readonly nearMiss?: { readonly margin: number; readonly count: number; readonly ids?: readonly string[] };
   /** Admitted past its tier's cap (`capped`, the gate's slots and the quiet
    *  pointers'): ranked, and not fitted. */
   readonly capped?: number;
@@ -404,6 +414,12 @@ export interface RecallDecision {
   readonly sentinel: string | null;
   readonly trimmed: { lane: string; id: string | null }[];
   readonly elapsedMs: number;
+  /**
+   * How far past the latency line (`BUDGET_MS`) this turn's build ran, ms; 0 when
+   * it did not (LT1, 2026-10-30). A turn this late used to be thrown away with
+   * its answer finished. `lateMs > 0` is what `latency-abort` used to count.
+   */
+  readonly lateMs: number;
 }
 
 export interface RecallResult {
@@ -424,8 +440,8 @@ export interface CreditResult {
   readonly reason: CreditReason;
   readonly tier: UseTier;
   readonly w: number;
-  /** Physics' own verdict, when it was consulted. */
-  readonly outcome: CreditOutcome | null;
+  /** Physics' own verdict, when it was consulted, with the return it tried for a credited use. */
+  readonly outcome: (CreditOutcome & { readonly ret?: ReturnOutcome | null }) | null;
   /**
    * CUE LEARNING (2026-10-24, R3): the word-to-memory deltas this use earned
    * from the turn that showed the memory — for the caller to hand to
@@ -588,6 +604,12 @@ export class Recall {
       }
     }
 
+    // HOW LATE THE TURN RAN (LT1, 2026-10-30): read once, when the decision is
+    // done, against the line that used to throw the answer away.
+    const elapsed = (): { elapsedMs: number; lateMs: number } => {
+      const elapsedMs = this.now() - started;
+      return { elapsedMs, lateMs: Math.max(0, elapsedMs - budgetMs) };
+    };
     const quiet = (
       reason: DecisionReason,
       partial: Partial<RecallDecision> = {},
@@ -598,7 +620,7 @@ export class Recall {
         day,
         observer: this.observer,
         reason,
-        aborted: reason === "latency-abort",
+        aborted: false,
         storeSize: 0,
         background: {
           regime: "absolute-thin-background",
@@ -641,7 +663,7 @@ export class Recall {
         budgetBytes,
         sentinel: null,
         trimmed: [],
-        elapsedMs: this.now() - started,
+        ...elapsed(),
         ...partial,
       },
       injection: "",
@@ -699,8 +721,6 @@ export class Recall {
       this.tunables,
     );
 
-    if (this.now() - started > budgetMs) return quiet("latency-abort");
-
     const carry = act.cues
       .filter((c) => !c.carried)
       .slice(0, this.tunables.MAX_CUES)
@@ -750,8 +770,6 @@ export class Recall {
       this.tunables,
     );
 
-    if (this.now() - started > budgetMs) return quiet("latency-abort");
-
     // SEE-ALSO FROM NAMED IDS (PP1, 2026-10-29, an experiment): a shown
     // memory whose text names another's id brings it along, one each,
     // `SEE_ALSO_MAX` a turn, after everything the gate admitted (so the byte
@@ -775,6 +793,7 @@ export class Recall {
       ...(turn.elsewhere !== undefined && (this.tunables.RECALL_BY_PROJECT || this.tunables.CROSS_PROJECT_BAR_LIFT > 1)
         ? { elsewhere: turn.elsewhere }
         : {}),
+      ...(turn.namedClosed === undefined ? {} : { closed: turn.namedClosed }),
       ...(habituated.size === 0 ? {} : { habituated }),
       background: gated.background.bar,
       t: this.tunables,
@@ -919,7 +938,7 @@ export class Recall {
       budgetBytes,
       sentinel: rendered.sentinel,
       trimmed: rendered.trimmed.map((x) => ({ lane: x.lane, id: x.id })),
-      elapsedMs: this.now() - started,
+      ...elapsed(),
     };
 
     return {
@@ -939,18 +958,12 @@ export class Recall {
 
   /**
    * BUILD, then RECORD. The record step is where gate state is persisted and
-   * telemetry is emitted — and it is skipped entirely on a latency abort, which
-   * is what makes the abort side-effect-free.
+   * telemetry is emitted. A late turn records like any other (contract §5 G2,
+   * since LT1): its answer was already finished, so it is shown.
    */
   recall(turn: Turn): RecallResult {
     const built = this.build(turn);
     const d = built.decision;
-
-    if (d.aborted) {
-      // Zero side effects on loss: nothing injected, nothing buffered, no
-      // telemetry, no state advanced (contract §5 G2).
-      return { injection: "", decision: d };
-    }
 
     if (built.gateStatus === "unreadable") {
       this.emit("recall.gate.reset", turn.sessionId, { status: built.gateStatus });
@@ -1643,6 +1656,9 @@ export function stopCounts(
   const crossed = new Set(crossLifted);
   let habituationCut = 0;
   let near = 0;
+  // WHICH MEMORIES ALMOST SHOWED (F1, 2026-10-30): the closest to their bars,
+  // kept as the count is walked. Ids only, capped; the count stays the whole of it.
+  const closest: { id: string; share: number }[] = [];
   let capped = 0;
   let inhibited = 0;
   for (const v of verdicts) {
@@ -1657,11 +1673,28 @@ export function stopCounts(
       // The bar it faced is plain * (1 + HABITUATION_BAR_LIFT) * crossLift
       // (gate.ts): clearing it without habituation's part is what that part stopped.
       if (v.habituated === true && v.activation >= v.bar / (1 + t.HABITUATION_BAR_LIFT)) habituationCut++;
-      else if (v.bar > 0 && v.activation >= (1 - margin) * v.bar) near++;
+      else if (v.bar > 0 && v.activation >= (1 - margin) * v.bar) {
+        near++;
+        closest.push({ id: v.id, share: v.activation / v.bar });
+      }
     }
   }
   const budgetTrimmed = trimmed.filter((x) => x.lane === "surfaced" || x.lane === "footnote").length;
-  return { habituationCut, nearMiss: { margin, count: near }, capped, budgetTrimmed, inhibited };
+  const ids = closest
+    .sort((a, b) => b.share - a.share || (a.id < b.id ? -1 : 1))
+    .slice(0, NEAR_MISS_IDS_CAP)
+    .map((c) => c.id);
+  return { habituationCut, nearMiss: { margin, count: near, ...(ids.length === 0 ? {} : { ids }) }, capped, budgetTrimmed, inhibited };
+}
+
+/**
+ * WHY A SHOWN MEMORY SHOWED, for its row (F1, 2026-10-30): what the words gave,
+ * what meaning gave, the part of the words' learned pairs gave, and the bar it
+ * cleared. Two decimals: enough to read it against its bar, about 30 bytes a row.
+ */
+export function whyShown(v: CandidateVerdict): { cue: number; sem: number; pair?: number; bar: number } {
+  const two = (x: number): number => Math.round(x * 100) / 100;
+  return { cue: two(v.cue), sem: two(v.semantic), ...(v.pair === undefined ? {} : { pair: two(v.pair) }), bar: two(v.bar) };
 }
 
 function trainsOf(verdicts: readonly CandidateVerdict[], id: string): boolean {

@@ -742,6 +742,21 @@ export const NARRATORS = {
     return calm(`A handoff was turned away (${why}). Nothing was left for the next session here.`);
   },
 
+  "handoff.daysummary.held": (t) => {
+    const about = typeof t.p["about"] === "string" ? t.p["about"] : "a day";
+    const what = t.p["what"] === "chapter" || t.p["what"] === "memory" || t.p["what"] === "cite" ? `a ${String(t.p["what"])}` : "the store";
+    const whys: Record<string, string> = {
+      "folder-closed": "from a folder set off, paused or to observe",
+      "no-folder": "with no folder recorded",
+      "no-setting": "from another folder, with no scope setting to ask",
+      "night-origins": "made at night from memories whose folders can't be told",
+      denied: "removed by the owner",
+      gone: "that no longer reads",
+      unreadable: "that would not answer",
+    };
+    const why = whys[String(t.p["why"])] ?? "for a reason this build can't name";
+    return calm(`The day summary of ${about} was held back, so the wake listed the chapters instead: ${what} ${why}.`);
+  },
   "handoff.lasthere.noroom": (t) => {
     const budget = n(t, "budget") ?? 0;
     const beside = t.p["besideHandoff"] === true ? " A handoff here was carried instead." : "";
@@ -819,11 +834,17 @@ export const NARRATORS = {
   },
   "adapter.recall": (t) => {
     const reason = s(t, "reason");
+    // Rows from before LT1 (2026-10-30): a slow turn used to give up. None is written now.
     if (reason === "latency-abort") {
       return amber(`Recall took too long for one turn and I abandoned it rather than make you wait.`);
     }
     const count = n(t, "surfaced") ?? n(t, "count") ?? 0;
     const bytes = n(t, "bytes") ?? 0;
+    const late = n(t, "lateMs") ?? 0;
+    if (late > 0) {
+      const past = `A turn's recall ran ${String(Math.round(late))} ms past its limit`;
+      return calm(bytes > 0 ? `${past}, and what it found was shown anyway.` : `${past}, and came to nothing to show.`);
+    }
     // A turn may hand over only the beliefs slot (lane E): its count and bytes say so.
     const beliefs = n(t, "beliefs") ?? 0;
     if (count === 0 && beliefs > 0 && bytes > 0) {
@@ -1339,6 +1360,7 @@ export const REF_KIND = {
   // since the review of #636, the later session with no chapter it named
   // first, which no store row answers (`subjectOf` prints it as a session).
   "handoff.lasthere.noroom": "memory",
+  "handoff.daysummary.held": "none",
   "recall.credit": "none",
   "recall.rated": "session",
   // A flush describes a SET of pairs, not one memory. The ids stay in the edge
