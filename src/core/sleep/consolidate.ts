@@ -94,7 +94,8 @@ export function promotionRecordKey(id: string): string {
 
 /**
  * THE SUPPORT DOOR IN SHADOW (2026-10-24 21:00, E2 addendum, Mike's yes
- * 20:59; `physics.CORE_DOOR_SUPPORT` "shadow", the default): the two lanes
+ * 20:59; `physics.CORE_DOOR_SUPPORT` "shadow" — the default until 2026-11-01,
+ * when Mike retired it: off by default since, this code inert): the two lanes
  * promote exactly as off, and beside them the support door is asked the same
  * question for every candidate the lanes consider. One row per
  * DISAGREEMENT — `ref` the memory; payload `memory`, `kind` (`wouldPromote`:

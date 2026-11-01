@@ -266,8 +266,18 @@ export const TUNABLES = {
    * fast as the lanes (days 7/14/21/28/end 0/0/3/4/6 against 0/6/10/11/12),
    * against Mike's 10-20/10-21 rulings that the core was starving; a week of
    * rows on his store decides on, off or tune.
+   *
+   * THE SHADOW RETIRED (2026-11-01, Mike, lightly held): the DEFAULT is
+   * `"off"` — the two lanes decide exactly as under shadow, and no
+   * `promotion.shadow` / `promotion.shadow.sleep` row or `sleep.shadow.*`
+   * mark is written. The shadow and the door are left in place, inert. Its
+   * week on his store (days 35–41: lanes 1, door 5, `docs/CHECK-AFTER.md`
+   * "Checked 2026-11-01") was read first. Admitting a memory to core on
+   * a reflection's citation alone stays (Mike's 09-27 ruling). No memory was
+   * promoted or demoted by the change. Undo: this one value back to
+   * `"shadow"` (or `"on"`).
    */
-  CORE_DOOR_SUPPORT: "shadow" as CoreDoorMode | boolean,
+  CORE_DOOR_SUPPORT: "off" as CoreDoorMode | boolean,
   /**
    * THE MAKING IS THE FIRST MOMENT (E2 review, 2026-10-24): the core door's
    * days factor counts the slot's first encoding's lived day as one of its

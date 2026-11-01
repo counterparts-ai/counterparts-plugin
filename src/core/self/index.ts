@@ -148,6 +148,7 @@ import {
   SELF_PAGE_WRITER_EVENT,
   dayMemories,
   nightClaimFor,
+  pageFormOf,
   pageWriterClaimOpen,
   pageWriterDue,
   pageWriterNight,
@@ -2578,6 +2579,8 @@ export class Self {
       bytes: picked.bytes,
       ...(opts.journal === undefined ? {} : { journal: opts.journal }),
       ...(opts.daysEnd === true ? { daysEnd: true } : {}),
+      // PF1: the store keeps its page's own form (`PAGE_FORM_KEY`); absent on every other store.
+      ...(pageFormOf(this.store) === "own" ? { pageForm: "own" as const } : {}),
     };
   }
 

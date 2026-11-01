@@ -283,6 +283,35 @@ export const PAGE_WRITING_RULE =
   `${HOW_I_WORK_RULE} The page is read on later days and by sessions on other models. Name the model when a claim is about one model ("the Opus 5.5 system card says…", not "my system card says…"); write a date, never "tonight" or "today"; and add no revised-on line of your own — the wake dates the page. ${NO_RECORD_RULE} ${PAGE_ROOM_RULE}`;
 
 /**
+ * THE PAGE IN ITS OWN FORM, ONE STORE AT A TIME (PF1, 2026-11-01; asked by the
+ * owner's counterpart, Mike's yes, an experiment, review 2026-11-08). A store
+ * whose meta says `self.page_form` = `own` (`counterparts page-form own`) tells
+ * its two nightly page writers to keep the page's sections and form instead of
+ * `HOW_I_WORK_RULE`: dated stories where it tells stories, plain lines where it
+ * doesn't. Words only; nothing checks a heading. Absent (every store but one),
+ * or a store that won't answer: every writer is told exactly what it was, the
+ * constants above unchanged. Undo: `counterparts page-form default`.
+ */
+export const PAGE_FORM_KEY = "self.page_form";
+
+export const OWN_FORM_RULE =
+  `Amend the page in its own form: keep its sections and headings as they stand, dated stories where it tells stories and plain lines where it doesn't.`;
+
+/** This store's page form: `own` when its meta says so, else null. Never throws. */
+export function pageFormOf(store: Pick<Store, "getMeta">): "own" | null {
+  try {
+    return (store.getMeta(PAGE_FORM_KEY) ?? "").trim() === "own" ? "own" : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the nightly writers are told about the page: `PAGE_WRITING_RULE` itself unless the store keeps its own form. */
+export function pageWritingRule(form: "own" | null | undefined): string {
+  return form === "own" ? PAGE_WRITING_RULE.replace(HOW_I_WORK_RULE, OWN_FORM_RULE) : PAGE_WRITING_RULE;
+}
+
+/**
  * THE DATE A RUN ON `today` IS ABOUT — yesterday, always.
  *
  * It never chases a backlog. A machine that was off for a week comes back and
@@ -794,6 +823,8 @@ export interface WriterInput {
    * Absent: the block as it was.
    */
   readonly daysEnd?: boolean;
+  /** PF1 (`PAGE_FORM_KEY`): `own` when the store keeps its page's own form. Absent: the block as it was. */
+  readonly pageForm?: "own";
 }
 
 /**
@@ -1053,7 +1084,7 @@ export function writerInstruction(
     // the same — "## Core" is the reflection's — with the day's own sections
     // named, and held at the door (`Self#revisePage`).
     SELF_TUNABLES.PAGE_SPLIT
-      ? `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: leave \`## ${PAGE_CORE_HEADING}\` exactly as it stands — tonight's reflection writes it${SELF_TUNABLES.CORE_FROM_BELIEFS ? ", from the beliefs life has backed" : ""} — and amend \`## ${PAGE_LATELY_HEADING}\` (what the last while has been like) and \`## How I work\` (how you work now) from the day. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds, word for word, and change the part that moved.${session}`
+      ? `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: leave \`## ${PAGE_CORE_HEADING}\` exactly as it stands — tonight's reflection writes it${SELF_TUNABLES.CORE_FROM_BELIEFS ? ", from the beliefs life has backed" : ""} — and amend \`## ${PAGE_LATELY_HEADING}\` (what the last while has been like) and ${input.pageForm === "own" ? "the page's other sections from the day, in their own form" : "`## How I work` (how you work now) from the day"}. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds, word for word, and change the part that moved.${session}`
       : SELF_TUNABLES.CORE_FROM_BELIEFS
       ? `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: leave \`## ${PAGE_CORE_HEADING}\` exactly as it stands — tonight's reflection writes it, from the beliefs life has backed (on a first page, one line saying it is still forming) — and amend \`## ${PAGE_LATELY_HEADING}\` for what the last while has actually been like. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds and change the part that moved.${session}`
       : `If something did move, call the \`${opts.tool}\` tool with the WHOLE page: \`## ${PAGE_CORE_HEADING}\` for what holds steady — it may honestly say it is still forming — and \`## ${PAGE_LATELY_HEADING}\` for what the last while has actually been like. Amend it; do not start over. You are the same person continuing, so keep every sentence that still holds and change the part that moved.${session}`,
@@ -1062,7 +1093,7 @@ export function writerInstruction(
     // review): a page said "tonight is its first real one" every morning after,
     // told a Fable session "My own system card says…" of Opus 5.5's, and
     // carried its own revision line under the wake's "(Last revised …)".
-    PAGE_WRITING_RULE,
+    pageWritingRule(input.pageForm),
     "",
   );
   // WHAT A SENTENCE RESTS ON (day's end, 2026-10-23): the memories below come

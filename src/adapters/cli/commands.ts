@@ -119,7 +119,7 @@ import {
   coreCommand,
   claimsEraCommand,
   settleCommand,
-  aboutCommand, wakeShapeCommand,
+  aboutCommand, pageFormCommand, wakeShapeCommand,
 } from "./commands-self.js";
 import { projectCommand } from "./commands-project.js";
 import {
@@ -242,6 +242,9 @@ export const COMMANDS = [
   // The wake's shape, one store at a time (WK2, 2026-10-30): read it, or set it.
   // Reads and writes, like `about`; the write refuses under observer.
   "wake-shape",
+  // The page's own form, one store at a time (PF1, 2026-11-01): read it, or set it.
+  // Reads and writes, like `wake-shape`; the write refuses under observer.
+  "page-form",
   // Contradictions (2026-09-29): what is unsettled and what was settled, and
   // the owner's settle and undo. Reads and writes, like `dream`; the write
   // refuses at the core's own seam under observer.
@@ -602,6 +605,7 @@ export const COMMAND_FLAGS: Record<Command, readonly string[]> = {
   settle: ["list", "pair", "holds", "against", "how", "why", "undo"],
   about: ["why"],
   "wake-shape": [],
+  "page-form": [],
   project: [],
   coverage: ["date"],
   // `--config` because the store it opens is the one the configuration names,
@@ -683,6 +687,8 @@ export const COMMAND_BLURB: Record<Command, string> = {
     "Last night, read-only: what a dream did and what the waking self made of it. It changes nothing — it opens the store as an observer, so it runs the same under --observer. With nothing after it (or list), the recent dreams and reflections, newest first (--all for every dream); last prints the newest dream — its journal, every change it made, and the reflection after it (last-reflection: the newest reflection); an id (drm_… or rfl_…) prints that one, and show <id|last> means the same. Undoing a dream stays on `counterparts dream`, the owner's door.",
   "wake-shape":
     "The wake's shape for this store: on, off, or the build's default. With nothing after it, says which this store has. On: a session start reads the wake top-down, one question per section and no item twice; off: as it has been. Takes effect at the next session start; it writes one setting in the store and nothing else. Reading works under observer; setting refuses there.",
+  "page-form":
+    "How this store's nightly writers treat the self page: own, or the build's default. With nothing after it, says which this store has. Own: day's end and the reflection are told to amend the page in its own form, keeping its sections and headings, dated stories where it tells stories, instead of keeping \"## How I work\" as a few short lessons. Default: as it has been. Takes effect at the next night; it writes one setting in the store and nothing else. Reading works under observer; setting refuses there.",
   core:
     "The core — the memories about me and about us that do not fade. With no flags (or --list), what it holds and which lane carried each one there, what dreams have nominated, what is being reconsidered, and what was sent back; --demote <id> --reason \"...\" sends one back to ordinary fading from today, records why, and keeps the lanes from promoting it again; --reaffirm <id> --reason \"...\" keeps one that is being reconsidered (it is not flagged again for what it is); --reflected-feeling on|off opens or closes the core to reflection alone. On (the default): a feeling a reflection records later and a reflection citing a memory both count toward the fast lane, and a reflection may re-label what a memory is about either way — each re-label is recorded with its reason, and one into me, us or the owner is told in the next morning share. Off: nothing reaches the core on a reflection alone — the fast lane needs a feeling felt at the time (not one a reflection recorded later) and an ordinary use after a gap (not a reflection citing it), and a reflection may only move what a memory is about toward work or world. Reading works under observer; the changes refuse there.",
   settle:
@@ -725,6 +731,7 @@ const COMMAND_ARGS: Partial<Record<Command, string>> = {
   settle: " [--list | --pair <id> --holds <id> --how changed|corrected|open --why \"...\" | --undo <pair>]",
   about: " <id> [me|us|owner|work|world] [--why \"...\"]",
   "wake-shape": " [on|off|default]",
+  "page-form": " [own|default]",
   project: " [list | join <folder> <project name or folder> | leave <folder>]",
   coverage: " [--date YYYY-MM-DD]",
 };
@@ -1749,6 +1756,8 @@ export async function run(argv: readonly string[], opts: RunOptions): Promise<nu
         return nightCommand(dir, io, parsed, typeof parsed.flags["dir"] === "string");
       case "wake-shape":
         return wakeShapeCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string");
+      case "page-form":
+        return pageFormCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string");
       case "core":
         return coreCommand(dir, io, parsed, observer, typeof parsed.flags["dir"] === "string");
       case "claims-era":

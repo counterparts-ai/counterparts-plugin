@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Counterpart } from "../../core/counterpart.js";
 import { WAKE_SHAPE_KEY } from "../../core/counterpart-wake-shape.js";
-import { NO_PAGE_VERSION } from "../../core/self/index.js";
+import { NO_PAGE_VERSION, PAGE_FORM_KEY, pageFormOf } from "../../core/self/index.js";
 import { REFLECTED_FEELING_KEY } from "../../core/sleep/index.js";
 import { CLAIMS_ERA_CUTOFF_KEY, storeExists } from "../../core/store/index.js";
 // The twin cards' undo is an owner op (2026-10-22): the store has no general un-archive.
@@ -387,6 +387,41 @@ export function wakeShapeCommand(dir: string, io: Io, parsed: Parsed, observer: 
     else if (word !== undefined) counterpart.store.setMeta(WAKE_SHAPE_KEY, word);
     const said = (counterpart.store.getMeta(WAKE_SHAPE_KEY) ?? "").trim();
     io.out(`The wake's shape here: ${counterpart.wakeShapeOn() ? "on" : "off"}${said === "" ? " (the build's default)" : ""}.`);
+    return EXIT.ok;
+  } finally {
+    counterpart.close();
+  }
+}
+
+/**
+ * THE PAGE'S OWN FORM FOR ONE STORE (PF1, 2026-11-01): one meta row, so one
+ * store's nightly writers keep the page's sections and form instead of "## How
+ * I work" as short lessons (`self/writer.ts#PAGE_FORM_KEY`). `default` empties
+ * the row, which reads as absent, as WK2's does. Nothing else is written; the
+ * next night reads it.
+ */
+export function pageFormCommand(dir: string, io: Io, parsed: Parsed, observer: boolean, namedDir: boolean): number {
+  if (!storeExists(dir)) {
+    io.err(`No store at ${dir}. Run 'counterparts init${namedDir ? ` --dir ${dir}` : ""}' to create one.`);
+    return EXIT.usage;
+  }
+  const [word, ...rest] = parsed.positional;
+  if (rest.length > 0 || (word !== undefined && word !== "own" && word !== "default")) {
+    io.err("refused: counterparts page-form [own|default].");
+    return EXIT.usage;
+  }
+  if (word !== undefined && observer) {
+    io.err("refused: this console has stood down (observer), so the page's form stays as it is.");
+    return EXIT.usage;
+  }
+  const counterpart = openCounterpart(dir, word === undefined || observer);
+  try {
+    if (word !== undefined) counterpart.store.setMeta(PAGE_FORM_KEY, word === "own" ? "own" : "");
+    io.out(
+      pageFormOf(counterpart.store) === "own"
+        ? "The page's form here: its own. The nightly writers keep its sections and form."
+        : "The page's form here: the default. The nightly writers keep \"## How I work\" as a few short lessons.",
+    );
     return EXIT.ok;
   } finally {
     counterpart.close();
