@@ -42,6 +42,7 @@ import type { CoactivateResult, CueDelta, CueFlushReport, Credited, FlushReport,
 import { READ_TODAY_AT_START, horizonFor } from "./briefing.js";
 import { episodeGate } from "./bridge.js";
 import { Dreams, NIGHT_LINE_READ, Reflections, nightLine } from "./dream/index.js";
+import type { NightNames } from "./dream/night-line.js";
 import { meetingDay } from "./onboarding.js";
 import type { VectorSource } from "./bridge.js";
 import type { MintResult } from "./mint.js";
@@ -212,10 +213,12 @@ import { chapterSummaries } from "./self/summaries.js";
 import { withNightLine, withTodaySoFar } from "./self/briefing.js";
 import type { WriterJournal } from "./self/writer.js";
 import { dayJournal } from "./dream/slices.js";
-import { NOTHING_CLOSED, closedToNight, isNightRow, memoryClosedTo, memoryFolder } from "./dream/slices.js";
+import { NOTHING_CLOSED, closedToNight, isNightRow, memoryClosedTo, memoryFolder, reminderHeldBack } from "./dream/slices.js";
 import type { FolderOn } from "./dream/slices.js";
 import { DREAM_TUNABLES } from "./dream/tunables.js";
 import { SELF_TUNABLES } from "./self/tunables.js";
+import { UNDATED_LAST, WAKE_SHAPE_KEY, headlessOf, readCues, readElsewhere, shapedDelivery, sinceHere } from "./counterpart-wake-shape.js";
+import type { Cue, ElsewhereListed, SinceItem } from "./counterpart-wake-shape.js";
 import type { CoreDecision, CoreDecisionActor } from "./sleep/index.js";
 import type { CyclePartial, CycleReport } from "./sleep/index.js";
 import { ABOUT_MARKS, CORE_ABOUT_MARKS, Store, aboutMarkOf, assertSafeDataDir, rowTombstoned, hashText, indexTextOf } from "./store/index.js";
@@ -809,6 +812,30 @@ export class Counterpart {
       this.reportedBudget = budgetBytes;
       this.emit("counterpart.budget.reported", undefined, { budgetBytes });
     }
+    // THE WAKE'S SHAPE (WK2, 2026-10-30; `self.WAKE_SHAPE`, off by default): one
+    // composer for this delivery, from reads only, replacing the road below.
+    // Null — no budget or date, a ceiling too small, anything that throws —
+    // takes the road below, as if the switch were off, and a ring event says so.
+    if (delivery !== undefined && this.reportedBudget !== null && this.wakeShapeOn()) {
+      const shaped = this.shapedWake(delivery, here, this.reportedBudget);
+      if (shaped !== null) {
+        this.emit("counterpart.wake", undefined, {
+          ok: shaped.result.ok,
+          reason: shaped.result.reason,
+          bytes: shaped.result.bytes,
+          preface: shaped.result.preface !== null,
+          budgetBytes: this.reportedBudget,
+        });
+        return {
+          ...shaped.result,
+          budgetBytes: this.reportedBudget,
+          lined: shaped.lined,
+          threads: shaped.threads,
+          ...(shaped.tagged ? { tagged: true } : {}),
+          shape: { sections: shaped.sections, page: shaped.page, assembled: true },
+        };
+      }
+    }
     // `delivery` present means THIS read is an injection: the bundle gets the
     // preface that states which system, which day, which date and what size —
     // the facts the body was composed too early to know. A read that is not a
@@ -912,6 +939,44 @@ export class Counterpart {
       ...(tagged ? { tagged } : {}),
       ...(delivery === undefined ? {} : { shape: { ...boundaryPart.wakeShape(withPointer.text), assembled: assembledHere } }),
     };
+  }
+
+  /**
+   * IS THE WAKE'S SHAPE ON FOR THIS STORE (WK2)? The store's own word
+   * (`counterparts wake-shape on|off`, `WAKE_SHAPE_KEY`), else `self.WAKE_SHAPE`.
+   * A meta row, so one store can read it on every host at once. Never throws: a
+   * store that will not answer is the switch's default.
+   */
+  wakeShapeOn(): boolean {
+    try {
+      const said = (this.store.getMeta(WAKE_SHAPE_KEY) ?? "").trim();
+      if (said === "on") return true;
+      if (said === "off") return false;
+    } catch {
+      /* the default, below */
+    }
+    return this.self.tunables.WAKE_SHAPE;
+  }
+
+  /** The shaped delivery, or null for the road below; what threw is a ring event. */
+  private shapedWake(delivery: WakeDelivery, here: WakeHere | undefined, budget: number): ReturnType<typeof shapedDelivery> {
+    const started = performance.now();
+    try {
+      const out = shapedDelivery(this, delivery, here, budget);
+      if (out === null) this.emit("counterpart.wake.shape.declined", undefined, { budget });
+      else this.emit("counterpart.wake.shaped", undefined, { ms: performance.now() - started, bytes: out.result.bytes, page: out.page ?? "" });
+      return out;
+    } catch (err) {
+      this.emit("counterpart.wake.shape.failed", undefined, { code: errCode(err) });
+      return null;
+    }
+  }
+
+  /** The head tag with the host's fields, when the whole still fits (ONE TAG), or null. */
+  private headFieldsOn(result: WakeResult, fields: readonly string[], budget: number | null): WakeResult | null {
+    const head = withHeadFields(result.text, fields);
+    if (!head.applied || (budget !== null && head.bytes > budget)) return null;
+    return { ...result, text: head.text, bytes: head.bytes, sentinel: head.sentinel };
   }
 
   /**
@@ -1568,6 +1633,9 @@ export class Counterpart {
       reader: here.session ?? null,
       now: this.nowFn(),
       sessions: sessions.map((s) => ({ session: s.session, scope: s.scope, lastAt: s.lastAt })),
+      // WITH THE WAKE'S SHAPE ON (WK2; #687's review): an unattended session's
+      // words aren't a person's, in the door as in the wake.
+      ...(this.wakeShapeOn() ? { skip: headlessOf(sessions) } : {}),
     });
   }
 
@@ -1590,7 +1658,69 @@ export class Counterpart {
     } catch {
       open = { items: [], parked: 0 };
     }
-    return { ...open, comingUp: this.comingUpList() };
+    return { ...open, comingUp: this.comingUpList(here) };
+  }
+
+  /**
+   * "COMING UP" WHOLE, FOR THIS FOLDER (WK2, 2026-10-30; the `coming up` handle,
+   * the door the shaped wake's count names): what is due today, then overdue,
+   * then later, this folder's and the personal ones; then other folders' the
+   * host's setting lets be named. A closed folder's are neither listed nor
+   * counted. Each by whole title. Reads only; empty on a store that cannot
+   * answer; never throws.
+   */
+  comingUp(here?: { scope?: string; exportsFrom?: (scope: string) => boolean }): { today: Cue[]; overdue: Cue[]; later: Cue[]; otherFolders: Cue[] } {
+    try {
+      const all = readCues(this, this.store.today(), here);
+      const by = (c: Cue): string => c.due ?? UNDATED_LAST;
+      return {
+        today: all.filter((c) => c.today && c.mine),
+        overdue: all.filter((c) => c.past && c.mine).sort((a, b) => by(b).localeCompare(by(a))),
+        later: all.filter((c) => !c.today && !c.past && c.mine).sort((a, b) => by(a).localeCompare(by(b))),
+        otherFolders: all.filter((c) => !c.mine),
+      };
+    } catch {
+      return { today: [], overdue: [], later: [], otherFolders: [] };
+    }
+  }
+
+  /**
+   * "ELSEWHERE" WITH ROOM, FOR THIS READER (2026-10-30; the `elsewhere` handle, the
+   * door the shaped wake's `+N more folders` names): the section's own read
+   * (`readElsewhere`). A closed folder is neither listed nor counted. Reads only;
+   * empty on a store that cannot answer; never throws.
+   */
+  elsewhere(here: WakeHere): ElsewhereListed[] {
+    try {
+      return readElsewhere(this, this.store.today(), here);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * WHAT CAME AFTER THE NEWEST HANDOFF HERE, AND YESTERDAY'S CHAPTERS HERE (WK2):
+   * the rest of the `handoffs` door, for the wake's `+N` under "Since, here" and
+   * "Yesterday here". Reads only; empty on a store that cannot answer; never throws.
+   */
+  sinceNewestHere(scope: string, exportsFrom?: (scope: string) => boolean): { since: SinceItem[]; yesterday: { id: string; title: string | null }[] } {
+    const s = scope.trim().replace(/\/+$/, "");
+    if (s.length === 0) return { since: [], yesterday: [] };
+    try {
+      const day = this.store.livedDay();
+      const newest = this.handoffs.readAll(s, day)[0];
+      const newestAt = newest === undefined ? null : this.handoffs.writtenAt(newest);
+      const yest = addDays(this.store.today(), -1);
+      const since = newest === undefined ? startOfLocalDay(yest, this.store.zone()) : (newestAt ?? startOfLocalDay(newest.writtenOn, this.store.zone()));
+      const chapters = this.chaptersHereFor(s, null, this.chaptersInWindow(day)).map((f) => f.chapter);
+      const later = sinceHere(this, s, since, { handoffSession: newest?.session ?? null, handoffAt: newestAt, reader: null, lead: "", chapters, folders: projectFolders(this.store, s, this.self.tunables.PROJECTS_TRAVEL, exportsFrom) });
+      const yesterday = chaptersOn(this.store, yest, { fromDay: Math.max(0, day - LAST_HERE_LIFE_DAYS) })
+        .filter((c) => (c.scope ?? "").trim().replace(/\/+$/, "") === s)
+        .map((c) => ({ id: c.id, title: c.title }));
+      return { since: later.items.map(({ rank: _r, ...item }) => item), yesterday };
+    } catch {
+      return { since: [], yesterday: [] };
+    }
   }
 
   /**
@@ -1599,12 +1729,16 @@ export class Counterpart {
    * counted alike — the door the wake's "Coming up" count names, beside
    * "Still open"'s. Empty on a store that cannot answer; never throws.
    */
-  private comingUpList(): ComingUpItem[] {
+  private comingUpList(here?: { scope?: string; exportsFrom?: (scope: string) => boolean }): ComingUpItem[] {
     try {
       const at = this.store.today();
       const day = this.store.livedDay();
       const asked = horizonFor(this.prospective, at, day, { readToday: READ_TODAY_AT_START });
-      return this.self.comingUpList([...asked.items, ...asked.moreItems], at, day);
+      const list = this.self.comingUpList([...asked.items, ...asked.moreItems], at, day);
+      // With the wake's shape on, this door honours the closed fence as its count does (WK2).
+      if (here === undefined || !this.wakeShapeOn()) return list;
+      const open = new Set(readCues(this, at, here).map((c) => c.id));
+      return list.filter((c) => open.has(c.id));
     } catch {
       return [];
     }
@@ -2202,7 +2336,7 @@ export class Counterpart {
    * not one (L1, 2026-10-25): before the day's run the line names the latest
    * FINISHED night, which an abandoned dream may sit in front of.
    */
-  private nightLineFor(at: string): string | null {
+  private nightLineFor(at: string, named?: NightNames): string | null {
     try {
       // Each dream's changes counted only when the line names it (review of
       // #626): `Dreams#counts` reads every change row, and a session start
@@ -2229,6 +2363,7 @@ export class Counterpart {
         reflections,
         run: this.dreams.nightRun(),
         setting: this.dreams.setting(),
+        ...(named === undefined ? {} : { named }),
       });
     } catch {
       return null;
@@ -3259,6 +3394,28 @@ export class Counterpart {
       this.emit("counterpart.prospective.plain.failed", undefined, { code: errCode(err) });
     }
     return out;
+  }
+
+  /**
+   * WHICH OF THESE MEMORIES' PLAIN REMINDERS THIS READER IS NOT TOLD (2026-10-30):
+   * a closed folder's work (`dream/slices.ts#reminderHeldBack`), asked of the one
+   * rule Coming up's fence uses. A read. A reminder held back is simply not offered
+   * to the delivery: no claim, no latch, no credit, so the next read after its
+   * folder turns on finds it, on its day or as a late beat inside its grace. Past
+   * the grace it is gone, as any reminder nobody could be told. Never throws.
+   */
+  plainHeldBack(ids: readonly string[], on: FolderOn, scope: string): ReadonlySet<string> {
+    const here = scope.trim().replace(/\/+$/, "");
+    const held = new Set<string>();
+    for (const id of ids) {
+      try {
+        const row = this.store.row(id);
+        if (row !== undefined && reminderHeldBack(this.store, row, on, here)) held.add(id);
+      } catch {
+        held.add(id);
+      }
+    }
+    return held;
   }
 
   /**

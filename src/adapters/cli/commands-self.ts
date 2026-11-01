@@ -4,6 +4,7 @@ import { localDate } from "../../core/time.js";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Counterpart } from "../../core/counterpart.js";
+import { WAKE_SHAPE_KEY } from "../../core/counterpart-wake-shape.js";
 import { NO_PAGE_VERSION } from "../../core/self/index.js";
 import { REFLECTED_FEELING_KEY } from "../../core/sleep/index.js";
 import { CLAIMS_ERA_CUTOFF_KEY, storeExists } from "../../core/store/index.js";
@@ -361,6 +362,37 @@ const ABOUT_BY_WORDS: Record<string, string> = {
  * everything and refuses under observer. The dashboard's "about" action runs
  * this same command.
  */
+/**
+ * THE WAKE'S SHAPE FOR ONE STORE (WK2, 2026-10-30): one meta row, so a store can
+ * read the shape on every host at once before any default changes, and go back
+ * by saying so. Nothing else is written; the next session start reads it.
+ */
+export function wakeShapeCommand(dir: string, io: Io, parsed: Parsed, observer: boolean, namedDir: boolean): number {
+  if (!storeExists(dir)) {
+    io.err(`No store at ${dir}. Run 'counterparts init${namedDir ? ` --dir ${dir}` : ""}' to create one.`);
+    return EXIT.usage;
+  }
+  const [word, ...rest] = parsed.positional;
+  if (rest.length > 0 || (word !== undefined && word !== "on" && word !== "off" && word !== "default")) {
+    io.err("refused: counterparts wake-shape [on|off|default].");
+    return EXIT.usage;
+  }
+  if (word !== undefined && observer) {
+    io.err("refused: this console has stood down (observer), so the shape stays as it is.");
+    return EXIT.usage;
+  }
+  const counterpart = openCounterpart(dir, word === undefined || observer);
+  try {
+    if (word === "default") counterpart.store.setMeta(WAKE_SHAPE_KEY, "");
+    else if (word !== undefined) counterpart.store.setMeta(WAKE_SHAPE_KEY, word);
+    const said = (counterpart.store.getMeta(WAKE_SHAPE_KEY) ?? "").trim();
+    io.out(`The wake's shape here: ${counterpart.wakeShapeOn() ? "on" : "off"}${said === "" ? " (the build's default)" : ""}.`);
+    return EXIT.ok;
+  } finally {
+    counterpart.close();
+  }
+}
+
 export function aboutCommand(dir: string, io: Io, parsed: Parsed, observer: boolean, namedDir: boolean): number {
   if (!storeExists(dir)) {
     io.err(`No store at ${dir}. Run 'counterparts init${namedDir ? ` --dir ${dir}` : ""}' to create one.`);

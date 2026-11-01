@@ -62,6 +62,9 @@ import type { Recurrence } from "../../core/time.js";
 import type { Counterpart, DepositResult } from "../../core/counterpart.js";
 import { LAST_EXCHANGE_HANDLE, lastExchangeAnswer } from "../../core/handoff/last-exchange.js";
 import { HANDOFFS_HERE_HANDLE } from "../../core/handoff/index.js";
+import { COMING_UP_HANDLE, ELSEWHERE_HANDLE, HANDOFFS_HANDLE } from "../../core/counterpart-wake-shape.js";
+import type { Cue } from "../../core/counterpart-wake-shape.js";
+import { placeWords } from "../../core/handoff/last-here.js";
 import { loadGateState } from "../../core/recall/index.js";
 import type { SemanticSource } from "../../core/recall/index.js";
 import { AUTHOR_DIMENSIONS } from "../../core/remember/index.js";
@@ -143,6 +146,7 @@ import {
   isSessionId,
   latestLiveSession,
   listSessions,
+  NON_INTERACTIVE_ENTRYPOINTS,
   manifestVersionOnDisk,
   readSession,
   reflectorDone,
@@ -2424,8 +2428,21 @@ export class McpServer {
     }
     // THIS FOLDER'S HANDOFFS (WK1, 2026-10-30): the door the wake's line counts
     // the rest behind, to expand or retire one, with no bare ids in the wake.
-    if (typeof handle === "string" && handle.trim().toLowerCase() === HANDOFFS_HERE_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
+    // `handoffs` is the shaped wake's name for it (WK2, 2026-10-30).
+    if (typeof handle === "string" && (handle.trim().toLowerCase() === HANDOFFS_HERE_HANDLE || handle.trim().toLowerCase() === HANDOFFS_HANDLE) && args["question"] === undefined && args["ids"] === undefined) {
       return this.handoffsHereTool();
+    }
+    // WHAT'S DUE (WK2, 2026-10-30): the door the shaped wake's "Coming up" counts behind.
+    if (typeof handle === "string" && handle.trim().toLowerCase() === COMING_UP_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
+      return this.comingUpTool();
+    }
+    // OTHER FOLDERS, WITH ROOM (2026-10-30): the door the shaped wake's "+N more folders" counts behind.
+    if (typeof handle === "string" && handle.trim().toLowerCase() === ELSEWHERE_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
+      const page = args["page"];
+      if (page !== undefined && (typeof page !== "number" || !Number.isInteger(page) || page < 1)) {
+        return this.refuse("recall", "page-not-a-positive-integer", {});
+      }
+      return this.elsewhereTool(typeof page === "number" ? page : 1);
     }
     // WHAT'S STILL OPEN (2026-10-25): the list "Still open" carries, by the
     // handle, or by a facts question that asks for exactly that.
@@ -2575,6 +2592,7 @@ export class McpServer {
           lastAt: Math.max(r.lastBoundaryAt, r.endedAt ?? 0),
           live: isLive(r, this.nowFn(), this.sessionTtlMs),
           endedAt: r.endedAt,
+          headless: r.entrypoint !== undefined && NON_INTERACTIVE_ENTRYPOINTS.has(r.entrypoint),
         })),
     });
     this.emit("mcp.recall.lastexchange", undefined, { found: ex !== null });
@@ -2664,8 +2682,98 @@ export class McpServer {
     return openCarry(store, store.livedDay(), t.OPEN_CARRY_DAYS, t.OPEN_CARRY_GLIMPSE_TOUCH).notCarried.size;
   }
 
+  /**
+   * `recall` with the handle `coming up` (WK2, 2026-10-30): what's due, by whole
+   * title, for this folder as its wake reads it; other folders' only where the
+   * setting lets them be named, and a closed folder's not even as a count.
+   */
+  private comingUpTool(): ToolResult {
+    const on = this.folderOn();
+    const closed = this.nightClosed();
+    const list = this.counterpart.comingUp({ scope: this.scope, ...(on === undefined ? {} : { exportsFrom: on }) });
+    const shown = (cs: readonly Cue[]): Record<string, unknown>[] =>
+      cs
+        .filter((c) => !closed.has(c.id))
+        .map((c) => ({
+          id: c.id,
+          title: c.title,
+          ...(c.plain ? { text: c.body, plain: true } : {}),
+          ...(c.due === null ? {} : { due: c.due }),
+          ...(c.every === null ? {} : { every: c.every }),
+          ...(c.settles === null ? {} : { settlesWhen: c.settles }),
+          ...(c.folder === null ? {} : { folder: placeWords(c.folder) }),
+        }));
+    const today = shown(list.today);
+    const overdue = shown(list.overdue);
+    const later = shown(list.later);
+    const otherFolders = shown(list.otherFolders);
+    const total = today.length + overdue.length + later.length + otherFolders.length;
+    this.emit("mcp.recall.comingup", undefined, { total });
+    return this.result(
+      {
+        path: "handle",
+        reason: "coming-up",
+        handle: COMING_UP_HANDLE,
+        total,
+        today,
+        overdue,
+        later,
+        otherFolders,
+        note:
+          total === 0
+            ? "Nothing dated is coming up here."
+            : "What's due: today, then overdue (newest first), then later (soonest first), this folder's and what's about you or the owner; then other folders'. Recall an id to read it whole.",
+      },
+      false,
+    );
+  }
+
+  /**
+   * `recall` with the handle `elsewhere` (2026-10-30): the folders and titles the
+   * wake's Elsewhere would show with room, by its own read (`readElsewhere`): the
+   * same gate, the same window, the same order, this session as its reader. So a
+   * wake's `+N more folders` is what lies past the lines it printed, including
+   * the folders it only counts, listed last with no title. A closed folder is
+   * neither. Reads only, like `coming up`: a ring event alone.
+   */
+  private elsewhereTool(page: number): ToolResult {
+    const closed = this.nightClosed();
+    const scope = this.scope ?? "";
+    const session = this.session ?? this.hostSession() ?? "";
+    const all = this.lifecycle()
+      .elsewhereListed({ sessionId: session, scope }, this.folderOn())
+      .filter((e) => e.id === null || !closed.has(e.id));
+    const pages = Math.max(1, Math.ceil(all.length / STILL_OPEN_PAGE));
+    const at = Math.min(page, pages);
+    const shown = all.slice((at - 1) * STILL_OPEN_PAGE, at * STILL_OPEN_PAGE);
+    this.emit("mcp.recall.elsewhere", undefined, { total: all.length, page: at, shown: shown.length });
+    return this.result(
+      {
+        path: "handle",
+        reason: "elsewhere",
+        handle: ELSEWHERE_HANDLE,
+        total: all.length,
+        page: at,
+        pages,
+        folders: shown.map((e) => ({
+          folder: e.place,
+          ...(e.title === null ? {} : { title: e.title }),
+          ...(e.id === null ? {} : { id: e.id }),
+          ...(e.age === null ? {} : { age: e.age }),
+          ...(e.live ? { live: true } : {}),
+        })),
+        note:
+          all.length === 0
+            ? "No other folder has work to name since yesterday."
+            : "Other folders' work since yesterday, as the wake's Elsewhere reads it: folders with a session open first, then newest; each one's newest title. A folder with no title was worked in, with nothing to say by title. Recall an id to read it whole.",
+      },
+      false,
+    );
+  }
+
   private handoffsHereTool(): ToolResult {
     const listed = this.counterpart.handoffsHere(this.scope ?? "");
+    const after = this.counterpart.sinceNewestHere(this.scope ?? "", this.folderOn());
     this.emit("mcp.recall.handoffshere", undefined, { total: listed.length });
     return this.result(
       {
@@ -2673,6 +2781,9 @@ export class McpServer {
         reason: "handoffs-here",
         handle: HANDOFFS_HERE_HANDLE,
         total: listed.length,
+        // What the wake's `+N` under "Since, here" and "Yesterday here" count (WK2).
+        ...(after.since.length === 0 ? {} : { sinceNewest: after.since.map((s) => ({ id: s.id, title: s.title, ...(s.status === null ? {} : { status: s.status }), ...(s.chapter ? { chapter: true } : {}) })) }),
+        ...(after.yesterday.length === 0 ? {} : { yesterdayChapters: after.yesterday }),
         handoffs: listed.map((h) => ({
           id: h.id,
           writtenOn: h.writtenOn,

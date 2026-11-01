@@ -1466,6 +1466,79 @@ export class Self {
   }
 
   /**
+   * THE WAKE'S SHAPE, THE "WHO AM I?" SECTION (WK2, 2026-10-30): the page on the
+   * first rung of its ladder that fits `room`, which is everything the wake has
+   * past its frame, since the page has first claim on the room. The ladder stays
+   * as a safety net and past-its-room-the-short-first does not apply
+   * (`PAGE_SHORT_PAST_ROOM` is the old road's). The other sections take what's
+   * left, so no reserve can step the page down.
+   *
+   * With no page yet, what a wake has of its memories: "Who I am" as the published
+   * bundle showed it and "Might be relevant" (WK1's one exception, for a store
+   * whose page does not hold the wake yet), composed by the same `render`, within
+   * `room`. Reads only. `skip`: a hint that is another section's. The text carries
+   * its blank line; empty when there is nothing to say.
+   */
+  shapedSelf(
+    room: number,
+    opts: { readonly at: string; readonly day: number; readonly keptOut?: (id: string) => boolean; readonly skip?: ReadonlySet<string> },
+  ): { text: string; rung: PageRung | null; ids: readonly string[]; lined: readonly string[]; elements: number } {
+    const none = { text: "", rung: null, ids: [], lined: [], elements: 0 };
+    if (this.page() !== null) {
+      let below: PageRung | undefined;
+      for (;;) {
+        const { block } = this.pageBlock(room + PAGE_FLOOR_RESERVE_BYTES, 0, below, false);
+        if (block === null || block === NO_ROOM) return none;
+        const lines = [FRAMING.identity, ...(block.top === null ? [] : [block.top]), block.text, ...(block.dateline === null ? [] : [block.dateline]), ...(block.end === null ? [] : [block.end])];
+        const text = `${lines.join("\n")}\n\n`;
+        if (byteLength(text) <= room) return { text, rung: block.rung, ids: [], lined: [], elements: 0 };
+        below = block.rung;
+      }
+    }
+    const shown = wakeShown(this.store);
+    const day = opts.day;
+    const docs = new Map<string, ProseDoc>();
+    const sources = new Map<string, string | null>();
+    const settled = settledOver(this.store);
+    const { flagged } = this.openScanned(day);
+    const opened = new Set([...this.store.openThreadIds(), ...flagged]);
+    const read = (ids: readonly string[], lane: "identity" | "hints"): Scanned[] => {
+      const out: Scanned[] = [];
+      for (const id of ids) {
+        if (lane === "hints" && (opened.has(id) || settled.has(id) || opts.skip?.has(id) === true || opts.keptOut?.(id) === true)) continue;
+        if (lane === "identity" && flagged.has(id)) continue;
+        const s = scanOne(this.store, id, day);
+        if (s === null || s.doc.body.trim().length === 0 || (lane === "identity") !== (s.band === "identity")) continue;
+        docs.set(s.id, s.doc);
+        sources.set(s.id, s.source);
+        out.push(s);
+      }
+      return out;
+    };
+    const lanes: Lanes = {
+      identity: read(shown?.identity ?? [], "identity").map((s) => rankedAs(s, "identity")),
+      craft: [],
+      hints: read(shown === null ? [] : [...shown.hints, ...shown.more.hints], "hints").map((s) => rankedAs(s, "hints")),
+      threads: [],
+      horizon: [],
+      overflow: { identity: [...(shown?.more.identity ?? [])], craft: [], hints: [], threads: [], horizon: [] },
+    };
+    let out: BriefingResult;
+    try {
+      out = this.composeOnce(lanes, docs, sources, { day, at: opts.at, budgetBytes: room });
+    } catch {
+      return none;
+    }
+    // Under its framing line and over its closing one: the lanes alone.
+    const lines = out.text.split("\n");
+    const body = lines.slice(2, -1).join("\n").trim();
+    if (body.length === 0) return none;
+    const text = `${body}\n\n`;
+    if (byteLength(text) > room) return none;
+    return { text, rung: null, ids: [...out.kept.identity, ...out.kept.hints], lined: out.lined ?? [], elements: out.kept.identity.length + out.kept.hints.length };
+  }
+
+  /**
    * RANKED LANES TO A BRIEFING — the half of `build` after the scan, shared
    * with `assemble` (2026-10-10) so the two compose by one set of rules: the
    * page's ladder and its borrowing, `render` and `ROOM_ORDER`, and the page
@@ -2727,7 +2800,7 @@ export class Self {
    * down to give its borrowing back to a plain reminder due the day the wake
    * is read (`build`, `briefing.ts#ROOM_ORDER`).
    */
-  private pageBlock(budgetBytes: number, lend = 0, below?: PageRung): { block: PageBlock | typeof NO_ROOM | null; took: number } {
+  private pageBlock(budgetBytes: number, lend = 0, below?: PageRung, shortPastRoom: boolean = this.tunables.PAGE_SHORT_PAST_ROOM): { block: PageBlock | typeof NO_ROOM | null; took: number } {
     const page = this.page();
     if (page === null) return { block: null, took: 0 };
     const dateline = pageDateline(
@@ -2767,7 +2840,7 @@ export class Self {
     // byte page took its extra 356 bytes out of the lanes. With a short version
     // written with this text, that is what the wake shows; with none, the page
     // whole when it fits, as before. The ladder below is unchanged.
-    const shortFirst = this.tunables.PAGE_SHORT_PAST_ROOM && page.short !== null && wholeBytes > this.tunables.PAGE_ROOM_BYTES;
+    const shortFirst = shortPastRoom && page.short !== null && wholeBytes > this.tunables.PAGE_ROOM_BYTES;
     const ladder = [
       shortFirst ? null : rung("whole", body),
       rung("short", page.short?.body ?? null),

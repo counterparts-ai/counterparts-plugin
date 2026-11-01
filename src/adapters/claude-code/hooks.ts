@@ -1110,8 +1110,9 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // The composed recall and its durable row (`Lifecycle#recallTurn`).
       const result = this.recallTurn(input, text, {
         ...(budgetBytes === undefined ? {} : { budgetBytes }),
-        // Said outright this turn, so not ALSO handed over as a quiet cue.
-        ...(waiting.length === 0 ? {} : { withhold: new Set(waiting.map((r) => r.memoryId)) }),
+        // Said outright this turn, so not ALSO handed over as a quiet cue; and
+        // one held back for its closed folder isn't let out that way instead.
+        ...(waiting.length === 0 && plain.held === undefined ? {} : { withhold: new Set([...waiting.map((r) => r.memoryId), ...(plain.held ?? [])]) }),
         ...(byHost ? { noCues: true } : {}),
         // Who started the turn, for the row only (N1): the reading above.
         startedBy: !isInteractive(input) ? "unattended" : byHost ? "host" : "person",

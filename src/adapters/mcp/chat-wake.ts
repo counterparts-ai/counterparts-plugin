@@ -23,7 +23,7 @@
  *
  * Pure text functions; the server composes and claims (`server.ts#wakeTool`).
  */
-import { FRAMING, LEGACY_CONTEXT, LEGACY_FRAMING, collapsedLane } from "../../core/self/briefing.js";
+import { FRAMING, LEGACY_CONTEXT, LEGACY_FRAMING, SHAPED_CONTEXT, collapsedLane } from "../../core/self/briefing.js";
 
 /** The session line a claude.ai wake opens with. */
 export function claudeAiSessionLine(session: string): string {
@@ -43,7 +43,7 @@ const PAGE_END = "(End of my page.)";
  */
 export function chatLanesFirst(text: string): string {
   const lines = text.split("\n");
-  const framing = lines.findIndex((l) => l === FRAMING.context || l === LEGACY_CONTEXT);
+  const framing = lines.findIndex((l) => l === FRAMING.context || l === LEGACY_CONTEXT || l === SHAPED_CONTEXT);
   if (framing < 0) return text;
   const pageEnd = lines.indexOf(PAGE_END, framing);
   const from = pageEnd < 0 ? framing + 1 : pageEnd + 1;

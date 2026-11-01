@@ -22,7 +22,8 @@
  * never the dream's journal or its title (the journal stays out of the
  * surfaces a session reads, dream CONTRACT), never a word of the reflection.
  * No model. A store that has never dreamed, reflected or run a night gets no
- * line. Pure.
+ * line. Pure. (The shaped wake, WK2 2026-10-30, names a night's dream and
+ * reflection by title instead, by Mike's approved shape: `NightFacts.named`.)
  *
  * BEFORE THE DAY'S RUN, THE LATEST FINISHED NIGHT, DATED (2026-10-25, the L1
  * builder; roadmap 10-25, lightly held). The run starts at the day's first
@@ -61,6 +62,19 @@ export interface NightFacts {
   /** The latest headless run's row (`Dreams#nightRun`), or null. */
   readonly run: NightRun | null;
   readonly setting: DreamingSetting;
+  /**
+   * BY NAME, NOT BY ID (WK2, 2026-10-30; `self.WAKE_SHAPE`): how the line names
+   * a dream and a reflection, each whole (`dream "A title"`), and then it says
+   * what state each is in only when that isn't plain finished; what it did is
+   * behind the door. Absent: the ids and counts, as always.
+   */
+  readonly named?: NightNames;
+}
+
+/** The words a night's dream and reflection go by (`NightFacts.named`). */
+export interface NightNames {
+  dream(id: string): string;
+  reflection(id: string): string;
 }
 
 /** A dream as the line reads it. */
@@ -152,18 +166,19 @@ export function nightOf(stamped: string): string {
 }
 
 /** What one night did, in parts; `quiet` when nothing it did changed anything. Null when there is nothing to say. */
-function nightParts(dream: NightDream | null, reflection: NightReflection | null, run: NightRun | null): { parts: string; quiet: boolean } | null {
+function nightParts(dream: NightDream | null, reflection: NightReflection | null, run: NightRun | null, named?: NightNames): { parts: string; quiet: boolean } | null {
   // What the dream did.
   let dreamPart: string | null = null;
   let dreamQuiet = true;
   if (dream !== null) {
-    if (dream.state === "undone") dreamPart = `dream ${dream.id} was undone`;
+    const it = named === undefined ? `dream ${dream.id}` : named.dream(dream.id);
+    if (dream.state === "undone") dreamPart = `${it} was undone`;
     else if (dream.state !== "journaled") {
-      dreamPart = `dream ${dream.id} was begun, not finished`;
+      dreamPart = `${it} was begun, not finished`;
     } else {
       const did = nightChangeWords(dream.counts);
       dreamQuiet = did === null;
-      dreamPart = did === null ? `dream ${dream.id} changed nothing` : `dream ${dream.id} made ${did}`;
+      dreamPart = did === null ? `${it} changed nothing` : named === undefined ? `${it} made ${did}` : it;
     }
   } else {
     const skipped = run === null ? null : dreamSkippedOf(run);
@@ -174,16 +189,17 @@ function nightParts(dream: NightDream | null, reflection: NightReflection | null
   let reflectionPart: string | null = null;
   let reflectionQuiet = true;
   if (reflection !== null) {
+    const it = named === undefined ? `reflection ${reflection.id}` : named.reflection(reflection.id);
     if (reflection.state !== "reflected") {
-      reflectionPart = `reflection ${reflection.id} was begun, not finished`;
+      reflectionPart = `${it} was begun, not finished`;
     } else if (reflection.page_version !== null) {
       reflectionQuiet = false;
-      reflectionPart = `reflection ${reflection.id} rewrote the page`;
+      reflectionPart = named === undefined ? `${it} rewrote the page` : it;
     } else if (reflection.entry_id !== null) {
       reflectionQuiet = false;
-      reflectionPart = `reflection ${reflection.id} wrote an entry`;
+      reflectionPart = named === undefined ? `${it} wrote an entry` : it;
     } else {
-      reflectionPart = `reflection ${reflection.id} had nothing much to add`;
+      reflectionPart = `${it} had nothing much to add`;
     }
   }
 
@@ -261,7 +277,7 @@ export function nightLine(f: NightFacts): string | null {
     // the day it read (L1, 2026-10-25). Dreaming off keeps #623's line.
     if (off.length === 0 && isDay(today)) {
       const night = latestFinished(f);
-      const words = night === null ? null : nightParts(night.dream, night.reflection, night.run);
+      const words = night === null ? null : nightParts(night.dream, night.reflection, night.run, f.named);
       if (night !== null && words !== null) {
         const of = nightOf(night.stamped);
         const stale = of < addDays(today, -NIGHT_LINE_STALE_DAYS);
@@ -274,6 +290,6 @@ export function nightLine(f: NightFacts): string | null {
       : `${NIGHT_LINE_HEAD} no night ran (last: ${shortDate(last)})${off}.`;
   }
 
-  const night = nightParts(dream, reflection, runToday);
+  const night = nightParts(dream, reflection, runToday, f.named);
   return night === null ? null : sayNight(NIGHT_LINE_HEAD, night);
 }

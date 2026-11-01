@@ -113,6 +113,7 @@ import {
   writeUpPartsDated,
   writeUpPlan,
 } from "./sessions.js";
+import type { ElsewhereListed } from "../core/counterpart-wake-shape.js";
 import type { FolderOn, SessionPhase } from "./sessions.js";
 import { planSpawn, spawnDetached } from "./spawn.js";
 import type { SpawnOutcome, Spawner } from "./spawn.js";
@@ -365,6 +366,11 @@ export interface PlainLines {
   readonly notices: string[];
   /** The records behind them, in the same order — claimed only at delivery. */
   readonly due: PlainReminder[];
+  /**
+   * What is due and this reader is not told, a closed folder's work (`plainFor`):
+   * memory ids, so a turn doesn't hand over as a quiet cue what it held back.
+   */
+  readonly held?: readonly string[];
 }
 
 /**
@@ -688,6 +694,16 @@ export class Lifecycle implements HostLifecycle {
   }
 
   /**
+   * WHAT THE WAKE'S ELSEWHERE WOULD LIST WITH ROOM (the `elsewhere` handle): this
+   * session's reader, sessions and all (`elsewhereHere`), asked of `exportsFrom`,
+   * the setting the door reads.
+   */
+  elsewhereListed(input: SessionInput, exportsFrom: ((scope: string) => boolean) | undefined): ElsewhereListed[] {
+    const { exportsFrom: _unused, ...here } = this.elsewhereHere(input);
+    return this.counterpart.elsewhere({ ...here, ...(exportsFrom === undefined ? {} : { exportsFrom }) });
+  }
+
+  /**
    * A SESSION THAT HAS JUST BEEN HANDED ITS WAKE has heard what the other
    * directories did (2026-10-11): its "Since you started" line counts from
    * now, and says nothing at the next prompt. SessionStart's call, after the
@@ -935,17 +951,26 @@ export class Lifecycle implements HostLifecycle {
    * `claude-code/bin/hook.ts#deliverTurn`) and strips the rest, so a beat is
    * never spent on a line the person did not get. No date (`input.at` absent)
    * means no calendar, and so nothing; the headless nightly run is told nothing
-   * (`SessionInput.nightRun`). Never throws.
+   * (`SessionInput.nightRun`). A closed folder's work is held back, whichever road
+   * the wake takes (2026-10-30, `Counterpart#plainHeldBack`): not in these lines,
+   * not claimed, not spent. The setting is read only when something is due: with
+   * no configuration named every folder is on, and one that won't read closes
+   * every folder (`writeUpFolders`). Never throws.
    */
   plainFor(input: SessionInput): PlainLines {
     const none = { context: "", notices: [], due: [] };
     if (input.at === undefined || input.nightRun === true) return none;
     try {
-      const due = this.counterpart.plainDueToday({ at: input.at });
+      const all = this.counterpart.plainDueToday({ at: input.at });
+      if (all.length === 0) return none;
+      const on = this.writeUpFolders();
+      const held = on === undefined ? new Set<string>() : this.counterpart.plainHeldBack(all.map((r) => r.memoryId), on, input.scope);
+      const due = all.filter((r) => !held.has(r.memoryId));
       return {
         context: due.map((r) => `${plainContextLine(r)}\n`).join(""),
         notices: due.map(plainLine),
         due,
+        ...(held.size === 0 ? {} : { held: [...held] }),
       };
     } catch {
       return none;

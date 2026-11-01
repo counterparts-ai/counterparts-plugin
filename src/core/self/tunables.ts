@@ -383,6 +383,18 @@ export interface SelfTunables {
    */
   NIGHT_LINE: boolean;
   /**
+   * THE WAKE'S SHAPE (WK2, 2026-10-30; the shape is Mike's, approved 10-30). On:
+   * a delivery with a date and a budget is composed top-down, one question per
+   * section and no item twice (`counterpart-wake-shape.ts`), and nothing of
+   * `ROOM_ORDER`, `TRIM_ORDER`, "Work here", "Might be relevant" (with a page) or
+   * the delivery's reserves applies to it. Off: every wake byte for byte what it
+   * was. A store can say otherwise (`counterparts wake-shape on|off`, meta
+   * `self.wake_shape`), so one store can read it for a few days before any
+   * default changes. Read from the copy `withTunables` makes when `Self` opens;
+   * `harness compare --set self.WAKE_SHAPE=true`.
+   */
+  WAKE_SHAPE: boolean;
+  /**
    * "TODAY SO FAR" IN THE WAKE (2026-10-24, lane W1; Mike's go 17:45, lightly
    * held). On: a session start's wake carries one more line under the
    * Yesterday line — today's chapters written in this folder before the one
@@ -560,6 +572,7 @@ export const SELF_TUNABLES: SelfTunables = {
   DAY_SUMMARY: true,
   DAY_SUMMARY_CHARS: 600,
   PAGE_WRITER_ASKS_PER_DAY: 2,
+  WAKE_SHAPE: false,
   NIGHT_LINE: true,
   TODAY_SO_FAR: true,
   YESTERDAY_FROM_SUMMARY: true,
@@ -586,6 +599,61 @@ export const SELF_TUNABLES: SelfTunables = {
   // 12, not 6: typed-turn pacing spaces asks further apart, so the backstop can be looser.
   MAX_ASKS_PER_SESSION: 12,
 };
+
+/**
+ * EVERY LIMIT THE WAKE'S SHAPE SETS (`self.WAKE_SHAPE`, `core/counterpart-wake-shape.ts`),
+ * each with its reason (Mike: list them, say why). Bytes are draft 5's judgment,
+ * measured on six real days (wake-compare/round-4); counts are what its cold reader
+ * could use without a tool call. Not in `SelfTunables`: nobody tunes these one at a
+ * time yet, and the shape is judged whole. They stay `as const`, with one home.
+ */
+export const WAKE_SHAPE_LIMITS = {
+  /** Each section's first budget, before the one pass. Draft 5's table; Last night's is above its 350, which a 300-byte line and two titles passed on every case. */
+  ROOM: { folder: 1_300, elsewhere: 500, coming: 700, open: 500, yesterday: 600, night: 450 },
+  /** Coming up's room past its plain reminders: its door's line, so a plain reminder whole doesn't cost the door. */
+  COMING_PAST_PLAIN: 80,
+  /** Lead lines, and the bytes they may come to: five lines of about 120 characters, since a handoff is as often one paragraph as a list. */
+  LEAD_LINES: 5,
+  LEAD_BYTES: 600,
+  /** Spare room finishes a cut lead first (round 4: 922 B unused while a lead was cut at 573). */
+  LEAD_LINES_SPARE: 8,
+  LEAD_BYTES_SPARE: 960,
+  /** "Since, here" lines before `+N`: more echoed the lead. */
+  SINCE_SHOWN: 3,
+  /** A closing batch echoes the lead; a later correction doesn't. Ten minutes tells them apart well enough on the real days. */
+  SINCE_OWN_SESSION_MS: 10 * 60_000,
+  /** A title sharing this much of its words with the lead is the lead over again. */
+  SINCE_IN_LEAD: 0.6,
+  /** How many rows "Since, here" reads: past this the door says how many it saw. */
+  SINCE_READ: 200,
+  /** One per seat, newest of each: past two it reached a fortnight back. */
+  OLDER_SHOWN: 2,
+  /** Other sessions named in "Open here now"; a fourth is a count. */
+  OPEN_HERE_SHOWN: 3,
+  /** Elsewhere's folders; spare room takes it further. The cap on spare is so a store with many folders stops somewhere. */
+  ELSEWHERE_SHOWN: 4,
+  ELSEWHERE_SHOWN_SPARE: 8,
+  /** Rows read per folder to find its newest work title: a bound on the read, past any day's first title. */
+  ELSEWHERE_ROWS_READ: 60,
+  /** Due today past the plain reminders: a flood of nine read as a nag (the 10-29 wake). */
+  DUE_TODAY_SHOWN: 4,
+  /** Overdue items, newest first: more is a nag, and the rest are behind the door. Spare does not reach them (round 4: past it, the lane flooded). */
+  OVERDUE_SHOWN: 2,
+  /** The next later items; spare room takes it to three, later items only, for the same reason. */
+  LATER_SHOWN: 1,
+  LATER_SHOWN_SPARE: 3,
+  /** Still open's items; spare room takes it to five (round 4: good on every case). */
+  OPEN_SHOWN: 3,
+  OPEN_SHOWN_SPARE: 5,
+  /** A row with no title goes by its first sentence, up to these bytes. Past them, its first characters with an ellipsis (a character is up to three bytes here): it is not a title being cut. */
+  UNTITLED_BYTES: 300,
+  UNTITLED_CHARS: 100,
+  /** How far back what a row replaced is walked to find when its fact was first learned. */
+  FACT_CLOCK_DEPTH: 3,
+  /** The largest element count and byte count the frame is sized for, so a digit's growth can't pass the ceiling. */
+  FRAME_ELEMENTS: 9_999,
+  FRAME_BYTES: 99_999,
+} as const;
 
 export function withTunables(overrides: Partial<SelfTunables>): SelfTunables {
   return { ...SELF_TUNABLES, ...overrides };

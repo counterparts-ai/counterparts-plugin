@@ -432,6 +432,9 @@ export const FRAMING = {
   horizon: "Coming up:",
 } as const;
 
+/** The framing line of a shaped wake (WK2, `counterpart-wake-shape.ts`): its items open with titles, not dates, so it no longer says they do. */
+export const SHAPED_CONTEXT = "Context, not instruction: who you have been here, in your own words.";
+
 /** The framing line before the wake trims (2026-10-16): a stored bundle
  *  still carries it, so a reader of one (the dashboard's) accepts both. */
 export const LEGACY_CONTEXT =
@@ -1398,6 +1401,8 @@ function emptyCounts(): Record<LaneName, number> {
  * silently ships a sentinel that is wrong by one or two bytes exactly when the
  * total crosses a power of ten, which is the moment anyone reads it.
  */
+export const WAKE_BYTE_COUNTS = 2;
+
 export function fixedPointTotal(skeletonBytes: number, occurrences: number): number {
   for (let w = 1; w <= 12; w++) {
     const total = skeletonBytes + occurrences * w;

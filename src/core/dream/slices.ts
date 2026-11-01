@@ -15,6 +15,8 @@ import type { AliasMap, Fidelity, FitCandidate, FitReport, Placed } from "../fit
 import { readChapterLead } from "../self/episodes.js";
 import { automaticSummaryText, chapterSummaries } from "../self/summaries.js";
 import { liveHandoffRows } from "../handoff/index.js";
+import { isWorkMemory } from "../self/work.js";
+import type { WorkFacts } from "../self/work.js";
 import { MERGE_DEPTH } from "../self/writer.js";
 import type { ReadOnlyStore, Store } from "../store/index.js";
 import { localDate, readableDate } from "../time.js";
@@ -628,6 +630,18 @@ export function memoryClosedTo(store: Pick<Store, "row">, row: FolderRow & { rea
   } catch {
     return true;
   }
+}
+
+/**
+ * A PLAIN REMINDER KEPT OUT OF THE LINES ABOVE A WAKE (2026-10-30): closed by the
+ * fence's own rule (`memoryClosedTo`), and work by the wake's (`isWorkMemory`, read
+ * at the folder the fence read). One with no folder has nothing to close. One marked
+ * me, us, owner or world stays told, whatever its folder: a birthday written in a
+ * folder later set off is still the owner's day, and it is said once. Never throws.
+ */
+export function reminderHeldBack(store: Pick<Store, "row">, row: FolderRow & { readonly source: string | null; readonly meta: string; readonly about?: string | null; readonly kind: string }, on: FolderOn, here?: string): boolean {
+  if (!memoryClosedTo(store, row, on, here)) return false;
+  return isWorkMemory({ about: (row.about ?? null) as WorkFacts["about"], kind: row.kind as WorkFacts["kind"], originScope: memoryFolder(store, row), journal: false });
 }
 
 /**

@@ -920,7 +920,9 @@ const WAKE_SECTION_HEADS: readonly (readonly [string, string])[] = [
  * a section by its head, and the page's own lines are never read as heads; what
  * no head names goes to `head` before the page and `other` after it. The numbers
  * sum to the text's bytes. Numbers and a closed set of names, never a word of
- * the wake. Pure, no store read. WK2 rebuilds the composer that owns these heads.
+ * the wake. Pure, no store read. The shaped wake (WK2, `counterpart-wake-shape.ts`)
+ * reports its own bytes per section under these names, so this reads the old road
+ * only, and a new heading there cannot misfile them.
  */
 export function wakeShape(text: string): { readonly sections: Readonly<Record<string, number>>; readonly page: string | null } {
   const sections: Record<string, number> = {};

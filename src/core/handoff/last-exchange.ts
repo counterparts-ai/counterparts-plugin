@@ -240,6 +240,8 @@ export function lastExchange(opts: {
   readonly now: number;
   readonly sessions?: readonly ExchangeSession[];
   readonly windowMs?: number;
+  /** Sessions passed over as if they had not been here: nobody attended them (WK2, 2026-10-30). */
+  readonly skip?: ReadonlySet<string>;
 }): LastExchange | null {
   const scope = norm(opts.scope);
   if (scope.length === 0) return null;
@@ -247,7 +249,7 @@ export function lastExchange(opts: {
   try {
     const stamps = new Map<string, { buffer: number; registry: number }>();
     const stamp = (session: string, kind: "buffer" | "registry", at: number): void => {
-      if (!isKnownSession(session) || session === opts.reader || !Number.isFinite(at)) return;
+      if (!isKnownSession(session) || session === opts.reader || opts.skip?.has(session) === true || !Number.isFinite(at)) return;
       const s = stamps.get(session) ?? { buffer: 0, registry: 0 };
       s[kind] = Math.max(s[kind], at);
       stamps.set(session, s);

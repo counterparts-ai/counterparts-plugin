@@ -1647,7 +1647,8 @@ function firedFindings(input: DoctorInput, store: Store): Finding[] {
       ),
     ];
   }
-  const report = firedReport(store, input.today);
+  const folderOn = input.configReason === "not-read" ? undefined : owedFolders(input.configPath);
+  const report = firedReport(store, input.today, folderOn === undefined ? {} : { folderOn });
   const c = report.counts;
   const blocked =
     c.blocked === 0
@@ -1687,9 +1688,17 @@ function firedFindings(input: DoctorInput, store: Store): Finding[] {
     wentQuiet: report.wentQuiet.join("; "),
     wentBlocked: report.wentBlocked.join("; "),
     missedOccasion: report.missedOccasion.join("; "),
+    heldBack: report.heldBack,
     young: report.young,
     livedDay: report.livedDay,
   };
+  // HELD BACK, NOT MISSED (2026-10-30): no fault, but said, since a reminder held
+  // past the week after its day is gone with no other line. A missed one's
+  // sentence already carries the count.
+  const held =
+    report.heldBack === 0 || report.missedOccasion.length > 0
+      ? ""
+      : ` ${report.heldBack === 1 ? "1 plain reminder is" : `${String(report.heldBack)} plain reminders are`} held back, ${report.heldBack === 1 ? "its folder" : "their folders"} not on: said if turned on within a week of the day, and not after.`;
   // TOO NEW TO GRADE (2026-09-20, finding 2). On a store younger than a lived
   // day or two, "28 have never fired" is a true sentence that reads like a
   // broken install — nothing has fired because nothing has happened yet. One
@@ -1719,7 +1728,7 @@ function firedFindings(input: DoctorInput, store: Store): Finding[] {
         "fired",
         "green",
         "Fired",
-        `${roll}. Nothing that fired last week has fallen silent this week.`,
+        `${roll}. Nothing that fired last week has fallen silent this week.${held}`,
         "",
         data,
       ),
@@ -1741,7 +1750,7 @@ function firedFindings(input: DoctorInput, store: Store): Finding[] {
       "fired",
       "amber",
       "Fired",
-      `${roll}. ${changed.join(". ")}`,
+      `${roll}. ${changed.join(". ")}${held === "" ? "" : `.${held}`}`,
       report.wentBlocked.length > 0
         ? `Run: counterparts mechanisms --all — ${STATE_MEANING.blocked}, and the reason on the row names what to fix.`
         : report.missedOccasion.length > 0

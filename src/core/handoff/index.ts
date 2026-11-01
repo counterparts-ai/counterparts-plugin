@@ -249,6 +249,10 @@ export const HANDOFF_LEAD_LINES = 5;
  * like it. A working default.
  */
 export const HANDOFF_LEAD_LINE_BYTES = 240;
+/** How much of a session id a line names. */
+const SESSION_SHORT_CHARS = 8;
+/** Words of two letters or more that make a sentence more than a label or an "OK." */
+const REAL_SENTENCE_WORDS = 4;
 
 /**
  * HOW MANY OTHER LIVE HANDOFFS GET A LINE, newest first (WK1, 2026-10-30; ROADMAP,
@@ -794,6 +798,65 @@ function nextAt(flat: string): number {
   return at;
 }
 
+/** A session's short id, as a line names it. */
+export function shortSession(session: string | null): string {
+  return (session ?? "unknown").slice(0, SESSION_SHORT_CHARS);
+}
+
+/** An all-caps first word that isn't a seat: the handoff's own label for what follows. */
+const NOT_SEATS = new Set(["NEXT", "TODO", "DONE", "NOTE", "NOTES", "STATUS", "WIP", "OPEN", "LIVE", "PLAN", "HANDOFF"]);
+
+/** The seat a handoff opens with: an all-caps first word (`ROADMAP 10-29 12:40: …`), or null. Only a word it wrote itself: no list of seats. (WK2, the shaped wake.) */
+export function seatOf(body: string): string | null {
+  const word = /^([A-Z][A-Z0-9]{3,})\b/.exec(body.trim())?.[1];
+  return word === undefined || NOT_SEATS.has(word) ? null : word;
+}
+
+/** The handoff's own opening label, when it opens with its seat word and date: the header above already says them. */
+export function withoutLabel(body: string): string {
+  return body.replace(/^\s*[A-Z][A-Z0-9-]{3,}\s+\d\d-\d\d(\s+\d\d?:\d\d)?(\s+\([^)]*\))?\s*[:.]?\s*/, "");
+}
+
+/** The first sentence with something in it: not a label, not "OK." */
+export function firstRealSentence(body: string): string {
+  const flat = flatten(withoutLabel(body)).replace(/^[A-Z][A-Z0-9-]{3,}\s*[:.]\s*/, "");
+  let last = flat;
+  for (const p of flat.split(/(?<=[.!?])\s+/)) {
+    last = p;
+    if ((p.match(/[A-Za-z]{2,}/g) ?? []).length >= REAL_SENTENCE_WORDS) return p;
+  }
+  return last;
+}
+
+const TITLE_WORDS = (x: string): string[] => (x.toLowerCase().match(/[a-z0-9#.]{3,}/g) ?? []).map((w) => w.replace(/\.$/, ""));
+
+/** Does the lead already say this title? `share` of its words are in the lead. Judged by words: a correction names new ones. */
+export function titleInLead(title: string, lead: string, share: number): boolean {
+  const t = TITLE_WORDS(title);
+  if (t.length === 0) return false;
+  const l = new Set(TITLE_WORDS(lead));
+  return t.filter((w) => l.has(w)).length / t.length >= share;
+}
+
+/**
+ * THE LEAD THE SHAPED WAKE SHOWS: up to `lines` lines coming to at most `bytes`,
+ * whole lines or whole sentences (`handoffLead`, which keeps a last `next:` part,
+ * with its cut set high enough that a line is only ever cut when one sentence alone
+ * passes the whole lead's room). `cut`: there is more of it than this.
+ */
+export function leadOf(body: string, lines: number, bytes: number): { lines: string[]; cut: boolean } {
+  const text = withoutLabel(body);
+  const all = handoffLead(text, Number.MAX_SAFE_INTEGER, bytes);
+  const kept = handoffLead(text, lines, bytes);
+  const out = [...kept];
+  const size = (x: readonly string[]): number => x.reduce((n, l) => n + byteLengthOf(l) + 1, 0);
+  // Over its room, the lines before the last give way first when the last is a
+  // `next:` part; otherwise from the end. Never below one line.
+  const nextLast = /^next\b/i.test(out[out.length - 1] ?? "");
+  while (out.length > 1 && size(out) > bytes) out.splice(nextLast ? out.length - 2 : out.length - 1, 1);
+  return { lines: out, cut: out.length < all.length };
+}
+
 /**
  * THE NEWEST HANDOFF'S LEAD (WK1, 2026-10-30; Mike's markup of the wake, via
  * ROADMAP): up to `maxLines` lines of what it says, in order: its lines with
@@ -806,18 +869,18 @@ function nextAt(flat: string): number {
  * paragraphs above it, with the lines before it giving way for it. It is what the
  * next session opens the handoff for. Pure.
  */
-export function handoffLead(body: string, maxLines = HANDOFF_LEAD_LINES): string[] {
+export function handoffLead(body: string, maxLines = HANDOFF_LEAD_LINES, lineBytes = HANDOFF_LEAD_LINE_BYTES): string[] {
   const pieces: { text: string; next: boolean }[] = [];
   const sentences = (flat: string): void => {
     let from = 0;
     for (const m of flat.matchAll(/[.!?](?=\s)/gu)) {
       const end = (m.index ?? 0) + 1;
       if (end - from < EXCERPT_MIN_SENTENCE) continue;
-      pieces.push({ text: cutToBytes(flat.slice(from, end).trim(), HANDOFF_LEAD_LINE_BYTES), next: false });
+      pieces.push({ text: cutToBytes(flat.slice(from, end).trim(), lineBytes), next: false });
       from = end;
     }
     const rest = flat.slice(from).trim();
-    if (rest.length > 0) pieces.push({ text: cutToBytes(rest, HANDOFF_LEAD_LINE_BYTES), next: false });
+    if (rest.length > 0) pieces.push({ text: cutToBytes(rest, lineBytes), next: false });
   };
   const lines = body.split("\n").filter((l) => !isHeading(l) && l.trim().length > 0).map(flatten);
   // Only the last line that says it holds the part kept.
@@ -825,7 +888,7 @@ export function handoffLead(body: string, maxLines = HANDOFF_LEAD_LINES): string
   for (let i = lines.length - 1; i >= 0 && nextLine < 0; i--) if (nextAt(lines[i] ?? "") >= 0) nextLine = i;
   lines.forEach((flat, i) => {
     const at = i === nextLine ? nextAt(flat) : -1;
-    if (byteLengthOf(flat) <= HANDOFF_LEAD_LINE_BYTES) {
+    if (byteLengthOf(flat) <= lineBytes) {
       pieces.push({ text: flat, next: at >= 0 });
       return;
     }
@@ -836,7 +899,7 @@ export function handoffLead(body: string, maxLines = HANDOFF_LEAD_LINES): string
     // A long line: what is before the part, then the part, one line, cut only at its own end.
     const before = flat.slice(0, at).replace(/[\s,;—-]+$/u, "");
     if (before.length > 0) sentences(before);
-    pieces.push({ text: cutToBytes(flat.slice(at), HANDOFF_LEAD_LINE_BYTES), next: true });
+    pieces.push({ text: cutToBytes(flat.slice(at), lineBytes), next: true });
   });
   if (pieces.length === 0) return [excerpt(body)];
   if (pieces.length <= maxLines) return pieces.map((p) => p.text);

@@ -107,6 +107,9 @@ export const LOGGED: { readonly names: ReadonlySet<string>; readonly suffixes: r
     "adapter.wake.injected",
     "counterpart.self.briefing",
     "counterpart.rebrief",
+    // ...and a store with the shape on that took the old road anyway (WK2): its
+    // ring dies with the hook, and the row it leaves doesn't say which road.
+    "counterpart.wake.shape.declined",
     // The worker's day: the cycle, the retention pass, and its own summary.
     "counterpart.sleep.cycle",
     "runner.retention",

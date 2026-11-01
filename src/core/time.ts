@@ -320,6 +320,11 @@ const YEAR_RE = /^(\d{4})$/;
 /** The range separator: `2026-10-20..2026-10-31`. */
 export const RANGE_SEP = "..";
 const DAY_MS = 86_400_000;
+const MINUTE_MS = 60_000;
+const MINUTES_PER_HOUR = 60;
+const MINUTES_PER_DAY = 1_440;
+/** An age reads in hours under two days. */
+const AGE_IN_HOURS_UNDER_MINUTES = 2 * MINUTES_PER_DAY;
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
@@ -444,6 +449,25 @@ export function parseCalendarDate(text: unknown): CalendarDate | null {
 /** Is `text` a calendar date this module can read? */
 export function isCalendarDate(text: unknown): text is string {
   return parseCalendarDate(text) !== null;
+}
+
+/** `10-29` from `2026-10-29`. */
+export function monthDay(ymd: string): string {
+  return ymd.slice("YYYY-".length);
+}
+
+/** The day a stamp or a day opens with: `2026-10-29` from `2026-10-29T12:40` or `2026-10-29`. */
+export function stampDay(stamp: string): string {
+  return stamp.slice(0, "YYYY-MM-DD".length);
+}
+
+/** `12 min`, `27 hours`, `3 days`: hours under two days, as a person says it. Never below zero. */
+export function ageWords(at: number, now: number): string {
+  const min = Math.max(0, Math.round((now - at) / MINUTE_MS));
+  const count = (n: number, w: string): string => `${String(n)} ${w}${n === 1 ? "" : "s"}`;
+  if (min < MINUTES_PER_HOUR) return `${String(min)} min`;
+  if (min < AGE_IN_HOURS_UNDER_MINUTES) return count(Math.round(min / MINUTES_PER_HOUR), "hour");
+  return count(Math.round(min / MINUTES_PER_DAY), "day");
 }
 
 /** `ymd` moved by `n` days. Throws on a malformed day — a caller's bug. */
