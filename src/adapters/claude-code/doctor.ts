@@ -957,6 +957,7 @@ function retentionFindings(input: DoctorInput, store: Store): Finding[] {
     keptYoung: run.keptYoung,
     keptLive: run.keptLive,
     failed: run.failed,
+    unboundLines: run.unboundLines,
   };
   const unfinished = run.reason === "STARTED" || run.reason === "LATCH_HELD";
   if (unfinished && run.date < input.today) {
@@ -974,7 +975,11 @@ function retentionFindings(input: DoctorInput, store: Store): Finding[] {
   if (unfinished) {
     return [finding("retention", "green", TITLE, `${policy} · a pass started today`, "", data)];
   }
-  const counts = `${String(run.deleted)} pruned ${run.date} · ${String(run.keptOwed)} kept until written up · ${String(run.keptLive)} still open`;
+  // The notes filed under a shared id, "mcp" or "console", go line by line, on
+  // their own age (`remember/owes.ts#planUnboundLines`), so they are not in `deleted`.
+  const unbound =
+    run.unboundLines > 0 ? ` · ${String(run.unboundLines)} old note${run.unboundLines === 1 ? "" : "s"} with no session let go` : "";
+  const counts = `${String(run.deleted)} pruned ${run.date}${unbound} · ${String(run.keptOwed)} kept until written up · ${String(run.keptLive)} still open`;
   if (run.failed > 0) {
     return [
       finding(

@@ -138,6 +138,12 @@ export const TUNABLES = {
    *  row carries it from the start (`night-run.ts#nightRowTimeoutMs`), so a
    *  long catch-up is never read as a lost run. */
   NIGHT_WRITE_UP_TOTAL_MS: 60 * 60_000,
+  /** How often a night's wait looks at the time, ms (2026-11-01, NT1;
+   *  `claude-code/awake.ts`). Each of these watchdogs counts time awake. */
+  NIGHT_AWAKE_TICK_MS: 1_000,
+  /** A tick this late, ms, means the machine slept and the time isn't charged.
+   *  A shorter sleep is charged: a busy machine's stall is never read as sleep. */
+  NIGHT_ASLEEP_GAP_MS: 30_000,
   /** One child's turn ceiling: two calls a part for the most parts a child
    *  takes (2 × 16), and 16 more — room to look a tool up and for the odd
    *  re-sent answer (one in five parts on 2026-10-11). A child that hits it
@@ -318,6 +324,8 @@ export interface AdapterConfig {
     readonly dir?: string;
     readonly keep?: number;
     readonly mirror?: string;
+    /** `false`: no daily copy (`adapters/snapshots.ts#SnapshotsConfig.daily`). Hosted's; no install writes it. */
+    readonly daily?: boolean;
     /**
      * What this file could not read inside the block, phrased for a person —
      * "snapshots.keep was 0; using 14". Empty is absent. It is a REPORT, not a
@@ -462,7 +470,7 @@ export function loadConfig(raw: unknown): LoadedConfig {
     socketLifetimeMs?: number;
     watchdogMs?: number;
     embedder?: { enabled: boolean; kind?: EmbedderKind };
-    snapshots?: { dir?: string; keep?: number; mirror?: string; ignored?: string[] };
+    snapshots?: { dir?: string; keep?: number; mirror?: string; daily?: boolean; ignored?: string[] };
     pageWriter?: { mode: PageWriterMode; ignored?: string[] };
     dreaming?: { model?: string; timeoutMs?: number; maxTurns?: number; ignored?: string[] };
     retention?: { afterWriteUpDays?: number; maxDays?: number; ignored?: string[] };
@@ -925,7 +933,7 @@ function readSnapshots(raw: unknown): {
   const ignored = (line: string): void => {
     raws.push(line);
   };
-  const out: { dir?: string; keep?: number; mirror?: string; ignored?: string[] } = {};
+  const out: { dir?: string; keep?: number; mirror?: string; daily?: boolean; ignored?: string[] } = {};
   const done = (): typeof out =>
     raws.length === 0 ? out : { ...out, ignored: tidy(raws) };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -933,7 +941,7 @@ function readSnapshots(raw: unknown): {
     return done();
   }
   const sn = raw as Record<string, unknown>;
-  const known = new Set(["dir", "keep", "mirror"]);
+  const known = new Set(["dir", "keep", "mirror", "daily"]);
   for (const key of Object.keys(sn)) {
     // An unknown sub-key is REPORTED rather than dropped in silence: a typo'd
     // `"mirrors"` that quietly did nothing is how somebody believes they have a
@@ -971,6 +979,11 @@ function readSnapshots(raw: unknown): {
     } else {
       out.keep = keep;
     }
+  }
+  const daily = sn["daily"];
+  if (daily !== undefined) {
+    if (typeof daily !== "boolean") ignored(`"snapshots.daily" was ${JSON.stringify(daily)}; taking the daily copy`);
+    else out.daily = daily;
   }
   return done();
 }

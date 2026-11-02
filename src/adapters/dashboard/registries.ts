@@ -370,7 +370,7 @@ export const DURABLE_EVENTS = {
   // Raw-transcript retention (2026-09-23, B3). One row per date; `STARTED` goes
   // in when the pass takes its latch and `LATCH_HELD` when a later worker finds
   // the latch taken with no row, so a pass that died is never a silence.
-  "remember.prune": "the week-old raw transcript of sessions that owe nothing was deleted (sessions deleted, kept because they still owe a write-up, kept because they are under a week old or still open, and any that failed — or STARTED / LATCH_HELD for a pass that has not finished)",
+  "remember.prune": "the week-old raw transcript of sessions that owe nothing was deleted (sessions deleted, kept because they still owe a write-up, kept because they are under a week old or still open, any that failed, and the old notes with no session let go line by line — or STARTED / LATCH_HELD for a pass that has not finished)",
   // The vector cache's identity check (2026-09-23, #190). Written only when an
   // open CHANGED something — never for a match — so a quiet week is no rows.
   "store.embedder.reconciled": "an open changed which model the stored vectors are filed under (reset to a new table and refilled, a paid model's vectors held until somebody chooses, a hold released, untagged vectors adopted, a decision deferred, or vectors dropped by a rebuild)",

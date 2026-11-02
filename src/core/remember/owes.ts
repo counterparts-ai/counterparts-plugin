@@ -53,6 +53,17 @@
  *
  * Every failure to read a fact moves toward KEEPING: a host that cannot answer
  * is read as holding the session open.
+ *
+ * ── THE TWO BUCKETS THAT ARE NOT SESSIONS ─────────────────────────────────
+ *
+ * `SHARED_SESSIONS`: `UNBOUND_SESSION` ("mcp") is the shared id of every server
+ * that does not know its session, and `CONSOLE_SESSION` ("console") of every
+ * `counterparts note`. Judged as one session, each new note restarted the clocks
+ * for all of them, so a note every two days kept day 0's raw copy for ever
+ * (2026-11-01, measured on both). `planUnboundLines` judges each of their lines
+ * as a session of one: on the line's own `at`, 3 days when the line owes nothing
+ * and 14 whatever it owes. The session rule above still runs over a bucket and
+ * may clear it sooner. Every other session is judged as it always was.
  */
 import { Buffer } from "node:buffer";
 
@@ -60,6 +71,7 @@ import { ledger } from "../coverage/index.js";
 import type { LedgerEntry, SessionState } from "../coverage/index.js";
 import type { Store } from "../store/index.js";
 import { resolveZone } from "../time.js";
+import { SHARED_SESSIONS } from "../types.js";
 
 import type { Span, SpanBuffer } from "./spans.js";
 import { TUNABLES } from "./tunables.js";
@@ -316,6 +328,81 @@ export function planRetention(buffer: SpanBuffer, sources: RetentionSources): He
   return out;
 }
 
+/** The lines of one shared id that one scope may let go, on their own age. */
+export interface AgedLines {
+  readonly scope: string;
+  /** Which of `SHARED_SESSIONS` they are filed under. */
+  readonly session: string;
+  /** The lines' hashes, for the strike to name. Never a pattern, never a word. */
+  readonly hashes: readonly string[];
+  readonly lines: number;
+  readonly bytes: number;
+}
+
+/**
+ * THE LINES OF THE SHARED IDS PAST THEIR OWN AGE, per scope and id. Read-only.
+ *
+ * Each line is judged the way a session holding only that line would be:
+ *
+ *   - **It owes nothing** (the assistant's own turn, or a piece with a claim in
+ *     `coverage.jsonl`, which a note that landed makes for itself and a write-up
+ *     makes for what it read): 3 days from its `at`. A write-up MARK does not
+ *     count: the bucket keeps taking notes, and one mark can close a write-up
+ *     another folder finished earlier, so a line older than the mark may be one
+ *     nobody read. A mark that landed without its claim costs a wait, not words.
+ *   - **Otherwise** (a note whose memory did not land, or a line a write-up
+ *     still owes): the ceiling, 14 days from its `at`. Past the ceiling it goes
+ *     owed or not, as a real session's does. It is the only way this drops
+ *     something a write-up could still have used, and it is what "never more
+ *     than 14 days" costs.
+ *
+ * A line whose `at` will not read is never judged, and a hash also on a line
+ * of the same id still inside its clock stays with it (the strike names hashes
+ * within one id, so the other id's line is not named either way).
+ */
+export function planUnboundLines(buffer: SpanBuffer, sources: RetentionSources): AgedLines[] {
+  const now = buffer.now();
+  const maxMs = clockOr(sources.maxMs, TUNABLES.RETENTION_MAX_MS);
+  const retentionMs = Math.min(clockOr(sources.retentionMs, TUNABLES.RETENTION_MS), maxMs);
+  const out: AgedLines[] = [];
+  for (const scope of buffer.scopes()) {
+    const covered = buffer.coveredHashes(scope);
+    const held: readonly Span[] = [
+      ...buffer.spans(scope),
+      ...buffer.assistantSpans(scope),
+      ...buffer.quarantined(scope),
+      ...buffer.claimedSpans(scope),
+    ];
+    for (const session of SHARED_SESSIONS) {
+      const due = new Map<string, { lines: number; bytes: number }>();
+      const stays = new Set<string>();
+      for (const s of held) {
+        if (s.session !== session) continue;
+        const at = numberOr(s.at, 0);
+        const written = s.kind === "assistant" || covered.has(s.hash);
+        if (at <= 0 || now - at < (written ? retentionMs : maxMs)) {
+          stays.add(s.hash);
+          continue;
+        }
+        const cell = due.get(s.hash) ?? { lines: 0, bytes: 0 };
+        cell.lines += 1;
+        cell.bytes += Buffer.byteLength(s.text, "utf8");
+        due.set(s.hash, cell);
+      }
+      const hashes = [...due.keys()].filter((h) => !stays.has(h));
+      if (hashes.length === 0) continue;
+      out.push({
+        scope,
+        session,
+        hashes,
+        lines: hashes.reduce((n, h) => n + (due.get(h)?.lines ?? 0), 0),
+        bytes: hashes.reduce((n, h) => n + (due.get(h)?.bytes ?? 0), 0),
+      });
+    }
+  }
+  return out;
+}
+
 // ── the report, the record, and its readers ─────────────────────────────────
 
 /** What one run came to. Counts only. */
@@ -340,8 +427,16 @@ export interface RetentionReport {
   readonly failed: number;
   /** Text lines the strike took out, across every file. */
   readonly lines: number;
-  /** Bytes of text held by the deleted sessions, as planned. */
+  /** Bytes of text held by the deleted sessions and aged lines, as planned. */
   readonly bytes: number;
+  /** Of `lines`, those the shared ids let go on their own age
+   *  (`planUnboundLines`): the buckets themselves are not in `deleted`. */
+  readonly unboundLines: number;
+  /** Which of `SHARED_SESSIONS` lost lines, a strike that failed part way
+   *  included: the one thing here that is not a count, and two constants, not
+   *  anyone's session. It is not recorded: the worker rewinds a write-up only of
+   *  a bucket whose parts really moved. */
+  readonly unboundSessions: readonly string[];
 }
 
 /** The payload of one `remember.prune` row. `clocks` is the run's own, when
@@ -362,6 +457,7 @@ export function retentionRow(
     failed: report.failed,
     lines: report.lines,
     bytes: report.bytes,
+    unboundLines: report.unboundLines,
     retentionDays: Math.round(clockOr(clocks.retentionMs, TUNABLES.RETENTION_MS) / 86_400_000),
     maxDays: Math.round(clockOr(clocks.maxMs, TUNABLES.RETENTION_MAX_MS) / 86_400_000),
   };
@@ -379,6 +475,8 @@ export interface RetentionRun {
   readonly failed: number;
   readonly lines: number;
   readonly bytes: number;
+  /** Absent from a row written before 2026-11-01: read as 0. */
+  readonly unboundLines: number;
   readonly at: number;
   readonly day: number;
 }
@@ -422,6 +520,7 @@ export function retentionRuns(store: Pick<Store, "eventLog" | "livedDay">): Rete
       failed: numberOr(p["failed"], 0),
       lines: numberOr(p["lines"], 0),
       bytes: numberOr(p["bytes"], 0),
+      unboundLines: numberOr(p["unboundLines"], 0),
       at: row.at,
       day: row.day,
       seq: row.seq,

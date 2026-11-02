@@ -261,6 +261,7 @@ import {
   startPromptFor,
   desktopWriteUpAsk,
   STORE_BUSY_REFUSAL,
+  threwDetail,
   schemaUnreadableRefusal,
   newerStoreRefusal,
   cacheAheadRefusal,
@@ -1871,7 +1872,7 @@ export class McpServer {
     const session = this.session ?? this.hostSession() ?? UNBOUND_SESSION;
 
     const captured = this.counterpart.captureJot({ session, scope: this.scope, text });
-    const ownSpanHash = captured.spans[0]?.hash ?? null;
+    const ownSpanHash = captured.spans[0]?.hash ?? captured.heldLine ?? null;
 
     const draft: Record<string, unknown> = { content: text };
     if (typeof args["kind"] === "string") draft["kind"] = args["kind"];
@@ -1909,20 +1910,29 @@ export class McpServer {
     const facts = readWriteFacts(args, this.today());
     // v14, lane B: its tags, loose first the same way.
     const tags = readTags(args);
-    const deposit = await this.counterpart.submitJot(draft, {
-      session,
-      scope: this.scope,
-      // The nightly run's own writing (lane C3): it never corrects a belief at once.
-      ...(this.nightRun() ? { night: true } : {}),
-      // The day this server reads, for a done that closes one occurrence (2026-10-20).
-      at: this.today(),
-      ownSpanHash,
-      facts: facts.sent,
-      ...(tags.sent === undefined ? {} : { tags: tags.sent }),
-      // What it is about sets an unclaimed memory's default floor (2026-10-10).
-      about: about.mark,
-      ...(model === undefined ? {} : { model }),
-    });
+    let deposit: DepositResult;
+    try {
+      deposit = await this.counterpart.submitJot(draft, {
+        session,
+        scope: this.scope,
+        // The nightly run's own writing (lane C3): it never corrects a belief at once.
+        ...(this.nightRun() ? { night: true } : {}),
+        // The day this server reads, for a done that closes one occurrence (2026-10-20).
+        at: this.today(),
+        ownSpanHash,
+        facts: facts.sent,
+        ...(tags.sent === undefined ? {} : { tags: tags.sent }),
+        // What it is about sets an unclaimed memory's default floor (2026-10-10).
+        about: about.mark,
+        ...(model === undefined ? {} : { model }),
+      });
+    } catch (err) {
+      // SAID AS A TOOL'S ANSWER (2026-11-01), as `session_end` says one entry's,
+      // with what to do about it, and on the log as a refusal: a throw left this
+      // door as a protocol error nothing counted. `call` still turns a schema
+      // guard's trip into its own refusal.
+      return this.refuse("remember", "threw", { detail: threwDetail(err) });
+    }
     const neighbours = this.neighboursOf(deposit, [], CONTRADICTION_TUNABLES.NEIGHBOURS, session);
     this.markSeen([...neighbours.map((n) => n.id), ...(deposit.slot === undefined ? [] : [deposit.slot.over])]);
     const feltNow = nowArg === undefined ? null : this.feelingsNowOutcome(nowArg as unknown[]);

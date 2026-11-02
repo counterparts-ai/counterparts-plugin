@@ -4586,7 +4586,7 @@ export class Counterpart {
     };
     let failure: string | null = null;
     const linked: string[] = [];
-    const cueOut = { deltas: 0, rows: 0, dropped: 0 };
+    const cueOut: { deltas: number; rows: number; dropped: number; stopped?: number } = { deltas: 0, rows: 0, dropped: 0 };
     for (const claim of claims) {
       out.passes += claim.passes;
       out.pairs += claim.deltas.length;
@@ -4635,6 +4635,8 @@ export class Counterpart {
         } catch (err) {
           this.emit("counterpart.associate.cues.failed", undefined, { code: errCode(err), site: "apply" });
         }
+        // R3S: what the stop-list dropped, only while it holds a word.
+        if (cueReport?.stopped !== undefined) cueOut.stopped = (cueOut.stopped ?? 0) + cueReport.stopped;
         if (cueReport !== null && cueReport.reason === "flushed") cueOut.rows += cueReport.rows;
         else {
           cueOut.dropped += claim.cues.length;
@@ -4685,6 +4687,7 @@ export class Counterpart {
       deposited: Math.max(0, out.pairs - out.blocked - out.dropped),
       // CUE LEARNING (R3): word-to-memory deltas carried, pair rows written, deltas lost.
       ...(cueOut.deltas === 0 ? {} : { cueDeltas: cueOut.deltas, cueRows: cueOut.rows, cueDropped: cueOut.dropped }),
+      ...(cueOut.stopped === undefined ? {} : { cueStopped: cueOut.stopped }),
       ...rowIds(linked),
       // The APPLYING session (2026-10-11): the boundary whose worker carried
       // these claims. A claim may hold lines several sessions credited.

@@ -23,7 +23,7 @@ import {
   tagsEcho,
   threadOf,
 } from "./server-args.js";
-import { TITLE_ASKED_NOTE, chatWordsFor } from "./server-words.js";
+import { TITLE_ASKED_NOTE, chatWordsFor, threwDetail } from "./server-words.js";
 import type { FeelingsRead, ReminderRead, AboutRead, TraitsRead, FactsRead, TagsRead } from "./server-args.js";
 import type { McpServer } from "./server.js";
 
@@ -329,7 +329,7 @@ export async function depositEntries(
       });
     } catch (err) {
       // Isolation, not a lost dump: this entry failed, the rest still run.
-      outcomes.push({ stored: false, reason: "threw", detail: String((err as Error).message ?? err) });
+      outcomes.push({ stored: false, reason: "threw", detail: threwDetail(err) });
       continue;
     }
     if (result.deposited) deposited += 1;

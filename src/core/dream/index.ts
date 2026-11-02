@@ -529,6 +529,12 @@ export interface NightRun {
   /** The child's watchdog, ms, as the host started it — what makes a `started` row LOST past it. */
   readonly timeoutMs?: number;
   /**
+   * What the run slept through, ms (2026-11-01, NT1): the waiting process adds
+   * to it each time it notices a sleep, so a run asleep is not read as LOST. A
+   * run whose process has really gone stops adding. Absent: none noticed.
+   */
+  readonly sleptMs?: number;
+  /**
    * WHAT THE HOST CUT (2026-10-09, U14 item 3): how the child's own transcript
    * read once it exited — `read`, `absent` (not where the host keeps it) or
    * `unreadable` — and, when read, how many of the run's tool results the host
@@ -653,9 +659,9 @@ export function nightChildrenWords(children: readonly NightChildRun[]): string {
  * A `started` row past its watchdog and the grace: its process never reported
  * (review of #282, finding 4).
  */
-export function nightRunLost(run: Pick<NightRun, "state" | "startedAt" | "timeoutMs">, now: number): boolean {
+export function nightRunLost(run: Pick<NightRun, "state" | "startedAt" | "timeoutMs" | "sleptMs">, now: number): boolean {
   if (run.state !== "started") return false;
-  return now - run.startedAt > (run.timeoutMs ?? DREAM_TUNABLES.NIGHT_RUN_ASSUMED_MS) + DREAM_TUNABLES.NIGHT_LOST_GRACE_MS;
+  return now - run.startedAt > (run.timeoutMs ?? DREAM_TUNABLES.NIGHT_RUN_ASSUMED_MS) + (run.sleptMs ?? 0) + DREAM_TUNABLES.NIGHT_LOST_GRACE_MS;
 }
 
 /**
@@ -709,6 +715,7 @@ export function nightRunOf(store: Pick<Store, "getMeta">): NightRun | null {
       reflection: typeof v.reflection === "string" ? v.reflection : null,
       ...(typeof v.handedAt === "number" ? { handedAt: v.handedAt } : {}),
       ...(typeof v.timeoutMs === "number" ? { timeoutMs: v.timeoutMs } : {}),
+      ...(typeof v.sleptMs === "number" ? { sleptMs: v.sleptMs } : {}),
       ...(Array.isArray(v.parts) ? { parts: v.parts.filter((p): p is NightPart => p === "writer" || p === "dream" || p === "reflection") } : {}),
       ...(Array.isArray(v.children) ? { children: v.children.flatMap(childRunOf) } : {}),
       ...(v.transcript === "read" || v.transcript === "absent" || v.transcript === "unreadable" ? { transcript: v.transcript } : {}),
@@ -786,7 +793,7 @@ export function nightRunWords(run: Pick<NightRun, "state" | "reason" | "detail" 
     case "watchdog":
       return (run.dream ?? null) === null && (run.reflection ?? null) === null ? "it ran too long and was stopped before it finished anything" : "it ran too long and was stopped";
     case "lost":
-      return "it never reported back (its process went away — a sleep, a restart, a kill)";
+      return "it never reported back (its process went away — a restart, a kill)";
     case "refused":
       return `it was refused before it started${run.detail === null ? "" : ` (${run.detail})`}`;
     case "folder-setting":
@@ -856,10 +863,11 @@ export function sayOnce(who: string): string {
 
 /**
  * THE DAY'S LINE, HELD for a session someone can see (2026-10-01, lane 8).
- * A headless or SDK session may START the nightly run — the start is the point
- * — but nobody sees what it is told, so it leaves the line here and the next
- * INTERACTIVE session says it (`Dreams#heldTold`, claimed by
- * `Dreams#claimHeldTold`). One row, the latest run's; empty once told.
+ * A turn no person started in a person's session (a subagent's hand-back) may
+ * START the nightly run — a headless or SDK session no longer does (2026-11-01,
+ * NT1, `hooks.ts#dreamLines`) — but nobody sees what it is told, so it leaves
+ * the line here and the next person's turn says it (`Dreams#heldTold`, claimed
+ * by `Dreams#claimHeldTold`). One row, the latest run's; empty once told.
  */
 export const NIGHT_UNTOLD_KEY = "dream.night.untold";
 
@@ -1142,6 +1150,8 @@ export class Dreams {
             ? {}
             : { childDetails: Object.fromEntries(run.children.filter((c) => c.detail !== undefined).map((c) => [c.child, c.detail as string])) }),
           ms: run.endedAt === null ? null : run.endedAt - run.startedAt,
+          // `ms` is the wall clock's; this is how much of it the machine slept.
+          ...(run.sleptMs === undefined ? {} : { sleptMs: run.sleptMs }),
           ...(run.transcript === undefined ? {} : { transcript: run.transcript }),
           ...(run.spills === undefined ? {} : { spills: run.spills }),
           ...(run.requeued === undefined ? {} : { requeued: run.requeued }),
@@ -1291,9 +1301,12 @@ export class Dreams {
     if (busy) return { ...base, reason: "dreaming-now" };
     // A HEADLESS RUN STILL INSIDE ITS WATCHDOG is under way, whether or not its
     // dream has begun yet (review of #282, finding 10): a watchdog longer than
-    // `ABANDONED_AFTER_MS` must not let a second run start beside it.
+    // `ABANDONED_AFTER_MS` must not let a second run start beside it. Nor a run
+    // of an earlier date (review of #712): one asleep past midnight wakes and goes
+    // on now, and the morning's prompt would start another on its dream. A row
+    // dated AHEAD is a clock since put right, and its process has long gone.
     const night = this.nightRun();
-    if (night !== null && night.state === "started" && night.date === at && !nightRunLost(night, this.store.now())) return { ...base, reason: "dreaming-now" };
+    if (night !== null && night.state === "started" && night.date <= at && !nightRunLost(night, this.store.now())) return { ...base, reason: "dreaming-now" };
     const ask = this.store.dreamAsk(at);
     if (ask !== undefined) {
       if (ask.state === "declined") return { ...base, reason: "declined-today" };

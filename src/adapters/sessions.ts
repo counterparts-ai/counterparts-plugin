@@ -2297,6 +2297,10 @@ export interface WriteUpProgress {
   readonly waiting?: boolean;
   /** Who is writing it up NOW (2026-10-01, claim-first): see `WriteUpClaim`. */
   readonly claim?: WriteUpClaim;
+  /** Lines left the head of its words since the last fetch
+   *  (`rewindWriteUps`), so a part a writer still holds was cut from the old
+   *  text: its answer stands and does not count as a part done. */
+  readonly rewound?: boolean;
 }
 
 /**
@@ -2400,6 +2404,7 @@ function parseWriteUpProgress(text: string | undefined): Record<string, WriteUpP
         handedAt: typeof handedAt === "number" && Number.isFinite(handedAt) ? handedAt : 0,
         ...((WRITE_UP_ANSWERS as readonly unknown[]).includes(answer) ? { answer: answer as WriteUpAnswer } : {}),
         ...(v["waiting"] === true ? { waiting: true } : {}),
+        ...(v["rewound"] === true ? { rewound: true } : {}),
         ...((): { claim?: WriteUpClaim } => {
           const c = v["claim"];
           if (c === null || typeof c !== "object" || Array.isArray(c)) return {};
@@ -2510,6 +2515,30 @@ export function saveWriteUpProgress(
     if (progress === null) delete all[key];
     else all[key] = { ...progress };
     return true;
+  });
+}
+
+/**
+ * START A SESSION'S UNFINISHED WRITE-UPS AGAIN (2026-11-01). The door counts
+ * parts from the session's oldest words, so when retention takes lines off the
+ * front of a shared id's bucket (`remember/owes.ts#planUnboundLines`) the parts
+ * not yet served move forward, and `done` would skip what moved into a part
+ * already counted; the last part's claim would then close words nobody read.
+ * Served again costs a writer a second read; a skip costs the words. A write-up
+ * whose last part came back (`answer`) has read everything and is left alone.
+ * `rewound` covers a writer holding a part right now, part 1 included: its
+ * answer stands but moves nothing, and a fetch serves from the new text
+ * (`mcp/write-up.ts`). Returns whether it landed; never throws.
+ */
+export function rewindWriteUps(store: Pick<Store, "updateMeta">, session: string): boolean {
+  return updateWriteUpProgress(store, (all) => {
+    let changed = false;
+    for (const [key, p] of Object.entries(all)) {
+      if (!key.startsWith(`${session}|`) || p.answer !== undefined) continue;
+      all[key] = { ...p, done: 0, rewound: true };
+      changed = true;
+    }
+    return changed;
   });
 }
 

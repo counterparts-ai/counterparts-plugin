@@ -48,7 +48,9 @@ export {
   NO_GATE,
   intake,
   markCovered,
+  prepareProposal,
   renderForSweep,
+  settleProposal,
   submitProposal,
 } from "./proposals.js";
 export type {

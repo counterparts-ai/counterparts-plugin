@@ -1,10 +1,11 @@
 /** `Counterpart`'s deposit: the gate's record, the update guard, and carrying facts, reminders and threads onto what is written (bodies moved out of `counterpart.ts`, 2026-10-11; the class keeps a delegate for each). */
 import { batteryGate } from "./bridge.js";
 import { mintProposal, settlesWhenOf, UNRESOLVED_META_KEY } from "./mint.js";
+import type { MintResult } from "./mint.js";
 import { screenTags } from "./tag-screen.js";
 import { cueModeOf, recurrenceOf, DATE_FROM_META, DATE_LINEAGE_MAX, DATE_MOVED_TO_META } from "./prospective/index.js";
-import { errCode, submitProposal } from "./remember/index.js";
-import type { Proposal, SubmitResult, ProposalSource } from "./remember/index.js";
+import { errCode, prepareProposal, settleProposal } from "./remember/index.js";
+import type { Proposal, SubmitContext, SubmitResult, ProposalSource } from "./remember/index.js";
 import {
   settleMovedReminder,
   expireUnanswerableSlots,
@@ -52,6 +53,15 @@ function withoutHow(p: Proposal): Proposal {
 /** A proposal without its `updates` (a held one, `Counterpart#guardUpdate`): a new memory, linked to nothing. */
 function withoutUpdates(p: Proposal): Proposal {
   return { ...withoutHow(p), updates: null };
+}
+
+/** Did a mint that threw leave its memory? The row names its proposal in `origin_ref`. Never throws. */
+function mintLanded(cp: Counterpart, proposalId: string): boolean {
+  try {
+    return cp.store.list({ type: "memory", originRef: proposalId }).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -164,7 +174,7 @@ export async function deposit(
     covers: [],
   });
 
-  const result = await submitProposal(cp.spans, draft, {
+  const submit: SubmitContext = {
     session: ctx.session,
     scope: ctx.scope,
     source,
@@ -172,7 +182,9 @@ export async function deposit(
     ...(ctx.ownSpanHash === undefined ? {} : { ownSpanHash: ctx.ownSpanHash }),
     ...(ctx.cover === undefined ? {} : { cover: ctx.cover }),
     resolveUpdates: (declared, content) => cp["resolveUpdatesFor"](ctx.scope, declared, content),
-  });
+  };
+  // The claim waits for the memory (`settleProposal`, below the mint).
+  const result = await prepareProposal(cp.spans, draft, submit);
 
   if (!result.accepted || result.proposal === null) {
     const reason: DepositReason =
@@ -220,18 +232,37 @@ export async function deposit(
       ? titledProposal
       : { ...titledProposal, tags: tags.tags, tagsVia: tags.from === null ? "write" : "carried" };
   // What would settle it, a carried-on thread's kept when none was sent (S1).
-  const settled = carrySettles(cp, tagged);
-  const proposal: Proposal = settled === null ? tagged : { ...tagged, settlesWhen: settled };
+  const settles = carrySettles(cp, tagged);
+  const minting: Proposal = settles === null ? tagged : { ...tagged, settlesWhen: settles };
   // What it is about, a revision's carried over when none was sent (2026-10-11).
   const about = cp["carryAbout"](carry.proposal, ctx.about);
-  const mint = mintProposal(cp.store, proposal, {
-    self: cp.self,
-    channel: "authored",
-    ...(about !== null ? { about: about.about, inheritedAbout: about } : ctx.about === undefined ? {} : { about: ctx.about }),
-    ...(ctx.model === undefined ? {} : { model: ctx.model }),
-    ...(ctx.writeUp === undefined ? {} : { writeUp: ctx.writeUp }),
-    onEvent: (name, data) => cp["emit"](name, undefined, data),
-  });
+  let mint: MintResult;
+  try {
+    mint = mintProposal(cp.store, minting, {
+      self: cp.self,
+      channel: "authored",
+      ...(about !== null ? { about: about.about, inheritedAbout: about } : ctx.about === undefined ? {} : { about: ctx.about }),
+      ...(ctx.model === undefined ? {} : { model: ctx.model }),
+      ...(ctx.writeUp === undefined ? {} : { writeUp: ctx.writeUp }),
+      onEvent: (name, data) => cp["emit"](name, undefined, data),
+    });
+  } catch (err) {
+    // NOT LOST, AND NOT CLAIMED (2026-11-01). The words stay unwritten and a
+    // retry lands. The throw still goes up: each door says it its own way.
+    // But `Store#put` commits before it indexes, and the freeze seam runs after
+    // it, so a throw can come with the row on disk: that memory stands, and it
+    // settles as any other, or a retry would mint its twin. A read that cannot
+    // tell says no, the side that keeps the words.
+    const landed = mintLanded(cp, minting.id);
+    if (landed) settleProposal(cp.spans, result, submit);
+    cp["emit"]("counterpart.deposit.mint.failed", undefined, { source, landed, error: errCode(err) });
+    throw err;
+  }
+  // THE CLAIM, NOW THE MEMORY EXISTS. A ledger that took the probe and not the
+  // row costs a repeat a twin, which sleep folds; the memory stands either way.
+  const claimed = settleProposal(cp.spans, result, submit);
+  if (!claimed.accepted) cp["emit"]("counterpart.deposit.ledger.failed", mint.id, { source });
+  const proposal: Proposal = { ...minting, covers: result.proposal.covers };
   // BEFORE the revision dispatch: a current-state target is superseded there,
   // and the date must leave the row while it is still the live one.
   // A CLOSE CLOSES THE WHOLE CHAIN (2026-10-14): the date dropped, or spent

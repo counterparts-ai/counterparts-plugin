@@ -1123,8 +1123,12 @@ export const NARRATORS = {
     const deleted = n(t, "deleted") ?? 0;
     const owed = n(t, "keptOwed") ?? 0;
     const failed = n(t, "failed") ?? 0;
+    const unbound = n(t, "unboundLines") ?? 0;
+    const notes = `the raw copy of ${String(unbound)} old note${unbound === 1 ? "" : "s"} with no session`;
     const text =
-      `The raw transcript of ${String(deleted)} session${deleted === 1 ? "" : "s"} older than a week was let go` +
+      (deleted === 0 && unbound > 0
+        ? `${notes.charAt(0).toUpperCase()}${notes.slice(1)} ${unbound === 1 ? "was" : "were"} let go`
+        : `The raw transcript of ${String(deleted)} session${deleted === 1 ? "" : "s"} older than a week was let go` + (unbound === 0 ? "" : `, and ${notes}`)) +
       (owed === 0 ? "." : `; ${String(owed)} ${owed === 1 ? "is" : "are"} kept until written up.`) +
       (failed === 0 ? "" : ` ${String(failed)} could not be deleted and will be tried again.`);
     return failed === 0 ? calm(text) : amber(text);

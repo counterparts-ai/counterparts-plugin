@@ -186,6 +186,9 @@ export interface CaptureResult {
   excluded: number;
   cursorBefore: number;
   cursorAfter: number;
+  /** A jot only, on `DEDUPED`: the hash of this session's own line for these words, when
+   *  nothing has claimed it, so a note sent again after its memory did not land rides it. */
+  heldLine?: string;
 }
 
 export interface Claim {
@@ -602,7 +605,13 @@ export class SpanBuffer {
     };
     if (this.seenHashes(input.scope).has(span.hash)) {
       this.emit("remember.span.deduped", span.hash, { scope: keyFor(input.scope), count: 1 });
-      return { ...base, reason: "DEDUPED", deduped: 1 };
+      // THIS SESSION'S OWN LINE, STILL UNCLAIMED (2026-11-01): the same note sent
+      // again after its memory did not land. The line is the one it would have
+      // appended, so the retry's memory takes it as its own span.
+      const held =
+        this.spans(input.scope).some((s) => s.kind === "jot" && s.hash === span.hash && s.session === input.session) &&
+        !this.coveredHashes(input.scope).has(span.hash);
+      return { ...base, reason: "DEDUPED", deduped: 1, ...(held ? { heldLine: span.hash } : {}) };
     }
     const written = this.mutate("jot", () => {
       this.ensureScope(span.scope);
@@ -1215,6 +1224,15 @@ export class SpanBuffer {
     const out = this.mutate("proposal", () => {
       this.ensureScope(scope);
       appendFileSync(this.path(scope, "proposals.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+    });
+    return out.ok;
+  }
+
+  /** Can `recordProposal` take a row? An empty append, asked before a memory is written. */
+  proposalLedgerWritable(scope: string): boolean {
+    const out = this.mutate("proposal", () => {
+      this.ensureScope(scope);
+      appendFileSync(this.path(scope, "proposals.jsonl"), "", "utf8");
     });
     return out.ok;
   }

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { STORE_EXPORT_EVENT } from "../../core/counterpart.js";
 import { readChapterLead, readableDate } from "../../core/self/index.js";
 import { Store, storeExists } from "../../core/store/index.js";
+import { CONSOLE_SESSION } from "../../core/types.js";
 // The MCP adapter's deliberate-recall dispatcher, imported rather than
 // re-implemented: a console with its own question path would be a second set of
 // rules about what recall means. `mcp/deliberate.ts` imports nothing from here,
@@ -107,11 +108,11 @@ export async function noteCommand(
     // resolved to the default store, the note landed there, and the only line
     // printed was that something had been remembered.
     io.out(`Store: ${counterpart.store.dir}`);
-    const session = "console";
+    const session = CONSOLE_SESSION;
     const scope = filedUnder ?? process.cwd();
     // Step 1 of 2, and the ORDER is the rule (see the docblock above).
     const captured = counterpart.captureJot({ session, scope, text });
-    const ownSpanHash = captured.spans[0]?.hash ?? null;
+    const ownSpanHash = captured.spans[0]?.hash ?? captured.heldLine ?? null;
 
     const draft: Record<string, unknown> = { content: text };
     if (typeof parsed.flags["kind"] === "string") draft["kind"] = parsed.flags["kind"];
@@ -326,7 +327,7 @@ export async function recallCommand(
         const meaning = meaningRecall(
           {
             counterpart,
-            sessionId: "console",
+            sessionId: CONSOLE_SESSION,
             vector: embedded.vector,
             semantic: embedded.semantic,
             asker: parsed.flags["voiced"] === true ? "self" : "owner",
@@ -338,7 +339,7 @@ export async function recallCommand(
         return EXIT.ok;
       }
       const facts = factsRecall(
-        { counterpart, sessionId: "console", vector: embedded.vector, semantic: embedded.semantic },
+        { counterpart, sessionId: CONSOLE_SESSION, vector: embedded.vector, semantic: embedded.semantic },
         question,
         page,
       );
@@ -365,7 +366,7 @@ export async function recallCommand(
       );
       return EXIT.ok;
     }
-    const result = deliberateRecall(counterpart, { handle: idFlag }, { sessionId: "console" });
+    const result = deliberateRecall(counterpart, { handle: idFlag }, { sessionId: CONSOLE_SESSION });
     if (parsed.flags["json"] === true) {
       io.out(JSON.stringify(result, null, 2));
       return EXIT.ok;

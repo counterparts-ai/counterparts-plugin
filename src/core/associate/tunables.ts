@@ -239,6 +239,28 @@ export interface AssociateTunables {
   /** A pair at or below this weight carries nothing and is swept (the edges'
    *  `EDGE_FLOOR`). CAL. */
   CUE_FLOOR: number;
+  /**
+   * THE STOP-LIST (2026-11-01, R3S — Mike's call, lightly held): words cue
+   * learning never learns, and whose pairs it never reads. A plain word is
+   * matched by its index term (`stemTerm`: "thanks" stops `thank`); a RegExp is
+   * tested on the term. Two classes, chosen from the 11-01 read of a store copy
+   * (3,184 pairs; these took 317 of them, about 10%, and 10% of the weight):
+   * - path fragments, words that came from file paths and socket paths, not
+   *   from what was said (`cross` 53 memories, `uds` 50, `tmp` 49, `etc` 27;
+   *   `sock`, `usr`, `var` named for the same reason), and a hex id (seven or
+   *   more hex characters with a digit and a letter: a commit, a memory id's
+   *   tail; 22 pairs);
+   * - acknowledgements, which say "go on" and nothing about a subject
+   *   (`ahead` 19, `let` 18, `sound` 18, `thank` 13, `fyi` 12, `yeah` 11, ...;
+   *   `ahead`, `let`, `sound` and `yeah` sit at or near the 1.5 cap, `ahead` and
+   *   `sound` led by the same memory).
+   * It is one list for every store, so a real sense goes with the word: NOTES.
+   * Words under `recall.MIN_CUE_LENGTH` ("go", "ok") never reach a cue and are
+   * not listed. Already-learned pairs stay in the table, untouched; they fade
+   * and are swept as before. Undo: empty this list — then nothing is filtered
+   * and cue learning is exactly what it was before it.
+   */
+  CUE_STOP_LIST: readonly (string | RegExp)[];
 }
 
 export const TUNABLES: AssociateTunables = {
@@ -278,6 +300,13 @@ export const TUNABLES: AssociateTunables = {
   CUE_MAX_OUT: 1.5,
   S_CUE: 60,
   CUE_FLOOR: 0.02,
+  CUE_STOP_LIST: [
+    // path fragments
+    "tmp", "uds", "sock", "cross", "etc", "usr", "var",
+    /^(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}$/,
+    // acknowledgements
+    "sounds", "good", "ahead", "let", "okay", "yes", "yeah", "yep", "sure", "fine", "cool", "great", "thanks", "fyi",
+  ],
 };
 
 export function withTunables(overrides: Partial<AssociateTunables> = {}): AssociateTunables {

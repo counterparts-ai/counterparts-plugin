@@ -95,7 +95,10 @@ export const LOGGED: { readonly names: ReadonlySet<string>; readonly suffixes: r
     "adapter.night.writeup",
     // ...and what its own transcript said about the host's cut (2026-10-09).
     "adapter.night.spill",
-    // ...and a run a session nobody watched started (2026-10-01, lane 8).
+    // ...and a sleep it noticed (2026-11-01, NT1).
+    "adapter.night.slept",
+    // ...and a run a session nobody watched started, or a headless session
+    // passed on (2026-10-01, lane 8; 2026-11-01, NT1).
     "adapter.dream.unwatched",
     "dream.night",
     "self.page.writer.ran",

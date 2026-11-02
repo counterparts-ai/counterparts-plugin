@@ -17,6 +17,8 @@
 import { spawn } from "node:child_process";
 
 import { withHostUmask } from "../private-umask.js";
+import { armAwake } from "./awake.js";
+import type { AwakeOptions } from "./awake.js";
 
 /**
  * The host CLI a windowless child runs — always this one, resolved on the
@@ -95,12 +97,16 @@ export const STDERR_TAIL_BYTES = 8 * 1024;
 export const KILL_GRACE_MS = 5_000;
 export const REAP_GRACE_MS = 2_000;
 
-/** The real starter: one child, two alarms, and an end that does not need it. */
-export async function startChild(plan: ChildPlan, abort?: AbortSignal): Promise<ChildResult> {
+/**
+ * The real starter: one child, two alarms, and an end that does not need it.
+ * `awake`: TESTS ONLY, the watchdog's tick and gap (`awake.ts`).
+ */
+export async function startChild(plan: ChildPlan, abort?: AbortSignal, awake?: AwakeOptions): Promise<ChildResult> {
   return await new Promise<ChildResult>((resolve) => {
     let settled = false;
     let terminated = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
+    let watchdog: (() => void) | null = null;
     let off: (() => void) | null = null;
     // THE CHILD'S OWN OUTPUT (2026-10-12), kept only when asked for and only
     // up to the cap. A child that writes past it is drained, never blocked.
@@ -118,6 +124,7 @@ export async function startChild(plan: ChildPlan, abort?: AbortSignal): Promise<
       if (settled) return;
       settled = true;
       for (const t of timers) clearTimeout(t);
+      watchdog?.();
       off?.();
       resolve({ ...r, ...output(), ...stderr() });
     };
@@ -190,9 +197,12 @@ export async function startChild(plan: ChildPlan, abort?: AbortSignal): Promise<
       );
     };
     // THE CHILD'S OWN WATCHDOG, armed here rather than left to `spawn`'s
-    // `timeout` option, which only signals and never resolves anything.
+    // `timeout` option, which only signals and never resolves anything. In
+    // time AWAKE (2026-11-01, NT1): a laptop's sleep is not the child being
+    // stuck. The two graces above stay plain: a kill that waits out a sleep
+    // has nothing to lose by landing on wake.
     if (Number.isFinite(plan.timeoutMs) && plan.timeoutMs > 0) {
-      timers.push(arm(terminate, plan.timeoutMs));
+      watchdog = armAwake(terminate, plan.timeoutMs, awake);
     }
     // THE CALLER'S WATCHDOG, which may be shorter than the child's. Fired, it
     // takes the child with it rather than leaving the caller holding the store

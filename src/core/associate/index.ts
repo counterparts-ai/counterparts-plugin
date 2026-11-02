@@ -35,6 +35,7 @@
  * and the failure arm emits `associate.flush.failed` with the dropped count.
  */
 import type { CueEdgeRow, CueEdgeWrite, EdgeInput, EdgeRow, MemoryRow } from "../store/index.js";
+import { stemTerm } from "../store/index.js";
 import type { UseTier } from "../physics/index.js";
 import { TUNABLES as PHYSICS } from "../physics/index.js";
 import { CueBuffer, DeltaBuffer } from "./buffer.js";
@@ -108,7 +109,28 @@ export interface CueFlushReport {
   /** Tokens synaptic scaling brought back to `CUE_MAX_OUT`. */
   readonly scaled: number;
   readonly swept: number;
+  /** Deltas dropped because their word is on `CUE_STOP_LIST` (R3S). Absent while the list is empty. */
+  readonly stopped?: number;
   readonly code?: string;
+}
+
+/**
+ * The stop-list as a predicate on index terms (R3S), or null when the list is
+ * empty — null means no filter runs anywhere, so an empty list is the code
+ * path cue learning had before it.
+ */
+export function cueStopPredicate(list: readonly (string | RegExp)[]): ((word: string) => boolean) | null {
+  if (list.length === 0) return null;
+  const words = new Set<string>();
+  const patterns: RegExp[] = [];
+  for (const e of list) {
+    if (typeof e === "string") {
+      const w = e.toLowerCase();
+      words.add(w);
+      words.add(stemTerm(w));
+    } else patterns.push(e);
+  }
+  return (word) => words.has(word) || patterns.some((p) => p.test(word));
 }
 
 /**
@@ -317,11 +339,14 @@ export class Associate {
   private readonly onEvent: ((e: AssociateEvent) => void) | undefined;
   private readonly ring: AssociateEvent[] = [];
   private flushing = false;
+  /** `CUE_STOP_LIST` as a predicate, null when the list is empty (R3S). */
+  private readonly cueStop: ((word: string) => boolean) | null;
 
   constructor(opts: AssociateOptions) {
     this.store = opts.store;
     this.tunables = withTunables(opts.tunables);
     this.onEvent = opts.onEvent;
+    this.cueStop = cueStopPredicate(this.tunables.CUE_STOP_LIST);
   }
 
   /** The stance, read from the store and never re-derived (SEAMS queued item 4). */
@@ -846,8 +871,14 @@ export class Associate {
       const deltas = this.cueBuffer.drain();
       if (deltas.length === 0) return empty;
       const conductor = this.conductor();
-      const live = deltas.filter((x) => conductor(x.id) && this.store.row(x.id)?.protected !== 1);
-      const blocked = deltas.length - live.length;
+      // R3S: a stop-listed word learns nothing, dropped here — the one place
+      // every delta passes, whichever process buffered it — and counted.
+      const stop = this.cueStop;
+      const kept = stop === null ? deltas : deltas.filter((x) => !stop(x.token));
+      const stopped = deltas.length - kept.length;
+      const counted: { stopped?: number } = stop === null ? {} : { stopped };
+      const live = kept.filter((x) => conductor(x.id) && this.store.row(x.id)?.protected !== 1);
+      const blocked = kept.length - live.length;
       const plan = planCueFlush(
         live,
         d,
@@ -863,7 +894,7 @@ export class Associate {
         }
       } catch (err) {
         this.emit("associate.cues.failed", undefined, { day: d, deltas: deltas.length, rows: plan.rows.length, error: codeOf(err) });
-        return { ...empty, reason: "failed", deltas: deltas.length, blocked, code: codeOf(err) };
+        return { ...empty, reason: "failed", deltas: deltas.length, blocked, ...counted, code: codeOf(err) };
       }
       let swept = 0;
       if (this.store.sweepCueEdges !== undefined) {
@@ -884,8 +915,9 @@ export class Associate {
         tokens: plan.tokens,
         scaled: plan.scaled.length,
         swept,
+        ...counted,
       });
-      return { reason: "flushed", day: d, deltas: deltas.length, blocked, rows: plan.rows.length, tokens: plan.tokens, scaled: plan.scaled.length, swept };
+      return { reason: "flushed", day: d, deltas: deltas.length, blocked, rows: plan.rows.length, tokens: plan.tokens, scaled: plan.scaled.length, swept, ...counted };
     } finally {
       this.flushing = false;
     }
@@ -897,9 +929,13 @@ export class Associate {
    * it into a turn (`retrieval.ts`) and reads a pair as one more cue. Nothing
    * for an observer (R3: an instrument neither writes nor reads cue pairs) or
    * with `CUE_LEARNING` off. Never throws: an unreadable table fetches nothing.
+   * A word on `CUE_STOP_LIST` is not asked (R3S): pairs it learned before the
+   * list stay in the table, untouched, and read as if they weren't there.
    */
-  learnedCues(tokens: readonly string[], day?: number): Map<string, { id: string; weight: number }[]> {
+  learnedCues(terms: readonly string[], day?: number): Map<string, { id: string; weight: number }[]> {
     const out = new Map<string, { id: string; weight: number }[]>();
+    const stop = this.cueStop;
+    const tokens = stop === null ? terms : terms.filter((t) => !stop(t));
     if (this.observer || !PHYSICS.CUE_LEARNING || tokens.length === 0 || this.store.cueEdgesFor === undefined) return out;
     let rows: CueEdgeRow[] = [];
     let d: number;

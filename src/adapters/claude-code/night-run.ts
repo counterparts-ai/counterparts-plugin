@@ -107,6 +107,8 @@ import { OBSERVER_ENV } from "../stance-env.js";
 
 import { NIGHT_DEBUG_DIR, NIGHT_TRANSCRIPT_NAME, TUNABLES, nightDebugDir } from "../config.js";
 import type { AdapterConfig } from "../config.js";
+import { awakeMeter } from "./awake.js";
+import type { AwakeMeter } from "./awake.js";
 import { DEFAULT_HOST_COMMAND, KILL_GRACE_MS, PERMISSION_MODE, REAP_GRACE_MS, startChild } from "./child.js";
 import { runCatchUp } from "./night-catch-up.js";
 import { foldersOn, readScopes, scopesPath } from "../scopes.js";
@@ -611,6 +613,32 @@ export interface NightRunInput {
   readonly now?: () => number;
   /** The process log's (`adapters/log/`), for what the store does not write. */
   readonly onEvent?: (e: CounterpartEvent) => void;
+  /** TESTS ONLY: what tells this run it slept; absent, `awake.ts#awakeMeter`. */
+  readonly awake?: (onSlept: (ms: number) => void) => AwakeMeter;
+}
+
+/**
+ * A SLEEP THE RUN NOTICED (2026-11-01, NT1) goes on its row as soon as it is
+ * noticed, so the next prompt reads a run that slept as still under way and no
+ * second run starts beside it (`nightRunLost`). Never throws.
+ */
+function noteSlept(input: NightRunInput, ms: number): void {
+  try {
+    const c = input.open();
+    try {
+      const row = c.dreams.nightRun();
+      if (row !== null && row.run === input.run && row.state === "started") c.dreams.recordNightRun({ ...row, sleptMs: (row.sleptMs ?? 0) + ms });
+    } finally {
+      c.close();
+    }
+  } catch {
+    /* it reads as lost a little sooner; the run still goes on */
+  }
+  try {
+    input.onEvent?.({ at: input.now?.() ?? Date.now(), name: "adapter.night.slept", ref: input.run, data: { ms } });
+  } catch {
+    /* never the run's problem */
+  }
 }
 
 /**
@@ -624,6 +652,18 @@ export interface NightRunInput {
  * (`transcript.ts#parseToolSpills`). Nothing under `~/.claude` is read.
  */
 export async function runNight(input: NightRunInput): Promise<NightRun> {
+  const onSlept = (ms: number): void => {
+    noteSlept(input, ms);
+  };
+  const meter = input.awake?.(onSlept) ?? awakeMeter({ onSlept });
+  try {
+    return await theNight(input, meter);
+  } finally {
+    meter.stop();
+  }
+}
+
+async function theNight(input: NightRunInput, meter: AwakeMeter): Promise<NightRun> {
   const now = input.now ?? ((): number => Date.now());
   const startedAt = now();
   let date = input.date ?? "";
@@ -635,9 +675,9 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   let writerPrompt = "";
   // THE MORNING CATCH-UP FIRST (2026-10-01, build 3): owed stretches in any
   // directory are written up before the page writer reads the day, by a short
-  // child of their own (`night-catch-up.ts`). Its time is added to the run's
-  // watchdog on the row, so the gate does not read a run that is still going
-  // as lost.
+  // child of their own (`night-catch-up.ts`). Its time awake is added to the
+  // run's watchdog on the row (what it slept is on `sleptMs` with the rest), so
+  // the gate does not read a run that is still going as lost.
   let catchUpMs = 0;
   // WHICH CHILDREN RAN (2026-10-11), in order, on every row that ends the run.
   const children: NightChildRun[] = [];
@@ -647,14 +687,18 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   // A WEEK OF DEBUG TRANSCRIPTS AT MOST (2026-10-23), pruned whether or not
   // the switch is on now, so turning it off leaves nothing behind for long.
   pruneNightTranscripts(input.config.dataDir, input.configPath, localDate(startedAt, input.config.timeZone));
-  const base = (c: Counterpart | null): Omit<NightRun, "state" | "endedAt" | "reason" | "detail" | "code" | "dream" | "reflection"> => ({
-    run: input.run,
-    date: date.length > 0 ? date : (c?.store.today() ?? ""),
-    kind: input.kind.kind,
-    session: input.session,
-    startedAt,
-    timeoutMs: nightChildrenTimeoutMs(input.config, input.kind.kind) + catchUpMs,
-  });
+  const base = (c: Counterpart | null): Omit<NightRun, "state" | "endedAt" | "reason" | "detail" | "code" | "dream" | "reflection"> => {
+    const slept = meter.asleepMs();
+    return {
+      run: input.run,
+      date: date.length > 0 ? date : (c?.store.today() ?? ""),
+      kind: input.kind.kind,
+      session: input.session,
+      startedAt,
+      timeoutMs: nightChildrenTimeoutMs(input.config, input.kind.kind) + catchUpMs,
+      ...(slept > 0 ? { sleptMs: slept } : {}),
+    };
+  };
   const record = (run: NightRun): NightRun => {
     try {
       const c = input.open();
@@ -717,7 +761,7 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
       parts: TUNABLES.NIGHT_WRITE_UP_PARTS,
       ...(input.onEvent === undefined ? {} : { onEvent: input.onEvent }),
     });
-    if (report !== null) catchUpMs = report.ms;
+    if (report !== null) catchUpMs = Math.max(0, report.ms - (report.sleptMs ?? 0));
     // THE CATCH-UP ALONE (2026-10-11): started because write-ups from an
     // earlier day were owed while the dream was not due. Its dream and its
     // reflection are skipped, and the row says why — never a failed dream.
@@ -784,12 +828,14 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   // a `skipped` row the claim wrote before it is not the writer having run,
   // and the dream's quick exit is not read as something begun (review of #603).
   let writerAt: number | null = null;
+  let writerMark: number | null = null;
   let writerAnswer: NightAnswer | null = null;
   if (split) {
     const w = await writerFirst(input, seat, writerPrompt, now);
     if (w !== null) {
       children.push(w.line);
       writerAt = w.at;
+      writerMark = w.mark;
       writerAnswer = w.answer;
     }
     // A PAGE THE WRITER WAS HELD ON AND NEVER SENT AGAIN IS KEPT NOW, before
@@ -809,6 +855,7 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
     }
   }
   const dreamAt = now();
+  const dreamMark = eventMark(input.open);
   const firstAct: NightChild = input.kind.kind === "night" ? "dream" : "reflection";
   const ran: NightAnswer[] = [];
   let one: NightAnswer;
@@ -831,7 +878,7 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
   // single run did. Not started when the first child could not run at all, or
   // a reflection already finished today.
   if (input.kind.kind === "night") {
-    const next = reflectionAfter(input.open, one, input.session, split ? dreamAt : startedAt);
+    const next = reflectionAfter(input.open, one, input.session, split ? { at: dreamAt, mark: dreamMark } : { at: startedAt, mark: null });
     if ("skipped" in next) children.push({ child: "reflection", code: null, ms: 0, skipped: next.skipped });
     else {
       try {
@@ -889,7 +936,7 @@ export async function runNight(input: NightRunInput): Promise<NightRun> {
       // The writer's phase was REACHED: it leaves a row carrying the session.
       // While split: what the writer's own child did, from when it was asked.
       const writerSince = split ? writerAt : startedAt;
-      writerRan = writerSince !== null && c.pageWriterRuns({ limit: 20 }).some((r) => r.at >= writerSince && r.session === input.session);
+      writerRan = writerSince !== null && c.pageWriterRuns({ limit: 20 }).some((r) => after(r, { at: writerSince, mark: split ? writerMark : null }) && r.session === input.session);
       dreamed = dreams.some((d) => d.state === "journaled");
       const journaled = dreams.find((d) => d.state === "journaled");
       const reflected = reflections.find((r) => r.state === "reflected");
@@ -1304,8 +1351,9 @@ async function writerFirst(
   seat: Seat<NightAnswer>,
   prompt: string,
   now: () => number,
-): Promise<{ readonly line: NightChildRun; readonly at: number | null; readonly answer: NightAnswer | null } | null> {
-  const line = (l: NightChildRun, at: number | null = null, answer: NightAnswer | null = null) => ({ line: l, at, answer });
+): Promise<{ readonly line: NightChildRun; readonly at: number | null; readonly mark: number | null; readonly answer: NightAnswer | null } | null> {
+  let mark: number | null = null;
+  const line = (l: NightChildRun, at: number | null = null, answer: NightAnswer | null = null) => ({ line: l, at, mark, answer });
   // Nothing for it tonight is no child and no line, as the tagging's: a
   // night's row reads as it did before the writer had a child of its own.
   if (input.config.pageWriter?.mode === "off") return null;
@@ -1329,6 +1377,7 @@ async function writerFirst(
     return line({ child: "writer", code: null, ms: 0, skipped: "unread" });
   }
   const at = now();
+  mark = eventMark(input.open);
   try {
     const out = await seat.answer(seatAsk("writer", { prompt, run: input.run, session: input.session, scope: input.scope, limits: { turns: TUNABLES.NIGHT_WRITER_MAX_TURNS, ms: TUNABLES.NIGHT_WRITER_MS } }));
     if (out.refused !== null) return line({ child: "writer", code: null, ms: 0, skipped: out.refused }, at);
@@ -1374,6 +1423,35 @@ async function tagsAfter(open: () => Counterpart, seat: Seat<NightAnswer>, ask: 
 }
 
 /**
+ * WHERE THE EVENT LOG STOOD when a child was asked: a row is that child's only
+ * when it came after this, by sequence (2026-11-01). The clock cannot say: the
+ * writer's `skipped` claim just before a child and a row the child writes at
+ * once can share a millisecond with the moment the child was asked, and the
+ * order of the log is the only thing that tells them apart. Null when the log
+ * will not read (readers then fall back to the millisecond).
+ */
+function eventMark(open: () => Counterpart): number | null {
+  try {
+    const c = open();
+    try {
+      return c.store.eventLog({ order: "desc", limit: 1 })[0]?.seq ?? 0;
+    } finally {
+      c.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** When a reading starts: the moment, and the log's mark when one was taken. */
+type Since = { readonly at: number; readonly mark: number | null };
+
+/** Is this writer row from after `since`: by log order when marked, else by the millisecond. */
+function after(r: { readonly at: number; readonly seq: number }, since: Since): boolean {
+  return since.mark !== null ? r.seq > since.mark : r.at >= since.at;
+}
+
+/**
  * THE REFLECTION'S CHILD, DECIDED (2026-10-11), after the dream's child
  * ended: its prompt, on tonight's journaled dream or (none journaled — the
  * dream failed or was skipped) on the last few days. Not started after a
@@ -1381,12 +1459,12 @@ async function tagsAfter(open: () => Counterpart, seat: Seat<NightAnswer>, ask: 
  * a second `claude` would stop the same way), when a reflection already
  * finished today, or when the store will not open. Never throws.
  */
-function reflectionAfter(open: () => Counterpart, first: NightAnswer, session: string, since: number): { prompt: string; dream: string | null } | { skipped: string } {
+function reflectionAfter(open: () => Counterpart, first: NightAnswer, session: string, since: Since): { prompt: string; dream: string | null } | { skipped: string } {
   try {
     const c = open();
     try {
-      const dreams = c.store.dreams({ sinceAt: since, limit: 5 });
-      const began = dreams.length > 0 || c.pageWriterRuns({ limit: 20 }).some((r) => r.at >= since && r.session === session);
+      const dreams = c.store.dreams({ sinceAt: since.at, limit: 5 });
+      const began = dreams.length > 0 || c.pageWriterRuns({ limit: 20 }).some((r) => after(r, since) && r.session === session);
       if (!began && first.code !== 0 && !first.timedOut && first.ms < TUNABLES.NIGHT_QUICK_EXIT_MS) return { skipped: "quick-exit" };
       const today = c.store.today();
       if (c.store.reflections({ limit: 5 }).some((x) => x.state === "reflected" && x.date === today)) return { skipped: "reflected-today" };

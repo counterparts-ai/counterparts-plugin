@@ -33,6 +33,7 @@ import {
 // dashboard's health panel so the three cannot disagree about what "silent"
 // means (constitution 16, the same rule this module already keeps for "healthy").
 import { daysBetween } from "../fired.js";
+import { NIGHT_RUNNER_PREFIX, NON_INTERACTIVE_ENTRYPOINTS, listSessions } from "../sessions.js";
 import { pageWriterMode } from "../config.js";
 import type { AdapterConfig } from "../config.js";
 import { catchUpOf, catchUpWords } from "./night-catch-up.js";
@@ -112,6 +113,50 @@ function toldDuring(store: Store, startedAt: number): boolean {
  * working. The fix says what to look at.
  */
 export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
+  return [...lastNightFindings(input, store), ...headlessOnlyFindings(store)];
+}
+
+/** How long without a night, ms, before a store only headless sessions use says so. */
+export const HEADLESS_ONLY_AFTER_MS = 2 * 24 * 60 * 60_000;
+
+/**
+ * ONLY HEADLESS SESSIONS HERE, AND NO NIGHTS (2026-11-01, NT1): a night waits for
+ * a session a person starts (`hooks.ts#passOnNight`), so a store only `claude -p`
+ * or the Agent SDK ever uses gets none under `auto`, the same as it always did
+ * under `ask`. Its memories wait in the queue. AMBER: a mechanism the owner chose
+ * isn't running. Read from the registry's week, by entrypoint (it keeps no
+ * `attended`), so a session the registry can't call headless keeps this quiet.
+ */
+function headlessOnlyFindings(store: Store): Finding[] {
+  try {
+    if (dreamingSetting(store) !== "auto") return [];
+    const now = store.now();
+    const run = nightRunOf(store);
+    let headless = 0;
+    let oldest = now;
+    for (const r of listSessions(store.dir)) {
+      if (r.sessionId.startsWith(NIGHT_RUNNER_PREFIX)) continue;
+      if (r.entrypoint === undefined || !NON_INTERACTIVE_ENTRYPOINTS.has(r.entrypoint)) return [];
+      headless += 1;
+      oldest = Math.min(oldest, r.startedAt);
+    }
+    if (headless === 0 || now - (run?.startedAt ?? oldest) < HEADLESS_ONLY_AFTER_MS) return [];
+    return [
+      finding(
+        "night-headless",
+        "amber",
+        "Nightly run",
+        `auto; no night ${run === null ? "yet" : `since ${run.date}`}: only headless sessions here this week (claude -p, the Agent SDK), and a night waits for a session a person starts`,
+        "Nothing is lost while it waits: the memories stay queued. Start one session by hand and the night runs.",
+        { setting: "auto", headless },
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function lastNightFindings(input: DoctorInput, store: Store): Finding[] {
   let setting: DreamingSetting;
   let run: ReturnType<typeof nightRunOf>;
   let now: number;
@@ -124,7 +169,7 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
   }
   if (run === null) {
     if (setting !== "auto") return [];
-    return [finding("night-run", "green", "Nightly run", "auto; no headless run yet — the first session of a day with enough new memory, or with write-ups owed from an earlier day, starts one", "", { setting, state: null })];
+    return [finding("night-run", "green", "Nightly run", "auto; no headless run yet — the first session a person starts on a day with enough new memory, or with write-ups owed from an earlier day, starts one", "", { setting, state: null })];
   }
   // ITS MORNING CATCH-UP (2026-10-01, build 3), when it had anything owed.
   const cu = catchUpOf(store, run.run);
@@ -190,7 +235,7 @@ export function nightRunFindings(input: DoctorInput, store: Store): Finding[] {
         lost && setting === "auto" ? "amber" : "green",
         "Nightly run",
         lost
-          ? `${setting}; the run of ${run.date} started ${mins(now - run.startedAt)} ago and never reported an end — its process went away (a sleep, a restart, a kill)`
+          ? `${setting}; the run of ${run.date} started ${mins(now - run.startedAt)} ago and never reported an end — its process went away (a restart, a kill)`
           : `${setting}; running now (${what}), started ${mins(now - run.startedAt)} ago`,
         lost ? "The next session asks instead of starting another headless run. If this repeats, run claude -p once by hand in a terminal to see whether it hangs (a login, an update prompt)." : "",
         data,

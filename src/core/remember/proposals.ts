@@ -596,7 +596,33 @@ export interface ProposalRecord {
   accepted: boolean;
 }
 
+/**
+ * The whole deposit, in one call: everything up to the claim, then the claim.
+ * Nothing stands between the two here, so nothing can fail between them. A
+ * caller with a write to make in between — `counterpart-deposit.ts#deposit`, whose
+ * mint can throw — calls the two halves itself, the write first.
+ */
 export async function submitProposal(
+  buffer: SpanBuffer,
+  raw: unknown,
+  ctx: SubmitContext,
+): Promise<SubmitResult> {
+  const prepared = await prepareProposal(buffer, raw, ctx);
+  return prepared.accepted ? settleProposal(buffer, prepared, ctx) : prepared;
+}
+
+/**
+ * EVERYTHING BUT THE CLAIM (2026-11-01): intake, the content ledger's answer, the
+ * gate, `updates:` — and a proposal ready to become a memory, which has claimed
+ * nothing and is not in the ledger. `accepted` here says the gate cleared it;
+ * `settleProposal` is what makes it stand.
+ *
+ * WHY THE CLAIM COMES AFTER THE WRITE. It came first until this date, so a mint
+ * that threw left a ledger row refusing the retry as a duplicate and coverage
+ * marks calling the words written up, with no memory behind either (NOTES,
+ * "A failed mint").
+ */
+export async function prepareProposal(
   buffer: SpanBuffer,
   raw: unknown,
   ctx: SubmitContext,
@@ -751,6 +777,52 @@ export async function submitProposal(
     ownSpanHash: own?.hash ?? null,
   };
 
+  // THE LEDGER CAN BE WRITTEN, asked before the memory is. A ledger that cannot
+  // take the row has always meant no memory (IO_FAILED, retried once it can),
+  // and a memory the ledger never hears of is one a repeat would mint again.
+  if (!buffer.proposalLedgerWritable(ctx.scope)) {
+    // The battery DID run before this failure, so its records travel: an IO loss
+    // after a clean gate is a different story from a refusal, and the durable
+    // row is how the difference survives the process.
+    return {
+      ...base,
+      reason: "IO_FAILED",
+      droppedFields: parsed.dropped,
+      records: verdict.records ?? [],
+      channels: verdict.channels ?? [],
+      kind,
+      blockedBy: [],
+    };
+  }
+
+  return {
+    accepted: true,
+    reason: "ACCEPTED",
+    proposal,
+    coverage: [],
+    gate: null,
+    malformed: null,
+    degradedToSpan: false,
+    droppedFields: parsed.dropped,
+    records: verdict.records ?? [],
+    channels: verdict.channels ?? [],
+    kind,
+    blockedBy: [],
+  };
+}
+
+/**
+ * THE CLAIM: coverage for the words, and the content ledger's row. Called once
+ * the memory exists, so a failed write leaves neither behind: the retry lands,
+ * and the words still read as unwritten until it does. A kill between the write
+ * and this leaves a memory with no ledger row and its words unclaimed, the one
+ * window left, and it fails on the side that keeps everything: a repeat mints a
+ * twin that sleep's content-hash pass folds (`sleep/dedup.ts`).
+ */
+export function settleProposal(buffer: SpanBuffer, prepared: SubmitResult, ctx: SubmitContext): SubmitResult {
+  const proposal = prepared.proposal;
+  if (proposal === null) return prepared;
+
   // WHOSE words: the depositor's by default, another session's or none when
   // the caller says so (`SubmitContext.cover`). The own span is only ever the
   // depositor's, so it rides only on the default claim. HOW MUCH (2026-10-11):
@@ -771,7 +843,7 @@ export async function submitProposal(
 
   const record: ProposalRecord = {
     id: proposal.id,
-    contentHash,
+    contentHash: proposal.contentHash,
     session: proposal.session,
     source: proposal.source,
     at: proposal.at,
@@ -780,18 +852,7 @@ export async function submitProposal(
     accepted: true,
   };
   if (!buffer.recordProposal(ctx.scope, record)) {
-    // The battery DID run before this failure, so its records travel: an IO loss
-    // after a clean gate is a different story from a refusal, and the durable
-    // row is how the difference survives the process.
-    return {
-      ...base,
-      reason: "IO_FAILED",
-      droppedFields: parsed.dropped,
-      records: verdict.records ?? [],
-      channels: verdict.channels ?? [],
-      kind,
-      blockedBy: [],
-    };
+    return { ...prepared, accepted: false, reason: "IO_FAILED", proposal: null };
   }
   buffer.emit("remember.proposal.accepted", proposal.id, {
     source: proposal.source,
@@ -801,20 +862,7 @@ export async function submitProposal(
     updates: proposal.updates?.method ?? "none",
   });
 
-  return {
-    accepted: true,
-    reason: "ACCEPTED",
-    proposal,
-    coverage,
-    gate: null,
-    malformed: null,
-    degradedToSpan: false,
-    droppedFields: parsed.dropped,
-    records: verdict.records ?? [],
-    channels: verdict.channels ?? [],
-    kind,
-    blockedBy: [],
-  };
+  return { ...prepared, coverage };
 }
 
 // ── prompt-side coverage marks (§5 G7) ───────────────────────────────────────

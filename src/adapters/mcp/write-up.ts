@@ -61,6 +61,8 @@
  *     captured something today and has not ended — `core/coverage/`);
  *   - `other-project` — ended in another directory;
  *   - `already-written-up` — so a second write-up of the same id is refused;
+ *   - `part-not-landed` — a memory of this part threw, and the same memories can
+ *     come back: the part stays open;
  *   - `owes-nothing` — `core/coverage/`'s rule says it owes nothing (`why`:
  *     below-threshold, answered, lapsed, no-text);
  *   - `not-asked` — a fetch for a session the hook did not point this one at,
@@ -141,6 +143,7 @@ export const WRITE_UP_REFUSALS = [
   "part-already-written",
   "memories-required",
   "nothing-landed",
+  "part-not-landed",
   "io-failed",
   "claimed",
   "allowance-spent",
@@ -361,7 +364,9 @@ async function handOver(
       detail: "This session has written up its part. The next part is handed over at a later session start here.",
     });
   }
-  const current = st.granted && answered ? undefined : mine;
+  // REWOUND since this writer's fetch: its part number belongs to the old text,
+  // so it is served from the start like anyone else.
+  const current = (st.granted && answered) || p?.rewound === true ? undefined : mine;
   const chunk = p?.chunk ?? WRITE_UP_PART_BYTES;
   const parts = writeUpPartsDated(writeUpEntries(counterpart.spans, { session: ended, scopes: [st.here] }), chunk);
   if (parts.length === 0) return refused("owes-nothing", { writeUp: ended, why: "no-text" });
@@ -387,8 +392,9 @@ async function handOver(
       detail: "This batch's allowance for that session is spent. The rest stays owed, for the next batch or a later catch-up.",
     });
   }
+  const { rewound: _cutFromOldText, ...before } = p ?? ({} as Partial<WriteUpProgress>);
   const next: WriteUpProgress & { readonly claim: WriteUpClaim } = {
-    ...(p ?? {}),
+    ...before,
     chunk,
     parts: parts.length,
     // The parts passed over count as written: every word in them already was.
@@ -533,6 +539,34 @@ async function takeBack(
       },
     };
   }
+  // A MEMORY THAT THREW HOLDS THE PART OPEN (2026-11-01), while the same memories
+  // can still come back: closed beside the ones that landed, it would be nowhere,
+  // its part done and a resend refused. The part stays fetched and owed, as a
+  // refused `[]` does; a resend lands what did not and answers duplicate-content
+  // for what did, and a batch that ends here leaves it for the next run.
+  //
+  // NOT ON A LAST PART WHERE ONE LANDED: that memory's claim took the session's
+  // words (`cover`), so it owes nothing and this door refuses a resend. There the
+  // part closes as it did, and the reply says where the rest goes (`finish`).
+  const threw = deposits.outcomes.filter((o) => o["reason"] === "threw").length;
+  if (threw > 0 && (!final || deposits.deposited === 0)) {
+    return {
+      reason: "part-not-landed",
+      isError: true,
+      body: {
+        stored: deposits.deposited > 0,
+        writeUp: true,
+        reason: "part-not-landed",
+        ended,
+        part,
+        entries: raw.length,
+        deposited: deposits.deposited,
+        refused: raw.length - deposits.deposited,
+        outcomes: deposits.outcomes,
+        detail: `${String(threw)} of these memories did not land, so part ${String(part)} stays open. Send the same memories again.`,
+      },
+    };
+  }
   const answered = markWriteUpFetched(input.registryDir, input.session, { session: ended, part, answer: said2 });
   if (!final) {
     // An ordinary writer is done with its one part: its claim is let go, so
@@ -540,7 +574,9 @@ async function takeBack(
     // its claim and goes on (2026-10-01).
     const { claim, ...rest } = p;
     const kept = st.granted && claim !== undefined ? { ...rest, claim: { ...claim, at: input.now } } : rest;
-    const advanced = saveWriteUpProgress(counterpart.store, st.key, { ...kept, done: part });
+    // A part cut from the old text (`rewound`) is not a part done: counting it
+    // would skip what moved into the new parts before it.
+    const advanced = saveWriteUpProgress(counterpart.store, st.key, { ...kept, done: p.rewound === true ? p.done : part });
     return {
       reason: "part-written",
       isError: false,
@@ -610,6 +646,7 @@ function finish(
   // Every part here is back: the claim is let go with it (2026-10-01).
   const { claim: _released, ...base } = st.progress ?? { chunk: WRITE_UP_PART_BYTES, parts: part, done: 0, handedAt: input.now };
   const entries = deposits.outcomes.length;
+  const threw = deposits.outcomes.filter((o) => o["reason"] === "threw").length;
   const common = {
     writeUp: true,
     answer: said,
@@ -621,6 +658,9 @@ function finish(
     deposited: deposits.deposited,
     refused: entries - deposits.deposited,
     outcomes: deposits.outcomes,
+    // A granted runner writes up and nothing else (`server.ts`, `write-up-runner`):
+    // `remember` is refused to it, so it isn't told to.
+    ...(threw === 0 ? {} : { notLanded: threw, notLandedDetail: `${String(threw)} of these memories did not land, and this part is closed.${st.granted ? " This run can't save them." : " Save each of them with remember."}` }),
   };
   if (elsewhere.length > 0) {
     saveWriteUpProgress(input.counterpart.store, st.key, { ...base, done: part, answer: said, waiting: true });

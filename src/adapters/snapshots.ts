@@ -151,10 +151,20 @@ export interface SnapshotsConfig {
   readonly keep?: number;
   /** A second location that receives the same copy, with its own rotation. */
   readonly mirror?: string;
+  /**
+   * `false`: no daily copy. Hosted sets it (`hosted/src/tenants.ts`): Litestream
+   * is a hosted store's backup (docs/hosted/DESIGN.md §2.4). Copies already in
+   * the directory, and the ones the store takes before a migration, go once they
+   * are `PRE_MIGRATION_KEEP_DAYS` old (`retireCopies`). Absent is every install's
+   * default: a copy a day.
+   */
+  readonly daily?: boolean;
 }
 
 export type SnapshotReason =
   | "taken"
+  // This configuration takes no daily copy (`SnapshotsConfig.daily`).
+  | "off"
   | "observer"
   // Today's copy is there — or, since 2026-10-20, another run holds today's
   // claim and is taking it (`claimDay`).
@@ -396,6 +406,19 @@ export function runSnapshot(input: SnapshotRunInput): SnapshotRunReport {
   // directory, so a stale partial cannot be mistaken for anything and the count
   // of what was cleaned reaches the report even on a day that takes no copy.
   const cleaned = cleanPartials(dir, now, errors);
+
+  if (input.config?.daily === false) {
+    const rotation = retireCopies(dir, cleaned, errors, now);
+    if (rotation.deleted.length > 0) {
+      note(
+        counterpart,
+        SNAPSHOT_ROTATED_EVENT,
+        { date, keep: 0, deleted: rotation.deleted.length, names: [...rotation.deleted], kept: rotation.kept, oldest: rotation.oldest },
+        undefined,
+      );
+    }
+    return done("off", dir, null, 0, rotation, null, errors, started);
+  }
 
   if (todaysSnapshot(dir, date) !== null) {
     return done("already-today", dir, null, 0, withCleaned(cleaned), null, errors, started);
@@ -796,6 +819,42 @@ export function rotate(
     unrecognised: read.unrecognised,
     preRows: read.preRows,
     preMigration,
+    errors: rotationErrors,
+  };
+}
+
+/**
+ * WHERE NO DAILY COPY IS TAKEN, nothing else would ever age out what the
+ * directory holds: `rotate` runs after a copy, and its pre-migration rule waits
+ * for `keep` newer daily copies that will never come. So every copy of ours,
+ * daily or pre-migration, goes once it is `PRE_MIGRATION_KEEP_DAYS` old by the
+ * date in its name. Younger ones stay, and so does anything that isn't ours.
+ */
+function retireCopies(dir: string, cleaned: number, errors: string[], now: number): RotationReport {
+  const read = readSnapshotsDir(dir);
+  const deleted: string[] = [];
+  const rotationErrors: string[] = [];
+  // No daily copies to wait for, so the age alone decides, for both kinds.
+  for (const name of expiredPreMigration([...read.names, ...read.preMigration], [], 0, now)) {
+    try {
+      rmSync(join(dir, name), { recursive: true, force: true });
+      deleted.push(name);
+    } catch (err) {
+      const why = `could not remove ${name}: ${messageOf(err)}`;
+      rotationErrors.push(why);
+      errors.push(why);
+    }
+  }
+  const remaining = read.names.filter((n) => !deleted.includes(n));
+  return {
+    deleted,
+    kept: remaining.length,
+    oldest: remaining[0] ?? null,
+    cleaned,
+    future: futureNamesIn(remaining, now).length,
+    unrecognised: read.unrecognised,
+    preRows: read.preRows,
+    preMigration: read.preMigration.filter((n) => !deleted.includes(n)),
     errors: rotationErrors,
   };
 }

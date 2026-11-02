@@ -124,6 +124,12 @@ export interface StrikeRequest {
    */
   hashes?: readonly string[];
   /**
+   * With `hashes`: only that session's lines match. Retention's request for the
+   * unbound bucket's aged lines (`retention.ts`): a line of another session
+   * that happens to hold the same words is not named by it. Absent: any line.
+   */
+  within?: string;
+  /**
    * The fallback for a memory whose provenance never recorded a hash: a
    * predicate over a span's TEXT. The destruction path passes the doomed body,
    * which is the only thing it can match on before it destroys it. The text
@@ -211,7 +217,7 @@ export function strikeSpans(buffer: object, request: StrikeRequest): StrikeRepor
   // lines instead (`SpanSurface.echoes`), and this is the half of that rule
   // that cannot be got round by calling the seam directly.
   const matches = (span: Span): boolean => {
-    if (hashes.has(span.hash)) return true;
+    if (hashes.has(span.hash) && (request.within === undefined || span.session === request.within)) return true;
     if (typeof span.session === "string" && sessions.has(span.session)) return true;
     if (predicate === undefined || typeof span.text !== "string") return false;
     return span.kind === "jot" && predicate(span.text);

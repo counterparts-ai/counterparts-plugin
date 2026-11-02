@@ -260,8 +260,11 @@ export interface PendingApplyReport {
   readonly stuck: number;
   /** How old the oldest carried work was when it was applied. */
   readonly oldestMs: number;
-  /** Cue learning (R3): word-to-memory deltas carried, and the pair rows they wrote. Absent when none were carried. */
-  readonly cues?: { readonly deltas: number; readonly rows: number; readonly dropped: number };
+  /**
+   * Cue learning (R3): word-to-memory deltas carried, and the pair rows they wrote. Absent when none were carried.
+   * `stopped` (R3S): of the deltas, those dropped because their word is on `associate.CUE_STOP_LIST`; absent while the list is empty.
+   */
+  readonly cues?: { readonly deltas: number; readonly rows: number; readonly dropped: number; readonly stopped?: number };
 }
 
 /** Telemetry: ids, counts, bytes, reasons, flags. NEVER body text (store §5 G10). */

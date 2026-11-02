@@ -70,6 +70,16 @@ export type SettleHow = (typeof SETTLE_HOWS)[number];
  */
 export const UNBOUND_SESSION = "mcp";
 
+/** The id `counterparts note` files under, and `counterparts ask` reads as. */
+export const CONSOLE_SESSION = "console";
+
+/**
+ * THE IDS MANY UNRELATED NOTES SHARE, which retention judges line by line
+ * (`remember/owes.ts#planUnboundLines`). Retention's list only: `isKnownSession`
+ * still calls `"console"` a session, and its readers are not changed by this.
+ */
+export const SHARED_SESSIONS: readonly string[] = [UNBOUND_SESSION, CONSOLE_SESSION];
+
 /** The meta mark on a memory written up by a session that did not live it
  *  (2026-10-01, `mint.ts#MintOptions.writeUp`). */
 export const SECOND_HAND_META_KEY = "secondHand";

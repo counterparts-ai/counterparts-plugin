@@ -40,7 +40,7 @@ function countsLine(counts: Readonly<Record<string, number>>): string {
 export function dreamingSettingWords(setting: DreamingSetting): string {
   switch (setting) {
     case "auto":
-      return "Once a day, the first session starts the nightly run by itself — day's end, then a dream, then a reflection — in a separate, windowless claude -p in the background, and says so in one line; if it cannot start, the next prompt asks instead and says why. Say 'no dreams' in a session, or counterparts dream --setting off, to turn it off.";
+      return "Once a day, the first session you start begins the nightly run by itself — day's end, then a dream, then a reflection — in a separate, windowless claude -p in the background, and says so in one line; if it cannot start, the next prompt asks instead and says why. Say 'no dreams' in a session, or counterparts dream --setting off, to turn it off.";
     case "ask":
       return "Once a day, the first session shows you the question in the terminal before it starts the nightly run; say 'dream' to start it, 'dream on your own' to let it start by itself each day, or nothing and it waits. (A memory with no setting reads as this; a new install starts on auto.)";
     case "off":

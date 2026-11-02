@@ -62,6 +62,8 @@ import type { Counterpart, CounterpartEvent, Seat } from "../../core/counterpart
 import { calendarDate } from "../../core/self/index.js";
 import { TUNABLES } from "../config.js";
 import type { AdapterConfig } from "../config.js";
+import { awakeMeter } from "./awake.js";
+import type { AwakeMeter } from "./awake.js";
 import { foldersOn, scopesPath } from "../scopes.js";
 import {
   NIGHT_RUNNER_PREFIX,
@@ -416,6 +418,37 @@ export function releaseCatchUp(c: Counterpart, plan: CatchUpPlan, opts: { scope:
 }
 
 /**
+ * RENEW WHAT A SLEEP WOULD HAVE LET RUN OUT (2026-11-01, NT1): a sleep past
+ * `WRITE_UP_CLAIM_MS` would leave the waking child with no claim on what it is
+ * writing and a grant the door refuses (`mcp/write-up.ts`), while another session
+ * could take the same subject. A process that noticed its sleep is plainly alive,
+ * so its claims and its record are as young as now. Only what is still its own: a
+ * subject another writer took meanwhile stays theirs. Never throws.
+ */
+export function renewCatchUp(c: Counterpart, plan: CatchUpPlan, opts: { scope: string; now: number }): void {
+  const dir = c.store.dir;
+  const scope = opts.scope.length > 0 ? opts.scope : dir;
+  try {
+    updateWriteUpProgress(c.store, (map) => {
+      let changed = false;
+      for (const [key, p] of Object.entries(map)) {
+        if (p.claim?.by !== plan.runner) continue;
+        map[key] = { ...p, claim: { ...p.claim, at: opts.now } };
+        changed = true;
+      }
+      return changed;
+    });
+  } catch {
+    /* it runs out as it would have */
+  }
+  try {
+    recordSession(dir, { sessionId: plan.runner, scope, phase: "boundary", at: opts.now });
+  } catch {
+    /* it runs out as it would have */
+  }
+}
+
+/**
  * THE CATCH-UP CHILD'S PROMPT: the runner's id, the sessions in order, and the
  * one way to write each up. Ids, dates and counts — no words of anyone's; the
  * words come through the door. The same for the night and the command.
@@ -472,6 +505,8 @@ export interface CatchUpReport {
   readonly busy: number;
   readonly bytes: number;
   readonly ms: number;
+  /** ...of which the machine slept (2026-11-01, NT1). Absent when it didn't. */
+  readonly sleptMs?: number;
   readonly code: number | null;
   /** Why the last child failed (2026-10-27, R4): one scrubbed line of what it
    *  said (`child-error.ts`); null when it did not fail, or said nothing, and
@@ -573,6 +608,8 @@ export interface CatchUpInput {
   readonly onBatch?: (b: { readonly batch: number; readonly plan: CatchUpPlan }) => void;
   /** The process log (`adapters/log/`), when there is one. */
   readonly onEvent?: (e: CounterpartEvent) => void;
+  /** TESTS ONLY: what tells this run it slept; absent, `awake.ts#awakeMeter`. */
+  readonly awake?: (onSlept: (ms: number) => void) => AwakeMeter;
 }
 
 /** One child, started and waited on: what became of it. */
@@ -606,6 +643,29 @@ async function runChild(input: CatchUpInput, plan: CatchUpPlan, prompt: string):
  * owed (no row: a quiet night is not an event). Never throws.
  */
 export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | null> {
+  // TIME ASLEEP ISN'T THE RUN'S (2026-11-01, NT1): its hour counts time awake,
+  // and what the current batch holds is kept alive across a sleep.
+  let holding: CatchUpPlan | null = null;
+  const onSlept = (): void => {
+    if (holding === null) return;
+    const c = input.open();
+    try {
+      renewCatchUp(c, holding, { scope: input.scope, now: input.now() });
+    } finally {
+      c.close();
+    }
+  };
+  const meter = input.awake?.(onSlept) ?? awakeMeter({ onSlept });
+  try {
+    return await catchUpBatches(input, meter, (plan) => {
+      holding = plan;
+    });
+  } finally {
+    meter.stop();
+  }
+}
+
+async function catchUpBatches(input: CatchUpInput, meter: AwakeMeter, hold: (plan: CatchUpPlan | null) => void): Promise<CatchUpReport | null> {
   const startedAt = input.now();
   // Read afresh for each plan, and for what is left: a long run sees a folder
   // turned off in the middle of it from its next batch on.
@@ -634,7 +694,7 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
       limit = "parts";
       break;
     }
-    if (batches > 0 && input.now() + TUNABLES.NIGHT_WRITE_UP_MS > deadline) {
+    if (batches > 0 && input.now() - meter.asleepMs() + TUNABLES.NIGHT_WRITE_UP_MS > deadline) {
       limit = "time";
       break;
     }
@@ -691,7 +751,9 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
     } catch {
       /* never the run's problem */
     }
+    hold(plan);
     const child = await runChild(input, plan, prompt);
+    hold(null);
     code = child.code;
     detail = child.detail;
     signedOut = child.signedOut === true;
@@ -729,6 +791,7 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
     }
   }
   const endedAt = input.now();
+  const slept = meter.asleepMs();
   const report = (over: Partial<CatchUpReport>): CatchUpReport => ({
     run: input.run,
     runner: catchUpRunner(input.run),
@@ -744,6 +807,7 @@ export async function runCatchUp(input: CatchUpInput): Promise<CatchUpReport | n
     busy,
     bytes,
     ms: endedAt - startedAt,
+    ...(slept > 0 ? { sleptMs: slept } : {}),
     code,
     detail,
     ...(signedOut ? { signedOut: true as const } : {}),
@@ -784,6 +848,7 @@ function record(input: CatchUpInput, report: CatchUpReport, open?: Counterpart):
     busy: report.busy,
     bytes: report.bytes,
     ms: report.ms,
+    ...(report.sleptMs === undefined ? {} : { sleptMs: report.sleptMs }),
     code: report.code,
     ...(report.detail === null ? {} : { detail: report.detail }),
     ...(report.signedOut === true ? { signedOut: true } : {}),

@@ -21,7 +21,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.44";
+export const SERVER_VERSION = "0.3.45";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -95,6 +95,15 @@ export function schemaUnreadableRefusal(host: string = DEFAULT_HOST): string {
 }
 
 export const SCHEMA_UNREADABLE_REFUSAL = schemaUnreadableRefusal(DEFAULT_HOST);
+
+/**
+ * A WRITE THAT THREW (2026-11-01). True however far it got: nothing is claimed
+ * unless the memory is on disk, so the same call either lands or says so. It
+ * says when to stop too: a full disk throws every time, and nothing here counts.
+ */
+export function threwDetail(err: unknown): string {
+  return `${String((err as Error).message ?? err)}. The memory may not have been saved: send the same thing again. It lands, or comes back duplicate-content if it already had. If it keeps failing, say so and go on.`;
+}
 
 /** And when the store was merely busy past the wait: a retry, not a reconnect. */
 export const STORE_BUSY_REFUSAL =
@@ -423,7 +432,7 @@ export const DREAMING_OFF_REFUSAL =
 export type DreamingSettingWords = Readonly<Record<"auto" | "ask" | "off", string>>;
 
 export const CLAUDE_CODE_SETTING_SAID: DreamingSettingWords = {
-  auto: "Dreaming on its own: once a day, the first session starts the nightly run by itself, in a separate windowless session in the background, and says so in one line. Today's run is still yours to start, if the owner asked for it.",
+  auto: "Dreaming on its own: once a day, the first session a person starts begins the nightly run by itself, in a separate windowless session in the background, and says so in one line. Today's run is still yours to start, if the owner asked for it.",
   ask: "Dreaming asks first: once a day, the first session shows the owner the question in the terminal and waits for their word.",
   off: "No dreams: nothing starts the nightly run and nothing asks. It can be turned back on with this phase (value ask or auto) when the owner says so.",
 };
