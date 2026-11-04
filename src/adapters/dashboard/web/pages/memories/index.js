@@ -48,8 +48,10 @@ async function render() {
  *  same number the list's "kept" chip and the home headline say. A zero "new
  *  today" is left out, as on Home. */
 export function count(d) {
-  if (d.total === 0) return "Nothing held yet. Add a memory, or just talk.";
-  return d.total + (d.total === 1 ? " memory" : " memories") + (d.newToday > 0 ? " · " + d.newToday + " new today" : "");
+  // The starter notes said apart (S1): "0 memories · 11 starter notes".
+  const starter = d.starter > 0 ? " · " + d.starter + (d.starter === 1 ? " starter note" : " starter notes") : "";
+  if (d.total === 0 && starter === "") return "Nothing held yet. Add a memory, or just talk.";
+  return d.total + (d.total === 1 ? " memory" : " memories") + starter + (d.newToday > 0 ? " · " + d.newToday + " new today" : "");
 }
 
 /** Who "I" am, once: "I'm Claude. This is what I've kept from working with Mike." */

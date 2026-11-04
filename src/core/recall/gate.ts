@@ -68,6 +68,8 @@ export type Verdict =
   | "cold-start-undiscriminating"
   /** Reached the bar, but not the loud tier's per-kind floor. */
   | "below-strong-floor"
+  /** A starter memory (S1, `Candidate.told`): told, not lived, so quiet at most. */
+  | "told-quiet"
   /** Lateral inhibition: a near-duplicate of a stronger admitted candidate. */
   | "inhibited"
   /** Admitted but past the tier cap. An empty slot stays quiet; a full one closes. */
@@ -167,6 +169,9 @@ export interface GateInput {
   readonly candidates: readonly Candidate[];
   readonly state: GateState;
   readonly storeSize: number;
+  /** Live memories LIVED, the starter set left out (S1 review): the cold-start
+   *  regime reads this. Absent: `storeSize`. */
+  readonly livedSize?: number | undefined;
   /** The turn stated a feeling (any subject) — the affect flag's turn gate. */
   readonly affectStated: boolean;
   readonly turn: number;
@@ -266,14 +271,31 @@ export function background(
   activations: readonly number[],
   storeSize: number,
   t: RecallTunables,
+  livedSize: number = storeSize,
+  unitSize: number = livedSize,
 ): Background {
   const n = activations.length;
   const mean = n === 0 ? 0 : activations.reduce((a, b) => a + b, 0) / n;
   const varSum = activations.reduce((acc, x) => acc + (x - mean) * (x - mean), 0);
   const sd = n === 0 ? 0 : Math.sqrt(varSum / n);
-  const unit = floorUnit(storeSize);
+  // THE FLOOR UNIT IS THE LIVED STORE'S (S1 fix, 2026-11-03, ROADMAP: counts
+  // that drive behaviour are lived only). With the whole store's, eleven seeds
+  // beside five lived memories doubled cold start's floor (0.44 to 0.86), and a
+  // lived memory reached by meaning alone — a semantic activation, which is
+  // not in IDF units and does not rise with the store — fell below it where a
+  // store without the set footnoted it. Cue weights keep the whole store's
+  // rarity (`docFrequency` counts seed words), so beside the set one rare word
+  // weighs about two of these units where it weighs one without it: a word
+  // match clears this floor much more easily, which is why the loud tier's
+  // strong floor (`gate`) stays in the whole store's unit. A seed still takes
+  // only a slot no lived memory wanted (the lived-first order below), and it
+  // faces the whole store's unit (`unitSize`, ROADMAP 11-03: seeds get their
+  // own bar, the stricter one; an empty footnote beats noise).
+  const unit = floorUnit(unitSize);
 
-  if (storeSize < t.COLD_START_MIN_STORE) {
+  // Cold start ends on LIVED memories (S1 review): the starter set is no
+  // evidence the store has grown.
+  if (livedSize < t.COLD_START_MIN_STORE) {
     const cold = t.COLD_START_FLOOR_UNITS * unit;
     return {
       regime: "absolute-cold-start",
@@ -360,15 +382,32 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   // A head brought in for an earlier memory (`standsFor`, 2026-10-11) is the
   // same reach counted twice: outside the sample too — but it faces the bar
   // of the one it stands for (`barOf`), not the whole sample's.
-  const inSample = (c: Candidate): boolean => c.pastCut !== true && c.standsFor === undefined && c.cue - (c.stamp ?? 0) + c.semantic > 0;
+  // A STARTER MEMORY (S1, `Candidate.told`) is outside the sample too: what a
+  // lived memory faces is what it would face in a store without the starter set.
+  const inSample = (c: Candidate): boolean => c.pastCut !== true && c.standsFor === undefined && c.told !== true && c.cue - (c.stamp ?? 0) + c.semantic > 0;
   // A stand-in the words also reached on their own keeps that reach in the
   // background (`directReach`, review of #526): what the words found, once.
   const acts = [
     ...input.candidates.filter(inSample).map(own),
     ...input.candidates.flatMap((c) => (c.standsFor !== undefined && c.directReach !== undefined ? [c.directReach] : [])),
   ];
-  const bg = background(acts, input.storeSize, t);
-  /** The loud-tier floors are in the same unit as hard gate (b)'s (`floorUnit`). */
+  const bg = background(acts, input.storeSize, t, input.livedSize ?? input.storeSize);
+  // A SEED'S OWN BAR (ROADMAP 11-03, review of #733): the floor and absolute
+  // bar a starter memory faces are in the whole store's unit, the stricter
+  // ones from before the lived-count fix. "Fill what's left" means room, not a
+  // lower bar: a turn no lived memory answers footnotes nothing rather than a
+  // loosely matched seed. The regime is the same (it reads lived memories).
+  const toldBg = background(acts, input.storeSize, t, input.livedSize ?? input.storeSize, input.storeSize);
+  const bgOf = (c: Candidate): Background => (c.told === true ? toldBg : bg);
+  /**
+   * The loud tier's strong floor stays in the WHOLE store's unit, the unit cue
+   * weights come in (`informativeness(df, storeSize)`; `floorUnit` is its df=1
+   * value). Read on the lived count it halved beside the set while one rare
+   * word still weighed a whole-store unit, and a young seeded store went loud
+   * on lived matches its twin without the set only footnoted (review of #733).
+   * The one-memory cap below reads the lived count, which only makes it stricter.
+   */
+  const livedSize = input.livedSize ?? input.storeSize;
   const loudUnit = floorUnit(input.storeSize);
   const sum = acts.reduce((a, b) => a + b, 0);
   const sumSq = acts.reduce((a, b) => a + b * b, 0);
@@ -402,7 +441,7 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
     return viaOwn === undefined ? viaEarlier : Math.min(viaEarlier, viaOwn);
   };
   const barsFor = (c: Candidate): { admit: number; loud: number } =>
-    bg.regime === "relative" ? { admit: either(c, t.SNR_GLOBAL), loud: either(c, t.SNR_STRONG) } : { admit: bg.bar, loud: bg.strongBar };
+    bg.regime === "relative" ? { admit: either(c, t.SNR_GLOBAL), loud: either(c, t.SNR_STRONG) } : { admit: bgOf(c).bar, loud: bgOf(c).strongBar };
 
   const verdicts: CandidateVerdict[] = [];
   const admitted: { c: Candidate; loud: boolean }[] = [];
@@ -417,7 +456,7 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   const record = (c: Candidate, verdict: Verdict): void => {
     const blocked = loudBlock.get(c.id);
     verdicts.push({
-      bar: faced.get(c.id) ?? bg.bar,
+      bar: faced.get(c.id) ?? bgOf(c).bar,
       id: c.id,
       kind: c.kind,
       verdict,
@@ -525,7 +564,7 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
     // Hard gate (b) — the absolute floor, BEFORE any salience adjustment.
     // On the activation WITHOUT priming (2026-10-19): the floor says how weak
     // the turn's own evidence may be, and a head start is not evidence.
-    if (c.activation - primeOf(c) < bg.floor) {
+    if (c.activation - primeOf(c) < bgOf(c).floor) {
       record(c, "below-floor");
       continue;
     }
@@ -580,7 +619,7 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
     // absolute floor (a stray common word reaches nearly everything).
     const competing = input.competing?.get(c.id);
     const rival = competing === undefined ? undefined : byId.get(competing.with);
-    if (competing !== undefined && rival !== undefined && rival.activation - primeOf(rival) >= bg.floor) {
+    if (competing !== undefined && rival !== undefined && rival.activation - primeOf(rival) >= bgOf(rival).floor) {
       c = { ...c, activation: c.activation * competing.factor };
       competedIds.set(c.id, { with: competing.with, factor: Math.round(competing.factor * 10_000) / 10_000 });
     }
@@ -593,7 +632,14 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
     if (c.maxTier === "footnoted") {
       loud = false;
       loudBlock.set(c.id, "cue-only-temporal");
-    } else if (input.storeSize < MIN_RARITY_STORE) {
+    } else if (c.told === true) {
+      // A STARTER MEMORY IS QUIET AT MOST (S1): its title in the footnotes,
+      // opened when the turn wants it; never the loud tier's one slot.
+      loud = false;
+      loudBlock.set(c.id, "told-quiet");
+    } else if (livedSize < MIN_RARITY_STORE) {
+      // (Lived memories, S1 fix: a lone lived note beside the set is a
+      // one-memory store for this, as it is without the set.)
       // Cold start is STRICTER, not looser — and below `MIN_RARITY_STORE` the
       // strictness the floors provide is not available, because the unit the
       // floors are denominated in is itself the thing that has stopped
@@ -624,7 +670,11 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
   // ── lateral inhibition on PURE activation (§9 G8: admission, inhibition and
   // the footnote tier never see salience — that is what keeps the footnote tier
   // a recency DISCOVERY channel rather than a second salience ranking).
-  admitted.sort((a, b) => b.c.activation - a.c.activation || (a.c.id < b.c.id ? -1 : 1));
+  // LIVED FIRST (S1, Mike: "real user memories always rank higher"): every
+  // lived memory admitted is ranked ahead of every starter memory, so a told
+  // one only takes a quiet slot no lived one wanted, and is the one inhibited
+  // when it reads like a lived one — never the other way round.
+  admitted.sort((a, b) => (a.c.told === true ? 1 : 0) - (b.c.told === true ? 1 : 0) || b.c.activation - a.c.activation || (a.c.id < b.c.id ? -1 : 1));
   // THE CHAIN HEAD WINS (2026-10-11, Group 2; review 04 change 1): a memory a
   // later one settled over is inhibited when the one that holds now is
   // admitted beside it or is already in this session — before the
@@ -695,7 +745,8 @@ export function gate(input: GateInput, t: RecallTunables): GateResult {
     Object.entries(p.linkedFrom ?? {}).reduce((sum, [id, a]) => (shownIds.has(id) ? sum + a : sum), 0);
   const ranked = pointerPool
     .map((p) => ({ p, a: anchored(p) }))
-    .sort((x, y) => y.a - x.a || (x.p.id < y.p.id ? -1 : 1));
+    // Lived first here too (S1): a told pointer only takes a slot no lived one did.
+    .sort((x, y) => (x.p.told === true ? 1 : 0) - (y.p.told === true ? 1 : 0) || y.a - x.a || (x.p.id < y.p.id ? -1 : 1));
   const pointers: Candidate[] = [];
   for (const { p, a } of ranked) {
     if (!(a > 0) || a < anchorBar) {

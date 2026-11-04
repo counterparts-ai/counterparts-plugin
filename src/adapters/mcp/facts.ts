@@ -144,6 +144,7 @@ import {
   nightlyMade,
   provenanceParts,
 } from "./deliberate.js";
+import { isTold } from "../../core/told.js";
 
 // ── the working defaults (held lightly; revisit after a few days of use) ────
 
@@ -823,25 +824,37 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
   for (const id of pool.keys()) beyond.delete(id);
 
   // ── the weak tail ───────────────────────────────────────────────────────
+  // A LIVED MATCH'S BAR IS SET BY LIVED MATCHES (S1 fix, 2026-11-03): a starter
+  // memory (`core/told.ts`) never pushes a lived match into the weak tail. On a
+  // new store a seed that shares a question word ("own", "which") outscored a
+  // lived note found by meaning alone five to one, and the note was cut as weak
+  // before the order below could halve the seed (the single-binary smoke's
+  // "which coffee maker do we own?"). A seed faces the whole pool's bar.
   let weak = 0;
-  const best = (m: ReadonlyMap<string, Candidate>): number => {
+  const told = (id: string): boolean => isTold(rows.get(id));
+  const best = (m: ReadonlyMap<string, Candidate>, livedOnly = false): number => {
     let b = 0;
-    for (const c of m.values()) if (c.score > b) b = c.score;
+    for (const c of m.values()) if (c.score > b && !(livedOnly && told(c.id))) b = c.score;
     return b;
   };
   const top = best(pool);
+  const topLived = best(pool, true);
   if (!onlyTime && top > 0) {
     for (const [id, c] of [...pool]) {
-      if (c.score < FACTS_WEAK_FRACTION * top) {
+      if (c.score < FACTS_WEAK_FRACTION * (told(id) ? top : topLived)) {
         weak += 1;
         pool.delete(id);
       }
     }
   }
-  // Outside the window, by the same bar — the best match anywhere sets it.
+  // Outside the window, by the same bars — the best match anywhere sets each.
   const topAll = Math.max(top, best(beyond));
+  const topAllLived = Math.max(topLived, best(beyond, true));
   let outside = 0;
-  for (const c of beyond.values()) if (onlyTime || topAll <= 0 || c.score >= FACTS_WEAK_FRACTION * topAll) outside += 1;
+  for (const c of beyond.values()) {
+    const bar = told(c.id) ? topAll : topAllLived;
+    if (onlyTime || bar <= 0 || c.score >= FACTS_WEAK_FRACTION * bar) outside += 1;
+  }
 
   // ── a soft word: the recent first, nothing filtered ─────────────────────
   // After the weak tail, so the bar is the matches' own; the ORDER only.
@@ -872,8 +885,12 @@ export function factsRecall(ctx: FactsContext, question: string, opts: { page?: 
     const r = rows.get(id);
     return r === undefined ? 0 : (r.type === "episode" ? (r.updated_at ?? r.created_at ?? 0) : (r.created_at ?? 0));
   };
+  // EVERY LIVED MATCH BEFORE EVERY STARTER ONE (S1 fix, ROADMAP 11-03; see
+  // `core/told.ts`): whatever the scores, lived matches first, then the seeds,
+  // each by its match. A seed is never dropped for a lived one either (the weak
+  // tail above sets a lived match's bar from lived matches only).
   const order = (a: Candidate, b: Candidate): number =>
-    b.score - a.score || moment(b.id) - moment(a.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    (told(a.id) ? 1 : 0) - (told(b.id) ? 1 : 0) || b.score - a.score || moment(b.id) - moment(a.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   main.sort(order);
 
   // ── near-duplicates, walked in order as far as this page needs ─────────

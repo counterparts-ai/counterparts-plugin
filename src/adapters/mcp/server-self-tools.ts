@@ -19,6 +19,7 @@ import type { PageWriterMode, PageWriterRun } from "../../core/self/index.js";
 import type { ToolResult } from "./server-options.js";
 import { DREAMING_OFF_REFUSAL, dreamHow, dreamLaunchHowFor, PAGE_REFUSAL_DETAIL, pageLaneAnswer, pageRoomAnswer, reflectLaunchHowFor, settingSaidFor } from "./server-words.js";
 import type { McpServer } from "./server.js";
+import { isTold } from "../../core/told.js";
 
 /**
  * `dream` — dreaming, in phases (`core/dream/`, 2026-09-26). Every phase
@@ -1006,7 +1007,9 @@ function daySummaryArgs(server: McpServer, sent: string, rawCites: unknown, from
     const id = aliases?.resolve(x) ?? x.trim();
     let known = false;
     try {
-      known = server.counterpart.store.row(id)?.type === "memory";
+      // A starter memory (S1) is never a day's evidence: the writer is never shown one.
+      const row = server.counterpart.store.row(id);
+      known = row?.type === "memory" && !isTold(row);
     } catch {
       known = false;
     }
@@ -1272,7 +1275,9 @@ function pageTraceArgs(server: McpServer, args: Record<string, unknown>): { trac
   const refused: string[] = [];
   const known = (id: string): boolean => {
     try {
-      return server.counterpart.store.row(id)?.type === "memory";
+      // A starter memory (S1) is never what the page rests on: told, not lived.
+      const row = server.counterpart.store.row(id);
+      return row?.type === "memory" && !isTold(row);
     } catch {
       return false;
     }

@@ -55,6 +55,8 @@ export interface MemoriesView {
   readonly owner: string | null;
   /** Of `total`: memories proper — the number `counterparts status` prints. */
   readonly memories: number;
+  /** The starter memories (S1), apart from `total` and `memories`; they are in `points`. */
+  readonly starter: number;
   /** Of `total`: entities and beliefs about them (schema rows). */
   readonly schemas: number;
   /** How firmly what I hold is held: firm / settling / fading, over every live
@@ -157,6 +159,8 @@ export function memoriesView(src: DashboardSource, opts: { limit?: number } = {}
   const store = src.store;
   const day = store.livedDay();
   const rows = census(src);
+  const toldIds = new Set(store.toldIds());
+  const starter = rows.filter((r) => toldIds.has(r.id)).length;
   const limit = opts.limit ?? 4000;
   const byKind = countMap<Kind>(rows, "kind");
   const everLived = day > 0 || rows.length > 0;
@@ -202,10 +206,12 @@ export function memoriesView(src: DashboardSource, opts: { limit?: number } = {}
 
   return {
     day,
-    total: rows.length,
+    // The starter memories apart (S1): the list shows them, the count doesn't claim them.
+    total: rows.length - starter,
     newToday: newTodayOf(src),
     owner: ownerOf(src),
-    memories: rows.filter((r) => !r.schema).length,
+    memories: rows.filter((r) => !r.schema).length - starter,
+    starter,
     schemas: rows.filter((r) => r.schema).length,
     hold,
     nearLetGoDays: NEAR_LET_GO_DAYS,

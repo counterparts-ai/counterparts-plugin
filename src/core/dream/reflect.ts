@@ -113,6 +113,7 @@ import type { JoinProposal } from "./project-ask.js";
 import type { CoreAsk, CoreDecided } from "./core-ask.js";
 import { settlesWhenOf, THREAD_CLOSED_BY_META_KEY, THREAD_REOPENED_BY_META_KEY, UNRESOLVED_META_KEY } from "../mint.js";
 import type { SettleOutcome } from "../reconsolidation.js";
+import { isTold } from "../told.js";
 
 /** Every `reflect` knob, in one place. Working defaults of 2026-09-27; CAL = not yet measured. */
 export const REFLECT_TUNABLES = {
@@ -3122,7 +3123,8 @@ export class Reflections {
         const row = denied.has(mid) ? undefined : this.store.row(mid);
         // Its own entries come as words (`earlier`), never as a memory — not
         // even when a dream nominated one or it is on my mind (review of #256, B1).
-        views.set(mid, row === undefined || !this.showable(row) || row.source === "reflection" ? null : this.view(row));
+        // Nor a starter memory (S1): told, not lived, it is never the self's evidence.
+        views.set(mid, row === undefined || !this.showable(row) || row.source === "reflection" || isTold(row) ? null : this.view(row));
       }
       return views.get(mid) ?? null;
     };
@@ -3169,7 +3171,7 @@ export class Reflections {
       // A dream's gists come through the dream, marked; a reflection's own
       // entries come through `earlier`, as words — neither as a memory to
       // return to, feel or mark here.
-      if (row === undefined || !this.showable(row) || row.source === "dreamed" || row.source === "reflection") continue;
+      if (row === undefined || !this.showable(row) || row.source === "dreamed" || row.source === "reflection" || isTold(row)) continue;
       const f = emotionalIntensity(this.store.physicsOf(mid));
       // Not the journal's own memories (2026-10-15, review of #504): a chapter's
       // summary reaches the reflection as its chapter's line in `chapters`,

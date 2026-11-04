@@ -103,12 +103,12 @@ import { coreNewer, newerStoreRemedy } from "../update-words.js";
 import type { NewerStoreInput } from "../update-words.js";
 import {
   MEET_STEPS,
-  ANSWER_STEPS,
   MEET_NO_ANSWER,
   STYLE_CHOICES,
   addressMemory,
   answerText,
   finishText,
+  isAnswerStep,
   meetState,
   meetStepOf,
   meetingHold,
@@ -122,7 +122,7 @@ import {
   recordWhere,
   styleMemories,
 } from "../../core/onboarding.js";
-import type { AnswerStep, MeetStep, StyleChoice } from "../../core/onboarding.js";
+import type { AnswerStep, MeetStep, RetiredAnswerStep, StyleChoice } from "../../core/onboarding.js";
 import type { RefusalPlace } from "../hosts.js";
 import { TUNABLES as ADAPTER_TUNABLES } from "../config.js";
 import type { AdapterConfig } from "../config.js";
@@ -251,6 +251,8 @@ export function asksStillOpen(question: string): boolean {
 import { openCarry, openSettlesCounts, STILL_OPEN_HANDLE, WAKE_BUILD_KEY } from "../../core/self/index.js";
 import type { PageWriterMode } from "../../core/self/index.js";
 import { canonicalToolName, toolDefinitions, toolSpec } from "./tools.js";
+import { MANUAL_HANDLE, MANUAL_PATH, findSection, installedManual, manualAsk, manualIndexText } from "./manual.js";
+import type { ManualAsk } from "./manual.js";
 import { writeUpDoor } from "./write-up.js";
 import type { ToolName } from "./tools.js";
 import { scriptArgs } from "../runtime.js";
@@ -1438,6 +1440,9 @@ export class McpServer {
     const file = this.scopesFile;
     const verdict = this.scopeVerdict();
     const read = file === null ? null : readScopes(file);
+    const words = wordingFor(this.placeHost);
+    // The registry's path only where its person can open it (`hosts.ts#scopeShowsRegistry`).
+    const registry = file !== null && words.scopeShowsRegistry ? { registry: file } : {};
 
     if (mode === undefined) {
       this.emit("mcp.scope.read", undefined, { mode: verdict.mode, matched: verdict.matched });
@@ -1450,7 +1455,7 @@ export class McpServer {
           ...(verdict.entry?.since === undefined ? {} : { since: verdict.entry.since }),
           ...(verdict.entry?.note === undefined ? {} : { note: verdict.entry.note }),
           ...(verdict.mode === "paused" ? { resumesTo: resumeTarget(verdict.entry) } : {}),
-          ...(file === null ? {} : { registry: file }),
+          ...registry,
           // Counterparts' daily update check (U1b), on or off, for "are you checking?".
           ...(this.host === CLAUDE_AI_HOST ? {} : { updates: this.updateCheckSwitch() === "none" ? "on" : "off" }),
           // A registry in trouble is never silent, on any surface that has a
@@ -1460,10 +1465,7 @@ export class McpServer {
           ...(read === null || read.refused.length === 0
             ? {}
             : { registryRefused: read.refused.map((r) => `${r.key} (${r.detail})`) }),
-          detail:
-            verdict.mode === "unset"
-              ? "Nothing is set for this directory or any parent, so it is on by default. Ask the user before setting it."
-              : "This is what the host's scope registry says about this directory.",
+          detail: verdict.mode === "unset" ? words.scopeReadUnset : words.scopeReadSet,
         },
         false,
       );
@@ -1554,12 +1556,12 @@ export class McpServer {
         scope: this.scope,
         mode: target,
         stance: stanceOfMode(target),
-        registry: file,
+        ...registry,
         // In the HOST's words (`hosts.ts`, 2026-09-30): Claude Code's name its
         // hooks and their boundaries — the text is what it always was, and why
         // it says what it says sits beside it in the table — and Desktop,
         // which has neither, gets its own.
-        detail: target === "off" || target === "paused" ? wordingFor(this.placeHost).scopeOff : wordingFor(this.placeHost).scopeOn,
+        detail: target === "off" || target === "paused" ? words.scopeOff : words.scopeOn,
       },
       false,
     );
@@ -1570,7 +1572,8 @@ export class McpServer {
    * script and the state, and the offer is recorded (`offered`), so neither
    * the wake's line nor the mod offers it again today. With a step:
    *
-   *   - an answer (name, week, work, love, saturday, origin) becomes ONE
+   *   - an answer (name, week, work, origin, saturday; the retired `love`
+   *     still, for a meeting in flight from before Q1) becomes ONE
    *     memory through `remember`'s own door — about the owner, said by the
    *     owner, marked "(from onboarding)" — and its id is kept for the second
    *     session's line; a skipped question is never sent, so nothing is stored;
@@ -1634,14 +1637,14 @@ export class McpServer {
       return { content: [{ type: "text", text: script }], structuredContent: { ...onboardingView(store), name, script } };
     }
     if (this.observer) return this.standDown("meet");
-    if (typeof step !== "string" || !(MEET_STEPS as readonly string[]).includes(step)) {
+    if (typeof step !== "string" || !((MEET_STEPS as readonly string[]).includes(step) || isAnswerStep(step))) {
       return this.refuse("meet", "step-unknown", { detail: `step is one of ${MEET_STEPS.join(", ")} — or omit it for the script.` });
     }
     const answer = typeof args["answer"] === "string" ? args["answer"].trim() : "";
     // AN ANSWER STEP WITH NO ANSWER (H1b): not an error (claude.ai draws those
     // as a red Failed card), and not progress either: it comes before the
     // offer mark, so it moves no meeting state, and nothing is written.
-    if (answer.length === 0 && (ANSWER_STEPS as readonly string[]).includes(step as string)) {
+    if (answer.length === 0 && isAnswerStep(step)) {
       this.emit("mcp.meet.unanswered", undefined, { step });
       return { content: [{ type: "text", text: MEET_NO_ANSWER }], structuredContent: { step, stored: 0, ...onboardingView(store), next: MEET_NO_ANSWER } };
     }
@@ -1706,10 +1709,10 @@ export class McpServer {
         return done({ stored: ids.length, ids });
       }
       default: {
-        // An answer: name, week, work, love, saturday, origin (a bare one was answered above).
+        // An answer: name, week, work, origin, saturday, or the retired `love` (a bare one was answered above).
         const text = step === "name" ? `They like to be called ${answer}.` : answer;
         const ids = await this.meetWrite([answerText(text)]);
-        if (ids[0] !== undefined) recordAnswer(store, step as AnswerStep, ids[0]);
+        if (ids[0] !== undefined) recordAnswer(store, step as AnswerStep | RetiredAnswerStep, ids[0]);
         return done({ stored: ids.length, ...(ids[0] === undefined ? {} : { id: ids[0] }) });
       }
     }
@@ -2402,7 +2405,12 @@ export class McpServer {
    * fenced. Asked once per recall.
    */
   private nightClosed(): ReadonlySet<string> {
-    return this.nightReading() ? this.counterpart.fenceNight(this.folderOn()) : NOTHING_CLOSED;
+    if (!this.nightReading()) return NOTHING_CLOSED;
+    // Nor the starter memories (S1, `core/told.ts`): told, not lived, so never
+    // what the night reads, from its bundles or by asking.
+    const fenced = this.counterpart.fenceNight(this.folderOn());
+    const told = this.counterpart.store.toldIds();
+    return told.length === 0 ? fenced : new Set([...fenced, ...told]);
   }
 
   private nightReading(): boolean {
@@ -2420,6 +2428,16 @@ export class McpServer {
   }
 
   private async recallTool(sent: Record<string, unknown>): Promise<ToolResult> {
+    // THE MANUAL (H1, 2026-11-03): before the stand-down, because it reads no
+    // memory, and an observer folder is where "how do I turn this back on?" is asked.
+    // Every other handle is one exact name; "manual <words>" is a family, so a
+    // memory titled "Manual for the boiler" would lose its exact-title door.
+    // Words that name no section go the ordinary way first, and come back as
+    // the manual's unknown section only when no memory has that title (review
+    // of #730). Under observer the manual answers, since recall stands down.
+    const manualAlone = sent["question"] === undefined && sent["query"] === undefined && sent["ids"] === undefined;
+    const manual = manualAlone ? manualAsk(sent["handle"]) : null;
+    if (manual !== null && (manual.kind === "index" || this.observer || this.manualNames(manual.asked))) return this.manualTool(manual);
     if (this.observer) return this.standDown("recall");
     // `query` IS `question` (2026-10-14, lightly held): the model sent `query`
     // about twice a day and was refused `no-argument`. Read at the root rather
@@ -2518,6 +2536,7 @@ export class McpServer {
       },
       { sessionId: this.session ?? key, closed: this.nightClosed() },
     );
+    if (manual !== null && result.reason === "handle-unknown") return this.manualTool(manual);
     const resolved = this.noteHandleResolution(handle, result);
     // THE MEASUREMENT (2026-09-28): did this lookup fetch what a mechanism's
     // index offered only in part? Counted per mechanism, never the ids.
@@ -2697,6 +2716,43 @@ export class McpServer {
    * title, for this folder as its wake reads it; other folders' only where the
    * setting lets them be named, and a closed folder's not even as a count.
    */
+  /**
+   * `recall` with the handle `manual` (H1, 2026-11-03): the installed manual's
+   * index, or one section whole (`manual.ts`). Reads the package's own file,
+   * never the store, so it writes nothing and credits nothing.
+   */
+  /** Do these words open a section of the installed manual? A missing manual says yes, so its refusal is what comes back. */
+  private manualNames(asked: string): boolean {
+    const manual = installedManual();
+    return manual === null || findSection(manual, asked) !== null;
+  }
+
+  private manualTool(ask: NonNullable<ManualAsk>): ToolResult {
+    const manual = installedManual();
+    if (manual === null) {
+      this.emit("mcp.recall.manual", undefined, { found: false });
+      return this.refuse("recall", "manual-missing", { path: MANUAL_PATH });
+    }
+    const room = this.resultCeilingChars - 1_000;
+    if (ask.kind === "index") {
+      this.emit("mcp.recall.manual", undefined, { section: 0 });
+      return this.result(
+        { path: "handle", reason: "manual", handle: MANUAL_HANDLE, sections: manual.sections.length, text: clipWire(manualIndexText(manual), room) },
+        false,
+      );
+    }
+    const section = findSection(manual, ask.asked);
+    if (section === null) {
+      this.emit("mcp.recall.manual", undefined, { section: -1 });
+      return this.refuse("recall", "manual-section-unknown", { asked: ask.asked, sections: manual.sections.map((s) => s.handle) });
+    }
+    this.emit("mcp.recall.manual", undefined, { section: section.n });
+    return this.result(
+      { path: "handle", reason: "manual", handle: section.handle, section: section.n, of: manual.sections.length, text: clipWire(section.text, room) },
+      false,
+    );
+  }
+
   private comingUpTool(): ToolResult {
     const on = this.folderOn();
     const closed = this.nightClosed();

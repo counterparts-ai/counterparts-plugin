@@ -34,9 +34,15 @@
  * **Lifetime:** the session, then `Store.pruneGateSessions()` — a real retention
  * sweep beside `pruneSupersededVersions`, which a meta keyspace could never have.
  * `MAX_SESSION_RECORDS` still bounds the per-session record maps, applied on the
- * write AND on the read, so neither direction can exceed it. (As of 2026-10-13
- * nothing on a live path calls `pruneGateSessions`; the one piece that is the
- * person's words, the carried cues, is emptied by `clearIdleCarries` below.)
+ * write AND on the read, so neither direction can exceed it. Since 2026-11-03
+ * the sleep cycle's `versions` phase calls `pruneGateSessions` every lived day
+ * (`sleep/cycle.ts`; from 10-13 until then nothing on a live path did). It goes
+ * by row, on `last_day`: every save re-stamps the scalar, surfaced, folded and
+ * belief rows with the session's latest day, so a session used inside the
+ * window keeps all of them; a session idle past it loses them all and loads
+ * `absent` — a fresh gate, its no-repeat memory of turns older than the window
+ * gone. The one piece that is the person's words, the carried cues, is emptied
+ * sooner, on the 14-day clock, by `clearIdleCarries` below.
  * **Observer:** never written. An instrument deposits nothing, so its gate state
  * lives and dies in the process (`Recall` holds it in memory and stands down at
  * the write).

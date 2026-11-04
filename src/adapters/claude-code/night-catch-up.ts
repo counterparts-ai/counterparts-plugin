@@ -69,6 +69,7 @@ import {
   NIGHT_RUNNER_PREFIX,
   WRITE_UP_CLAIM_MS,
   WRITE_UP_PART_BYTES,
+  WRITE_UP_PLUMBING_RULE,
   claimedByOther,
   firstUnwrittenPart,
   grantWriteUps,
@@ -460,6 +461,7 @@ export function catchUpPrompt(plan: CatchUpPlan): string {
     "1. Call session_end with writeUp: <its id> and no memories. It returns one part of that conversation.",
     "2. Call session_end with writeUp: <its id>, part: <that part>, memories: [...] — what caught your attention in it, one idea each, in your own words. Do not write again what is marked as already written up. If nothing that is not marked so is worth keeping, send memories: [] with nothing: \"<one line: why>\"; an empty answer without that line is refused while the part holds words not yet written up.",
     "3. Fetch again for its next part, until the answer is \"written-up\" or the door says this run's allowance for it is spent. Then the next session.",
+    WRITE_UP_PLUMBING_RULE,
     "",
     "Sessions:",
     ...plan.subjects.map(

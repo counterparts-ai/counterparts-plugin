@@ -85,6 +85,7 @@ import type { ChapterEntry, EpisodeInView, EpisodesFit, ShownChapter, ShownEntry
 import { DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 import type { DreamAction } from "./tunables.js";
 import { TUNABLES as SCHEMAS_TUNABLES } from "../schemas/tunables.js";
+import { isTold } from "../told.js";
 import {
   FOLD_SOURCE,
   SLOT_SOURCE,
@@ -2956,6 +2957,9 @@ export class Dreams {
     if (row.type !== "memory") return false;
     if (row.protected === 1) return false;
     if (row.body === "") return false;
+    // A STARTER MEMORY (S1, `core/told.ts`) is told, not lived: never in a
+    // dream's bundle, and so never a change's source or target.
+    if (isTold(row)) return false;
     if (this.ctx.closed?.().has(row.id) === true) return false;
     return true;
   }

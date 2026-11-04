@@ -36,6 +36,11 @@ export const MEMORY_SOURCES = [
   // reflection is an awake act — and labelled so recall can say where it came
   // from (its title opens "Reflected:"), the way a dream's gist opens "Dreamed:".
   "reflection",
+  // A starter memory (S1, 2026-11-03, `core/told.ts`): told, not lived —
+  // planted once, when a new store is created, and never by anything else.
+  // Weaker than anything lived in recall, and kept out of the night, the wake,
+  // the core, beliefs and cards.
+  "told",
 ] as const;
 export type MemorySource = (typeof MEMORY_SOURCES)[number];
 

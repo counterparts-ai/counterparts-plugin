@@ -961,9 +961,16 @@ export class Lifecycle implements HostLifecycle {
     const none = { context: "", notices: [], due: [] };
     if (input.at === undefined || input.nightRun === true) return none;
     try {
-      const all = this.counterpart.plainDueToday({ at: input.at });
+      // The setting, read at most once, and only when something is due (the
+      // settle's fence asks it first when a done row could settle one).
+      const read: { on?: FolderOn | undefined } = {};
+      const folders = (): FolderOn | undefined => {
+        if (!("on" in read)) read.on = this.writeUpFolders();
+        return read.on;
+      };
+      const all = this.counterpart.plainDueToday({ at: input.at, scope: input.scope, folders });
       if (all.length === 0) return none;
-      const on = this.writeUpFolders();
+      const on = folders();
       const held = on === undefined ? new Set<string>() : this.counterpart.plainHeldBack(all.map((r) => r.memoryId), on, input.scope);
       const due = all.filter((r) => !held.has(r.memoryId));
       return {

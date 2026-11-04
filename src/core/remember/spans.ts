@@ -85,7 +85,12 @@ export type TurnSource =
   /** A DREAM's words (2026-09-26, `dream/`): the bundle a dreamer was shown or
    *  its hand-back, read back off a transcript. What was dreamed is not what
    *  happened; it enters nothing, and it is counted like `ritual`. */
-  | "dream";
+  | "dream"
+  /** PLUMBING (2026-11-03, WP1): a host's line about the machinery between
+   *  the person and the counterpart — a tool call refused at its permission
+   *  prompt, a hook's output — that neither of them said. Not an event
+   *  between them; it enters nothing, and it is counted like `ritual`. */
+  | "plumbing";
 
 export interface Turn {
   role: "user" | "assistant";
@@ -1425,6 +1430,12 @@ export function enters(turn: Turn): boolean {
   // bundle or hand-back through: the sweep mints from these turns, and a dream
   // is never a lived event (`dream/mark.ts`).
   if (source === "dream" || carriesDreamMark(turn.text)) return false;
+  // THE PLUMBING EXCLUSION (2026-11-03, WP1): the host's own line about a
+  // refused tool call or a hook's output. A write-up handed it wrote "declined
+  // permission to mark a note delivered" as something that happened between
+  // the two of them. What the person or the counterpart SAID about it is
+  // conversation and still enters.
+  if (source === "plumbing") return false;
   return source === "conversation" || source === "injected";
 }
 

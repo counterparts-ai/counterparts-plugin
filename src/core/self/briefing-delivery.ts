@@ -168,9 +168,15 @@ export interface PrefaceFacts {
   readonly day: number;
   /** Today's calendar date as the HOST reports it. Absent ⇒ no date is stated. */
   readonly date?: string;
-  /** Live memories in the store AT DELIVERY, not at the render:
-   *  `countMemories({ type: "memory", archived: false })`. */
+  /** Live LIVED memories in the store AT DELIVERY, not at the render:
+   *  `countMemories({ type: "memory", archived: false, notSource: "told" })`. */
   readonly memories: number;
+  /**
+   * The live starter memories (S1, `core/told.ts`), said apart from the lived
+   * ones (ROADMAP, 11-03): `· 0 memories · 11 starter notes`. Absent or 0:
+   * nothing said, the line as before S1.
+   */
+  readonly starter?: number;
   /**
    * TRUE when the body was ASSEMBLED at session start (2026-10-10,
    * `Self#assemble`) rather than read as the last boundary composed it: the
@@ -208,6 +214,12 @@ export function groupDigits(n: number): string {
   return n < 0 ? `-${out}` : out;
 }
 
+/** ` · 11 starter notes`, or nothing when there are none (S1). */
+function starterWords(n: number | undefined): string {
+  if (n === undefined || n <= 0) return "";
+  return ` · ${groupDigits(n)} ${n === 1 ? "starter note" : "starter notes"}`;
+}
+
 /** One line, under `PREFACE_RESERVE_BYTES`, stating what the body cannot — and
  *  saying WHICH population each of its two counts is (U4) — then how to read
  *  all of it when a host cut it (`WAKE_WHOLE_SENTENCE`, 2026-10-10). */
@@ -217,11 +229,11 @@ export function prefaceLine(f: PrefaceFacts): string {
     // stay, and a bundle served as published still says it was composed
     // earlier (the 2026-09-03 reason this line exists).
     const when = f.assembled === true ? "" : PUBLISHED_WORDS;
-    return `${f.system} memory, day ${f.day} · ${groupDigits(f.memories)} memories${when}. ${WAKE_WHOLE_SENTENCE}`;
+    return `${f.system} memory, day ${f.day} · ${groupDigits(f.memories)} memories${starterWords(f.starter)}${when}. ${WAKE_WHOLE_SENTENCE}`;
   }
   const when = f.date === undefined ? `day ${f.day}` : `day ${f.day} (${f.date})`;
   return (
-    `${f.system} memory, ${when}, ${groupDigits(f.memories)} memories of ` +
+    `${f.system} memory, ${when}, ${groupDigits(f.memories)} memories${starterWords(f.starter)} of ` +
     `${groupDigits(f.liveRows)} live rows — ${f.assembled === true ? "assembled at session start" : "composed at the last boundary"}. ${LEGACY_WAKE_WHOLE_SENTENCE}`
   );
 }

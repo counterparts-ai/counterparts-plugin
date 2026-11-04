@@ -111,6 +111,7 @@ import {
   WRITE_UP_CLAIM_MS,
   WRITE_UP_KEPT_MARK,
   WRITE_UP_PART_BYTES,
+  WRITE_UP_PLUMBING_RULE,
   WRITE_UP_REPLY_MARK,
   claimWriteUpProgress,
   firstUnwrittenPart,
@@ -434,7 +435,8 @@ async function handOver(
           ? `If nothing in what is not yet written up is worth keeping, send memories: [] WITH nothing: "<one line: why>" — an empty answer without that line is refused, and the part stays owed. `
           : `memories: [] only if nothing in it held your attention. `) +
         `Anything marked ${WRITE_UP_KEPT_MARK} was written up before — by that session or an earlier write-up. ` +
-        `Lines marked ${WRITE_UP_REPLY_MARK} are what that session said back — context for what was said to it; you are writing it up second-hand.` +
+        `Lines marked ${WRITE_UP_REPLY_MARK} are what that session said back — context for what was said to it; you are writing it up second-hand. ` +
+        WRITE_UP_PLUMBING_RULE +
         (part < parts.length
           ? st.granted
             ? " Then fetch the next part the same way (writeUp and no memories)."

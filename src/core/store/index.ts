@@ -5107,11 +5107,13 @@ export class Store {
   /**
    * The words of every memory with words — live and archived, never a
    * tombstone — for a scan that must look at all of them once (a card's
-   * birth, the v12 backfill). Ids, titles and bodies only.
+   * birth, the v12 backfill). Ids, titles and bodies only. Never a starter
+   * memory (`source = 'told'`, S1): its names are told, not lived, so a card
+   * is never born of one nor linked to one.
    */
   memoryTexts(): { id: string; title: string | null; body: string }[] {
     return this.ops.all<{ id: string; title: string | null; body: string }>(
-      "SELECT id, title, body FROM memories WHERE type = 'memory' AND body != '' ORDER BY id",
+      "SELECT id, title, body FROM memories WHERE type = 'memory' AND body != '' AND (source IS NULL OR source != 'told') ORDER BY id",
     );
   }
 
@@ -5119,11 +5121,12 @@ export class Store {
    * The LIVE memories with words, with the lived day each was written on and
    * its kind — the night's name tally reads these (`schemas/names.ts`,
    * 2026-10-11). A chased removal is archived and blank, so it is not here; one
-   * still dark is, and the caller drops it by `deniedIds()`.
+   * still dark is, and the caller drops it by `deniedIds()`. Never a starter
+   * memory (S1), as `memoryTexts`.
    */
   liveMemoryTexts(): { id: string; title: string | null; body: string; day: number; kind: string }[] {
     return this.ops.all<{ id: string; title: string | null; body: string; day: number; kind: string }>(
-      "SELECT id, title, body, birth_day AS day, kind FROM memories WHERE type = 'memory' AND archived = 0 AND body != '' ORDER BY id",
+      "SELECT id, title, body, birth_day AS day, kind FROM memories WHERE type = 'memory' AND archived = 0 AND body != '' AND (source IS NULL OR source != 'told') ORDER BY id",
     );
   }
 
@@ -5316,6 +5319,16 @@ export class Store {
     return memoryReads.memoriesWrittenHereSince(this, scope, since, until, limit);
   }
 
+  /** Live owner/us memories written in `(since, until]`, any folder, newest first (`reads-memories.ts#aboutUsWrittenSince`; WF1). */
+  aboutUsWrittenSince(since: number, until: number, limit: number): MemoryRow[] {
+    return memoryReads.aboutUsWrittenSince(this, since, until, limit);
+  }
+
+  /** Live memories marked done written after `since`, any folder, oldest first (`reads-memories.ts#doneWrittenSince`; WF1). */
+  doneWrittenSince(since: number, limit: number): MemoryRow[] {
+    return memoryReads.doneWrittenSince(this, since, limit);
+  }
+
   countWrittenHereSince(scope: string, since: number, until: number): number {
     return memoryReads.countWrittenHereSince(this, scope, since, until);
   }
@@ -5427,6 +5440,16 @@ export class Store {
    */
   tombstones(): Tombstone[] {
     return memoryReads.tombstones(this);
+  }
+
+  /** The starter memories (`source = 'told'`, S1, `core/told.ts`), live or not: ids only. */
+  toldIds(): string[] {
+    return this.ops.all<{ id: string }>("SELECT id FROM memories WHERE source = 'told' ORDER BY id").map((r) => r.id);
+  }
+
+  /** How many starter memories are live (not archived, not superseded): the count shown apart from the lived ones. */
+  liveToldCount(): number {
+    return this.ops.get<{ n: number }>("SELECT COUNT(*) AS n FROM memories WHERE source = 'told' AND archived = 0 AND superseded_by IS NULL")?.n ?? 0;
   }
 
   /** Ids a removal has taken dark: consulted at load and at rebuild (§16 G12). */

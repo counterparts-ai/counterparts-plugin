@@ -439,6 +439,26 @@ export function runCycle(opts: SleepOptions): CycleReport {
         cutoffDay: report.cutoffDay,
         retentionDays: report.retentionDays,
       });
+      // RECALL'S GATE ROWS, on the same clock (2026-11-03). `gate_session`
+      // rows whose `last_day` is past the window go; a session saved inside it
+      // keeps every row the gate reads, because each recall turn re-stamps them
+      // with its day (`recall/session.ts#saveGateState`). A session with no rows
+      // loads `absent` and starts fresh. Its own try: the version prune above
+      // has committed, and a gate sweep that threw must not fail it. Counted in
+      // its event only, so the phase's numbers stay the versions'.
+      if (store.pruneGateSessions !== undefined) {
+        try {
+          const gate = store.pruneGateSessions();
+          emit("sleep.gate.pruned", undefined, {
+            count: gate.pruned,
+            cutoffDay: gate.cutoffDay,
+            retentionDays: gate.retentionDays,
+          });
+        } catch (err) {
+          if (err instanceof CycleKilled) throw err;
+          emit("sleep.gate.failed", undefined, { error: errorCode(err) });
+        }
+      }
       return out;
     });
 

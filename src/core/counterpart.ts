@@ -218,6 +218,7 @@ import type { FolderOn } from "./dream/slices.js";
 import { DREAM_TUNABLES } from "./dream/tunables.js";
 import { SELF_TUNABLES } from "./self/tunables.js";
 import { UNDATED_LAST, WAKE_SHAPE_KEY, headlessOf, readCues, readElsewhere, shapedDelivery, sinceHere } from "./counterpart-wake-shape.js";
+import { happenedAlready } from "./counterpart-wake-news.js";
 import type { Cue, ElsewhereListed, SinceItem } from "./counterpart-wake-shape.js";
 import type { CoreDecision, CoreDecisionActor } from "./sleep/index.js";
 import type { CyclePartial, CycleReport } from "./sleep/index.js";
@@ -404,6 +405,12 @@ export type { Seat, SeatAct, SeatAnswer, SeatAsk, SeatTool } from "./seat.js";
 // a reading, here so a host (the harness's compare) reaches it through the package entry.
 export { beliefCoreCandidates, coreBeliefFloors, coreBeliefMiss, coreFromBeliefs, livedSupportDays } from "./self/measures.js";
 export type { CoreBelief, CoreBeliefFloors, CoreFromBeliefs } from "./self/measures.js";
+
+// The starter memories (S1, `told.ts`): the one writer that plants the set in a
+// store its caller has just created, here so a host that makes its own stores
+// (hosted's signup, the harness's week) reaches it through the package entry.
+export { plantTold } from "./told.js";
+export type { ToldSurface } from "./told.js";
 
 const EVENT_RING = REMEMBER.CONSUMED_LEDGER_MAX;
 
@@ -3373,11 +3380,24 @@ export class Counterpart {
    * and the sentence around it are the host adapter's to decide. Never throws:
    * any failure is an empty list.
    */
-  plainDueToday(input: { at: string }): PlainReminder[] {
+  plainDueToday(input: { at: string; scope?: string; folders?: () => FolderOn | undefined }): PlainReminder[] {
     if (this.observer) return [];
     const out: PlainReminder[] = [];
+    // The reader's fence for what may settle a reminder (review of #734), the
+    // news line's rule: this folder's rows always, another's only when it is
+    // on. Asked only when a done row could settle one; `folders` absent or
+    // answering nothing is every folder on, as `plainHeldBack`'s caller reads it.
+    let fence: FolderOn | undefined | null = null;
+    const here = (input.scope ?? "").trim().replace(/\/+$/, "");
+    const open = (r: MemoryRow): boolean => {
+      if (fence === null) fence = input.folders?.();
+      return fence === undefined || !memoryClosedTo(this.store, r, fence, here.length === 0 ? undefined : here);
+    };
     try {
       for (const due of this.prospective.plainDue({ at: input.at })) {
+        // ALREADY HAPPENED (WF1, 2026-11-03): a newer done memory says so, as
+        // the shop that launched a day early did; nobody is told it's today.
+        if (happenedAlready(this.store, due.memoryId, input.at, { open }) !== null) continue;
         let what = "";
         try {
           const doc = this.store.readProse(due.memoryId);

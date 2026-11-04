@@ -53,6 +53,7 @@ import { headOf, standingOf, unsettledCompetition } from "./standing.js";
 import type { RenderResult, Resolve, Resolved } from "./render.js";
 import { withTunables } from "./tunables.js";
 import type { RecallTunables } from "./tunables.js";
+import { TOLD_SOURCE } from "../told.js";
 
 /** At most this many mood-lifted ids on a decision (`moodMatchedIds`) — the
  *  same cap the credit row puts on `shownNotUsed` (2026-10-14). */
@@ -686,8 +687,13 @@ export class Recall {
     // A count, not a list of every live id (Lane 0, scale review C4: 16% of a
     // turn at 10x). The same WHERE (`memoryWhere`).
     const storeSize = this.store.countMemories({ archived: false });
+    // COLD START ENDS ON LIVED MEMORIES ONLY (S1 review, ROADMAP 11-03): the
+    // starter set (`core/told.ts`) is no evidence the store has grown, so the
+    // regime is read on what was lived. Rarity and the floor unit keep the
+    // whole store, the population the word counts (`docFrequency`) are taken over.
+    const livedSize = this.store.countMemories({ archived: false, notSource: TOLD_SOURCE });
     const maxCandidates =
-      storeSize < this.tunables.COLD_START_MIN_STORE
+      livedSize < this.tunables.COLD_START_MIN_STORE
         ? this.tunables.COLD_START_MAX_CANDIDATES
         : this.tunables.MAX_CANDIDATES;
 
@@ -715,6 +721,7 @@ export class Recall {
         mood,
         maxCandidates,
         storeSize,
+        livedSize,
         ...(turn.feeling === undefined ? {} : { feeling: turn.feeling }),
         ...(plan === null ? {} : { prime: plan.activation }),
       },
@@ -759,6 +766,7 @@ export class Recall {
         candidates,
         state,
         storeSize: act.storeSize,
+        livedSize,
         affectStated: affect.stated,
         turn: turnNo,
         ...(turn.echo === undefined || turn.echo.size === 0 ? {} : { echo: turn.echo }),
@@ -1071,7 +1079,7 @@ export class Recall {
     for (const b of offers) if (!byId.has(b.id)) byId.set(b.id, b);
     // HABITUATION (2026-10-19), for belief lines too: one rated 0 in enough
     // recent sessions rests, as a footnote's raised bar would — the slot has
-    // no bar to raise, so it is left out until a later 2 or 3 or the week passes.
+    // no bar to raise, so it is left out until a later 2 or 3 or the window passes.
     const habituated = byId.size === 0 || !(this.tunables.HABITUATION_BAR_LIFT > 0) ? new Map<string, number>() : habituatedIds(this.store, day, this.tunables);
     const picked = [...byId.values()]
       .filter((b) => b.strength > this.tunables.BELIEFS_SLOT_FLOOR && seen[b.id] === undefined && !habituated.has(b.id))

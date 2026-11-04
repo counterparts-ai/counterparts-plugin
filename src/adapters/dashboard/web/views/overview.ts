@@ -24,6 +24,7 @@ import { selfMap } from "./self-map.js";
 import type { SelfMap } from "./self-map.js";
 import { todayView } from "./today.js";
 import type { TodayView } from "./today.js";
+import { starterNotes } from "../../../../core/told.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // overview
@@ -51,14 +52,18 @@ export interface Hero {
   readonly memories: number;
   /** Memories written today (`todayView`'s `newToday`). */
   readonly newToday: number;
+  /** The starter memories (S1), counted apart from `memories`. */
+  readonly starter: number;
 }
 
 /** The headline, in short parts joined by a dot. A zero "new today" is left out. */
-export function heroHeadline(x: { day: number; lived: boolean; owner: string | null; memories: number; newToday: number }): string {
+export function heroHeadline(x: { day: number; lived: boolean; owner: string | null; memories: number; newToday: number; starter?: number }): string {
   const parts = [
     x.lived ? `Day ${x.day}${x.owner === null ? "" : ` with ${x.owner}`}` : "Nothing lived yet",
     `${x.memories} ${x.memories === 1 ? "memory" : "memories"}`,
   ];
+  // The starter notes apart (S1; ROADMAP, 11-03): day one never claims memories nobody made.
+  if ((x.starter ?? 0) > 0) parts.push(starterNotes(x.starter ?? 0));
   if (x.newToday > 0) parts.push(`${x.newToday} new today`);
   return parts.join(" · ");
 }
@@ -122,7 +127,12 @@ export interface OverviewView {
 export function overviewView(src: DashboardSource, feedLimit = FEED_LIMIT): OverviewView {
   const store = src.store;
   const day = store.livedDay();
-  const rows = census(src);
+  // THE STARTER MEMORIES ARE COUNTED APART (S1): told, not lived, so neither
+  // the headline's number nor "I am holding" includes them.
+  const toldIds = new Set(store.toldIds());
+  const all = census(src);
+  const rows = all.filter((r) => !toldIds.has(r.id));
+  const starter = all.length - rows.length;
   // A SCHEMA ROW IS NOT A MEMORY. The census keeps both, because the bands and
   // kinds below are true of both and the physics runs on both — but the number
   // in the headline tile is the one a person compares against the console, and
@@ -209,9 +219,10 @@ export function overviewView(src: DashboardSource, feedLimit = FEED_LIMIT): Over
   const memories = rows.length;
   const today = todayView(src);
   const hero: Hero = {
-    headline: heroHeadline({ day, lived: !(day === 0 && rows.length === 0), owner: ownerName(src), memories, newToday: today.newToday }),
+    headline: heroHeadline({ day, lived: !(day === 0 && rows.length === 0), owner: ownerName(src), memories, newToday: today.newToday, starter }),
     memories,
     newToday: today.newToday,
+    starter,
   };
 
   return {

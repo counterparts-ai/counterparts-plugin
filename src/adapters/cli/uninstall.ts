@@ -124,6 +124,7 @@ import { confirm, typed, ui } from "./ui.js";
 import type { Ui } from "./ui.js";
 import type { Outcome, ProcessLister, Spawner, WireInput, WireResult } from "./wire.js";
 import { look, readMcp, tilde, unwire } from "./wire.js";
+import { isTold } from "../../core/told.js";
 
 /** The phrase `--delete-memories` asks for, exactly. Case-sensitive, and
  *  nothing is trimmed but the end-of-line (`ui.ts#typed`). */
@@ -274,6 +275,9 @@ export type Census =
       /** Beliefs, entities and the self page — `status`'s second population.
        *  Reported so a warning is never the bare word "0" while a store goes. */
       readonly schemas: number;
+      /** Of `memories`: the starter memories (S1, `core/told.ts`), which the
+       *  count includes and always says (ROADMAP, 11-03). */
+      readonly told: number;
     }
   | { readonly kind: "size"; readonly bytes: number; readonly why: string };
 
@@ -384,6 +388,17 @@ export function grouped(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+/**
+ * The starter memories inside a count, said (S1; ROADMAP, 11-03): `, 11 of
+ * them starter notes` (or ` (11 of them starter notes)` in a sentence), so a
+ * count that includes them never passes them off as lived. Empty when none.
+ */
+export function starterPart(told: number, of: number, lead: ", " | " ("): string {
+  if (told <= 0) return "";
+  const words = of === 1 ? "a starter note" : told === 1 ? "1 of them a starter note" : `${grouped(told)} of them starter notes`;
+  return lead === ", " ? `, ${words}` : ` (${words})`;
+}
+
 /** `1,204 memories`, and `1 memory`. A brand-new install holds exactly one — its
  *  identity core — so "1 memories" was what somebody leaving after five minutes
  *  actually read. */
@@ -425,6 +440,7 @@ export function censusOf(base: string, storeDir: string | null): Census {
     try {
       const denied = new Set(opened.deniedIds());
       let live = 0;
+      let told = 0;
       let journal = 0;
       let schemas = 0;
       for (const id of opened.list()) {
@@ -441,8 +457,9 @@ export function censusOf(base: string, storeDir: string | null): Census {
           continue;
         }
         live += 1;
+        if (isTold(row)) told += 1;
       }
-      return { kind: "memories", memories: live, journal, schemas };
+      return { kind: "memories", memories: live, journal, schemas, told };
     } finally {
       opened.close();
     }
@@ -476,7 +493,7 @@ export function censusWords(census: Census): string {
     census.journal === 0
       ? ""
       : `, ${grouped(census.journal)} journal entr${census.journal === 1 ? "y" : "ies"}`;
-  if (census.memories > 0) return `${memories(census.memories)}${journal}`;
+  if (census.memories > 0) return `${memories(census.memories)}${starterPart(census.told, census.memories, ", ")}${journal}`;
   const rest =
     census.schemas === 0
       ? ""
@@ -1377,7 +1394,7 @@ export async function uninstall(input: UninstallInput): Promise<Outcome> {
   const where = tilde(input.config.dataDir ?? join(configDir, "store"), home);
   u.ok(
     kept.kind === "memories"
-      ? `${memories(kept.memories)} ${kept.memories === 1 ? "is" : "are"} still at ${where}.`
+      ? `${memories(kept.memories)}${starterPart(kept.told, kept.memories, " (")} ${kept.memories === 1 ? "is" : "are"} still at ${where}.`
       : `everything is still at ${tilde(configDir, home)} (${humanBytes(kept.bytes)}).`,
   );
   if (offers(input)) return offerDelete(input, u, removed, viaPlugin ? wireInput : null);
@@ -1729,7 +1746,7 @@ function deletePlan(input: UninstallInput, u: Ui, plan: UninstallPlan): Outcome 
   if (plan.storeActed) {
     u.hint(
       plan.census !== null && plan.census.kind === "memories"
-        ? `${memories(plan.census.memories)} ${plan.census.memories === 1 ? "is" : "are"} gone with it.`
+        ? `${memories(plan.census.memories)}${starterPart(plan.census.told, plan.census.memories, " (")} ${plan.census.memories === 1 ? "is" : "are"} gone with it.`
         : "Your memory went with it.",
     );
   } else {

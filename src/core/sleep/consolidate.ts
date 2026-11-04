@@ -950,6 +950,14 @@ export function runConsolidate(ctx: PhaseCtx): ConsolidateResult {
       block("a-belief");
       continue;
     }
+    // A STARTER MEMORY DOES NOT CROSS (S1, `core/told.ts`): told at birth, not
+    // lived, it is never the self. It consolidates and fades like any memory.
+    // The source spelled here, not `isTold`: sleep imports only types,
+    // physics and store (test/sleep.test.ts, structural guarantees).
+    if (row.source === "told") {
+      block("told");
+      continue;
+    }
     if (p.promotedIdentity) {
       block("already-identity");
       // The shadow asks again about a core member the lanes promoted against its no.

@@ -23,6 +23,7 @@ import { isJournal } from "../../../../core/sleep/index.js";
 import type { DashboardSource } from "../../source.js";
 import { reveal } from "../reveal.js";
 import { isChapterMemory } from "./memory-words.js";
+import { isTold } from "../../../../core/told.js";
 
 /** At most this many lines, the "and N more" line included. */
 export const TODAY_LINES = 6;
@@ -62,7 +63,8 @@ function writtenOn(src: DashboardSource, from: number): Map<number, { id: string
   const out = new Map<number, { id: string; at: number }[]>();
   for (const id of src.store.list({ archived: false })) {
     const row = src.store.row(id);
-    if (row === undefined || row.type !== "memory" || isJournal(row) || isChapterMemory(row)) continue;
+    // A starter memory (S1) was told at birth, not written that day.
+    if (row === undefined || row.type !== "memory" || isJournal(row) || isChapterMemory(row) || isTold(row)) continue;
     if (row.birth_day < from) continue;
     const list = out.get(row.birth_day) ?? [];
     list.push({ id, at: typeof row.created_at === "number" ? row.created_at : 0 });

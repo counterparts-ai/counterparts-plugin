@@ -251,8 +251,8 @@ export interface SchemasOptions {
 
 const ZERO_DIMS: DimensionsInput = { relevance: 0, emotional: 0, predictive: 0 };
 
-/** The memory sources that are not lived: a dream's words, a reflection's own entry (reflect.ts `notLivedReason`). */
-const NOT_LIVED_SOURCES: ReadonlySet<string> = new Set(["dreamed", "reflection"]);
+/** The memory sources that are not lived: a dream's words, a reflection's own entry (reflect.ts `notLivedReason`), a starter memory (`told`, S1). */
+const NOT_LIVED_SOURCES: ReadonlySet<string> = new Set(["dreamed", "reflection", "told"]);
 
 export class Schemas {
   readonly store: Store;

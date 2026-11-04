@@ -26,6 +26,7 @@ import type { SelfTunables } from "./tunables.js";
 import { craftBornDay, isCraft, isWorkMemory } from "./work.js";
 import { headOf } from "../recall/standing.js";
 import { TUNABLES as SLEEP_TUNABLES } from "../sleep/tunables.js";
+import { isTold } from "../told.js";
 
 export type LaneName = "identity" | "craft" | "threads" | "hints" | "horizon";
 
@@ -388,6 +389,9 @@ export function scanOne(
 ): Scanned | null {
   const row = store.row(id);
   if (row === undefined || row.archived !== 0) return null;
+  // A STARTER MEMORY (S1, `core/told.ts`) is seen only by looking: never a
+  // wake lane's, never identity's.
+  if (isTold(row)) return null;
   let doc: ProseDoc;
   let physics: MemoryPhysics;
   try {

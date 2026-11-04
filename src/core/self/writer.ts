@@ -92,6 +92,7 @@ import { PAGE_ROOM_BYTES } from "./briefing.js";
 import type { SelfPage } from "./page.js";
 import type { SelfTunables } from "./tunables.js";
 import { SELF_TUNABLES } from "./tunables.js";
+import { TOLD_SOURCE, isTold } from "../told.js";
 
 /** The durable row every page-writer attempt leaves. Read by `fired`, doctor. */
 export const SELF_PAGE_WRITER_EVENT = "self.page.writer.ran";
@@ -354,10 +355,12 @@ export function pageWriterNight(store: Store, zone?: string): { today: string; a
  */
 export function hasDayBefore(store: Store, today: string): boolean {
   try {
-    const all = store.countMemories({ type: "memory" });
+    // Lived rows only (S1 review): the starter set (`core/told.ts`) is no day.
+    const all = store.countMemories({ type: "memory", notSource: TOLD_SOURCE });
     const fromToday = store.countMemories({
       type: "memory",
       learnedOnFrom: today,
+      notSource: TOLD_SOURCE,
     });
     return all > fromToday;
   } catch {
@@ -709,7 +712,8 @@ export function dayIsEmpty(store: Store, about: string): boolean {
   try {
     for (const id of store.list({ type: "memory", archived: false, learnedOnFrom: about })) {
       const row = store.row(id);
-      if (row !== undefined && isOfDay(store, row, about)) return false;
+      // A starter memory (S1) is no day's: told at birth, not lived.
+      if (row !== undefined && !isTold(row) && isOfDay(store, row, about)) return false;
     }
   } catch {
     // A store that will not answer is not a store with an empty day; the safe
@@ -878,6 +882,9 @@ export function dayMemories(
     // not listed here: the day's chapters come in the journal block, each
     // with its summary as its line (2026-10-15), and would be shown twice.
     if (row.source === "episode" && row.origin_ref !== null && row.origin_ref.length > 0) continue;
+    // A STARTER MEMORY (S1, `core/told.ts`) is told, not lived: never the
+    // day's, so never on the page or in Lately.
+    if (isTold(row)) continue;
     let statement: string;
     try {
       statement = store.read(id).doc.body;

@@ -119,7 +119,7 @@ export const SHORT: Record<string, string | readonly string[]> = {
   scope: "Choose which folders it remembers",
   uninstall: "Remove Counterparts; keeps your memory unless you say otherwise",
   // ── your data ──
-  export: "A copy of your memory you can take anywhere, encrypted by default",
+  export: "A copy of your memory you can take anywhere, encrypted with --passphrase",
   backup: "Save a snapshot of your memory to a folder",
   remove: "Delete one memory for good",
   delete: "Delete one kind of data: conversation text, backups or the activity log",
@@ -353,6 +353,7 @@ export const COMMAND_DETAIL: Record<string, readonly string[]> = {
     "connect again.",
   ],
   init: [
+    "init makes a bare store, with no starter notes; install sets up yours.",
     "No host config, nothing under ~/.counterparts/ — that",
     "is what install is for.",
   ],

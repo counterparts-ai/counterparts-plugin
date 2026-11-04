@@ -2046,6 +2046,20 @@ export const WRITE_UP_JOT_MARK = "[a note it jotted]";
 /** What marks the ended session's OWN reply (2026-10-01, build 3): handed over
  *  labelled, so the writer can tell what was said to it from what it said. */
 export const WRITE_UP_REPLY_MARK = "[its reply]";
+/**
+ * WHAT A WRITE-UP LEAVES OUT (2026-11-03, WP1), said to every writer of an
+ * ended session's words — the door's `next` (the pointer's writer and the
+ * catch-up's) and the catch-up's own prompt. The night wrote a refused tool
+ * call as "Declined permission to mark a note delivered", and the session's
+ * own asides about it as an `about: me` lesson; neither is something that
+ * happened between the two of them. The reader drops the host's own line
+ * about a refusal (`transcript.ts#PLUMBING_FRAMES`); what the session SAID
+ * about one is its real words and stays in the part, so this sentence is
+ * what keeps it out of memory. Not "tool calls" at large (review of #731): in
+ * a working session what the tools found or changed is what happened.
+ */
+export const WRITE_UP_PLUMBING_RULE =
+  "Permission prompts, refused tool calls and this memory system's own notices (saving, marking, the nightly run) are plumbing, not events between you and them: write nothing about them, even where a reply mentions one, unless the person talked about them.";
 /** What ends a reply cut at `WRITE_UP_REPLY_BYTES`. */
 export const WRITE_UP_REPLY_CUT = " [… the rest of this reply is not shown]";
 /**

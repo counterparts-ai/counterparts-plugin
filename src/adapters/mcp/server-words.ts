@@ -21,7 +21,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.45";
+export const SERVER_VERSION = "0.3.46";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -115,7 +115,7 @@ export const STORE_BUSY_REFUSAL =
  * a host that reads it learns the one thing it needs to.
  */
 export const DESKTOP_INSTRUCTIONS =
-  "Counterparts is your memory. In every new chat, call its wake tool first — before answering anything about the person, the past, or work in progress — and once: it returns this chat's briefing, including what happened yesterday across every session, and a session id to pass on session_end, chapter, dream and reflect. Without a wake, what recall returns is a slice, not the whole record: never present it as complete. In a Claude Code session (Desktop's Code tab) the hook already woke you: do not call wake — pass your own session id, the one your wake or Stop ask names, as `session` on every call.";
+  "Counterparts is your memory. In every new chat, call its wake tool first — before answering anything about the person, the past, or work in progress — and once: it returns this chat's briefing, including what happened yesterday across every session, and a session id to pass on session_end, chapter, dream and reflect. Without a wake, what recall returns is a slice, not the whole record: never present it as complete. In a Claude Code session (Desktop's Code tab) the hook already woke you: do not call wake — pass your own session id, the one your wake or Stop ask names, as `session` on every call. For how anything here works, recall the handle \"manual\".";
 
 /** The MCP prompt a Desktop person can pick (brief item 6). */
 export const START_PROMPT = {
@@ -324,7 +324,7 @@ export const TITLE_ASKED_NOTE =
  * exactly that (`claudeAiInstructions`).
  */
 export const CLAUDE_AI_INSTRUCTIONS =
-  "Counterparts is your memory. In every conversation, call its wake tool first — before answering anything, and above all anything about the person, the past, or work in progress — and once: it returns this conversation's briefing and a session id to pass as `session` on every later call in it. Without a wake, what recall returns is a slice, not the whole record: never present it as complete. Nothing tells this memory when a conversation ends, so remember what matters as it comes up, in the moment, with the remember tool.";
+  "Counterparts is your memory. In every conversation, call its wake tool first — before answering anything, and above all anything about the person, the past, or work in progress — and once: it returns this conversation's briefing and a session id to pass as `session` on every later call in it. Without a wake, what recall returns is a slice, not the whole record: never present it as complete. Nothing tells this memory when a conversation ends, so remember what matters as it comes up, in the moment, with the remember tool. For how anything here works, recall the handle \"manual\".";
 
 /**
  * The `instructions` a claude.ai server sends, with the trial's CANARY when the

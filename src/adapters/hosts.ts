@@ -198,6 +198,16 @@ export interface HostWording {
   readonly offRefusal: (at: RefusalPlace) => string;
   /** The same while it is PAUSED. */
   readonly pausedRefusal: (at: RefusalPlace) => string;
+  /** The `scope` tool's read, when this place (or a parent) has a setting. */
+  readonly scopeReadSet: string;
+  /** The same when nothing is set, so it is on by default. */
+  readonly scopeReadUnset: string;
+  /**
+   * Does a `scope` result name the registry file's path? Where the person can
+   * open that file it helps; claude.ai's is the server's, a path its person
+   * can do nothing with.
+   */
+  readonly scopeShowsRegistry: boolean;
 }
 
 /**
@@ -251,6 +261,9 @@ export const HOST_WORDING: Readonly<Record<string, HostWording>> = {
       at.inherited === null
         ? `Counterparts is paused for this directory (${at.here}). Nothing is recorded or read here until it is resumed — call \`scope\` with mode \`resume\`, or run \`${at.entryCommand("--resume")}\`.`
         : `Counterparts is paused for ${at.inherited}, which includes this directory (${at.here}). Nothing is recorded or read here until it is resumed — run \`${at.entryCommand("--resume")}\`. The \`scope\` tool sets only this directory: mode \`resume\` refuses here, and mode \`on\` turns this directory on alone while ${at.inherited} stays paused.`,
+    scopeReadSet: "This is what the host's scope registry says about this directory.",
+    scopeReadUnset: "Nothing is set for this directory or any parent, so it is on by default. Ask the user before setting it.",
+    scopeShowsRegistry: true,
   },
   // Desktop has no `/mcp` and no hooks: the one server every chat talks to is
   // started with the app, so a newer build loads when the app does.
@@ -267,6 +280,9 @@ export const HOST_WORDING: Readonly<Record<string, HostWording>> = {
       `Counterparts is off for Claude Desktop's chats. Nothing is recorded or read here — call \`scope\` with mode \`on\`, or run \`${at.hereCommand("--on")}\`.`,
     pausedRefusal: (at) =>
       `Counterparts is paused for Claude Desktop's chats. Nothing is recorded or read here until it is resumed — call \`scope\` with mode \`resume\`, or run \`${at.entryCommand("--resume")}\`.`,
+    scopeReadSet: "This is what the host's scope registry says about this directory.",
+    scopeReadUnset: "Nothing is set for this directory or any parent, so it is on by default. Ask the user before setting it.",
+    scopeShowsRegistry: true,
   },
   // claude.ai has no app to reopen and no `/mcp`: the server behind the
   // connector is a process somebody started, and a newer build loads when it
@@ -278,10 +294,16 @@ export const HOST_WORDING: Readonly<Record<string, HostWording>> = {
       "claude.ai's chats are no longer recorded or read. Every other tool will refuse until it is turned back on — including in a new chat, which is the point.",
     scopeOn:
       "Recorded. This takes effect immediately, for every tool in every claude.ai chat. Nothing is collected from before now: claude.ai keeps no transcript here, so only what is written through the tools is remembered.",
-    offRefusal: (at) =>
-      `Counterparts is off for claude.ai's chats. Nothing is recorded or read here — call \`scope\` with mode \`on\`, or run \`${at.hereCommand("--on")}\`.`,
-    pausedRefusal: (at) =>
-      `Counterparts is paused for claude.ai's chats. Nothing is recorded or read here until it is resumed — call \`scope\` with mode \`resume\`, or run \`${at.entryCommand("--resume")}\`.`,
+    // NO TERMINAL HERE (2026-11-03, the 11-03 reviews): a claude.ai person has
+    // no `counterparts scope` to run, and on hosted one account is one memory
+    // (ROADMAP's words). The `scope` tool is the whole way back.
+    offRefusal: () =>
+      "Counterparts' memory is off for claude.ai. Nothing is recorded or read until it is turned back on — call `scope` with mode `on` when the person says.",
+    pausedRefusal: () =>
+      "Counterparts' memory is paused for claude.ai. Nothing is recorded or read until it is resumed — call `scope` with mode `resume` when the person says.",
+    scopeReadSet: "One account is one memory: they can pause it or turn it off, and back on. This is what it is set to now.",
+    scopeReadUnset: "One account is one memory: they can pause it or turn it off, and back on. Nothing is set, so it is on.",
+    scopeShowsRegistry: false,
   },
 };
 

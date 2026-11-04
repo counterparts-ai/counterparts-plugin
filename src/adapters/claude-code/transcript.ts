@@ -58,6 +58,14 @@
  *   visible. A `Stop hook feedback:` block carrying a v1 marker is still
  *   `foreign` — foreign is checked first, so the canary's agreement holds.
  *
+ *   **PLUMBING NEVER ENTERS** (2026-11-03, WP1). The host's own line after a
+ *   declined permission prompt (`[Request interrupted by user for tool use]`)
+ *   and a hook's output written as user text are the machinery, not anything
+ *   the person or the counterpart said; kept as `injected`, the first reached
+ *   the night's write-up beside the person's words. They are tagged `plumbing`
+ *   (`PLUMBING_FRAMES`) and `enters()` refuses them, counted. What either of
+ *   them SAID about a prompt or a refusal stays conversation.
+ *
  *   **B1 — pacing counts what the PERSON typed, decided from the entry's own
  *   metadata first** (2026-09-23; since 2026-09-24 the assistant's replies add
  *   bytes but never turns — `hooks.ts#substanceOf`). A subagent's hand-back
@@ -126,11 +134,14 @@ const INJECTED =
  *   - `Another Claude session sent a message:` — how 2.1.28x delivers a
  *     subagent's hand-back (the `<agent-message …>` wrapper follows it);
  *   - `[Subagent hand-back]` — the same hand-back's own opening line;
- *   - `[Request interrupted by user…]` — the host's marker for an interrupt;
+ *   - `[Request interrupted by user…]` — the host's marker for an interrupt
+ *     (but not the one after a declined permission prompt: `PLUMBING_FRAMES`);
  *   - `<Event> hook success:` / `… hook additional context:` / `… hook system
- *     message:` — how the host RENDERS hook output to the model. In the file
- *     these are `attachment` entries, which carry no role and never reach this
- *     reader; the anchor is here in case a build ever writes one as user text.
+ *     message:` written BARE — how the host renders hook output, should a build
+ *     write it as user text. Kept as `injected`, not `plumbing`: one bare line
+ *     cannot be told from a person on an older build (no metadata) asking about
+ *     their hook ("Stop hook success: why does this keep showing?"), and losing
+ *     their words is worse than keeping the machinery (review of #731).
  *     `hook error` is deliberately NOT here: it is what a person types when
  *     their own hook breaks.
  *
@@ -143,6 +154,38 @@ const HOST_FRAMES: readonly RegExp[] = [
   /^\[Subagent hand-back\]/,
   /^\[Request interrupted by user/,
   /^[A-Z][A-Za-z]+ hook (?:success|additional context|system message):/,
+];
+
+/**
+ * PLUMBING FRAMES (2026-11-03, WP1): host frames that carry the machinery, not
+ * the conversation, and so enter nothing (`plumbing`, refused and counted).
+ * Same anchoring and the same reach as `HOST_FRAMES` (user-role, never the
+ * person's own typed entry), checked first:
+ *
+ *   - `[Request interrupted by user for tool use]`, the WHOLE block — what the
+ *     host writes, as its own user-role entry with no metadata, after the
+ *     person declines a permission prompt (measured 11-03 on the owner's
+ *     transcripts: the rejected `tool_result` comes first and is already a
+ *     blind spot). Kept as `injected` until then, it reached the night's
+ *     write-up as part of what the person said. A plain interrupt is still a
+ *     host frame: the person stopping a reply is something they did;
+ *   - a system reminder holding ONLY a hook's output (`<Event> hook success:`
+ *     / `… additional context:` / `… system message:`), the WHOLE block, one
+ *     reminder and nothing after it — how the host hands hook output to the
+ *     model (`OWN_ASK`'s shapes). In the file these are `attachment` entries,
+ *     which carry no role and never reach this reader; the anchor is here in
+ *     case a build ever writes one as user text. Some OTHER hook's output was
+ *     `injected`, kept, until then. Anything the person wrote after the
+ *     reminder keeps the block out of here (review of #731), and the bare
+ *     form stays a `HOST_FRAMES` entry, kept.
+ *
+ * What the person or the counterpart SAYS about a refusal or a prompt ("why
+ * do you keep asking me to allow that?") is conversation; that is the
+ * write-up's prompt to weigh (`sessions.ts#WRITE_UP_PLUMBING_RULE`), not this file's.
+ */
+const PLUMBING_FRAMES: readonly RegExp[] = [
+  /^\[Request interrupted by user for tool use\]\s*$/,
+  /^<system-reminder>\s*[A-Z][A-Za-z]+ hook (?:success|additional context|system message):(?:(?!<\/system-reminder>)[\s\S])*<\/system-reminder>\s*$/,
 ];
 
 /**
@@ -265,7 +308,13 @@ export function classifyBlock(text: string): TurnSource {
 /** True when a user-role block with no metadata opens with a host frame. */
 function hostFramed(text: string): boolean {
   const probe = text.trimStart();
-  return HOST_FRAMES.some((frame) => frame.test(probe));
+  return plumbingFramed(text) || HOST_FRAMES.some((frame) => frame.test(probe));
+}
+
+/** True when a user-role block opens with a plumbing frame (`PLUMBING_FRAMES`). */
+function plumbingFramed(text: string): boolean {
+  const probe = text.trimStart();
+  return PLUMBING_FRAMES.some((frame) => frame.test(probe));
 }
 
 /**
@@ -539,7 +588,10 @@ export function parseTranscript(raw: string): TranscriptRead {
     // The host's own lines keep only what is refused (and so counted); their
     // text enters no turn (`hostRecord`).
     const all = blocksOf(content, role, author);
-    const pieces = role === "user" && hostRecord(entry) ? all.filter((p) => p.source !== "injected") : all;
+    // Plumbing on such a line enters no turn either (2026-11-03): it was
+    // `injected` and dropped here before, and the turn list a live session's
+    // cursor indexes must not grow across an upgrade.
+    const pieces = role === "user" && hostRecord(entry) ? all.filter((p) => p.source !== "injected" && p.source !== "plumbing") : all;
     // A twin, if the host ever writes one, is the person's NEXT sent entry: the
     // same words, marked queued. Anything else the person sends closes the
     // window. Assistant lines do not: the turn goes on after the attachment.
@@ -634,6 +686,7 @@ function pieceOf(text: string, role: "user" | "assistant", author: EntryAuthor):
   if (role !== "user") return { text, source: author === "host" ? "injected" : source };
   if (author === "host") {
     if (OWN_ASK.test(text.trimStart())) return { text, source: "ritual" };
+    if (plumbingFramed(text)) return { text, source: "plumbing" };
     // Kept in capture — a hand-back or a notification is real experience — and
     // out of pacing, because nobody in this session typed it. The peer rewrite
     // still applies, so a wrapper is labelled rather than read as the owner.
@@ -654,6 +707,7 @@ function pieceOf(text: string, role: "user" | "assistant", author: EntryAuthor):
   // a bare opener may be the person quoting it), then master's rule, plus the
   // anchored host frames.
   if (OWN_ASK_FRAMED.test(text.trimStart())) return { text, source: "ritual" };
+  if (plumbingFramed(text)) return { text, source: "plumbing" };
   if (source === "conversation" && hostFramed(text)) return { text, source: "injected" };
   const attributed = attributePeers(text);
   if (attributed.peers === 0) return { text, source };

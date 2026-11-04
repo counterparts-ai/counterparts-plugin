@@ -101,6 +101,13 @@ export interface SleepStore {
   setBand(id: string, band: Band, day: number): void;
   pruneSupersededVersions(): VersionPruneReport;
   /**
+   * Recall's per-session gate rows past the store's window (SEAMS item B),
+   * OPTIONAL like the log below: a port without `gate_session` has none to
+   * sweep. Called inside the `versions` phase, beside the version prune and on
+   * its clock (2026-11-03; nothing on a live path called it from 10-13 to then).
+   */
+  pruneGateSessions?(): VersionPruneReport;
+  /**
    * The durable event log (SEAMS item K), OPTIONAL so this port stays satisfiable
    * by any store-shaped object. Where it exists, each prune / promotion / merge
    * record is appended beside its meta row, which is what makes the three

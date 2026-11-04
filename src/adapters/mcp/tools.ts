@@ -67,6 +67,7 @@ import { RECALL_MAX_IDS } from "./deliberate.js";
 import { FACTS_MEANING_CAP, FACTS_PAGE_SIZE, FACTS_TAIL_SIZE } from "./facts.js";
 import { RECURRENCES } from "../../core/time.js";
 import { PAGE_ROOM_BYTES, STILL_OPEN_HANDLE } from "../../core/self/briefing.js";
+import { MANUAL_HANDLE } from "./manual.js";
 import { CLAIM_PREFIX_MIN_CHARS } from "../../core/self/page.js";
 import { MEET_STEPS } from "../../core/onboarding.js";
 import { CLAUDE_AI_HOST, DESKTOP_HOST } from "../hosts.js";
@@ -925,7 +926,7 @@ const RECALL: ToolSpec = {
       },
       handle: {
         type: "string",
-        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads that night whole, read-only. Or "last dream" (or "last night"): the newest dream whole — title, journal, what it did — and the reflection after it, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page) — and what its Coming up lists or counts, by title and date. Or "handoffs" (or "${HANDOFFS_HERE_HANDLE}"): this folder's live handoffs, newest first, each by first sentence and id, to expand or retire, with what came after the newest. Or "coming up": what's due, by whole title: today, overdue, later, then other folders' the setting lets be named. Or "elsewhere": the other folders the wake's Elsewhere would show with room, in its order, each with its newest title — paged (see page) — and last the folders it only counts. A memory titled exactly like one of these names opens by its id.`,
+        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads that night whole, read-only. Or "last dream" (or "last night"): the newest dream whole — title, journal, what it did — and the reflection after it, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page) — and what its Coming up lists or counts, by title and date. Or "handoffs" (or "${HANDOFFS_HERE_HANDLE}"): this folder's live handoffs, newest first, each by first sentence and id, to expand or retire, with what came after the newest. Or "coming up": what's due, by whole title: today, overdue, later, then other folders' the setting lets be named. Or "elsewhere": the other folders the wake's Elsewhere would show with room, in its order, each with its newest title — paged (see page) — and last the folders it only counts. Or "${MANUAL_HANDLE}": how Counterparts works and how to use it — commands, switches, what to do when something seems off — as a list of sections; "${MANUAL_HANDLE} <section>" opens one. A memory titled exactly like one of these names opens by its id.`,
       },
       ids: {
         type: "array",
@@ -1035,7 +1036,7 @@ const RATED_PROPERTY = {
 /** The claim `session_end` makes about `rated`. */
 const RATED_PRIVILEGE = {
   claim:
-    "`rated` is recorded, and (an experiment since 2026-10-19) each score is a use of the memory at its weight — 3 a full use, 2 most of one, 1 a quarter, 0 none — once a lived day, and each footnote the call leaves unrated since the last rating a glimpse; memories rated 2 or 3 (or otherwise used) since the last rating are linked together, and one rated 0 in two sessions within a week shows less readily in ambient recall until a later 2 or 3 or the week passes. A memory archived, replaced or handed over as a handoff is scored but not credited. A belief the beliefs slot showed (since 2026-10-22) can be rated too: its score is a use of it, once a lived day, never support, nothing for a belief about me or us, never linked, and one left unrated is no glimpse. Only a memory this session was shown — a footnote, a loud memory, a belief, a recall answer, one it opened — can be rated; any other id, a score that is not an integer 0 to 3, or an entry with no id is refused by name, and its siblings still count. A call whose every rating is refused records nothing.",
+    "`rated` is recorded, and (an experiment since 2026-10-19) each score is a use of the memory at its weight — 3 a full use, 2 most of one, 1 a quarter, 0 none — once a lived day, and each footnote the call leaves unrated since the last rating a glimpse; memories rated 2 or 3 (or otherwise used) since the last rating are linked together, and one rated 0 in two sessions within two weeks shows less readily in ambient recall until a later 2 or 3 or the two weeks pass. A memory archived, replaced or handed over as a handoff is scored but not credited. A belief the beliefs slot showed (since 2026-10-22) can be rated too: its score is a use of it, once a lived day, never support, nothing for a belief about me or us, never linked, and one left unrated is no glimpse. Only a memory this session was shown — a footnote, a loud memory, a belief, a recall answer, one it opened — can be rated; any other id, a score that is not an integer 0 to 3, or an entry with no id is refused by name, and its siblings still count. A call whose every rating is refused records nothing.",
   mechanizedBy:
     "src/core/counterpart.ts#rateShown -> src/core/recall/rated.ts#readRatings (one recall.rated row) + #planRatedUse -> src/core/counterpart.ts#useRatings (resolveUse; Associate#deposit to the pending file) + src/core/recall/habituation.ts (gate.ts raises the bar)",
 };
@@ -1355,7 +1356,7 @@ const CHAPTER: ToolSpec = {
  * `scope`'s `updates` (U1b, 2026-10-28; Mike's must-have, Q4): "stop reminding
  * me about updates" said to the AI must be enough. Not a tool of its own — a
  * field on the door that already changes the host's settings — and passed
- * alone. Stripped from claude.ai's list (`withoutUpdates`): the hosted memory
+ * alone. Not in claude.ai's own `scope` (`CLAUDE_AI_SCOPE`): the hosted memory
  * is always current and makes no check.
  */
 const UPDATES_PROPERTY = {
@@ -2283,8 +2284,6 @@ export const CLAUDE_AI_WORDS: Readonly<
     summary:
       "Search your long-term memory on purpose: what you remember about the person, past conversations, a project, a plan — beyond what the wake brought. Three kinds of ask, one per call — a question with a mode (facts or meaning), ids to read memories whole, or a handle (an id or an exact title) to read one.",
   },
-  // The every-host summary without its `updates` sentence: claude.ai's scope has no update check (`withoutUpdates`).
-  scope: { summary: SCOPE_SUMMARY_BASE },
   status: {
     summary:
       "Memory status: the census of long-term memory — how much is held, of what kinds, in which bands, how much has left, and how much was removed. Counts and dates only.",
@@ -2320,13 +2319,73 @@ export const CLAUDE_AI_WORDS: Readonly<
   },
 };
 
-/** claude.ai's `scope` has no `updates` (U1b): the hosted memory is always current. Its privilege stays, as every host's do (it says it is not offered there). */
-function withoutUpdates(spec: ToolSpec): ToolSpec {
-  if (spec.name !== "scope") return spec;
-  const schema = spec.inputSchema as { properties?: Record<string, unknown> };
-  const { updates: _updates, ...properties } = schema.properties ?? {};
-  return { ...spec, inputSchema: { ...spec.inputSchema, properties } };
-}
+/**
+ * `scope` FOR CLAUDE.AI (2026-11-03, the 11-03 reviews). claude.ai has no
+ * directories and its person has no terminal: the place is `claude-ai:`, one
+ * entry, and on hosted one account is one memory. The every-host words — "which
+ * directories", "the directory THIS session is running in", "beside
+ * claude-code.json", "the console's --note" — were false here, so the chat gets
+ * its own spec, in ROADMAP's hosted words ("One account is one memory: they can
+ * pause it or turn it off, and back on."). Its privileges are the every-host
+ * ones said for one setting, with the same mechanized paths (`mcp.test.ts`'s
+ * audit holds them). No `updates` (U1b): the hosted memory is always current
+ * and makes no check.
+ */
+export const CLAUDE_AI_SCOPE: ToolSpec = {
+  name: "scope",
+  annotations: annotate("Memory on or off", { readOnly: false }),
+  summary:
+    "Turn memory on or off. One account is one memory: they can pause it or turn it off, and back on. Read whether it is on, observer (reads only), off, paused, or unset (on), and set it when the person says. It writes no memory and reads none.",
+  admission:
+    "Call it to READ when the person asks whether memory is on; call it to SET the moment they say 'pause it', 'just read', 'turn it off' or 'turn it back on'.",
+  negativeExamples: [
+    "Do NOT call it to remember something — that is `remember`, and this tool stores no content of any kind.",
+    "Do NOT pause memory or turn it off unless the person says so; the choice is theirs, not yours to guess.",
+    "Do NOT call it repeatedly to check state; the setting changes only when somebody changes it.",
+  ],
+  privileges: [
+    {
+      claim: "It acts only on this memory's one setting for claude.ai. There is no argument for anything else.",
+      mechanizedBy: "src/adapters/mcp/server.ts#scopeTool (this.scope, never an argument)",
+    },
+    {
+      claim: "It writes only that setting and touches no store: no memory is created, read, strengthened or removed by calling it.",
+      mechanizedBy: "src/adapters/scopes.ts#writeScopes (no Store, no Counterpart)",
+    },
+    {
+      claim:
+        "While memory is `off` it is the ONE tool that still answers — every other tool refuses with `scope-off` — so memory can always be turned back on.",
+      mechanizedBy: "src/adapters/mcp/server.ts#call (scope-off refusal, scope exempted)",
+    },
+    {
+      claim:
+        "Under observer stance it READS and refuses to write, in the same sentence every other write refuses in.",
+      mechanizedBy: "src/adapters/mcp/server.ts#scopeTool -> standDown",
+    },
+    {
+      claim: "A setting it cannot read is never overwritten: it says what it could not read and changes nothing.",
+      mechanizedBy: "src/adapters/scopes.ts#readScopes -> src/adapters/mcp/server.ts#scopeTool",
+    },
+  ],
+  inputSchema: {
+    type: "object",
+    properties: {
+      mode: {
+        type: "string",
+        enum: ["on", "observer", "off", "pause", "resume"],
+        description:
+          "What to set memory to. Omit to READ what it is set to now. `pause` is off until they say to resume, and remembers what to go back to; `resume` undoes a pause or an off.",
+      },
+      note: {
+        type: "string",
+        description:
+          "Optional: the person's own reason, recorded beside the setting. Omit it and the note already there is kept; pass an empty string to clear it.",
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
 
 function withClaudeAiWords(spec: ToolSpec): ToolSpec {
   const words = CLAUDE_AI_WORDS[spec.name as ToolName];
@@ -2335,7 +2394,10 @@ function withClaudeAiWords(spec: ToolSpec): ToolSpec {
 
 /** The tools a claude.ai server offers: `wake` first, then every host's, each
  *  able to name its session, in the chat's words where those differ. */
-export const CLAUDE_AI_TOOLS: readonly ToolSpec[] = [CLAUDE_AI_WAKE, ...TOOLS.map((t) => withoutUpdates(withClaudeAiWords(withClaudeAiSession(t))))];
+export const CLAUDE_AI_TOOLS: readonly ToolSpec[] = [
+  CLAUDE_AI_WAKE,
+  ...TOOLS.map((t) => withClaudeAiSession(t.name === "scope" ? CLAUDE_AI_SCOPE : withClaudeAiWords(t))),
+];
 
 /**
  * WHICH LIST A SERVER OFFERS: a boolean is the old question (is this Desktop?),

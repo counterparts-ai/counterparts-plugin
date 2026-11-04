@@ -1,7 +1,8 @@
 /**
  * THE JOURNAL'S MARKDOWN COPY — the one file the owner can open in any editor.
  *
- * Constitution line 6 promises "memories kept as prose the owner can view".
+ * Constitution line 6 promises "the owner can read their own memories" (amended 2026-11-02;
+ * until then "memories kept as prose the owner can view").
  * Since the floor (schema v6) every body is a column, so that promise is kept
  * in two named places and nowhere else: `counterparts export --markdown`, and
  * this — a `.md` per episode under `<store>/journal/`, written as each chapter

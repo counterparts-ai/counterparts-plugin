@@ -121,7 +121,10 @@ export interface UntaggedMemory {
  */
 export function untaggedMemories(store: Store, limit: number): { memories: UntaggedMemory[]; total: number } {
   if (!has(store, "memory_tags")) return { memories: [], total: 0 };
+  // Never a starter memory (`source = 'told'`, S1 review): the night is never
+  // handed one, and a tag on one would count toward a topic card's bar.
   const where = `m.type = 'memory' AND m.archived = 0 AND m.superseded_by IS NULL AND m.body != '' AND ${NOT_JOURNAL}
+       AND (m.source IS NULL OR m.source != 'told')
        AND NOT EXISTS (SELECT 1 FROM memory_tags t WHERE t.memory_id = m.id AND t.via IN ('write', 'carried', 'night'))`;
   const total = ops(store).get<{ n: number }>(`SELECT COUNT(*) AS n FROM memories m WHERE ${where}`)?.n ?? 0;
   const salience = store.hasColumn("memories", "birth_salience") ? "COALESCE(m.birth_salience, 0)" : "0";

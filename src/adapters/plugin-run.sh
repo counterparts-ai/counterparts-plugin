@@ -290,8 +290,15 @@ asset="counterparts-$version-$platform$exe.gz"
 bindir="$data/bin"
 bin="$bindir/$version/counterparts$exe"
 verified="$bindir/$version/verified" # "<sha256> <inode> <size> <mtime>", written by a full check
-lock="$bindir/download-$version.lock"
+lock="$bindir/download-$version.lock" # a file, taken by take_file
 failed="$bindir/download-$version.failed"
+
+# Create a file only if it is not there, and say which: one winner, however many
+# try at once. The shell's own noclobber (O_EXCL), not `mkdir`: Ubuntu 26.04's
+# mkdir (uutils 0.10.0) answers 0 to a loser that arrives between its own
+# existence check and the system call, so with it two processes both held a
+# directory lock.
+take_file() { (set -C && : >"$1") 2>/dev/null; }
 
 sha256_of() { # the hex digest of a file, or nothing (fastest tool first)
   # The file on stdin, so no tool prints (or escapes) its name: GNU sha256sum
@@ -357,9 +364,15 @@ if [ "$mode" = "__fetch" ]; then
   fail() {
     printf '%s\n' "$1" >"$failed"
     rm -rf "$tmp"
-    rmdir "$lock" 2>/dev/null
+    rm -rf "$lock"
     exit 0
   }
+  # The launcher looked for the program before it took the lock. A download that
+  # finished in between left the program here and the lock free: nothing to fetch.
+  if [ -f "$bin" ] && [ "$(sha256_of "$bin")" = "$sha" ]; then
+    rm -rf "$lock"
+    exit 0
+  fi
   # A partial download whose process is gone died mid-transfer (its bytes
   # were never made executable): swept, whatever its version. One whose
   # process lives is left alone — a download that outlived its lock (a laptop
@@ -396,12 +409,13 @@ if [ "$mode" = "__fetch" ]; then
     [ "$old" = "$bindir/$version" ] && continue
     [ -f "$old/verified" ] && [ -n "$(find "$old/verified" -mmin +10080 2>/dev/null)" ] && rm -rf "$old"
   done
-  rmdir "$lock" 2>/dev/null
+  rm -rf "$lock"
   exit 0
 fi
 
 # ── no binary yet: start the download (once), and say so ───────────────────
 state="unavailable"
+is_old() { [ -n "$(find "$1" -maxdepth 0 -mmin +30 2>/dev/null)" ]; }
 if [ -z "$why" ]; then
   for tool in curl gunzip; do
     command -v "$tool" >/dev/null 2>&1 || why="$tool is not on PATH"
@@ -414,13 +428,21 @@ fi
 if [ -z "$why" ]; then
   (umask 077 && mkdir -p "$bindir") 2>/dev/null
   # A lock older than half an hour is a download that died holding it (curl
-  # gives up within 25 minutes).
-  [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
-  if [ -d "$lock" ]; then
+  # gives up within 25 minutes). The next start's hook and server find it together,
+  # so one of them breaks it, and looks again first: the other may have broken it
+  # and taken a new one since this one looked.
+  if is_old "$lock"; then
+    is_old "$lock.breaking" && rm -f "$lock.breaking" 2>/dev/null
+    if take_file "$lock.breaking"; then
+      is_old "$lock" && rm -rf "$lock"
+      rm -f "$lock.breaking"
+    fi
+  fi
+  if [ -e "$lock" ]; then
     state="downloading"
   elif [ -f "$failed" ] && [ -z "$(find "$failed" -mmin +10 2>/dev/null)" ]; then
     state="failed"
-  elif mkdir "$lock" 2>/dev/null; then
+  elif take_file "$lock"; then
     state="downloading"
     # DETACHED, so neither the hook's exit nor the host ending its process
     # group takes the download with it: its own session where `setsid`
@@ -429,8 +451,10 @@ if [ -z "$why" ]; then
     if command -v setsid >/dev/null 2>&1; then
       setsid sh "$0" __fetch </dev/null >/dev/null 2>&1 &
     else
+      # Tried in a subshell first: zsh as sh refuses `set -m` with no terminal, and
+      # a refused `set` would end this subshell before the download started.
       (
-        set -m 2>/dev/null
+        (set -m) 2>/dev/null && set -m 2>/dev/null
         sh "$0" __fetch </dev/null >/dev/null 2>&1 &
       )
     fi

@@ -19,7 +19,7 @@
  * row's `seq` it was built through. The window is applied when it is READ, so
  * a memory recovers on a later day without a new rating. A note older than
  * the newest rating row, or missing (a cache reset), is rebuilt from the rows
- * on the spot — a bounded read of one week's rating rows — so the count is
+ * on the spot — a bounded read of the window's rating rows — so the count is
  * never wrong, only sometimes slower. Written after each rating
  * (`Counterpart#rateShown`), never on the prompt path.
  *
@@ -50,12 +50,25 @@ interface Note {
   readonly rows: readonly HabituationRow[];
 }
 
+/**
+ * The most rating rows one read of the window takes. `eventLog`'s own default
+ * (500) is too few: the first owner's store has 546 rows in 14 lived days and
+ * peaks at 73 a day. Past that default an oldest-first read dropped the NEWEST
+ * rows, the ones that clear a hold, and left a note that never caught up. This
+ * bound is about five times a fortnight at that peak, and the read below takes
+ * the newest first, so a store past it loses the window's oldest rows instead:
+ * a hold can end early, nothing else, and nothing says so. It is here because
+ * the prompt path parses what this read becomes (about 730 KB and 5 ms at the
+ * bound, `recall/NOTES.md`, H14). CAL.
+ */
+export const HABITUATION_ROWS_MAX = 5_000;
+
 /** The rating rows inside the window ending on `day`, reduced, oldest first. */
 export function habituationRows(store: Pick<Store, "eventLog">, day: number, t: RecallTunables): Note {
   const since = day - t.HABITUATION_WINDOW_DAYS + 1;
   const rows: HabituationRow[] = [];
   let through = 0;
-  for (const row of store.eventLog({ name: RATED_EVENT_NAME, sinceDay: since, order: "asc" })) {
+  for (const row of store.eventLog({ name: RATED_EVENT_NAME, sinceDay: since, order: "desc", limit: HABITUATION_ROWS_MAX }).reverse()) {
     through = Math.max(through, row.seq);
     let p: unknown;
     try {

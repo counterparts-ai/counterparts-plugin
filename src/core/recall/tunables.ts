@@ -270,7 +270,13 @@ export interface RecallTunables {
   // Trying a raised bar for memories rated 0 twice to see whether footnote
   // noise drops. Revert by setting `HABITUATION_BAR_LIFT` to 0.
   /** How far back, in lived days (today included), a rating of 0 counts toward
-   *  habituation. Why 7: the brief's week; an old rating ages out by itself. */
+   *  habituation. Why 14 (it was 7, the first brief's week, until 2026-11-01):
+   *  replaying 2,037 real turns (10-26..31) at 14 took 261 showings away for 5
+   *  useful ones lost, and rated noise from 40.3% to 37.7%. The cost: about
+   *  twice as many memories held down at once (271 against 138 on lived day
+   *  41). An estimate (the replay's control reproduced 66.5% of live
+   *  footnotes), lightly held; `docs/CHECK-AFTER.md` says how to read it again.
+   *  An old rating still ages out by itself. */
   HABITUATION_WINDOW_DAYS: number;
   /** Rated 0 in at least this many sessions inside the window: the memory is
    *  habituated. Why 2: one 0 can be one odd turn; two sessions agreeing is a
@@ -792,7 +798,7 @@ export const TUNABLES: RecallTunables = {
   SEE_ALSO_MAX: 2,
   SEE_ALSO_TITLE_BYTES: 100,
 
-  HABITUATION_WINDOW_DAYS: 7,
+  HABITUATION_WINDOW_DAYS: 14,
   HABITUATION_MIN_SESSIONS: 2,
   HABITUATION_CLEAR_SCORE: 2,
   HABITUATION_BAR_LIFT: 0.5,

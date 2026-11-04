@@ -495,6 +495,12 @@ export interface MemoryFilter {
    */
   source?: string;
   /**
+   * NOT FROM THIS SOURCE — a NULL source passes (S1, 2026-11-03): "every
+   * memory but the starter set" is `notSource: "told"`, the count recall's
+   * cold start reads.
+   */
+  notSource?: string;
+  /**
    * BORN ON OR AFTER this calendar date, `YYYY-MM-DD` — a string comparison,
    * which is exact for that spelling. Undated rows carry `learned_on = ''`
    * (`self/briefing.ts`) and are excluded by the same comparison, which is
@@ -548,6 +554,10 @@ export function memoryWhere(filter: MemoryFilter): { clause: string; args: (stri
   if (filter.source !== undefined) {
     where.push("source = ?");
     args.push(filter.source);
+  }
+  if (filter.notSource !== undefined) {
+    where.push("(source IS NULL OR source != ?)");
+    args.push(filter.notSource);
   }
   if (filter.learnedOnFrom !== undefined) {
     where.push("learned_on >= ?");

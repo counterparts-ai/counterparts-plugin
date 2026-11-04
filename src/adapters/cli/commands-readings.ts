@@ -86,6 +86,7 @@ import {
 } from "./commands-shared.js";
 import type { Io, Parsed } from "./commands-shared.js";
 import { STORE_STARTED_KEY, STORE_PREVIOUS_PARKED_KEY } from "./commands-start-fresh.js";
+import { isTold, starterNotes } from "../../core/told.js";
 
 // ── status ──────────────────────────────────────────────────────────────────
 
@@ -547,6 +548,8 @@ export function statusCommand(
     // against the preface's 121, the difference being exactly the 13 entities
     // and 9 beliefs. Both numbers were right; one of the labels was not.
     let memories = 0;
+    /** Starter memories (S1, `core/told.ts`), counted apart from the lived ones. */
+    let told = 0;
     let addedToday = 0;
     let schemas = 0;
     let journal = 0;
@@ -578,7 +581,11 @@ export function statusCommand(
         continue;
       }
       if (row.type === "schema") schemas += 1;
-      else memories += 1;
+      else if (isTold(row)) {
+        // Told, not lived (S1): said apart, and never "new today".
+        told += 1;
+        continue;
+      } else memories += 1;
       // THE SAME POPULATION, so the two numbers on the page cannot disagree.
       // `countMemories({ learnedOnFrom })` would have been one query and a
       // different census: it counts removed and superseded rows, and reported
@@ -653,6 +660,7 @@ export function statusCommand(
     // a surface that will disagree with the briefing the model reads.
     say(
       `Memories: ${memories}` +
+        (told === 0 ? "" : ` · ${starterNotes(told)}`) +
         `   Beliefs and entities: ${schemas}` +
         `   Journal: ${journal} ${journal === 1 ? "episode" : "episodes"}` +
         `   Archived: ${archived}   Superseded: ${superseded}`,
@@ -732,7 +740,7 @@ export function statusCommand(
       {
         title: "Memory",
         rows: [
-          { label: "Memories", value: String(memories) },
+          { label: "Memories", value: told === 0 ? String(memories) : `${memories} · ${starterNotes(told)}` },
           { label: "Beliefs and entities", value: String(schemas) },
           { label: "Journal", value: `${journal} ${journal === 1 ? "episode" : "episodes"}` },
           { label: "Archived", value: String(archived) },

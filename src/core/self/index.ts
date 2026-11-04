@@ -41,6 +41,7 @@
  */
 import type { Band, Kind } from "../types.js";
 import { settlesWhenOf } from "../types.js";
+import { TOLD_SOURCE } from "../told.js";
 import { defaultClaimFor, strength } from "../physics/index.js";
 import type { CreditOutcome, UseTier } from "../physics/index.js";
 import type { AboutMark, ProseDoc, Store } from "../store/index.js";
@@ -3148,7 +3149,9 @@ export class Self {
             system: WAKE_SYSTEM,
             day: this.store.livedDay(),
             ...(delivery.date === undefined ? {} : { date: delivery.date }),
-            memories: this.store.countMemories({ type: "memory", archived: false }),
+            // The lived memories are the number; the starter notes are said apart (S1; ROADMAP, 11-03).
+            memories: this.store.countMemories({ type: "memory", archived: false, notSource: TOLD_SOURCE }),
+            starter: this.store.countMemories({ type: "memory", archived: false, source: TOLD_SOURCE }),
             // THE SECOND NUMBER, and it is recall's own denominator (U4): the
             // same filter minus the type clause, so "live rows" here and
             // `storeSize` there cannot mean two things.

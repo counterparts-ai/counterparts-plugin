@@ -168,6 +168,7 @@ import { owedFolders, readOwed, crashWriteUpFindings, nightHeldFindings, overdue
 import type { OwedSource, OwedReading } from "./doctor-write-ups.js";
 import { worstFirst } from "./doctor-report.js";
 import { feedbackLoopFindings } from "./doctor-feedback.js";
+import { starterNotes } from "../../core/told.js";
 
 // What moved to the doctor-*.ts parts, re-exported so every import of this file still resolves.
 export { SEVERITIES } from "./doctor-finding.js";
@@ -502,7 +503,8 @@ function configFindings(input: DoctorInput): Finding[] {
         : finding("store", "green", MEMORY_TITLE, memoryDetail(input, held), "", {
             dir: input.dir,
             exists: true,
-            memories: held,
+            memories: held === null ? null : held.lived,
+            starterNotes: held === null ? null : held.told,
           }),
     );
     return out;
@@ -595,7 +597,8 @@ function configFindings(input: DoctorInput): Finding[] {
       finding("store", "green", MEMORY_TITLE, memoryDetail(input, held), "", {
         dir: input.dir,
         exists: true,
-        memories: held,
+        memories: held === null ? null : held.lived,
+        starterNotes: held === null ? null : held.told,
       }),
     );
   }
@@ -628,9 +631,11 @@ const MEMORY_TITLE = "Memory";
  * row: this line is built on the hook's hot path too, and a census that opened
  * every row would put the whole store between a session and its first word.
  */
-function memoryCount(store: Store): number | null {
+/** Live memory rows, the starter memories counted apart (S1): `{ lived, told }`. */
+function memoryCount(store: Store): { lived: number; told: number } | null {
   try {
-    return store.countMemories({ type: "memory", archived: false });
+    const told = store.liveToldCount();
+    return { lived: store.countMemories({ type: "memory", archived: false }) - told, told };
   } catch {
     // A store that will not answer still has a path worth printing, and the
     // `Store open` line is where an unreadable store is graded.
@@ -647,8 +652,12 @@ function memoryCount(store: Store): number | null {
  * `--json` still carry it, and a store that will NOT open prints its own line
  * with the code and the repair.
  */
-function memoryDetail(input: DoctorInput, n: number | null): string {
-  const held = n === null ? "" : ` — ${String(n)} ${n === 1 ? "memory" : "memories"}`;
+function memoryDetail(input: DoctorInput, n: { lived: number; told: number } | null): string {
+  // The lived memories are the number; the starter notes are said apart (ROADMAP, 11-03).
+  const held =
+    n === null
+      ? ""
+      : ` — ${String(n.lived)} ${n.lived === 1 ? "memory" : "memories"}${n.told === 0 ? "" : ` · ${starterNotes(n.told)}`}`;
   const opens = input.open?.ok === true ? ", opens fine" : "";
   return `${tilde(input.dir)}${held}${opens}`;
 }
@@ -2009,7 +2018,12 @@ function vectorFindings(input: DoctorInput, store: Store): Finding[] {
   // session. A store that has lived one and still has a shortfall keeps the
   // amber below.
   if (unembedded > 0 && !livedABoundary(store)) {
-    const memories = unembedded === 1 ? "1 memory" : `${unembedded} memories`;
+    // The starter notes said apart (S1): a new store's 11 are not memories anybody made.
+    const toldIds = new Set(store.toldIds());
+    const toldWaiting = toldIds.size === 0 ? 0 : store.missingVectors(unembedded).filter((id) => toldIds.has(id)).length;
+    const lived = unembedded - toldWaiting;
+    const livedSaid = lived === 1 ? "1 memory" : `${lived} memories`;
+    const memories = toldWaiting === 0 ? livedSaid : lived === 0 ? starterNotes(toldWaiting) : `${livedSaid} · ${starterNotes(toldWaiting)}`;
     return [finding("vectors", "green", "Vectors", `${memories} not searchable by meaning yet — this builds after your first session`, "", data)];
   }
   if (unembedded > 0) {

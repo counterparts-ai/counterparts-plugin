@@ -38,6 +38,7 @@
  */
 import { AUTO_RESET_KEY, DREAMING_SETTING_KEY } from "./dream/index.js";
 import type { Store } from "./store/index.js";
+import { WAKE_SHAPE_KEY } from "./self/tunables.js";
 
 type MetaReader = Pick<Store, "getMeta">;
 type MetaStore = Pick<Store, "getMeta" | "setMeta" | "setMetaMany">;
@@ -62,9 +63,28 @@ export type StyleChoice = (typeof STYLE_CHOICES)[number];
  * reading the step as "the meeting has started". The old name is still taken
  * WITH an answer (`MEET_STEP_ALIASES`: a meeting in flight, an older script),
  * and the second session's line still reads answers recorded under it (`ahaDue`).
+ *
+ * Q1 (Mike, 2026-11-03): `love` is dropped, with no replacement (it overlapped
+ * `work`), and `origin` comes before `saturday`. The ids of `work` and `origin`
+ * stay; only their questions changed (`meetingInstructions`).
  */
-export const ANSWER_STEPS = ["name", "week", "work", "love", "saturday", "origin"] as const;
+export const ANSWER_STEPS = ["name", "week", "work", "origin", "saturday"] as const;
 export type AnswerStep = (typeof ANSWER_STEPS)[number];
+
+/**
+ * ANSWER STEPS NO SCRIPT ASKS ANY MORE, still taken WITH an answer: a meeting in
+ * flight across the update, whose window holds the old script (Q1, 2026-11-03).
+ * Kept under their own name, never served as another step: `love` has no new
+ * one, and filed as `work` it would replace the work answer the second
+ * session's line reads first. Never offered in the tool's schema.
+ */
+export const RETIRED_ANSWER_STEPS = ["love"] as const;
+export type RetiredAnswerStep = (typeof RETIRED_ANSWER_STEPS)[number];
+
+/** Every answer step `meet` takes: the script's, and the retired ones. */
+export function isAnswerStep(step: unknown): step is AnswerStep | RetiredAnswerStep {
+  return typeof step === "string" && ((ANSWER_STEPS as readonly string[]).includes(step) || (RETIRED_ANSWER_STEPS as readonly string[]).includes(step));
+}
 
 /** Old step names `meet` still takes, served as their new ones. Never offered in the tool's schema. */
 export const MEET_STEP_ALIASES: Readonly<Record<string, AnswerStep>> = { started: "origin" };
@@ -85,7 +105,7 @@ export function meetStepOf(sent: unknown): unknown {
 export const MEET_NO_ANSWER =
   "Nothing stored: no answer came with this step. If they answered, send it again with `answer`; a question they skipped needs no call. Starting the meeting needs no call either: just ask the first question.";
 
-/** Every step `meet` takes. */
+/** Every step the tool's schema offers (`meet` also takes the retired answer steps and the aliases). */
 export const MEET_STEPS = ["where", ...ANSWER_STEPS, "style", "address", "later", "skipped", "done"] as const;
 export type MeetStep = (typeof MEET_STEPS)[number];
 
@@ -125,9 +145,12 @@ export const NEW_INSTALL_DREAMING_LINE =
 export const NEW_INSTALL_DREAMING_LINE_PLUGIN =
   "(Daily tidy-up, called dreaming, is on; say \"no dreams\" to turn it off.)";
 
+/** The wake's shape a NEW install starts with (WF1, 2026-11-03): on. A store with no word reads `self.WAKE_SHAPE` (off). */
+export const NEW_INSTALL_WAKE_SHAPE = "on";
+
 /**
  * A NEW INSTALL'S STARTING STATE — written by `install`, only into a store it
- * has just created: the meeting `not_started`, and dreaming `auto` (with the
+ * has just created: the meeting `not_started`, the wake's shape on (WF1), and dreaming `auto` (with the
  * marker that says the setting was chosen on this version, so the once-only
  * reset of an explicit `auto` — `Dreams#resetAutoOnce` — never undoes it).
  * A store that already existed is never passed here.
@@ -135,6 +158,11 @@ export const NEW_INSTALL_DREAMING_LINE_PLUGIN =
 export function beginNewInstall(store: MetaStore, opts: { dreaming?: boolean } = {}): void {
   store.setMetaMany([
     [ONBOARDING_MEET_KEY, "not_started"],
+    // THE WAKE'S SHAPE ON FOR A NEW STORE (WF1, 2026-11-03; ROADMAP's brief,
+    // Mike's go 14:41): the same door as the starter memories (#729), a store
+    // this install created. Every store that already existed keeps its own word
+    // or `self.WAKE_SHAPE`'s default (off).
+    [WAKE_SHAPE_KEY, NEW_INSTALL_WAKE_SHAPE],
     ...(opts.dreaming === false
       ? []
       : ([
@@ -375,7 +403,7 @@ export function recordStyle(store: MetaStore, style: StyleChoice): void {
 }
 
 /** Remember which memory answered which question (the second session's line reads it). */
-export function recordAnswer(store: MetaStore, step: AnswerStep, memoryId: string): void {
+export function recordAnswer(store: MetaStore, step: AnswerStep | RetiredAnswerStep, memoryId: string): void {
   const v = readJson(store, ONBOARDING_ANSWERS_KEY) ?? {};
   store.setMeta(ONBOARDING_ANSWERS_KEY, JSON.stringify({ ...v, [step]: memoryId }));
 }
@@ -580,7 +608,9 @@ function firstDream(dreaming: MeetContext["dreaming"], web = false): string {
  * read only when the meeting happens, never a description in every session's
  * context. Round 1 (2026-10-12, Mike's trial): the opening asks once, through
  * the dialog (B); the questions are the research's five, easy to slightly
- * deeper (C); the close is the finish step's (`finishText`, D).
+ * deeper (C), four of them since Q1 (2026-11-03: `love` dropped, `work` and
+ * `origin` reworded, the light swap for `saturday` alone); the close is the
+ * finish step's (`finishText`, D).
  */
 export function meetingInstructions(ctx: MeetContext): string {
   const again = ctx.state === "done";
@@ -613,11 +643,10 @@ export function meetingInstructions(ctx: MeetContext): string {
       ? "   name: \"What should I call you?\" (the answer is just the name)"
       : `   name: already known (${ctx.name}); don't ask it.`,
     "   week: \"What's been the highlight, or the weirdest part, of your week?\"",
-    "   work: \"What are you working on lately that you're actually enjoying?\"",
-    "   love: \"What do you love most about what you do?\"",
+    "   work: \"What are you working on right now?\"",
+    "   origin: \"What's something you've been into lately that has nothing to do with work — a show, a game, food, anything?\"",
     "   saturday: \"What would a really good Saturday look like for you?\"",
-    "   origin: \"What got you started building things?\" For someone who doesn't build things, ask instead: \"What's something you've been into lately that has nothing to do with work — a show, a game, food, anything?\"",
-    "   If the answers are one word, swap love or saturday for a lighter one: \"When do you do your best work: morning, night, with music, in silence?\" or \"Coffee, tea, or something stranger while you work?\" (same step).",
+    "   If the answers are one word, swap saturday for a lighter one: \"When do you do your best work: morning, night, with music, in silence?\" or \"Coffee, tea, or something stranger while you work?\" (same step).",
     "   style: \"How do you like to be talked to?\" Choice: Straight to it · Think it through with me · Friendly and easy · Like a character you love (name one) · or their own words.",
     "     → meet {step: \"style\", answer: \"straight\" | \"think\" | \"friendly\"}.",
     "     A character: say back the 2 to 4 concrete traits you'd take from them, then meet {step: \"style\", answer: \"character\", like: \"<who>\", traits: [...]}. It is a style reference, never a persona: you stay yourself underneath.",
@@ -696,8 +725,8 @@ export function onboardingMarker(state: MeetState): string {
 
 /**
  * THE SECOND SESSION'S MEMORY (the "aha"): due in the first session after the
- * meeting was finished, once. Which memory: the work answer, else what they
- * love about it, else the rest. Null when nothing is due.
+ * meeting was finished, once. Which memory: the work answer, else (a meeting
+ * from before Q1) what they love about it, else the rest. Null when nothing is due.
  */
 export function ahaDue(
   store: MetaReader,
@@ -714,8 +743,9 @@ export function ahaDue(
   if (done === null || done["session"] === session || session.length === 0) return null;
   const ids = readJson(store, ONBOARDING_ANSWERS_KEY) ?? {};
   // The round-1 steps (2026-10-12; `origin` was `started` until 2026-10-29,
-  // kept beside it), then the steps a 0.3.18/0.3.19 meeting recorded under
-  // their old names, so its line still comes.
+  // kept beside it; `love` retired 2026-11-03, Q1, kept for the meetings that
+  // answered it), then the steps a 0.3.18/0.3.19 meeting recorded under their
+  // old names, so its line still comes.
   for (const step of ["work", "love", "saturday", "origin", "started", "week", "loved", "outside", "problem", "peeves"] as const) {
     const raw = ids[step];
     const id = typeof raw === "string" ? raw : undefined;

@@ -9,6 +9,7 @@
  *
  *   Frame                     what is this?
  *   Who I am (the page)       who am I? Whole; first claim on the room.
+ *   Since the last night      what's the news the page can't know yet? (WF1)
  *   Where this folder stands  where's the work, what changed?
  *   Elsewhere                 what are other folders doing?
  *   Coming up                 what's due?
@@ -61,9 +62,12 @@ import { addDays, ageWords, daysBetween, isDay, localDate, localStamp, monthDay,
 import { settlesWhenOf } from "./types.js";
 import type { Kind } from "./types.js";
 import type { MemoryRow } from "./store/index.js";
+import { TOLD_SOURCE, isTold } from "./told.js";
+import { happenedAlready, sinceLastNight } from "./counterpart-wake-news.js";
+import type { NewsItem } from "./counterpart-wake-news.js";
 
-/** The meta key that sets the shape for one store (`counterparts wake-shape on|off`): `on`, `off`, or absent for `self.WAKE_SHAPE`. */
-export const WAKE_SHAPE_KEY = "self.wake_shape";
+/** The meta key that sets the shape for one store (`self/tunables.ts#WAKE_SHAPE_KEY`, where a new install's state can read it too). */
+export { WAKE_SHAPE_KEY } from "./self/tunables.js";
 
 /** The door a section's rest goes behind. Each is a `recall` handle that lists what it counts. */
 export const COMING_UP_HANDLE = "coming up";
@@ -73,14 +77,15 @@ export const UNDATED_LAST = "undated";
 /** Where Elsewhere's rest goes (the spec's floor: no count without a door): these folders, as the section reads them (`readElsewhere`). */
 export const ELSEWHERE_HANDLE = "elsewhere";
 
-type SectionKey = "folder" | "elsewhere" | "coming" | "open" | "yesterday" | "night";
-const ORDER: readonly SectionKey[] = ["folder", "elsewhere", "coming", "open", "yesterday", "night"];
+type SectionKey = "news" | "folder" | "elsewhere" | "coming" | "open" | "yesterday" | "night";
+/** "Since the last night" first (WF1): the freshest thing a wake can say, and the first to claim its items. */
+const ORDER: readonly SectionKey[] = ["news", "folder", "elsewhere", "coming", "open", "yesterday", "night"];
 /** What gives way first when the wake is over: older things to read, then the rest; the folder's own last. */
-const GIVE: readonly SectionKey[] = ["elsewhere", "open", "coming", "yesterday", "night", "folder"];
+const GIVE: readonly SectionKey[] = ["elsewhere", "open", "coming", "yesterday", "night", "news", "folder"];
 /** Where spare room goes, in draft 5's order. */
 const SPARE: readonly SectionKey[] = ["folder", "open", "elsewhere", "coming"];
 /** The section names the host's row carries (`sec_…`), `counterpart-boundary.ts#wakeShape`'s. */
-const SECTION_NAME: Readonly<Record<SectionKey, string>> = { folder: "stands", elsewhere: "elsewhere", coming: "horizon", open: "threads", yesterday: "yesterday", night: "night" };
+const SECTION_NAME: Readonly<Record<SectionKey, string>> = { news: "news", folder: "stands", elsewhere: "elsewhere", coming: "horizon", open: "threads", yesterday: "yesterday", night: "night" };
 
 /** One section as composed: its text with its blank line, the ids it claims, and the items it listed. */
 interface Sec {
@@ -176,6 +181,10 @@ export function readCues(cp: Counterpart, at: string, here: WakeHere | undefined
     if (row === undefined || row.band === "identity" || row.archived === 1) continue;
     // The fence's own rule (#697): whatever its mark, and a night's row by what it rests on.
     if (here?.exportsFrom !== undefined && memoryClosedTo(store, row, here.exportsFrom, norm(here.scope ?? ""))) continue;
+    // Already happened (WF1): a newer done memory this reader may read says so (the shop that launched a day early).
+    const fence = here?.exportsFrom;
+    const own = norm(here?.scope ?? "");
+    if (happenedAlready(store, h.id, at, { open: (r) => (fence === undefined ? norm(r.origin_scope ?? "") === own : !memoryClosedTo(store, r, fence, own)) }) !== null) continue;
     const place = threadPlace({ about: row.about ?? null, kind: row.kind as Kind, originScope: row.origin_scope ?? null, journal: false }, folders, rule);
     let folder: string | null = null;
     if (place === "out") {
@@ -310,7 +319,7 @@ export function sinceHere(
     if (opts.skip?.has(r.id) === true || (r.meta ?? "").includes('"unresolved":true')) continue;
     if (opts.reader !== null && r.origin_session === opts.reader) continue;
     const title = (r.title ?? "").trim();
-    if (title.length === 0 || r.source === "episode" || (r.origin_ref ?? "").startsWith("epi_") || isNightRow(r) || (r.meta ?? "").includes('"episodeId"')) continue;
+    if (title.length === 0 || r.source === "episode" || isTold(r) || (r.origin_ref ?? "").startsWith("epi_") || isNightRow(r) || (r.meta ?? "").includes('"episodeId"')) continue;
     if (!r.status && !isWorkMemory({ about: r.about ?? null, kind: r.kind as Kind, originScope: r.origin_scope ?? null, journal: false })) continue;
     // A closing batch from the handoff's own session echoes its lead.
     const at = r.created_at ?? 0;
@@ -387,7 +396,9 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
     system: WAKE_SYSTEM,
     day,
     ...(delivery.date === undefined ? {} : { date: delivery.date }),
-    memories: store.countMemories({ type: "memory", archived: false }),
+    // The lived memories are the number; the starter notes are said apart (S1; ROADMAP, 11-03).
+    memories: store.countMemories({ type: "memory", archived: false, notSource: TOLD_SOURCE }),
+    starter: store.countMemories({ type: "memory", archived: false, source: TOLD_SOURCE }),
     liveRows: store.countMemories({ archived: false }),
     assembled: true,
   });
@@ -430,8 +441,17 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
   const elsewhere = safe(() => elsewhereFacts(cp, gate, sessions, sinceY, now, reader, factAt), { list: [] as ElsewhereRow[], quiet: [] as string[] });
   const said = scope.length === 0 ? null : safe(() => saidHere(cp, scope, here, sessions, headless, chaptersHere, newest ?? null, reader, zone, now), null);
   const liveHere = sessions.filter((s) => s.live && s.session !== reader && hereFolders.includes(norm(s.scope)));
+  // THE HANDOFF STEPS DOWN (WF1): past `HANDOFF_STEP_DOWN_MS` with a session
+  // here since, it is one line with its age after what came since, not whole
+  // and first (Dana's day-1 "waiting on Dana to pick a platform" led every shop
+  // wake through day 6). Sessions since: the ended ones that left a chapter or
+  // a memory here.
+  const sinceSessions = newest === undefined || newestAt === null ? 0 : sessionsSince(cp, { at: newestAt, own: newest.session, reader, folders: hereFolders, sessions, headless, chapters: chaptersHere, now });
+  // And only with something in "Since, here" to read in its place (review of #734).
+  const stepDown = newestAt !== null && now - newestAt >= SHAPE.HANDOFF_STEP_DOWN_MS && sinceSessions > 0 && sinceAged.length > 0;
   const night = safe(() => nightWords(cp, at, here, scope), null);
   const installed = here?.installed ?? null;
+  const news = safe(() => sinceLastNight(cp, at, here, { ours: new Set(hereFolders), skip: cueIds }), { items: [] as NewsItem[], since: 0, night: false });
 
   // ── the page: first claim on the room ──
   const self = cp.self.shapedSelf(room, {
@@ -439,12 +459,24 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
     day,
     keptOut: (id) => cp["hintKeptOut"](id, here ?? {}),
     // What Elsewhere names is Elsewhere's, not a hint's: so its door can count what it counts (`readElsewhere`).
-    skip: new Set([...cueIds, ...elsewhere.list.flatMap((e) => (e.id === null ? [] : [e.id]))]),
+    skip: new Set([...cueIds, ...news.items.map((n) => n.id), ...elsewhere.list.flatMap((e) => (e.id === null ? [] : [e.id]))]),
   });
 
   // ── the sections ──
   const spareOn = new Set<SectionKey>();
   const blockOf = (lines: readonly string[]): string => (lines.length === 0 ? "" : `${lines.join("\n")}\n\n`);
+
+  // "Since the last night" (WF1): titles only, with their ages; no door, since
+  // the rest is the page's and the night's; nothing to say, no section.
+  const newsSec = (b: number, claim: ReadonlySet<string>): Sec => {
+    const list = news.items.filter((n) => !claim.has(n.id));
+    if (list.length === 0) return { text: "", ids: [], items: 0 };
+    const render = (k: number): string[] => [news.night ? "Since the last night:" : "Since yesterday:", ...aged(list.slice(0, k).map((n) => ({ text: `- ${n.title}`, age: ageOf(n.at) })))];
+    let k = list.length;
+    while (k > 0 && byteLength(blockOf(render(k))) > b) k -= 1;
+    if (k === 0) return { text: "", ids: [], items: 0 };
+    return { text: blockOf(render(k)), ids: list.slice(0, k).map((n) => n.id), items: k };
+  };
 
   const folderSec = (b: number, claim: ReadonlySet<string>): Sec => {
     if (scope.length === 0) return { text: "", ids: [], items: 0 };
@@ -456,8 +488,13 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
     const build = (n: { lead: number; since: number; older: number; said: boolean }): { lines: string[]; leadBytes: number } => {
       const out = ["Where this folder stands:"];
       let leadSize = 0;
+      let stepped: string | null = null;
       if (newest === undefined) out.push("No handoff here. Leave one with session_end's handoff field when you stop.");
-      else {
+      else if (stepDown) {
+        const seat = seatOf(newest.body) ?? `session ${shortSession(newest.session)}`;
+        stepped = `Last handoff, ${seat}, ${monthDay(newest.writtenOn)} (${ageOf(newestAt ?? startOfLocalDay(newest.writtenOn, zone))} old; ${plural(sinceSessions, "session")} here since${hs.length > 1 ? `; newest of ${String(hs.length)}` : ""}): recall ${newest.id}`;
+        leadSize = byteLength(`${stepped}\n`);
+      } else {
         const lead = leadOf(newest.body, n.lead, leadBytes);
         const seat = seatOf(newest.body) ?? `session ${shortSession(newest.session)}`;
         const when = `${monthDay(newest.writtenOn)}${newestAt === null ? "" : ` ${localStamp(newestAt, zone).split(" ")[1] ?? ""}`}`;
@@ -483,7 +520,9 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
       } else if (newest !== undefined && (later?.older ?? 0) > 0) {
         out.push(`Nothing new here; ${plural(later?.older ?? 0, "older note")} added.`);
       } else if (later !== null && later.rawLater === 0) {
-        if (newest !== undefined) out.push("Nothing here since.");
+        if (newest !== undefined) {
+          if (!stepDown) out.push("Nothing here since.");
+        }
         else {
           // No handoff and a quiet day: the last chapter here, so a folder a
           // session left a while ago still says what happened in it.
@@ -491,6 +530,7 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
           out.push(last === undefined ? "Nothing here since yesterday." : `Last here: chapter "${flatten((last.title ?? "").trim() || last.excerpt)}" (${ageOf(last.writtenAt)})`);
         }
       }
+      if (stepped !== null) out.push(stepped);
       const rest = hs.length - 1;
       if (rest > 0) {
         out.push(`Older handoffs: ${String(rest)}; recall "${HANDOFFS_HANDLE}"`);
@@ -500,7 +540,7 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
       if (n.said && said !== null) out.push(said.line);
       return { lines: out, leadBytes: leadSize };
     };
-    const most = newest === undefined ? 1 : Math.max(1, leadOf(newest.body, leadLines, leadBytes).lines.length);
+    const most = newest === undefined || stepDown ? 1 : Math.max(1, leadOf(newest.body, leadLines, leadBytes).lines.length);
     const n = { lead: most, since: Math.min(SHAPE.SINCE_SHOWN, sinceLines.length), older: Math.min(SHAPE.OLDER_SHOWN, olderPick.length), said: said !== null };
     const size = (): number => byteLength(blockOf(build(n).lines));
     while (size() > b && n.older > 0) n.older -= 1;
@@ -571,9 +611,10 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
       const hiddenToday = todayAll.filter((c) => !ids.has(c.id)).length;
       const hereMore = [...overdue, ...laterAll].filter((c) => !ids.has(c.id)).length;
       const words = [hiddenToday > 0 ? `${String(hiddenToday)} more due today` : "", hereMore > 0 ? `${String(hereMore)} more here` : "", other.length > 0 ? `${String(other.length)} in other folders` : ""].filter((x) => x.length > 0).join(", ");
+      // Nothing to list and nothing behind the door: no section (WF1), not "Nothing dated."
+      if (shown.length === 0 && words.length === 0) return [];
       const out = ["Coming up:", ...shown.map((s) => s.line)];
       if (words.length > 0) out.push(`(${words}; recall "${COMING_UP_HANDLE}")`);
-      if (cues.length === 0) out.push("Nothing dated.");
       return out;
     };
     // Whole lines in order; a line that doesn't fit goes behind the door, and a
@@ -596,7 +637,9 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
     const render = (k: number): string[] => {
       const more = carried.length - k;
       const door = more > 0 || open.parked > 0 ? `(${[more > 0 ? `${String(more)} more open` : "", open.parked > 0 ? `${String(open.parked)} parked` : ""].filter((w) => w.length > 0).join(", ")}; recall "still open")` : "";
-      return ["Still open:", ...aged(carried.slice(0, k).map(lineOf)), ...(door === "" ? [] : [door]), ...(carried.length === 0 && open.parked === 0 ? ["Nothing open."] : [])];
+      // Nothing open and nothing parked: no section (WF1), not "Nothing open."
+      if (k === 0 && door === "") return [];
+      return ["Still open:", ...aged(carried.slice(0, k).map(lineOf)), ...(door === "" ? [] : [door])];
     };
     let k = Math.min(cap, carried.length);
     while (k > 0 && byteLength(blockOf(render(k))) > b) k -= 1;
@@ -633,6 +676,7 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
   };
 
   const fn: Readonly<Record<SectionKey, (b: number, claim: ReadonlySet<string>) => Sec>> = {
+    news: newsSec,
     folder: folderSec,
     elsewhere: elsewhereSec,
     coming: comingSec,
@@ -762,6 +806,40 @@ function finish(
   };
 }
 
+/**
+ * HOW MANY SESSIONS WORKED HERE SINCE A HANDOFF: the distinct other sessions
+ * that left a chapter or a memory here after it (not the handoff's own, not
+ * this reader, not one nobody attended, not the night's), and that have ended.
+ * A session that only opened here, a check-in that left nothing, or one still
+ * open beside this one says nothing about the handoff (review of #734: a
+ * silent check-in, still live, stepped a 20-hour handoff down to a recall, with
+ * nothing in "Since, here" to read instead). Never throws.
+ */
+function sessionsSince(
+  cp: Counterpart,
+  o: {
+    readonly at: number;
+    readonly own: string | null;
+    readonly reader: string | null;
+    readonly folders: readonly string[];
+    readonly sessions: readonly WakeSession[];
+    readonly headless: ReadonlySet<string>;
+    readonly chapters: readonly ChapterHere[];
+    readonly now: number;
+  },
+): number {
+  const live = new Set(o.sessions.filter((s) => s.live).map((s) => s.session));
+  const other = (s: string | null): s is string => s !== null && s.length > 0 && s !== o.own && s !== o.reader && !o.headless.has(s) && !live.has(s);
+  const seen = new Set<string>();
+  for (const c of o.chapters) if (c.writtenAt > o.at && other(c.session)) seen.add(c.session);
+  try {
+    for (const f of o.folders) for (const r of cp.store.memoriesWrittenHereSince(f, o.at, o.now, SHAPE.SINCE_READ)) if (!isNightRow(r) && !isTold(r) && other(r.origin_session ?? null)) seen.add(r.origin_session as string);
+  } catch {
+    /* what the chapters said */
+  }
+  return seen.size;
+}
+
 /** Up to `OLDER_SHOWN` of the older handoffs, one per seat, not the lead's, newest of each. */
 function pickOlder(hs: readonly Handoff[]): { h: Handoff; seat: string }[] {
   const first = hs[0];
@@ -778,9 +856,9 @@ function pickOlder(hs: readonly Handoff[]): { h: Handoff; seat: string }[] {
   return out;
 }
 
-/** Who else is at work here now, with when they started; or that nobody is. Asked only of a host with a registry: one with none can't say. */
-function openHereLine(live: readonly WakeSession[], today: string, zone: string): string {
-  if (live.length === 0) return "Open here now: no other session.";
+/** Who else is at work here now, with when they started. Nobody: no line (WF1). Asked only of a host with a registry: one with none can't say. */
+function openHereLine(live: readonly WakeSession[], today: string, zone: string): string | null {
+  if (live.length === 0) return null;
   const words = [...live]
     .sort((a, b) => b.lastAt - a.lastAt)
     .slice(0, SHAPE.OPEN_HERE_SHOWN)
