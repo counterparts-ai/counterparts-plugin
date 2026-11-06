@@ -112,6 +112,7 @@ import type {
 import { redactSecrets } from "./encode/index.js";
 import { TUNABLES as SCHEMAS_TUNABLES } from "./schemas/tunables.js";
 import { similarity as textSimilarity } from "./remember/updates.js";
+import { OWN_PLUMBING_META_KEY } from "./remember/own-plumbing.js";
 import { REFLECT_TUNABLES } from "./dream/reflect.js";
 import type { SchemaSlice as EncodeSchemaSlice } from "./encode/index.js";
 import { recallTurn } from "./retrieval.js";
@@ -289,6 +290,8 @@ import { rowIds } from "./counterpart-boundary.js";
 import * as sweepPart from "./counterpart-sweep.js";
 import * as depositPart from "./counterpart-deposit.js";
 import * as projectsPart from "./counterpart-projects.js";
+import { reviseTold } from "./told.js";
+import type { ToldSurface } from "./told.js";
 
 // What moved to the counterpart-*.ts parts, re-exported so every import of this file still resolves.
 export {
@@ -410,6 +413,8 @@ export type { CoreBelief, CoreBeliefFloors, CoreFromBeliefs } from "./self/measu
 // store its caller has just created, here so a host that makes its own stores
 // (hosted's signup, the harness's week) reaches it through the package entry.
 export { plantTold } from "./told.js";
+/** What counts as a folder's WORK (`self/work.ts`), for a host or the harness measuring folder separation by the product's own rule. */
+export { craftBornDay, craftSince, isWorkMemory } from "./self/work.js";
 export type { ToldSurface } from "./told.js";
 
 const EVENT_RING = REMEMBER.CONSUMED_LEDGER_MAX;
@@ -590,6 +595,12 @@ export class Counterpart {
     // Once per store, the memories whose reminder moved before a move wrote
     // its own row (2026-10-11, Group 2b): each steps back behind its holder.
     if (!this.observer) settleMovedReminders(this.store, { retarget: this.retargetLinks });
+    // Once per store, the starter memories v2 changed, where still in v1's
+    // words (HD1, 2026-11-04; `told.ts#reviseTold`). After the subject finder
+    // above: a revise relinks what the new words name. And once per change of
+    // surface, the starters still in the other surface's words (EX1: a hosted
+    // export opened locally), when this door says which surface it serves.
+    if (!this.observer) this.reviseToldOnce(opts.toldSurface);
     // SEAMS H: the REAL battery, so `self/`'s refusing default is unreachable.
     this.self = new Self({
       store: this.store,
@@ -1153,7 +1164,7 @@ export class Counterpart {
       }
       // This folder's other open sessions (2026-10-20), the same title gates.
       const mine = this.hereSessions(gate, here?.sessions?.() ?? [], since, until, { skip: new Set(this.store.openThreadIds()), startedSince: false });
-      const lines = todayElsewhereLines([...dirs.values()] as TodayElsewhere[], zone, mine, this.nowFn());
+      const lines = todayElsewhereLines([...dirs.values()] as TodayElsewhere[], zone, mine, this.nowFn(), undefined, [...gate.ours]);
       if (lines === null) return {};
       return lines.shorter.length === 0 ? { elsewhere: lines.line } : { elsewhere: lines.line, elsewhereShorter: lines.shorter };
     } catch {
@@ -1379,7 +1390,7 @@ export class Counterpart {
         if (d.chapter === null || d.chapter.writtenAt < c.writtenAt) d.chapter = c;
       }
       const mine = this.hereSessions(gate, here.sessions?.() ?? [], since, until, { startedSince: true });
-      return sinceElsewhereLines([...dirs.values()] as SinceElsewhere[], { at: since, started: window.started, now: until }, this.store.zone(), mine);
+      return sinceElsewhereLines([...dirs.values()] as SinceElsewhere[], { at: since, started: window.started, now: until }, this.store.zone(), mine, [...gate.ours]);
     } catch {
       return null;
     }
@@ -2092,7 +2103,7 @@ export class Counterpart {
       // ABOUT ME, FROM ANOTHER DIRECTORY (2026-10-01): one more line, given up
       // first; alone when nothing was written here.
       const away = this.selfChapterElsewhere(all, new Set(found.map((f) => f.chapter.id)), reader, exportsFrom);
-      const aboutMe = away === null || named?.(away.id) === true ? null : elsewhereLine(away, stampWords(localStamp(away.writtenAt, zone).split(" ")[0] ?? ""), reader);
+      const aboutMe = away === null || named?.(away.id) === true ? null : elsewhereLine(away, stampWords(localStamp(away.writtenAt, zone).split(" ")[0] ?? ""), reader, [scope]);
       return {
         chapter: later !== null || this.yesterdayKeepsNewest ? null : first,
         later: later === null ? null : { later, at: later.at ?? 0, before: first },
@@ -2163,6 +2174,8 @@ export class Counterpart {
         // said in it. Its own notes and its write-ups (filed under the
         // session they write up) are what the line quotes.
         if (isNightRow(row)) continue;
+        // Nor our own plumbing (TC1, `remember/own-plumbing.ts`): kept for recall, never where the person left off.
+        if ((row.meta ?? "").includes(`"${OWN_PLUMBING_META_KEY}"`)) continue;
         // THIS FOLDER'S OWN (S2 review): a session at work in two folders
         // made its notes, and its write-ups are filed, under each folder; a
         // memory from the other one — or from none recorded — is not this
@@ -2284,8 +2297,10 @@ export class Counterpart {
       // only a folder the "Today, elsewhere" line may name (`elsewhereGate`)
       // — the rest are not said, as that line does not say them.
       const places = new Map<string, number>();
+      let ours: readonly string[] = [];
       if (reader !== undefined && day.length < all.length) {
         const gate = this.elsewhereGate(reader.here);
+        ours = gate === null ? [] : [...gate.ours];
         const kept = new Set(day.map((c) => c.id));
         for (const c of all) {
           const scope = c.scope ?? null;
@@ -2294,7 +2309,9 @@ export class Counterpart {
           places.set(key, (places.get(key) ?? 0) + 1);
         }
       }
-      const elsewhere = [...places].map(([scope, sessions]) => ({ scope, sessions }));
+      // The reader's own folders at 0 sessions: never named, only weighed for a name they share (FS1).
+      const own = places.size === 0 ? [] : ours.map((scope) => ({ scope, sessions: 0 }));
+      const elsewhere = [...[...places].map(([scope, sessions]) => ({ scope, sessions })), ...own];
       // Undated at a session start, read under its `Now:` line (2026-10-16).
       const dated = reader === undefined || !YESTERDAY_UNDATED_AT_START;
       // DAY'S END'S SUMMARY LEADS (2026-10-24, lane W1, `self.YESTERDAY_FROM_SUMMARY`,
@@ -2458,7 +2475,7 @@ export class Counterpart {
    *     cite marked about me, us or the owner crossed (`nameableHere`). A cite
    *     that no longer reads (removed, forgotten), is denied, or is not a
    *     memory fails it. A cite the night wrote (a dream's merge or gist, a
-   *     reflection's entry) is filed under the folder the night ran in, so it
+   *     reflection's entry) may be filed under no folder or the night's, so it
    *     is read by its originals' folders (`nightOriginFolders`), and fails
    *     when any original is not open or cannot be told (review of Y2);
    *   - every chapter written that day (`chaptersWrittenOn`, unbounded by
@@ -2538,7 +2555,7 @@ export class Counterpart {
       // `isOfDay`: the day LIVED, so a second-hand write-up the next morning is
       // that day's, and a row written that day about another day is not), born
       // before the summary was told. The night's own rows (a merge, a gist, a
-      // reflection's entry) are filed under the folder the night ran in, so they
+      // reflection's entry) may be filed under no folder or the night's, so they
       // are read by their originals' folders (`nightOriginFolders`, review of
       // Y2): a night that ran early in the day may have merged an older memory
       // of a folder since set off, and day's end reads that merge as the day's.
@@ -2556,8 +2573,8 @@ export class Counterpart {
       // never showed for someone who works in several (10-24: one ~/motelier
       // `work` cite held it in ~/counterparts).
       // A cite the NIGHT wrote (a dream's merge or gist, a reflection's
-      // entry) is filed under the folder the night ran in, not where its
-      // words came from: it is read by its originals' folders instead
+      // entry) may be filed under no folder or the night's (FS1: a dream's
+      // under its sources' shared folder): it is read by its originals' folders instead
       // (`nightOriginFolders`, review of Y2), and fails when any of them is
       // not open or cannot be told.
       for (const id of told.cites) {
@@ -2633,8 +2650,9 @@ export class Counterpart {
    * THE FOLDERS A NIGHT ROW'S WORDS CAME FROM, for a privacy read (review of
    * Y2, 2026-10-25): a dream's merge (`meta.mergedFrom`), a dream's gist or
    * fold (`meta.sources`), a reflection's entry (`meta.cites`) — each is
-   * filed under the folder the night ran in, so its own `origin_scope` says
-   * nothing about whose memories it rewords. Its originals are followed, a
+   * filed under its sources' shared folder or none (FS1; a reflection's entry
+   * under the night's), so its own `origin_scope` can't say whose memories it
+   * rewords. Its originals are followed, a
    * night row among them through its own, `NIGHT_ORIGINS_DEPTH` deep, as
    * `self/writer.ts#isOfDay` follows a merge to its day; an archived original
    * reads as any row does. Null — the caller fails the cite — when it names
@@ -6268,6 +6286,16 @@ export class Counterpart {
       this.store.setMeta(CORRECTED_RELINK_META, JSON.stringify({ at: this.nowFn(), day, carried }));
     } catch (err) {
       this.emit("counterpart.corrected.relink.failed", undefined, { code: errCode(err) });
+    }
+  }
+
+  /** `told.ts#reviseTold` from an open: one meta read once done; a failure never fails the open, and the next one tries again. */
+  private reviseToldOnce(opening: ToldSurface | undefined): void {
+    try {
+      const out = reviseTold(this.store, opening);
+      if (out !== null) this.emit("counterpart.told.revise", undefined, { revised: out.revised.length, kept: out.kept, failed: out.failed });
+    } catch (err) {
+      this.emit("counterpart.told.revise.failed", undefined, { code: errCode(err) });
     }
   }
 

@@ -4,8 +4,8 @@ import { mintProposal, settlesWhenOf, UNRESOLVED_META_KEY } from "./mint.js";
 import type { MintResult } from "./mint.js";
 import { screenTags } from "./tag-screen.js";
 import { cueModeOf, recurrenceOf, DATE_FROM_META, DATE_LINEAGE_MAX, DATE_MOVED_TO_META } from "./prospective/index.js";
-import { errCode, prepareProposal, settleProposal } from "./remember/index.js";
-import type { Proposal, SubmitContext, SubmitResult, ProposalSource } from "./remember/index.js";
+import { errCode, OWN_PLUMBING_META_KEY, ownPlumbingCue, prepareProposal, settleProposal } from "./remember/index.js";
+import type { OwnPlumbingCue, Proposal, SubmitContext, SubmitResult, ProposalSource } from "./remember/index.js";
 import {
   settleMovedReminder,
   expireUnanswerableSlots,
@@ -25,7 +25,7 @@ import { ownerNames } from "./sleep/index.js";
 import { isBeliefRow } from "./recall/index.js";
 import { headOf } from "./recall/standing.js";
 import { statusOf, inheritFrom, occurredOnOf, saidByOf } from "./store/index.js";
-import type { MemoryRow, Inherited, MemoryStatus } from "./store/index.js";
+import type { AboutMark, MemoryRow, Inherited, MemoryStatus } from "./store/index.js";
 import type {
   DepositContext,
   SessionEndDepositContext,
@@ -235,13 +235,20 @@ export async function deposit(
   const settles = carrySettles(cp, tagged);
   const minting: Proposal = settles === null ? tagged : { ...tagged, settlesWhen: settles };
   // What it is about, a revision's carried over when none was sent (2026-10-11).
-  const about = cp["carryAbout"](carry.proposal, ctx.about);
+  const carriedAbout = cp["carryAbout"](carry.proposal, ctx.about);
+  // THIS SYSTEM'S OWN PLUMBING (2026-11-04, TC1): a subject that is a refused
+  // call, a prompt or the session's own limits keeps no date, thread or me/us.
+  const plumbing = ownPlumbingOf(cp, minting, carry.from, ctx.about, carriedAbout?.about ?? null);
+  const minting2: Proposal = plumbing === null ? minting : plumbing.proposal;
+  const about = plumbing !== null && carriedAbout !== null && plumbing.aboutRefused === carriedAbout.about ? null : carriedAbout;
+  const sentAbout = plumbing !== null && plumbing.aboutRefused !== null && plumbing.aboutRefused === ctx.about ? undefined : ctx.about;
   let mint: MintResult;
   try {
-    mint = mintProposal(cp.store, minting, {
+    mint = mintProposal(cp.store, minting2, {
       self: cp.self,
       channel: "authored",
-      ...(about !== null ? { about: about.about, inheritedAbout: about } : ctx.about === undefined ? {} : { about: ctx.about }),
+      ...(plumbing === null ? {} : { ownPlumbing: plumbing.cue }),
+      ...(about !== null ? { about: about.about, inheritedAbout: about } : sentAbout === undefined ? {} : { about: sentAbout }),
       ...(ctx.model === undefined ? {} : { model: ctx.model }),
       ...(ctx.writeUp === undefined ? {} : { writeUp: ctx.writeUp }),
       onEvent: (name, data) => cp["emit"](name, undefined, data),
@@ -253,7 +260,7 @@ export async function deposit(
     // it, so a throw can come with the row on disk: that memory stands, and it
     // settles as any other, or a retry would mint its twin. A read that cannot
     // tell says no, the side that keeps the words.
-    const landed = mintLanded(cp, minting.id);
+    const landed = mintLanded(cp, minting2.id);
     if (landed) settleProposal(cp.spans, result, submit);
     cp["emit"]("counterpart.deposit.mint.failed", undefined, { source, landed, error: errCode(err) });
     throw err;
@@ -262,7 +269,7 @@ export async function deposit(
   // row costs a repeat a twin, which sleep folds; the memory stands either way.
   const claimed = settleProposal(cp.spans, result, submit);
   if (!claimed.accepted) cp["emit"]("counterpart.deposit.ledger.failed", mint.id, { source });
-  const proposal: Proposal = { ...minting, covers: result.proposal.covers };
+  const proposal: Proposal = { ...minting2, covers: result.proposal.covers };
   // BEFORE the revision dispatch: a current-state target is superseded there,
   // and the date must leave the row while it is still the live one.
   // A CLOSE CLOSES THE WHOLE CHAIN (2026-10-14): the date dropped, or spent
@@ -348,7 +355,68 @@ export async function deposit(
     ...(titled.carried === undefined ? {} : { titleCarried: titled.carried }),
     ...(titled.asked ? { titleAsked: true as const } : {}),
     ...(slot === null ? {} : { slot }),
+    ...(plumbing === null ? {} : { ownPlumbing: { cue: plumbing.cue, dropped: plumbing.dropped, aboutRefused: plumbing.aboutRefused } }),
   };
+}
+
+/** The marks a plumbing memory may not carry: about me, the two of us, or the owner (TC1; owner after review of #751). */
+const PLUMBING_REFUSED_MARKS: ReadonlySet<string> = new Set(["me", "us", "owner"]);
+
+/**
+ * THIS SYSTEM'S OWN PLUMBING AT THE WRITE (2026-11-04, TC1): when the
+ * memory's subject reads as a refused call to this memory's tools or what the
+ * session couldn't do (`remember/own-plumbing.ts`; never `saidBy: owner`), it
+ * is kept, without the standing a life event has: no date that comes back
+ * (`eventDate`, `remind`, a repeat), no open thread (`unresolved`,
+ * `settlesWhen`), and no `me`, `us` or `owner` mark (sent, or carried from
+ * what it revises; the door's `recordAbout` honours `aboutRefused`). The
+ * developer week's "Morning share told to Theo but reflect 'told' call was
+ * permission-denied", dated and `us`, led Coming up in every folder for 7
+ * wakes; that is what this stops at the source.
+ *
+ * A REVISION OF A REAL MEMORY keeps only what it carries FROM that memory
+ * (review of #751): its date when the reminder is the target's own chain
+ * (`carryFrom`, which also covers a redate of it), its thread when the target
+ * is open. Dropping those would close the memory it revises
+ * (`closeReminderChain`, `closeThread`); a fresh date or thread the target
+ * never had is dropped as on a first write, so `updates` cannot bring back
+ * what the gate dropped. A revision of a plumbing row is a first write. Null
+ * when the subject is not plumbing.
+ */
+function ownPlumbingOf(
+  cp: Counterpart,
+  p: Proposal,
+  carryFrom: string | null,
+  sentAbout: string | null | undefined,
+  carriedAbout: string | null,
+): { proposal: Proposal; cue: OwnPlumbingCue; dropped: ("eventDate" | "unresolved")[]; aboutRefused: AboutMark | null } | null {
+  const cue = ownPlumbingCue({ title: p.title, content: p.content, saidBy: p.facts?.saidBy ?? null });
+  if (cue === null) return null;
+  const target = p.updates?.resolved ?? null;
+  let row: MemoryRow | undefined;
+  try {
+    row = target === null ? undefined : cp.store.row(target);
+  } catch {
+    row = undefined;
+  }
+  const real = row !== undefined && !(row.meta ?? "").includes(`"${OWN_PLUMBING_META_KEY}"`);
+  const keepDate = real && carryFrom !== null;
+  const keepThread = real && (row?.meta ?? "").includes('"unresolved":true');
+  const dropped: ("eventDate" | "unresolved")[] = [];
+  let out: Proposal = p;
+  if (!keepDate && p.eventDate !== null) {
+    out = { ...out, eventDate: null, remind: null, recurring: null };
+    dropped.push("eventDate");
+  }
+  if (!keepThread && p.unresolved) {
+    const { settlesWhen: _s, ...rest } = out;
+    void _s;
+    out = { ...rest, unresolved: false };
+    dropped.push("unresolved");
+  }
+  const mark = typeof sentAbout === "string" ? sentAbout : carriedAbout;
+  const aboutRefused = mark !== null && PLUMBING_REFUSED_MARKS.has(mark) ? (mark as AboutMark) : null;
+  return { proposal: out, cue, dropped, aboutRefused };
 }
 
 /**

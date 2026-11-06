@@ -495,6 +495,11 @@ export function expandHandle(
 
   const id = matches[0] as string;
   if (opts.closed?.has(id) === true) return { ...base, reason: "closed-to-the-night", memories: [], considered: 0 };
+  // A DENIED ID IS NOT FOUND (HD1, 2026-11-04): `resolve` stops at a removed
+  // id and returns it, and `read` refuses it by name — which reached the wire
+  // as an internal error. A memory a chat deleted (held) or the owner removed
+  // reads as not-found here, as it does to every other reader.
+  if (store.deniedIds().includes(id)) return { ...base, reason: "handle-unknown", memories: [], considered: 0 };
   const read = store.read(id);
   // THE SELF PAGE IS NOT EXPANDED HERE either (2026-09-18). It is excluded from
   // activation, so it never appears in a result to be followed up — and the one

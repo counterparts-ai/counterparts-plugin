@@ -267,6 +267,11 @@ function shortLine(name: string, column: number): string[] {
 const ASK_A_COMMAND = "counterparts help <command>   everything a command can do";
 const ASK_ADVANCED = "counterparts help advanced    maintenance and developer commands";
 const HOME_PAGE = "https://www.npmjs.com/package/counterparts";
+/** Where to send a bug, and anything else (Mike, 2026-11-04). */
+const FEEDBACK = [
+  "Bugs: https://github.com/mlapeter/counterparts/issues",
+  "Anything else: mike@resonantventures.com",
+];
 
 /**
  * The console in about twenty-five lines — what `counterparts`, `--help` and
@@ -286,7 +291,7 @@ export function shortHelp(): string {
     lines.push("", group.title);
     for (const name of group.commands) lines.push(...shortLine(name, NAME_COLUMN));
   }
-  lines.push("", ASK_A_COMMAND, ASK_ADVANCED, HOME_PAGE);
+  lines.push("", ASK_A_COMMAND, ASK_ADVANCED, HOME_PAGE, ...FEEDBACK);
   return lines.join("\n");
 }
 
@@ -300,7 +305,7 @@ export function advancedHelp(): string {
   for (const { flag, said } of GLOBAL_FLAGS) {
     lines.push(`  ${flag.padEnd(ADVANCED_NAME_COLUMN)}${said}`);
   }
-  lines.push("", ASK_A_COMMAND, HOME_PAGE);
+  lines.push("", ASK_A_COMMAND, HOME_PAGE, ...FEEDBACK);
   return lines.join("\n");
 }
 
@@ -522,7 +527,9 @@ export const COMMAND_DETAIL: Record<string, readonly string[]> = {
   uninstall: [
     "It disconnects the host, then says where your memory still is, how many",
     "memories are in it, and the one command that removes the package:",
-    "`bun remove -g counterparts` (a program does not delete itself).",
+    "`npm uninstall -g counterparts`, or `bun remove -g counterparts` for a bun",
+    "install (a program does not delete itself). It also removes the backups of",
+    "Claude Code's settings file that connecting and disconnecting kept.",
     "",
     "At a terminal it then asks: \"Also delete all memories and related data?",
     "This can't be undone. [y/N]\" — after printing every path that would go and",
@@ -530,6 +537,9 @@ export const COMMAND_DETAIL: Record<string, readonly string[]> = {
     "asks you to type DELETE MEMORIES, as --delete-memories does. It is not asked",
     "with --keep-memories or --yes, from a pipe, or while a session, memory",
     "server, dashboard or worker has the store open.",
+    "",
+    "From a script or a pipe, pass --yes too, or it refuses before changing",
+    "anything: `counterparts uninstall --keep-memories --yes` (or --park --yes).",
     "",
     "~/.counterparts is left exactly where it is unless you say otherwise.",
     "--park renames the whole directory to <dir>.parked-<date> — one rename,",

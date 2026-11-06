@@ -490,6 +490,9 @@ export function openCounterpart(
     observer,
     // A wake `rebrief` publishes is stamped with this build (2026-10-02).
     build: installedVersion(),
+    // The console is local by definition (EX1): a hosted export it opens
+    // gets the local starter words.
+    toldSurface: "local",
     ...(timeZone === undefined ? {} : { timeZone }),
     ...(identity === undefined ? {} : { identity }),
     ...(embed === undefined ? {} : { embed }),

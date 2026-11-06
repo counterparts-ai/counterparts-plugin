@@ -54,6 +54,7 @@ import type { RenderResult, Resolve, Resolved } from "./render.js";
 import { withTunables } from "./tunables.js";
 import type { RecallTunables } from "./tunables.js";
 import { TOLD_SOURCE } from "../told.js";
+import { OWN_PLUMBING_META_KEY } from "../remember/own-plumbing.js";
 
 /** At most this many mood-lifted ids on a decision (`moodMatchedIds`) — the
  *  same cap the credit row puts on `shownNotUsed` (2026-10-14). */
@@ -746,7 +747,13 @@ export class Recall {
 
     // THE CHAIN HEAD WINS (2026-10-11, Group 2): an earlier version the turn
     // reached is shown as the memory that holds now (`headsWin`).
-    const candidates = headsWin(this.store, act.candidates, day);
+    // OUR OWN PLUMBING (2026-11-04, TC1, `remember/own-plumbing.ts`): a row the
+    // write read as a refused call or the session's limits is kept for a
+    // deliberate recall (a question, an id) and never offered at a prompt.
+    // A deliberate feeling ask keeps it, as habituation leaves that ask alone.
+    const reached = headsWin(this.store, act.candidates, day);
+    const candidates = turn.feeling === undefined ? reached.filter((c) => !(this.store.row(c.id)?.meta ?? "").includes(`"${OWN_PLUMBING_META_KEY}"`)) : reached;
+    if (candidates.length === 0) return withBeliefs({ ...quiet("no-candidates", cueStats), carry });
     // HABITUATION (an experiment, 2026-10-19, light): who was rated 0 in enough
     // recent sessions. Ambient turns only: a deliberate feeling ask is untouched.
     const habituated = turn.feeling === undefined ? habituatedIds(this.store, day, this.tunables) : new Map<string, number>();

@@ -68,7 +68,9 @@ import { strikeSpans } from "../../core/remember/owner-strike-seam.js";
 import { journalFilesFor, syncJournalCopy } from "../../core/self/journal-file.js";
 import { indexTerms, paths, rowTombstoned } from "../../core/store/index.js";
 import { isLocked, openDb } from "../../core/store/db.js";
+import { claimHold, dueHolds, holdNextAt, removalRefusal } from "../../core/removal-hold.js";
 import type {
+  ProseDoc,
   OwnerRemovalOutcome,
   OwnerRemovalRequest,
   RemovalNote,
@@ -80,8 +82,6 @@ import type {
 // holding a `Store` (INTERFACE-GAPS §1, closed 2026-08-25).
 import { chaseRemoved } from "../../core/store/owner-op-seam.js";
 import { chaseSidebarStatus } from "../sidebar-status.js";
-// The page has its own door out (`self-page --clear`), and removal is not it.
-import { isSelfPageRow } from "../../core/self/page.js";
 
 export interface RemovalPlan {
   readonly targetId: string;
@@ -194,54 +194,32 @@ export interface RemovalOptions extends PlanOptions {
    *  thoughts (§16's note on the released ceremony). */
   now?: () => number;
   onEvent?: (name: string, data: Record<string, string | number | boolean | null>) => void;
+  /** HD1: the caller (the hold sweep) has already claimed this held memory (`claimHold`). */
+  claimed?: boolean;
 }
-
-/** Prose families a removal may target. Everything else is chased, never named. */
-const MEMORY_BEARING = new Set(["memory", "episode", "schema"]);
 
 /** Everything `planRemoval` can say instead of `ok`. */
 export type RemovalRefusal = Exclude<RemovalPlan["reason"], "ok">;
 
 /**
- * IS THIS ID REMOVABLE AT ALL — step 1 on its own, and nothing after it.
- *
- * Extracted 2026-09-22 for the console's interactive picker, which has to ask
- * the question twice before anything is planned: once to decide which search
- * hits it may OFFER, and once over what the person picked, before the single
- * confirmation. Both of those run over several ids at a time, and step 2 —
- * reading the body, the contamination scan, the bounded journal-echo pass — is
- * the expensive half of a plan and answers a question nobody has asked yet.
- *
- * It is an EXTRACTION, not a second rule: `planRemoval` calls this and nothing
- * else decides its refusals, so a candidate the picker offers is a candidate the
- * plan accepts. Pure, like the plan: it writes nothing and takes no lock.
+ * IS THIS ID REMOVABLE AT ALL — step 1 on its own. Moved to
+ * `core/removal-hold.ts` (HD1, 2026-11-04) so a chat's hold and this console
+ * ask one question; re-exported here for the console's own callers. A HELD id
+ * is removable: `--confirm` and the sweep finish it.
  */
-export function removalRefusal(store: Store, targetId: string): RemovalRefusal | null {
-  const row = store.row(targetId);
-  if (row === undefined) return "unknown-id";
-  if (!MEMORY_BEARING.has(row.type)) return "not-memory-bearing";
-  if (store.deniedIds().includes(targetId)) return "already-removed";
-  // THE SELF PAGE IS NOT REMOVED, IT IS CLEARED (2026-09-18, S1, and the
-  // adversarial review that found the dead end). Removal tombstones a row —
-  // blank body, blank content hash, id on the deny-list, row still listed — and
-  // `schemas/` reads every `type: "schema"` row at open, so removing the page
-  // (or the identity core, which has had the same exposure since it shipped)
-  // left a store that would not open at all, with the wake hook swallowing the
-  // error so the symptom was silence.
-  //
-  // *(The floor, 2026-09-20, closed the crash half of that: `Schemas.load`
-  // SKIPS a tombstoned row and counts it, so a removed page no longer takes the
-  // session down. Everything below still holds and is why this door stays —
-  // removal is permanent and the page is the one schema row the owner is
-  // guaranteed to have, so sending him to `--clear` is about being able to put
-  // it back, not only about the store opening.)*
-  //
-  // The page is also the most conspicuous schema row an owner has:
-  // `enumerate()` lists it and `status` prints its id. So the console sends him
-  // one door along, to the one that keeps the page as a version and lets him
-  // put it back.
-  if (isSelfPageRow(store, targetId)) return "is-the-self-page";
-  return null;
+export { removalRefusal };
+
+/**
+ * A memory's words for the erase: its prose, or — when it is on a HOLD, which
+ * the deny-list refuses by name — the same prose read through the hold
+ * (`Store.heldProse`). Null when neither reads: the prose is already gone.
+ */
+function doomedProse(store: Store, id: string): ProseDoc | null {
+  try {
+    return store.readProse(id);
+  } catch {
+    return store.heldProse(id);
+  }
 }
 
 /**
@@ -749,15 +727,16 @@ export function planRemoval(
   // EVERYTHING THAT READS THE DOOMED CONTENT HAPPENS HERE (§16 G13).
   let body = "";
   let doc: { meta?: Record<string, unknown> } | null = null;
-  try {
-    const read = store.readProse(targetId);
+  // Read THROUGH A HOLD as well (HD1): a held memory is denied, and its words
+  // are what the span fallback, the contamination scan and the echo check need.
+  const read = doomedProse(store, targetId);
+  if (read !== null) {
     body = read.body;
     doc = read;
-  } catch {
-    // The prose is already gone. The removal still proceeds — the row, the
-    // graph and the deny-list entry are the rest of the surface, and the span
-    // hash is still reachable through `origin_ref` and the coverage marks.
   }
+  // Null: the prose is already gone. The removal still proceeds — the row, the
+  // graph and the deny-list entry are the rest of the surface, and the span
+  // hash is still reachable through `origin_ref` and the coverage marks.
   const chase = chaseHashes(store, doc, row);
   const contamination: string[] = [];
   if (body.trim().length > 0) {
@@ -897,6 +876,19 @@ export function ownerRemoval(
     throw new Error(`removal refused: ${plan.reason}`);
   }
 
+  // A MEMORY ON A CHAT'S HOLD IS CLAIMED BEFORE IT IS ERASED (HD1 fix round,
+  // R1): one transaction re-checks the hold and appends `erasing`, so an undo
+  // and two erasers (the worker, hosted's timer, this console) can't both land.
+  // The sweep claims before it calls this (`claimed`); the console claims here.
+  if (opts.claimed !== true && store.holdState(request.targetId) !== null) {
+    if (!claimHold(store, request.targetId, store.now(), { actor: request.actor, console: true })) {
+      if (store.holdState(request.targetId) !== null) throw new Error("removal refused: being-erased");
+      // Undone or erased in between: an erased one refuses as removal does; an
+      // undone one is an ordinary memory again, and the owner asked for it gone.
+      if (store.deniedIds().includes(request.targetId)) throw new Error("removal refused: already-removed");
+    }
+  }
+
   // 3. REQUESTED — if this throws, nothing has moved and nothing will (§16 G10).
   append("requested");
 
@@ -907,13 +899,14 @@ export function ownerRemoval(
   let doomedBody = "";
   /** Its title, for the cue words' chase after the cache rebuild (R3). Never recorded. */
   let doomedTitle = "";
-  try {
-    const doomed = store.readProse(request.targetId);
+  // Through a hold too (HD1): the sweep's erase of a held memory strikes its
+  // span by content when the mint recorded no hash, and sweeps its cue words.
+  const doomed = doomedProse(store, request.targetId);
+  if (doomed !== null) {
     doomedBody = doomed.body.trim();
     doomedTitle = doomed.title ?? "";
-  } catch {
-    /* already gone; the hashes are the chase then, or nothing is */
   }
+  /* null: already gone; the hashes are the chase then, or nothing is */
 
   // 4. DARK — the deny-list is live from this line onward (§16 G12).
   append("dark");
@@ -992,7 +985,7 @@ export function ownerRemoval(
   // its own transaction, so the rows and the record land together or not at all.
   // What survives is named in the report, never implied (§16 G15).
   try {
-    const report = chaseRemoved(store, request.targetId);
+    const report = chaseRemoved(store, request.targetId, request.actor);
     for (const surface of report.removed) chased.push(`${surface.surface}(${surface.count})`);
     for (const surface of report.neutralized) {
       chased.push(`${surface.surface}(${surface.count}, tombstoned)`);
@@ -1238,3 +1231,100 @@ export function verifyRemoval(store: Store, targetId: string): {
       store.edgesFrom(targetId).length + store.prospectiveFor(targetId).length,
   };
 }
+
+/** What one pass of the hold sweep did. Ids and counts only — never a word of a memory. */
+export interface HoldSweepReport {
+  /** Holds whose window (or a failed erase's backoff) had passed when the pass listed them. */
+  readonly due: number;
+  /** Erased now, each with how many surfaces went unchased (0 is the whole chase). */
+  readonly erased: readonly { readonly id: string; readonly unchased: number }[];
+  /**
+   * Claimed and not erased: the record could not be written, or the id would
+   * not plan. Still hidden; tried again after a backoff (`claimRetryAfter`).
+   * `attempt` is which try this was (1: the first failure).
+   */
+  readonly failed: readonly { readonly id: string; readonly why: string; readonly attempt: number }[];
+  /** Listed but not claimed: undone, erased or claimed by another eraser in between. Nothing done. */
+  readonly skipped: number;
+  /** When the sweep may next act on a hold still active (epoch ms), or null when none is. */
+  readonly nextAt: number | null;
+}
+
+/**
+ * THE ERASE AFTER THE HOLD (HD1, 2026-11-04): every memory a chat put on the
+ * 24-hour hold whose window has passed is removed by THIS file's
+ * `ownerRemoval` — the same plan, record, dark, chase and reclaim the console
+ * runs — with the actor `self` and the hold's fixed reason.
+ *
+ * WHO MAY CALL IT is the point, and the caller-universality test pins it:
+ * this directory, the background worker (`claude-code/bin/runner.ts`, local),
+ * and hosted's ten-minute timer (`hosted/src/app.ts`). Nothing a model talks
+ * to imports this file, so the model's call can only hide a memory; an
+ * owner-side clock or the owner destroys it (CLI CONTRACT §1).
+ *
+ * ONE CLAIM PER ID, RIGHT BEFORE ITS ERASE (fix round R1): the list below is
+ * only a list. Each id is claimed in its own transaction (`claimHold`: still
+ * held, not undone, not claimed, its time come), so an undo that lands after
+ * the list and before the erase keeps the memory, and of two sweeps (the
+ * worker and the timer, or two workers) exactly one erases it. A failed
+ * erase keeps its claim and is tried again after a backoff.
+ *
+ * Wall-clock time (`now`), never lived days. Never throws: one memory's
+ * failure is counted and the next is tried.
+ */
+export function sweepHeldRemovals(
+  store: Store,
+  opts: { now?: number; onEvent?: RemovalOptions["onEvent"] } = {},
+): HoldSweepReport {
+  const now = opts.now ?? store.now();
+  const due = dueHolds(store, now);
+  opts.onEvent?.("cli.removal.sweep.listed", { due: due.length });
+  const erased: { id: string; unchased: number }[] = [];
+  const failed: { id: string; why: string; attempt: number }[] = [];
+  let skipped = 0;
+  for (const hold of due) {
+    let claimed: boolean;
+    try {
+      claimed = claimHold(store, hold.id, now);
+    } catch (err) {
+      const why = failureCode(err);
+      failed.push({ id: hold.id, why: why === "error" ? "claim-failed" : why, attempt: hold.claims + 1 });
+      continue;
+    }
+    if (!claimed) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const outcome = ownerRemoval(
+        store,
+        { targetId: hold.id, actor: "self", reason: HELD_ERASE_WHY, requestedAt: now },
+        { ...(opts.onEvent === undefined ? {} : { onEvent: opts.onEvent }), claimed: true },
+      );
+      erased.push({ id: hold.id, unchased: outcome.unchased.length });
+    } catch (err) {
+      failed.push({ id: hold.id, why: failureCode(err), attempt: hold.claims + 1 });
+    }
+  }
+  const active = store.holds();
+  const nextAt = active.length === 0 ? null : Math.min(...active.map(holdNextAt));
+  opts.onEvent?.("cli.removal.sweep", { due: due.length, erased: erased.length, failed: failed.length, skipped, waiting: active.length });
+  return { due: due.length, erased, failed, skipped, nextAt };
+}
+
+/**
+ * Why an erase failed, as a short constant and never an error's message (G1 L6:
+ * hosted writes this into its audit, which holds codes only; a message can name
+ * a path or a store id, and its words are unbounded). A StoreError's or a
+ * system error's `code` when it is a short constant; the refusal's reason from
+ * `removal refused: <reason>`; else "error".
+ */
+export function failureCode(err: unknown): string {
+  const e = err !== null && typeof err === "object" ? (err as { code?: unknown; message?: unknown }) : {};
+  if (typeof e.code === "string" && /^[A-Za-z0-9_.-]{1,40}$/.test(e.code)) return e.code;
+  const refused = typeof e.message === "string" ? /^removal refused: ([a-z0-9-]{1,40})$/.exec(e.message) : null;
+  return refused?.[1] ?? "error";
+}
+
+/** The reason the sweep's erase records: fixed words, none of the memory's (§16 G9). */
+export const HELD_ERASE_WHY = "asked in chat; erased when its 24-hour hold ran out";

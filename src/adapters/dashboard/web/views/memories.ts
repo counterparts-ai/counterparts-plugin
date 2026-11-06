@@ -518,9 +518,12 @@ export function memoryListView(
   const all: Slim[] = [];
   let live = 0;
   let archived = 0;
+  // Held (HD1): a chat's delete, whole and unarchived — hidden from the list and its counts, as in `census`.
+  const denied = new Set(store.deniedIds());
   for (const id of store.list({})) {
     const row = store.row(id);
     if (row === undefined || isJournal(row)) continue;
+    if (row.archived !== 1 && denied.has(id)) continue;
     const isArchived = row.archived === 1;
     if (isArchived) archived += 1;
     else live += 1;

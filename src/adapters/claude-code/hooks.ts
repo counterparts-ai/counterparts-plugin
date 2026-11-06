@@ -82,6 +82,7 @@ import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessa
 import type { CheckoutReading } from "./doctor.js";
 import { staleWindowsLine as staleWindowsSaid } from "./stale-windows.js";
 import { upperFirst, windowStep } from "../update-words.js";
+import { heldWakeLine } from "../../core/removal-hold.js";
 import { UPDATE_ROOM_MARGIN, updateLineInputHere, updateNoticeLine, urgentUpdateLine } from "../update-check.js";
 import { nightRowTimeoutMs, planNightRunner } from "./night-run.js";
 import { NOTHING_OWED_BEFORE_KEY, catchUpOf, catchUpWords, owedBefore } from "./night-catch-up.js";
@@ -800,7 +801,14 @@ export class ClaudeCodeAdapter extends Lifecycle {
         resumed || !watched || maintenance >= 3 || (meaning !== null && this.install === "plugin")
           ? null
           : this.updateLine(input, "notice", { fits: fitsUnder([stale, urgent, meaning]), urgentSaid: urgent !== null });
-      const leadLines = [codeTab, stale, urgent, meaning, update].filter((l): l is string => l !== null);
+      // A CHAT'S DELETES STILL HELD (HD1, 2026-11-04): one count line, never
+      // titles, while any memory deleted in chat waits for its erase — the
+      // window turns a forged delete the person sees into one they can undo.
+      // Only where a person reads it — and on a RESUMED session too (R5,
+      // ROADMAP 10:33): a delete the person didn't ask for must be in front
+      // of them while its day runs, and a long chat resumed is where it hides.
+      const held = !watched ? null : this.heldLine();
+      const leadLines = [codeTab, stale, urgent, meaning, update, held].filter((l): l is string => l !== null);
       // THE FIRST MEETING'S MARKER (2026-10-11), on every session-start wake:
       // the state word only, for the mod, which cannot reach the dashboard
       // before somebody starts it. The store marker beside it (2026-10-12)
@@ -1979,6 +1987,15 @@ export class ClaudeCodeAdapter extends Lifecycle {
    * hears nothing. Reads the worker's small `updates.json` and two meta keys;
    * makes no request (a hook never does). Never throws.
    */
+  /** The count of a chat's deletes still on their hold (HD1), or null. Never throws. */
+  heldLine(): string | null {
+    try {
+      return heldWakeLine(this.counterpart.store.pendingHolds().length);
+    } catch {
+      return null;
+    }
+  }
+
   updateLine(
     input: HookInput,
     which: "urgent" | "notice",

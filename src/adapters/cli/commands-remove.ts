@@ -1,5 +1,5 @@
 /** `remove`: by id, or by search and pick, through the removal plan (moved out of `commands.ts`, 2026-10-11). */
-import { ID_PREFIX, Store, storeExists } from "../../core/store/index.js";
+import { ID_PREFIX, REMOVAL_HOLD_MS, Store, storeExists } from "../../core/store/index.js";
 // `removalRefusal` is step 1 of a plan on its own — the console's picker asks it
 // of every search hit before it offers one, and of every pick before it asks the
 // one question. It is an extraction from `planRemoval`, never a second rule.
@@ -111,8 +111,12 @@ async function removeByIdCommand(
   // THE PLAN, made read-only and with no lock held (scar E5).
   const planning = openStoreAt({ dir, observer: true });
   let plan;
+  /** A chat's delete already holds it (HD1): when that hold's 24 hours end. */
+  let heldUntil: number | null = null;
   try {
     plan = planRemoval(planning, targetId, planOpts);
+    const hold = planning.pendingHolds().find((h) => h.id === targetId);
+    if (hold !== undefined) heldUntil = hold.at + REMOVAL_HOLD_MS;
   } finally {
     planning.close();
   }
@@ -122,6 +126,11 @@ async function removeByIdCommand(
   }
 
   printRemovalPlan(io, plan);
+  if (heldUntil !== null) {
+    // HD1: a memory deleted in chat is hidden and waits for its sweep. This
+    // door skips the rest of the window and finishes it now.
+    io.out(`  held — deleted in chat and hidden since; it goes at ${new Date(heldUntil).toISOString()} on its own. --confirm erases it now.`);
+  }
 
   if (flags["confirm"] !== true) {
     io.out("");

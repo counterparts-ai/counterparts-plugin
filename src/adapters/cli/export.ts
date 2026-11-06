@@ -940,5 +940,7 @@ function encryptedReadme(files: number, bytes: number, kind: ExportKind): string
     "The passphrase is yours and is not stored anywhere. There is no recovery path;",
     "that is the point of it being owner-keyed.",
     "",
+    "No counterparts command opens this file yet; the three steps above open it by hand.",
+    "",
   ].join("\n");
 }

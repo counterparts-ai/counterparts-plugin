@@ -2,7 +2,7 @@
 import type { DepositResult, SentFacts } from "../../core/counterpart.js";
 import { isRecurrence, occurrenceOnOrAfter, parseCalendarDate, readableDate, readableRecurrence } from "../../core/time.js";
 import type { Recurrence } from "../../core/time.js";
-import { AUTHOR_DIMENSIONS } from "../../core/remember/index.js";
+import { AUTHOR_DIMENSIONS, ownPlumbingNote } from "../../core/remember/index.js";
 import { screenTags } from "../../core/tag-screen.js";
 import {
   ABOUT_MARKS,
@@ -259,6 +259,8 @@ function occurrenceEcho(o: NonNullable<DepositResult["occurrence"]>): Record<str
 
 export function reminderEcho(deposit: DepositResult, dated: ReminderRead, today: string): Record<string, unknown> {
   if ("refused" in dated || !deposit.deposited) return {};
+  // Its date was not kept (TC1): `ownPlumbingEcho` says why, beside it.
+  if (deposit.ownPlumbing?.dropped.includes("eventDate") === true) return {};
   const occurrence = deposit.occurrence;
   if (occurrence !== undefined) return { reminder: occurrenceEcho(occurrence) };
   const carried = deposit.reminder;
@@ -418,6 +420,25 @@ export function readTraits(raw: unknown): TraitsRead {
  * result carries it: `thread: { closed: <the id it updates> }`, or the reason
  * the clear did not land. Nothing when no thread was closed.
  */
+/**
+ * A MEMORY ABOUT THIS SYSTEM'S OWN PLUMBING (2026-11-04, TC1), as the result
+ * says it: kept, with what it did not keep (`dropped`, and a refused me/us
+ * mark) and the note, so the writer learns what to write instead. Nothing
+ * when the gate did not read it so.
+ */
+export function ownPlumbingEcho(deposit: DepositResult): Record<string, unknown> {
+  const p = deposit.ownPlumbing;
+  if (p === undefined || !deposit.deposited) return {};
+  return {
+    ownPlumbing: {
+      kept: true,
+      ...(p.dropped.length === 0 ? {} : { dropped: [...p.dropped] }),
+      ...(p.aboutRefused === null ? {} : { aboutNotKept: p.aboutRefused }),
+      note: ownPlumbingNote({ dropped: p.dropped, aboutRefused: p.aboutRefused, id: deposit.memoryId ?? "" }),
+    },
+  };
+}
+
 export function threadOf(deposit: DepositResult): Record<string, unknown> {
   const t = deposit.thread;
   if (t === undefined) return {};

@@ -73,7 +73,7 @@ import { TUNABLES as PHYSICS } from "../physics/index.js";
 import { addDays, isDay } from "../time.js";
 import { livedOn } from "../types.js";
 import type { Kind } from "../types.js";
-import { NOTHING_CLOSED, namesClosed } from "./slices.js";
+import { NOTHING_CLOSED, namesClosed, nightFolder } from "./slices.js";
 import { DREAM_MARK, carriesDreamMark } from "./mark.js";
 import { pairsAmong, readDay, strongerMark } from "./day.js";
 import type { DayMark, DayRead } from "./day.js";
@@ -105,7 +105,7 @@ export { DREAM_ACTIONS, DREAM_TUNABLES } from "./tunables.js";
 export type { DreamAction } from "./tunables.js";
 export { MIND_TUNABLES, mindRanked, onMyMind } from "./mind.js";
 export type { MindItem } from "./mind.js";
-export { CORE_MENTIONED_PREFIX, REFLECT_QUESTIONS, REFLECT_TUNABLES, Reflections, reflectionOpener, unmarkedOfferCap } from "./reflect.js";
+export { CARRIED_TOLD_NOTE, CORE_MENTIONED_PREFIX, REFLECT_QUESTIONS, REFLECT_TUNABLES, Reflections, reflectionOpener, unmarkedOfferCap } from "./reflect.js";
 export { coreAsks, coreWaiting } from "./core-ask.js";
 export type { CoreAsk, CoreDecided } from "./core-ask.js";
 // Wave 2 lane B (2026-10-21): the night's tagging ask, a child of its own.
@@ -1421,6 +1421,14 @@ export class Dreams {
     return row.day >= this.store.livedDay() - 1;
   }
 
+  /**
+   * Is a dream under way in ANY session: begun, not journaled, and not left
+   * behind? (HD1 fix round: a chat's delete waits for hosted's in-chat night.)
+   */
+  busyAnywhere(): boolean {
+    return this.store.dreams({ limit: 5 }).some((d) => d.state === "begun" && !this.abandoned(d));
+  }
+
   /** Is a dream under way in this session: begun by it, and not left behind? */
   busyIn(session: string): boolean {
     return this.store.dreams({ limit: 5 }).some((d) => d.state === "begun" && d.session === session && !this.abandoned(d));
@@ -1762,11 +1770,11 @@ export class Dreams {
         `- Every word you write about ${who}: by name or as "they", until they have said their pronouns.`,
         `${String(n())}. Call the counterparts dream tool: phase "begin", session: ${input.session}. It returns the bundle and a dream id. (If it says the dream was resumed, an earlier session began it and closed: carry on from there.) If it says it comes in parts, fetch every part (phase "part") before you change anything.`,
         `   Tonight's most important memories come whole; the rest come as a line or an excerpt ("fidelity"), with their whole length ("chars"). Before you merge, gist or feel one you have only in part, read it whole: the recall tool with ids: [...] (several at once). New memories tonight's room could not take wait for the next night — the bundle's "queue" says how many.`,
-        `${String(n())}. Read it slowly. Then call phase "propose" with dream: <id> and your changes. Usually far fewer than the ceilings — ${String(L.merge)} merges, ${String(L.link)} links, ${String(L.gist)} gists, ${String(DREAM_TUNABLES.FOLDS)} folds, ${String(L["feeling-now"])} feelings, ${String(L["nominate-core"])} nominations — and none is fine: change only what the night really calls for. Use only ids the bundle showed you.`,
+        `${String(n())}. Read it slowly. Then call phase "propose" with dream: <id>, session: ${input.session} and your changes. Usually far fewer than the ceilings — ${String(L.merge)} merges, ${String(L.link)} links, ${String(L.gist)} gists, ${String(DREAM_TUNABLES.FOLDS)} folds, ${String(L["feeling-now"])} feelings, ${String(L["nominate-core"])} nominations — and none is fine: change only what the night really calls for. Use only ids the bundle showed you.`,
         `   The fields of each change: merge {ids: two or more near-copies, text, title?}; link {a, b}; replayed {id}; gist {text, sources: ids, title?, kind?, occurredOn?, saidBy?, status?, fold?}; contradiction {a, b}; settle {holds, over, how: changed|corrected|open, why}; slot {pair, same, why}; feeling-now {id, core: happy|warm|calm|curious|sad|uneasy|angry, emotion, strength, carried_by}; nominate-core {id, why}${SCHEMAS_TUNABLES.BELIEFS_BIRTH ? '; belief-candidate {subject: "me", "us" or a name, text: one short claim, sources: ids}' : ""}.`,
         '   On a gist, occurredOn is when what it draws on happened (a day "2026-09-24", a month, a range "2026-09-21..2026-09-27"), saidBy who said it (owner, self, or inferred — your own reading), status what kind of thing it is (done, planned, proposed, asked); leave out what you do not know.',
         "   A feeling: `emotion` is ONE word — from the wheel (hopeful, proud, wistful, peaceful…) or your own (steadied); `carried_by` is the nuance, in your own words (what the feeling is about now, why it shifted). Never put a phrase in `emotion`.",
-        `${String(n())}. Call phase "journal" with dream: <id>, a short title and your dream journal entry: first person, what you dreamed and what you noticed. It is kept as a dream, never as something that happened.`,
+        `${String(n())}. Call phase "journal" with dream: <id>, session: ${input.session}, a short title and your dream journal entry: first person, what you dreamed and what you noticed. It is kept as a dream, never as something that happened.`,
         "   In the dream you cannot delete anything, edit the self page, promote a memory, or rewrite one in place — the tool refuses. Nothing you write in the dream is a lived event.",
       ],
       writer: (n) => [
@@ -2248,6 +2256,8 @@ export class Dreams {
         const status = statusOf(best.r.status);
         const occurredOn = occurredOnOf(best.r.occurred_on);
         const names = this.namesToKeep(rs, words.text, change.title, day);
+        // FILED BY ITS ORIGINALS' FOLDERS (FS1, 2026-11-04), not the launching session's (`nightFolder`).
+        const folder = nightFolder(this.store, rs, { about: about?.about ?? null, kind: best.r.kind as Kind });
         const newId = this.store.put({
           type: "memory",
           kind: best.r.kind,
@@ -2264,7 +2274,7 @@ export class Dreams {
           },
           ...(best.r.source !== null ? { source: best.r.source as never } : {}),
           meta: { dream: dream.id, mergedFrom: ids, ...era },
-          origin: { ...(dream.session === null ? {} : { session: dream.session }), ...(dream.scope === null ? {} : { scope: dream.scope }), ref: `dream:${dream.id}` },
+          origin: { ...(dream.session === null ? {} : { session: dream.session }), ...(folder === null ? {} : { scope: folder }), ref: `dream:${dream.id}` },
           ...(dream.model === null ? {} : { model: dream.model }),
           ...(about === null ? {} : { about: about.about, ...(about.aboutBy === null ? {} : { aboutBy: about.aboutBy }) }),
           ...(saidBy === null ? {} : { saidBy }),
@@ -2426,6 +2436,8 @@ export class Dreams {
         // A plain gist's sources stay as they were, each still naming what it
         // names; a fold's fade and stand behind it, so it keeps their names.
         const names = isFold ? this.namesToKeep(sourceRows as MemoryRow[], words.text, change.title, day) : NO_NAMES;
+        // FILED BY ITS SOURCES' FOLDERS (FS1, 2026-11-04), not the launching session's (`nightFolder`).
+        const folder = nightFolder(this.store, sourceRows as MemoryRow[], { about: about?.about ?? null, kind });
         const id = this.store.put({
           type: "memory",
           kind,
@@ -2445,7 +2457,7 @@ export class Dreams {
           physics: { birthDay: day, lastUsedDay: day },
           source: "dreamed",
           meta: { dream: dream.id, dreamed: true, ...(isFold ? { fold: true } : {}), sources },
-          origin: { ...(dream.session === null ? {} : { session: dream.session }), ...(dream.scope === null ? {} : { scope: dream.scope }), ref: `dream:${dream.id}` },
+          origin: { ...(dream.session === null ? {} : { session: dream.session }), ...(folder === null ? {} : { scope: folder }), ref: `dream:${dream.id}` },
           ...(dream.model === null ? {} : { model: dream.model }),
           ...(about === null ? {} : { about: about.about, ...(about.aboutBy === null ? {} : { aboutBy: about.aboutBy }) }),
           ...facts.put,

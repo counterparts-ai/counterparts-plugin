@@ -15,7 +15,7 @@ import type { AliasMap, Fidelity, FitCandidate, FitReport, Placed } from "../fit
 import { readChapterLead } from "../self/episodes.js";
 import { automaticSummaryText, chapterSummaries } from "../self/summaries.js";
 import { liveHandoffRows } from "../handoff/index.js";
-import { isWorkMemory } from "../self/work.js";
+import { isDirectoryScope, isWorkMemory, projectFolder } from "../self/work.js";
 import type { WorkFacts } from "../self/work.js";
 import { MERGE_DEPTH } from "../self/writer.js";
 import type { ReadOnlyStore, Store } from "../store/index.js";
@@ -489,15 +489,15 @@ export function leanEntry(e: ShownEntry, chapterId: string, aliases: AliasMap, m
  * WHAT THE NIGHT MAY NOT READ (2026-10-30, round 2 of the day-summary fix). The
  * night's children — day's end, the dream, the reflection, the tagging — read
  * the store whole, whatever folder wrote a row, and what they write is what
- * every session then reads: the page, a summary, a merge filed under the
- * folder the night ran in. So a folder that does not export (`off`, `paused`,
+ * every session then reads: the page, a summary, a merge filed under its
+ * sources' folder (`nightFolder`). So a folder that does not export (`off`, `paused`,
  * `observer`, and anything under one) is closed to them, by the rule the host's
  * `foldersOn` answers: a row whose folder it says no to is not shown to a night
  * and cannot go into a merge or a gist.
  *
  * Which folder a row counts as: a memory's own (`memoryFolder`: its chapter's,
  * for a chapter's summary); an episode's; and a night's own row (a merge, a
- * gist, a reflection's entry), filed under wherever the night ran, by its
+ * gist, a reflection's entry), whatever folder it was filed under, by its
  * originals', so a merge made from a closed row is closed too.
  *
  * Where it can't tell, it reads the row as open, the other way from the wake's
@@ -524,8 +524,9 @@ type FolderRow = { type: string; origin_scope: string | null; origin_ref: string
  * A ROW THE NIGHTLY RUN WROTE — a dream's merge or gist, a reflection's entry —
  * told by origin (`dream:` / `reflection:`, which catches a merge, whose
  * `source` is its best source's) or by source, as the store's `NIGHTLY_SQL`
- * tells it. Filed under the folder the night ran in, whatever folders its words
- * came from.
+ * tells it. A dream's merge or gist is filed by its sources' folders
+ * (`nightFolder`, FS1, 2026-11-04), a reflection's entry under the folder the
+ * night ran in; a privacy read still follows its originals either way.
  */
 export function isNightRow(row: { source: string | null; origin_ref: string | null }): boolean {
   const ref = row.origin_ref ?? "";
@@ -550,6 +551,86 @@ export function memoryFolder(store: Pick<Store, "row">, row: FolderRow): string 
   } catch {
     return null;
   }
+}
+
+/**
+ * WHERE A DREAM FILES WHAT IT WRITES (FS1, 2026-11-04; the work rule from
+ * counterparts-a0 that afternoon, lightly held). Until FS1 a merge or gist took
+ * the folder of the session that launched the night, so a fold of sim's work
+ * run from evals was evals' (the 11-04 developer week).
+ *
+ * What it IS decides, by the mark the written memory takes (`about`, from its
+ * sources: `inheritFrom` / `foldMarkFrom`) and its kind, as `isWorkMemory` reads
+ * any memory:
+ *
+ *   - WORK stays work, in one folder: the folder most of its sources come from;
+ *     on a tie, the newest source's (by `created_at`) among the tied. Never no
+ *     folder: a work row with none reads as personal and would reach every
+ *     folder's Coming up, the leak FS1 stops.
+ *   - Anything else (me, us, owner, world): the folder its sources share, else
+ *     none — the unscoped default, which reaches every folder as personal does.
+ *
+ * Each source's folder is `memoryFolder`'s, `projectFolder`-normalized; a night
+ * row among them (filed before FS1 under its night's folder) by its originals'
+ * (`folderLeaves`). Only a directory votes; a source with none, or a host's name
+ * scope, doesn't, and makes "shared" fail unless it's the only folder there is.
+ * With no directory to vote, or not work: shared-or-null. Never throws.
+ */
+export function nightFolder(
+  store: Pick<Store, "row">,
+  sources: readonly NightSource[],
+  written: { about: string | null; kind: WorkFacts["kind"] },
+): string | null {
+  const leaves = sources.flatMap((r) => folderLeaves(store, r, 0));
+  // Every leaf in one folder: that one; else none (the shared-or-null branch).
+  const all = new Set(leaves.map((l) => l.folder));
+  const shared = all.size === 1 ? ([...all][0] as string) : "";
+  const sharedOrNull = shared.length > 0 ? shared : null;
+  // Only a directory votes: a host's name scope (`claude-desktop:`) is no folder a work row could be another's in.
+  const votes = new Map<string, { n: number; newest: number }>();
+  for (const l of leaves) {
+    if (!isDirectoryScope(l.folder)) continue;
+    const had = votes.get(l.folder);
+    votes.set(l.folder, { n: (had?.n ?? 0) + 1, newest: Math.max(had?.newest ?? -Infinity, l.at) });
+  }
+  const top = [...votes.entries()].sort((a, b) => b[1].n - a[1].n || b[1].newest - a[1].newest)[0]?.[0] ?? null;
+  if (top !== null && isWorkMemory({ about: written.about, kind: written.kind, originScope: top, journal: false })) return top;
+  return sharedOrNull;
+}
+
+/** A source as `nightFolder` reads it. */
+type NightSource = FolderRow & { created_at?: number | null; source?: string | null; meta?: string };
+
+/**
+ * A SOURCE'S FOLDERS, for `nightFolder`: its own (`memoryFolder`), or — for a
+ * night row, filed before FS1 under the folder its night ran in — its
+ * originals', followed `MERGE_DEPTH` deep. A night row whose originals are gone,
+ * unreadable or past the depth is one leaf with no folder: it votes for nothing
+ * and fails "shared". Never throws.
+ */
+function folderLeaves(store: Pick<Store, "row">, r: NightSource, depth: number): { folder: string; at: number }[] {
+  const at = r.created_at ?? 0;
+  if (r.type === "memory" && isNightRow({ source: r.source ?? null, origin_ref: r.origin_ref })) {
+    if (depth >= MERGE_DEPTH) return [{ folder: "", at }];
+    try {
+      const meta = JSON.parse(r.meta ?? "{}") as Record<string, unknown>;
+      const out: { folder: string; at: number }[] = [];
+      for (const key of ["mergedFrom", "sources", "cites"]) {
+        const ids = meta[key];
+        if (!Array.isArray(ids)) continue;
+        for (const id of ids) {
+          if (typeof id !== "string" || id.length === 0) continue;
+          const orig = store.row(id);
+          if (orig !== undefined) out.push(...folderLeaves(store, orig, depth + 1));
+        }
+      }
+      return out.length > 0 ? out : [{ folder: "", at }];
+    } catch {
+      return [{ folder: "", at }];
+    }
+  }
+  const f = memoryFolder(store, r);
+  return [{ folder: f === null ? "" : projectFolder(f), at }];
 }
 
 /** Does this night row rest on a closed row, following night rows among its originals? An original that is gone says nothing. */

@@ -61,7 +61,11 @@ interface Dated {
 /** Memories written on a lived day: live, prose memories, not the journal and not its chapters. */
 function writtenOn(src: DashboardSource, from: number): Map<number, { id: string; at: number }[]> {
   const out = new Map<number, { id: string; at: number }[]>();
+  // A memory deleted in a chat is on a hold (HD1): whole and unarchived, and
+  // hidden like a removal. It was not "written today" as far as this feed says.
+  const denied = new Set(src.store.deniedIds());
   for (const id of src.store.list({ archived: false })) {
+    if (denied.has(id)) continue;
     const row = src.store.row(id);
     // A starter memory (S1) was told at birth, not written that day.
     if (row === undefined || row.type !== "memory" || isJournal(row) || isChapterMemory(row) || isTold(row)) continue;
@@ -77,7 +81,9 @@ function writtenOn(src: DashboardSource, from: number): Map<number, { id: string
  *  memories list and its card lead with), else its own words. */
 function words(src: DashboardSource, id: string): { text: string } {
   const r = reveal(src.store, id, 90);
-  const title = r.headId === null ? null : (src.store.row(r.headId)?.title ?? "").trim();
+  // Only a PRESENT memory's title: a held one resolves to its head with the
+  // words withheld, and its row still carries the title (HD1).
+  const title = !r.present || r.headId === null ? null : (src.store.row(r.headId)?.title ?? "").trim();
   return { text: title || wordEnd(r.text ?? r.label) };
 }
 

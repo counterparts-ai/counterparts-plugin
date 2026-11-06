@@ -21,6 +21,9 @@ import { DREAMING_OFF_REFUSAL, dreamHow, dreamLaunchHowFor, PAGE_REFUSAL_DETAIL,
 import type { McpServer } from "./server.js";
 import { isTold } from "../../core/told.js";
 
+/** A dream call filed under a session that doesn't own the dream (with two chats open, an unnamed call files under the newest one; review of #740). */
+const NOT_THIS_SESSION = "That dream belongs to another session: pass `session` (the session that began it, this conversation's) and send it again.";
+
 /**
  * `dream` — dreaming, in phases (`core/dream/`, 2026-09-26). Every phase
  * binds the session: the dreamer is a background agent the session launched,
@@ -234,7 +237,7 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
         const aliases = dreams.aliasesOf(dream);
         const sent = aliases === null ? changes : (aliases.resolveIn(changes, ID_KEYS) as unknown[]);
         const out = dreams.propose({ dream, session, changes: sent as never });
-        if (!out.ok) return refused(out.reason, "That dream is not open for this session.");
+        if (!out.ok) return refused(out.reason, out.reason === "not-this-session" ? NOT_THIS_SESSION : "That dream is not open for this session.");
         server["emit"]("mcp.dream", dream, { phase: "propose", applied: out.results.filter((r) => r.ok).length });
         const refusedN = out.results.filter((r) => !r.ok).length;
         // Each refusal names what tripped it (`detail`); 2026-09-28.
@@ -253,7 +256,7 @@ export function dreamTool(server: McpServer, args: Record<string, unknown>): Too
         }
         const title = args["title"];
         const out = dreams.journal({ dream, session, text, ...(typeof title === "string" ? { title } : {}) });
-        if (!out.ok) return refused(out.reason, "detail" in out && out.detail !== undefined ? out.detail : "The journal was not written.");
+        if (!out.ok) return refused(out.reason, "detail" in out && out.detail !== undefined ? out.detail : out.reason === "not-this-session" ? NOT_THIS_SESSION : "The journal was not written.");
         server["emit"]("mcp.dream", dream, { phase: "journal" });
         const next = nextAfter("dream", dream);
         return server["result"](
@@ -592,7 +595,13 @@ export function reflectTool(server: McpServer, sent: Record<string, unknown>): T
         const reflection = args["reflection"];
         if (typeof reflection !== "string") return refused("reflection-required", "Pass `reflection`, the id the share named.");
         const out = reflections.told({ reflection, session });
-        if (!out.ok) return refused(out.reason, "Nothing to record: the share was already told, or there was none.");
+        // ALREADY TOLD IS NOT A FAILURE (2026-11-04, TC1): a share a prompt or a
+        // wake carried was marked told as it was handed over, so a model that
+        // still calls `told` gets a plain yes, not an error to explain or file.
+        if (!out.ok && out.reason === "already-told") {
+          return server["result"]({ phase, reflection, told: true, cited: 0, note: "Already marked told: a share handed to a session is marked as it arrives. Nothing to do." }, false);
+        }
+        if (!out.ok) return refused(out.reason, "Nothing to record: there was no share to tell.");
         server["emit"]("mcp.reflect", reflection, { phase: "told", cited: out.cited });
         return server["result"]({ phase, reflection, told: true, cited: out.cited }, false);
       }
@@ -639,7 +648,8 @@ export function reflectTool(server: McpServer, sent: Record<string, unknown>): T
         const asked = reflections.joinProposal(reflection);
         if (asked === null) return refused("nothing-proposed", "That reflection asked to join no folders, or the owner's yes is already recorded.");
         if (server.counterpart.store.reflection(reflection)?.share_state !== "told") {
-          return refused("share-not-told", "Tell the share first and mark it told (phase \"told\"); the yes must follow the owner hearing the question.");
+          // Only a share your own `launch` handed back is still untold here (TC1): a carried one was marked as it arrived.
+          return refused("share-not-told", "This share hasn't been told yet: it came back from a reflection you launched, so tell it to the owner first and then call phase \"told\". The yes must follow the owner hearing the question.");
         }
         const folderOn = server["folderOn"]();
         const stale = joinStillStands(server.counterpart.store, asked, { day: server.counterpart.store.livedDay(), ...(folderOn === undefined ? {} : { folderOn }) });

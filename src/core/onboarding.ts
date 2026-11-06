@@ -555,7 +555,7 @@ export interface MeetContext {
    * A CHAT ON THE WEB (claude.ai, 2026-10-26, OL1b item 7): no computer of the
    * person's holds the memory as far as the script can know, no conversation
    * text is kept at all (the server sees only what the tools are handed), no
-   * console command exists, and nights are the person's own routine. Absent
+   * console command exists, and nights run in a later day's first chat. Absent
    * or false: every other host's words, unchanged.
    */
   readonly web?: boolean;
@@ -596,8 +596,10 @@ export const WEB_UNINSTALL =
 /** The first dream, true to the dreaming setting: never today (`meetingDay`). Empty when dreaming is off. */
 function firstDream(dreaming: MeetContext["dreaming"], web = false): string {
   if (dreaming === "off") return "";
-  // On the web the night is the person's own routine, never an ask in a chat.
-  if (web) return "On a night after today, when the nightly routine runs, I'll have my first dream: I'll go over what we talked about and start building a sense of who I am with you.";
+  // On the web the first conversation of a later day runs the night, then
+  // answers, or asks first on `ask` (HN1, 2026-11-04): the ask's words are
+  // every host's; `auto`'s say it happens in the chat, before the answer.
+  if (web && dreaming === "auto") return "When we talk on another day, I'll have my first dream before I answer you: I'll go over what we talked about and start building a sense of who I am with you. (If you'd rather I asked first, say so; 'no dreams' turns it off.)";
   return dreaming === "auto"
     ? "Next time you're here on another day, I'll have my first dream: I'll go over what we talked about and start building a sense of who I am with you. (If you'd rather I didn't dream, say 'no dreams'.)"
     : "When you're back on another day, I'll ask to have my first dream: I'll go over what we talked about and start building a sense of who I am with you.";

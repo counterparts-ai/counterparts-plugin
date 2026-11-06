@@ -142,6 +142,21 @@ export interface McpServerOptions {
    * wake is a night's own (`wake` with `night: true`), which no person reads.
    */
   wakeNotice?: (opts: { night: boolean }) => string | null;
+  /**
+   * A CHAT'S DELETE (HD1, 2026-11-04): `remember`'s `remove` puts a memory on a
+   * 24-hour hold, and something no model can call erases it after. Which thing
+   * that is decides what the answer may promise, so the entry point says:
+   * `hosted` (the hosted server's timer, Litestream backups) or `local` (the
+   * worker at a session after the window, snapshots on this computer).
+   * Absent: `local`. `onHeld` is told, after a hold is written, when the
+   * earliest hold waiting may be erased (epoch ms) — hosted records it in its
+   * control database, so its timer opens only stores with one due. A throw
+   * is swallowed.
+   */
+  removal?: {
+    readonly erasedBy?: "hosted" | "local";
+    readonly onHeld?: (erasableAt: number) => void;
+  };
   /** The package version on disk now (`sessions.ts#manifestVersionOnDisk`),
    *  injectable so the update line is provable without reinstalling. */
   manifestVersion?: () => string | null;

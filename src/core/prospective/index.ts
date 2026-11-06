@@ -1024,12 +1024,20 @@ export class Prospective {
     return false;
   }
 
-  /** Was this memory — or one its reminder moved from — told plainly on the calendar day `at`? */
-  private plainToldOn(memoryId: string, at: string): boolean {
+  /**
+   * Was this memory — or one its reminder moved from — told plainly on the
+   * calendar day `at`? A read of the latch `claimPlain` writes (its `date`).
+   * Public for the shaped wake's fold (RF1, 2026-11-04): a plain reminder told
+   * earlier today is one line in a later wake, not its whole text again. With
+   * `by`, only a telling whose session (the latch's `session`, null when it
+   * names none) `by` accepts counts.
+   */
+  plainToldOn(memoryId: string, at: string, by?: (session: string | null) => boolean): boolean {
     for (const id of this.lineage(memoryId)) {
       for (const e of this.plainRows(id)) {
         try {
-          if ((JSON.parse(e.payload ?? "{}") as { date?: unknown }).date === at) return true;
+          const p = JSON.parse(e.payload ?? "{}") as { date?: unknown; session?: unknown };
+          if (p.date === at && (by === undefined || by(typeof p.session === "string" ? p.session : null))) return true;
         } catch {
           /* an unreadable row answers nothing */
         }

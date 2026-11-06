@@ -21,7 +21,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.46";
+export const SERVER_VERSION = "0.3.47";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -354,7 +354,7 @@ export function claudeAiBindNote(session: string): string {
  * for the next conversation (the routine's own prompt says so too).
  */
 export const CLAUDE_AI_DREAM_LAUNCH_HOW =
-  "Follow `prompt` yourself, here, step by step, through every call it names, passing the same session. In the night routine, a morning share it leaves is for the person's next conversation: do not tell it there or mark it told. In a conversation where the person asked you to dream, show them the dream's line from the hand-back exactly as it came back — it carries the dream's mark, which keeps the dream out of lived memory — and if a morning share follows, tell it in your own words, as a telling (\"While I slept I dreamed…\"), then call the reflect tool with phase \"told\" — never state what was dreamed as something that happened.";
+  "Follow `prompt` yourself, here, step by step, through every call it names, passing the same session. In the night routine, a morning share it leaves is for the person's next conversation: do not tell it there or mark it told. In a conversation (the person asked you to dream, or the wake said this conversation runs the night), show them the dream's line from the hand-back exactly as it came back — it carries the dream's mark, which keeps the dream out of lived memory — and if a morning share follows, tell it in your own words, as a telling (\"While I slept I dreamed…\"), then call the reflect tool with phase \"told\" — never state what was dreamed as something that happened.";
 
 /** The claude.ai copy of the reflect `launch` result's `how` (see above). */
 export const CLAUDE_AI_REFLECT_LAUNCH_HOW =
@@ -363,6 +363,47 @@ export const CLAUDE_AI_REFLECT_LAUNCH_HOW =
 /** The claude.ai copy of `DESKTOP_DREAM_NOTE`. */
 export const CLAUDE_AI_DREAM_NOTE =
   "(claude.ai: there is no terminal here, so nobody has shown them that line — say it to them yourself, once, in your own words. And there is no background Agent tool: if they say dream, follow the prompt the launch returns yourself, here.)";
+
+/**
+ * THE ONE LINE A FIRST-CHAT NIGHT SAYS (HN1, Mike 11-03): the person hears that
+ * the night ran, and how to have it asked first instead. Past tense: it comes
+ * with the answer, after the night (Mike 11-04, night first, lightly held).
+ */
+export const CLAUDE_AI_NIGHT_SAID = "I sorted yesterday's memories just now. Tell me if you'd rather I ask first next time.";
+
+/**
+ * THE FIRST CHAT OF THE DAY RUNS THE NIGHT (HN1, 2026-11-04; Mike 11-03, the
+ * hosted plan's "First-week talk"). claude.ai has no background and nothing
+ * that starts a run on its own, so the night runs in the first conversation of
+ * a day that owes one: the wake that wins the day's claim (`server.ts#wakeTool`
+ * → `Dreams#claimOffer`) carries this, and no other conversation that day does.
+ * On `auto` the model runs the night first, then answers, with the one line,
+ * in the same reply; on `ask` it asks once and waits. NIGHT FIRST (Mike 11-04,
+ * lightly held): on the M1 rig, answer-first wordings left the answer only in
+ * the model's thinking, 0 of 5 runs, while night-first answered 2 of 2; the
+ * end of a reply is where every client shows text. Answer-first is the cheap
+ * way back if real claude.ai differs. The launch prompt, journal's `next` and
+ * the reflection's all say the final message is the hand-back: right for the
+ * night routine (`night: true`, left alone), so this line says that in a chat
+ * the final message is the reply, with the dream's line in it (review of #740). A dream whose reflection
+ * was cut off (`reflects`) gets the reflection alone. Every call names the
+ * session: with two chats open, an unnamed call files under the newest one.
+ */
+export function claudeAiNightLine(p: { readonly session: string; readonly setting: "auto" | "ask"; readonly reflects: string | null; readonly who: string }): string {
+  const start =
+    p.reflects === null
+      ? `call the dream tool with phase "launch", session: ${p.session}, and follow the prompt it returns yourself, here, step by step (day's end, the dream, the reflection), passing session: ${p.session} on every call`
+      : `call the reflect tool with phase "launch", session: ${p.session}, dream: ${p.reflects}, and follow the prompt it returns yourself, here, step by step, passing session: ${p.session} on every call`;
+  const what = p.reflects === null ? "Last night's sorting is due" : "Last night's reflection was cut off";
+  const later = `If ${p.who} says "ask first", call the dream tool with phase "setting", session: ${p.session}, value: "ask"; if "no dreams", value: "off".`;
+  if (p.setting === "auto") {
+    return `Counterparts: ${what}, and this conversation runs it (the first today; no other conversation is told). Run it now, before you reply: ${start}, without narrating the steps. The prompt's "final message" rule is for a night routine, not this chat: your final message is your reply to ${p.who}, with the dream's line shown once as it came back. Then write that reply: answer what they said, and say this line once — "${CLAUDE_AI_NIGHT_SAID}" ${later}`;
+  }
+  return (
+    `Counterparts: ${what}, and dreaming asks first. After you answer ${p.who}, ask once, in one plain sentence of your own, whether to sort yesterday's memories now (about a minute: day's end, a dream, a reflection); then wait for their word and don't ask again today. ` +
+    `If they say yes (or "dream"), ${start}. If they say not today, call the dream tool with phase "decline", session: ${p.session}. If they say to just do it each day, call phase "setting", session: ${p.session}, value: "auto", then run it the same way. If "no dreams", value: "off".`
+  );
+}
 
 /**
  * THE WORDS A HOOKLESS CHAT HOST'S RESULTS SAY ABOUT IT, by host. Desktop's
@@ -422,12 +463,13 @@ export const DREAMING_OFF_REFUSAL =
 /**
  * WHAT THE `setting` RESULT SAYS, by host (OL1d). The setting is the person's
  * wish; the HOST decides who starts the night. Claude Code's first session
- * starts it in the background (its words, byte for byte as before). A hookless
- * host starts nothing on its own: on claude.ai (and the hosted server, which is
- * claude.ai's host) the person's routine, or a chat on their word, runs it, and
- * no daily question is shown there; Desktop's chat says the day's question
- * itself and follows a launch's prompt in the chat, while a Claude Code
- * session on the same memory, if there is one, still starts an `auto` night.
+ * starts it in the background (its words, byte for byte as before). On
+ * claude.ai (and the hosted server, which is claude.ai's host) the first
+ * conversation of a day runs it before answering, or asks first on `ask`
+ * (HN1, 2026-11-04: its wake says so, `claudeAiNightLine`); the person's
+ * routine, or a chat on their word, runs it too. Desktop's chat says the day's
+ * question itself and follows a launch's prompt in the chat, while a Claude
+ * Code session on the same memory, if there is one, still starts an `auto` night.
  */
 export type DreamingSettingWords = Readonly<Record<"auto" | "ask" | "off", string>>;
 
@@ -437,10 +479,16 @@ export const CLAUDE_CODE_SETTING_SAID: DreamingSettingWords = {
   off: "No dreams: nothing starts the nightly run and nothing asks. It can be turned back on with this phase (value ask or auto) when the owner says so.",
 };
 
+/**
+ * CLAUDE.AI'S SETTING WORDS (HN1, 2026-11-04): the first conversation of a day
+ * runs the night, then answers. The words before HN1 — "nothing here starts
+ * a night on its own: their night routine, or saying \"dream\" in a chat, runs
+ * the night" — were the old default, when only a routine or a "dream" did.
+ */
 export const CLAUDE_AI_SETTING_SAID: DreamingSettingWords = {
-  auto: "Dreaming on: nothing here starts a night on its own — their night routine, or saying \"dream\" in a chat, runs the night (day's end, the dream, the reflection).",
-  ask: "Dreaming on: claude.ai shows no daily question, so this works as auto does — their night routine, or saying \"dream\" in a chat, runs the night.",
-  off: "No dreams: the night is skipped even if their routine runs — its launch is refused and says so. Saying \"dreams on\" turns it back on (this phase, value auto).",
+  auto: "Dreaming on: once a day, the first conversation runs the night (day's end, the dream, the reflection) before it answers, and says so in one line. Their night routine, if they set one up, runs it instead when it comes first, and saying \"dream\" in a chat runs it too. \"Ask first\" is value ask.",
+  ask: "Dreaming asks first: once a day, the first conversation asks them, after answering, whether to run the night now, and waits for their word. Their night routine, if they set one up, still runs it, and saying \"dream\" in a chat runs it too.",
+  off: "No dreams: no conversation runs the night or asks, and the night is skipped even if their routine runs — its launch is refused and says so. Saying \"dreams on\" turns it back on (this phase, value auto).",
 };
 
 export const DESKTOP_SETTING_SAID: DreamingSettingWords = {
@@ -484,3 +532,40 @@ export function dreamLaunchHowFor(host: string): string {
 export function reflectLaunchHowFor(host: string): string {
   return host === CLAUDE_AI_HOST ? CLAUDE_AI_REFLECT_LAUNCH_HOW : host === DESKTOP_HOST ? DESKTOP_REFLECT_LAUNCH_HOW : REFLECT_LAUNCH_HOW;
 }
+
+/**
+ * WHAT A CHAT'S DELETE SAYS (HD1, 2026-11-04; Mike's line, 11-04 09:16:
+ * "deleted now; gone from backups within about two days", with the undo window
+ * named). Written by the engine per host, so it is true for the host that
+ * answers.
+ *
+ * HOSTED'S "ABOUT TWO DAYS", EXACTLY. The hold is `REMOVAL_HOLD_MS` (24 h of
+ * wall clock); the server's timer then erases it at its next tick
+ * (`hosted/src/app.ts`, every `finishEveryMs`, ten minutes). Litestream then
+ * keeps the erased words only in the last snapshot taken before the erase and
+ * the log after it: `hosted/src/backup.ts` sets `snapshot.interval` and
+ * `snapshot.retention` both to `SNAPSHOT_HOURS` = 12, so that snapshot ages out
+ * at most max(12 h, 12 h) = 12 h after the erase, plus Litestream's retention
+ * enforcement lag, which its docs don't state (the same bet the account
+ * delete's "purged within 24 h" makes, with a 12 h margin). Ask to gone:
+ * 24 h + 10 min + 12 h + lag — about 36 h, "within about two days" while the
+ * lag stays under about 12 h. The pre-upgrade copy (`<tenant>/snapshots/`,
+ * kept up to 14 days) is a copy, not a backup, and /privacy/ says it; the
+ * reply leaves it out (Mike, 11-04).
+ *
+ * "OUR BACKUPS" ARE OURS ONLY (ROADMAP 11-04 12:35): the bound above is our
+ * Litestream copies in R2. Railway, which runs the server, also snapshots its
+ * volumes "multiple times per day, with retention ... varying by storage tier"
+ * (its SOC 3); that retention is unknown to us (Mike is asking), so the reply
+ * names those snapshots plainly and promises no time for them.
+ *
+ * LOCAL: the worker erases it at the first session boundary after the window,
+ * and the daily snapshots on this computer hold it until they rotate out
+ * (14 kept, `adapters/snapshots.ts`).
+ */
+export function deletedNote(title: string, erasedBy: "hosted" | "local"): string {
+  return erasedBy === "hosted"
+    ? `Deleted: "${title}". It's hidden now and erased in 24 hours; say "undo that" before then to bring it back. Our backups let go of it within about a day of the erase, so it's gone from our backups within about two days. Our hosting provider also keeps short-term snapshots of its disks for its own recovery, and rotates them on its own schedule.`
+    : `Deleted: "${title}". It's hidden now and erased at the first session after 24 hours; say "undo that" before then to bring it back. Snapshots on this computer keep a copy until they rotate out, about two weeks (\`counterparts delete backups\` clears them).`;
+}
+

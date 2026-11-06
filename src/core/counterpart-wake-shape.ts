@@ -63,6 +63,7 @@ import { settlesWhenOf } from "./types.js";
 import type { Kind } from "./types.js";
 import type { MemoryRow } from "./store/index.js";
 import { TOLD_SOURCE, isTold } from "./told.js";
+import { OWN_PLUMBING_META_KEY } from "./remember/own-plumbing.js";
 import { happenedAlready, sinceLastNight } from "./counterpart-wake-news.js";
 import type { NewsItem } from "./counterpart-wake-news.js";
 
@@ -320,6 +321,8 @@ export function sinceHere(
     if (opts.reader !== null && r.origin_session === opts.reader) continue;
     const title = (r.title ?? "").trim();
     if (title.length === 0 || r.source === "episode" || isTold(r) || (r.origin_ref ?? "").startsWith("epi_") || isNightRow(r) || (r.meta ?? "").includes('"episodeId"')) continue;
+    // Our own plumbing (TC1, `remember/own-plumbing.ts`): kept for recall, never the folder's news.
+    if ((r.meta ?? "").includes(`"${OWN_PLUMBING_META_KEY}"`)) continue;
     if (!r.status && !isWorkMemory({ about: r.about ?? null, kind: r.kind as Kind, originScope: r.origin_scope ?? null, journal: false })) continue;
     // A closing batch from the handoff's own session echoes its lead.
     const at = r.created_at ?? 0;
@@ -423,6 +426,20 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
   const hereFolders: readonly string[] = gate === null ? [scope] : [...gate.ours];
   const cues = safe(() => readCues(cp, at, here), [] as Cue[]);
   const cueIds = new Set(cues.map((c) => c.id));
+  // SHOWN EARLIER TODAY (RF1, 2026-11-04): a plain reminder already told today
+  // (the told latch, `Prospective.plainToldOn`) folds into Coming up's one line
+  // in every later wake, this folder's own included. The first delivery that
+  // reaches it shows it whole and is what writes the latch (`claimPlain`, after
+  // this compose), so a reminder nobody has been told yet is never folded. Only
+  // a telling in a session that started today, with a person's entrypoint,
+  // counts (review of RF1): a prompt in last night's session after midnight, an
+  // agent's hand-back with nobody reading, isn't a wake anyone saw. A latch that
+  // names no session, or one the registry doesn't hold, doesn't count either.
+  // Never on a compaction: that session's model just lost what it was shown. A
+  // dated item that isn't plain has no such record and shows as before.
+  const seenToday = new Set(sessions.filter((s) => s.headless !== true && localDate(s.startedAt, zone) === at).map((s) => s.session));
+  const byToday = (session: string | null): boolean => session !== null && seenToday.has(session);
+  const shownEarlier = new Set(here?.source === "compact" ? [] : cues.filter((c) => c.plain && safe(() => cp.prospective.plainToldOn(c.id, at, byToday), false)).map((c) => c.id));
   const later = scope.length === 0 ? null : safe(() => sinceHere(cp, scope, since, { handoffSession: newest?.session ?? null, handoffAt: newestAt, reader, lead: lead5, chapters: chaptersHere, skip: cueIds, folders: hereFolders }), null);
   const sinceAged = (later?.items ?? []).map((s) => ({ ...s, age: ageOf(s.chapter ? s.at : Math.min(s.at, factAt(s.id))) }));
   const open = safe(() => cp.self.stillOpen(day, cp["threadReader"](here?.scope, here?.exportsFrom)), { items: [], parked: 0 });
@@ -589,13 +606,15 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
 
   const comingSec = (b: number, claim: ReadonlySet<string>): Sec => {
     const live = cues.filter((c) => !claim.has(c.id) || c.plain);
-    const todayAll = live.filter((c) => c.today);
+    // Another folder's dated work isn't due here (FS1): it's counted "in other folders", as the `coming up` door lists it. A plain reminder keeps its own rule.
+    const todayAll = live.filter((c) => c.today && (c.mine || c.plain));
     const ranked = [...todayAll].sort(dueOrder);
-    const plain = ranked.filter((c) => c.plain);
+    const plain = ranked.filter((c) => c.plain && !shownEarlier.has(c.id));
+    const folded = live.filter((c) => shownEarlier.has(c.id)).length;
     const rest = ranked.filter((c) => !c.plain);
     const overdue = live.filter((c) => c.past && c.mine).sort((x, y) => String(y.due).localeCompare(String(x.due)));
     const laterAll = live.filter((c) => !c.today && !c.past && c.mine).sort((x, y) => String(x.due ?? UNDATED_LAST).localeCompare(String(y.due ?? UNDATED_LAST)));
-    const other = live.filter((c) => !c.today && !c.mine);
+    const other = live.filter((c) => !c.mine && !(c.today && c.plain));
     const laterCap = spareOn.has("coming") ? SHAPE.LATER_SHOWN_SPARE : SHAPE.LATER_SHOWN;
     const dueLine = (c: Cue): string => `- Due today · ${c.plain ? c.body : c.title}${c.settles === null ? "" : ` · settles when ${flatten(c.settles)}`} [${c.id}]`;
     const overdueLine = (c: Cue): string => `- ${c.due === null ? "Overdue" : `${plural(Math.max(1, daysBetween(c.due, at)), "day")} overdue`} · ${c.title} [${c.id}]`;
@@ -608,9 +627,11 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
     ];
     const render = (shown: readonly { c: Cue; line: string }[]): string[] => {
       const ids = new Set(shown.map((s) => s.c.id));
-      const hiddenToday = todayAll.filter((c) => !ids.has(c.id)).length;
+      const hiddenToday = todayAll.filter((c) => !ids.has(c.id) && !shownEarlier.has(c.id)).length;
       const hereMore = [...overdue, ...laterAll].filter((c) => !ids.has(c.id)).length;
-      const words = [hiddenToday > 0 ? `${String(hiddenToday)} more due today` : "", hereMore > 0 ? `${String(hereMore)} more here` : "", other.length > 0 ? `${String(other.length)} in other folders` : ""].filter((x) => x.length > 0).join(", ");
+      const more = [hiddenToday > 0 ? `${String(hiddenToday)} more due today` : "", hereMore > 0 ? `${String(hereMore)} more here` : "", other.length > 0 ? `${String(other.length)} in other folders` : ""].filter((x) => x.length > 0).join(", ");
+      // The fold is its own clause: "2 due today, shown earlier; 1 more due today; recall …".
+      const words = [folded > 0 ? `${String(folded)} due today, shown earlier` : "", more].filter((x) => x.length > 0).join("; ");
       // Nothing to list and nothing behind the door: no section (WF1), not "Nothing dated."
       if (shown.length === 0 && words.length === 0) return [];
       const out = ["Coming up:", ...shown.map((s) => s.line)];
@@ -700,7 +721,7 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
   const used = (s: Record<SectionKey, Sec>): number => ORDER.reduce((n, k) => n + byteLength(s[k].text), 0);
   const left = room - byteLength(self.text);
 
-  const plainBytes = cues.filter((c) => c.plain).reduce((n, c) => n + byteLength(`- Due today · ${c.body}${c.settles === null ? "" : ` · settles when ${flatten(c.settles)}`} [${c.id}]\n`), byteLength("Coming up:\n\n"));
+  const plainBytes = cues.filter((c) => c.plain && !shownEarlier.has(c.id)).reduce((n, c) => n + byteLength(`- Due today · ${c.body}${c.settles === null ? "" : ` · settles when ${flatten(c.settles)}`} [${c.id}]\n`), byteLength("Coming up:\n\n"));
   const summaryBytes = summary === null ? 0 : byteLength(`Yesterday, in day's end's words: ${flatten(summary)}\n\n`);
   const budgets: Budgets = { ...SHAPE.ROOM, coming: Math.max(SHAPE.ROOM.coming, plainBytes + SHAPE.COMING_PAST_PLAIN), yesterday: Math.max(SHAPE.ROOM.yesterday, summaryBytes) };
   let sec = compose(budgets);
@@ -946,15 +967,18 @@ function elsewhereFacts(
   }
   const live = new Set<string>();
   for (const s of sessions) if (s.live && s.session !== reader && gate.named(s.scope)) live.add(gate.norm(s.scope));
-  const list: ElsewhereRow[] = [...best.entries()].map(([key, m]) => ({ place: placeWords(key), id: m.id, title: m.title, fact: m.fact, at: m.at, live: live.has(key) }));
-  for (const key of live) if (!best.has(key)) list.push({ place: placeWords(key), id: null, title: null, fact: now, at: 0, live: true });
-  list.sort((a, b) => Number(b.live) - Number(a.live) || b.at - a.at || (a.place < b.place ? -1 : 1));
   // Folders worked in with no title to say: counted past the list, and named at its door.
+  const counted = store.memoryCountsByScopeSince(sinceY).flatMap(({ scope }) => (gate.named(scope) ? [gate.norm(scope)] : []));
+  // A folder by its name; by its path only when another here or in the section has the same name (FS1).
+  const among = [...best.keys(), ...live, ...counted, ...gate.ours];
+  const list: ElsewhereRow[] = [...best.entries()].map(([key, m]) => ({ place: placeWords(key, among), id: m.id, title: m.title, fact: m.fact, at: m.at, live: live.has(key) }));
+  for (const key of live) if (!best.has(key)) list.push({ place: placeWords(key, among), id: null, title: null, fact: now, at: 0, live: true });
+  list.sort((a, b) => Number(b.live) - Number(a.live) || b.at - a.at || (a.place < b.place ? -1 : 1));
   const named = new Set(list.map((l) => l.place));
   const quiet = new Set<string>();
-  for (const { scope } of store.memoryCountsByScopeSince(sinceY)) {
-    const place = placeWords(gate.norm(scope));
-    if (gate.named(scope) && !named.has(place)) quiet.add(place);
+  for (const key of counted) {
+    const place = placeWords(key, among);
+    if (!named.has(place)) quiet.add(place);
   }
   return { list, quiet: [...quiet].sort() };
 }

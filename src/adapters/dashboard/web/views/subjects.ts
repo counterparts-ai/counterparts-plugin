@@ -184,9 +184,11 @@ function memoriesOf(
     }
   }
   const found: { id: string; row: MemoryRow }[] = [];
+  // A memory deleted in a chat (HD1, on its hold) is unarchived but denied: not counted.
+  const denied = new Set(store.deniedIds());
   for (const m of via.keys()) {
     const row = store.row(m);
-    if (counted(row)) found.push({ id: m, row });
+    if (counted(row) && !denied.has(m)) found.push({ id: m, row });
   }
   return { via, found };
 }
@@ -594,10 +596,12 @@ export function tagView(src: DashboardSource, raw: string): TagView {
   const store = src.store;
   const tag = normalizeTag(raw);
   const ids = tag.length === 0 ? [] : store.memoriesTagged(tag);
+  // Held (HD1): denied while unarchived — left out, as `memoriesOf` leaves it.
+  const denied = new Set(tag.length === 0 ? [] : store.deniedIds());
   // The rows `counted` allows — what the cloud's weight (`tagCounts`) counts, journal aside.
   const rows = ids
     .map((id) => ({ id, row: store.row(id) }))
-    .filter((x): x is { id: string; row: MemoryRow } => counted(x.row))
+    .filter((x): x is { id: string; row: MemoryRow } => counted(x.row) && !denied.has(x.id))
     .sort((a, b) => b.row.birth_day - a.row.birth_day || (a.id < b.id ? 1 : -1));
   const { cards } = readSchemas(store);
   const tagToSubject = subjectByTag(cards, store);

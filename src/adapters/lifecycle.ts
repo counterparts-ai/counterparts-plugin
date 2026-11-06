@@ -403,7 +403,7 @@ export interface HostLifecycle {
    *  registry's note of the sentinel it was printed with; with `tags`, the
    *  host's markers in its head tag (2026-10-20, ONE TAG). */
   composeWake(
-    input: SessionInput,
+    input: SessionInput & { readonly source?: string },
     budget: number | undefined,
     tags?: () => readonly string[],
   ): ReturnType<Counterpart["wake"]> & { readonly tags?: readonly string[]; readonly tagged?: boolean };
@@ -591,7 +591,7 @@ export class Lifecycle implements HostLifecycle {
    * marker settles the meeting's state, which the compose does not read.
    */
   composeWake(
-    input: SessionInput,
+    input: SessionInput & { readonly source?: string },
     budget: number | undefined,
     tags?: () => readonly string[],
   ): ReturnType<Counterpart["wake"]> & { readonly tags?: readonly string[]; readonly tagged?: boolean } {
@@ -603,6 +603,7 @@ export class Lifecycle implements HostLifecycle {
       { ...(input.at === undefined ? {} : { date: input.at }) },
       {
         ...this.elsewhereHere(input),
+        ...(input.source === undefined ? {} : { source: input.source }),
         // What a handoff's release is compared with (2026-10-01): the version
         // on disk NOW, which a long-running server's own may not be.
         installed: manifestVersionOnDisk(),

@@ -252,6 +252,8 @@ import { openCarry, openSettlesCounts, STILL_OPEN_HANDLE, WAKE_BUILD_KEY } from 
 import type { PageWriterMode } from "../../core/self/index.js";
 import { canonicalToolName, toolDefinitions, toolSpec } from "./tools.js";
 import { MANUAL_HANDLE, MANUAL_PATH, findSection, installedManual, manualAsk, manualIndexText } from "./manual.js";
+import { DELETED_HANDLE, heldList, heldWakeLine, holdForRemoval, releaseHold, removalRefusal } from "../../core/removal-hold.js";
+import { REMOVAL_HOLD_MS } from "../../core/store/index.js";
 import type { ManualAsk } from "./manual.js";
 import { writeUpDoor } from "./write-up.js";
 import type { ToolName } from "./tools.js";
@@ -276,6 +278,8 @@ import {
   TITLE_ASKED_NOTE,
   chatWordsFor,
   claudeAiInstructions,
+  deletedNote,
+  claudeAiNightLine,
 } from "./server-words.js";
 import { resolveScope, SEEN_SESSIONS, EVENT_RING } from "./server-options.js";
 import type {
@@ -295,6 +299,7 @@ import {
   readWriteFacts,
   readTags,
   reminderEcho,
+  ownPlumbingEcho,
   titleEcho,
   undatedReminderWarning,
   factsEcho,
@@ -438,6 +443,7 @@ export class McpServer {
   private readonly lifecycleOpts: NonNullable<McpServerOptions["lifecycle"]>;
   private lifecycleInst: Lifecycle | null = null;
   private readonly wakeNotice: ((opts: { night: boolean }) => string | null) | undefined;
+  private readonly removalOpts: NonNullable<McpServerOptions["removal"]>;
   private readonly manifestVersion: () => string | null;
   private readonly pluginVersion: () => string | null;
   private readonly env: Readonly<Record<string, string | undefined>>;
@@ -459,6 +465,7 @@ export class McpServer {
     this.host = opts.host ?? DEFAULT_HOST;
     this.lifecycleOpts = opts.lifecycle ?? {};
     this.wakeNotice = opts.wakeNotice;
+    this.removalOpts = opts.removal ?? {};
     this.manifestVersion = opts.manifestVersion ?? manifestVersionOnDisk;
     this.env = opts.env ?? process.env;
     this.pluginVersion =
@@ -1020,7 +1027,7 @@ export class McpServer {
       case "remember":
         return this.rememberTool(args);
       case "recall":
-        return await this.recallTool(args);
+        return this.withHeldNotice(await this.recallTool(args));
       case "status":
         return this.statusTool();
       case "session_end":
@@ -1787,6 +1794,28 @@ export class McpServer {
    */
   private async rememberTool(args: Record<string, unknown>): Promise<ToolResult> {
     if (this.observer) return this.standDown("remember");
+    // REMOVE (HD1, 2026-11-04): delete one memory on the person's word — a
+    // 24-hour hold, never an erase (`core/removal-hold.ts`). Alone, or beside
+    // anything else the call does; the hold is answered first.
+    const removeArg = args["remove"];
+    if (removeArg !== undefined) {
+      if (removeArg === null || typeof removeArg !== "object" || Array.isArray(removeArg)) {
+        return this.refuse("remember", "remove-malformed", { detail: "remove is one object: {id} to delete a memory, or {id, undo: true} to bring it back." });
+      }
+      const rest = { ...args };
+      delete rest["remove"];
+      // ANY OTHER FIELD goes on to `remember` as it would alone (fix round R9):
+      // `{remove, updates}` without text refuses `text-required` there rather
+      // than dropping `updates` in silence. `session` is the chat copy's
+      // envelope, not a field of the call.
+      const hasRest = Object.entries(rest).some(([k, v]) => k !== "session" && v !== undefined && v !== null);
+      const out = this.removeOutcome(removeArg as Record<string, unknown>);
+      if (!hasRest) return this.result({ stored: false, reason: "remove-only", remove: out }, out["ok"] !== true);
+      const done = await this.rememberTool(rest);
+      const body = (done as { structuredContent?: Record<string, unknown> }).structuredContent;
+      if (body === undefined) return done;
+      return this.result({ ...body, remove: out }, (done as { isError?: boolean }).isError === true && out["ok"] !== true);
+    }
     // CORE (2026-10-11, Group 3 part A): keep or retire a core memory, as me.
     // Alone, or beside anything else the call does.
     const coreArg = args["core"];
@@ -1956,6 +1985,7 @@ export class McpServer {
       ...tagsEcho(deposit, tags),
       ...this.settledOf(deposit, args["how"] !== undefined),
       ...threadOf(deposit),
+      ...ownPlumbingEcho(deposit),
       // IN THE PAYLOAD, so it rides in `structuredContent` — which is what
       // Claude Code hands the model (the #282 lesson, f387f55).
       ...(neighbours.length === 0 ? {} : { neighbours, neighboursHint: NEIGHBOURS_HINT }),
@@ -2024,7 +2054,10 @@ export class McpServer {
    */
   private feelingsNowOutcome(list: readonly unknown[]): Record<string, unknown> {
     try {
-      const { session, shown } = this.shownToCaller();
+      const { session, shown: seen } = this.shownToCaller();
+      // A memory deleted in chat (held) or removed is not one to feel again (fix round R7).
+      const deniedNow = new Set(this.counterpart.store.deniedIds());
+      const shown = new Set([...seen].filter((x) => !deniedNow.has(x)));
       const model = this.sessionModel(session);
       const items = list.map((x) => (x !== null && typeof x === "object" && !Array.isArray(x) ? (x as Record<string, unknown>) : {}));
       const done = this.counterpart.reflections.feelAgain({
@@ -2076,7 +2109,8 @@ export class McpServer {
     try {
       if (id.length === 0) return { ok: false, reason: "remark-malformed", detail: "remark needs the memory's id: {id, about, why}." };
       const { shown } = this.shownToCaller();
-      if (!shown.has(id)) {
+      // A memory deleted in chat (held) or removed is gone to remark (fix round R7).
+      if (!shown.has(id) || this.denied(id)) {
         return { ok: false, reason: "not-shown-or-gone", detail: `${id} was not shown in this session: recall it by id first, then re-mark it.` };
       }
       const out = this.counterpart.markAbout({
@@ -2098,6 +2132,111 @@ export class McpServer {
   }
 
   /**
+   * One `remove` through the core (HD1, 2026-11-04), as the result carries it.
+   * A DELETE IS A HOLD: the memory is hidden at once and erased after
+   * `REMOVAL_HOLD_MS` by something no model can call (the console's
+   * sweep: the worker on local, the server's timer on hosted). Only an id
+   * this conversation was shown, so the model can delete only what it has
+   * read here and named — text that merely says "remove mem_x" deletes
+   * nothing by itself. Refused in a night run, which no person reads. The
+   * answer names the memory and says the window. Never throws.
+   */
+  private removeOutcome(arg: Record<string, unknown>): Record<string, unknown> {
+    const id = typeof arg["id"] === "string" ? arg["id"].trim() : "";
+    const undoArg = arg["undo"];
+    try {
+      if (id.length === 0) return { ok: false, reason: "remove-malformed", detail: "remove needs the memory's id: {id}, or {id, undo: true}." };
+      if (undoArg !== undefined && typeof undoArg !== "boolean") return { ok: false, reason: "remove-malformed", detail: "undo is true or false." };
+      const undo = undoArg === true;
+      // A NIGHT HAS NOBODY TO SEE THE ANSWER, so the window's premise — a
+      // person who reads "deleted" and can say "undo that" — fails by design.
+      // The local night's two marks; hosted's nights come through the
+      // person's routine and are not told apart here.
+      if (this.nightRun()) {
+        return { ok: false, reason: "night-run", detail: "A night run does not delete or restore memories: nobody is here to see it. Nothing was changed." };
+      }
+      const store = this.counterpart.store;
+      if (store.row(id) === undefined) return { ok: false, reason: "unknown-id", detail: `No memory ${id} in this store.` };
+      const { shown } = this.shownToCaller();
+      if (undo) {
+        if (!shown.has(id)) {
+          return { ok: false, reason: "not-shown", detail: `${id} was not shown in this conversation: recall the handle "${DELETED_HANDLE}" to see what can still be brought back.` };
+        }
+        const out = releaseHold(store, id);
+        this.emit("mcp.remember.remove", id, { ok: out.ok, reason: out.reason, undo: true });
+        if (!out.ok) {
+          const detail: Record<string, string> = {
+            "not-held": `${id} is not deleted: there is nothing to undo.`,
+            "already-removed": `${id} was already erased; nothing can bring it back.`,
+            "already-erasing": `${id} is being erased now: its 24 hours have passed, and it can't be brought back.`,
+            "unknown-id": `No memory ${id} in this store.`,
+          };
+          return { ok: false, reason: out.reason, detail: detail[out.reason] ?? out.reason };
+        }
+        this.dropHeldNotice(id);
+        return { ok: true, reason: out.reason, id, title: out.title, note: `Back: "${out.title}" is a memory again, as it was.` };
+      }
+      // HOSTED'S NIGHTS RUN IN THE PERSON'S CHAT (HN1), so the env marks
+      // above never see them: while this store has a dream begun and not yet
+      // journaled, or a reflection begun and not finished (either quiet past
+      // `ABANDONED_AFTER_MS` is left behind and lets go), a DELETE waits for
+      // the night (fix round item 1). The night's own window only. An UNDO
+      // always goes through (ROADMAP 11:55): it only restores, and it is the
+      // safety net for a delete nobody asked for.
+      if (this.removalOpts.erasedBy === "hosted" && this.nightUnderWay()) {
+        return { ok: false, reason: "night-under-way", detail: "A night pass is running in this memory right now, so nothing was deleted. Ask again after the night has finished." };
+      }
+      // What removal itself refuses, before the shown check: none of these
+      // depends on what this conversation saw, and each says what to do instead.
+      const refusal = removalRefusal(store, id);
+      if (refusal !== null) {
+        this.emit("mcp.remember.remove", id, { ok: false, reason: refusal, undo: false });
+        const detail: Record<string, string> = {
+          "is-the-self-page": `${id} is my page about who I am with the person, not one memory; it isn't deleted. Ask me to change what it says (self_page) instead.`,
+          "not-memory-bearing": `${id} is not a memory that can be deleted.`,
+          "already-removed": `${id} was already erased.`,
+          "unknown-id": `No memory ${id} in this store.`,
+        };
+        return { ok: false, reason: refusal, detail: detail[refusal] ?? refusal };
+      }
+      if (!shown.has(id)) {
+        this.emit("mcp.remember.remove", id, { ok: false, reason: "not-shown", undo: false });
+        return {
+          ok: false,
+          reason: "not-shown",
+          detail: `${id} was not shown in this conversation, so it was not deleted. Recall it, tell the person which memory it is, then delete it if they still want that.`,
+        };
+      }
+      const out = holdForRemoval(store, id);
+      this.emit("mcp.remember.remove", id, { ok: out.ok, reason: out.reason, undo: false });
+      if (!out.ok) return { ok: false, reason: out.reason, detail: out.reason };
+      // The host's clock is told when the earliest waiting hold falls due
+      // (hosted's timer). Only for a new hold: a second ask changed nothing.
+      if (out.reason === "held") {
+        try {
+          const next = Math.min(...store.pendingHolds().map((h) => h.at)) + REMOVAL_HOLD_MS;
+          if (Number.isFinite(next)) this.removalOpts.onHeld?.(next);
+        } catch {
+          // The timer's index only: the local worker's sweep reads the store itself.
+        }
+      }
+      if (out.reason === "held") this.noteHeld(id, out.title);
+      const zone = store.zone();
+      return {
+        ok: true,
+        reason: out.reason,
+        id,
+        title: out.title,
+        written: localDate(out.createdAt, zone),
+        erasedAfter: new Date(out.erasableAt).toISOString(),
+        note: deletedNote(out.title, this.removalOpts.erasedBy ?? "local"),
+      };
+    } catch (err) {
+      return { ok: false, reason: "threw", detail: String((err as Error).message ?? err) };
+    }
+  }
+
+  /**
    * One `core` decision through the core (2026-10-11, Group 3 part A): keep a
    * core memory (`Counterpart.keepCore`) or retire it (`demoteCore`), by
    * `self`, with the why. Any core memory: the owner's and my door alike.
@@ -2112,6 +2251,8 @@ export class McpServer {
       if (decision !== "keep" && decision !== "retire") return { ok: false, reason: "core-malformed", detail: 'decision is "keep" or "retire".' };
       const row = this.counterpart.store.row(id);
       if (row === undefined) return { ok: false, reason: "unknown-id", detail: `No memory ${id} in this store.` };
+      // Deleted in chat (held) or removed: gone, not "not in the core" (fix round R7).
+      if (this.denied(id)) return { ok: false, reason: "not-shown-or-gone", detail: `${id} was deleted; there is no core decision to make about it.` };
       const out = decision === "keep" ? this.counterpart.keepCore(id, { why, actor: "self" }) : this.counterpart.demoteCore(id, { reason: why, actor: "self" });
       const detail: Record<string, string> = {
         "reason-required": "Say why: the decision is kept with its reason.",
@@ -2460,6 +2601,11 @@ export class McpServer {
     if (typeof handle === "string" && (handle.trim().toLowerCase() === HANDOFFS_HERE_HANDLE || handle.trim().toLowerCase() === HANDOFFS_HANDLE) && args["question"] === undefined && args["ids"] === undefined) {
       return this.handoffsHereTool();
     }
+    // WHAT A CHAT DELETED AND STILL HOLDS (HD1, 2026-11-04): each by title,
+    // with when it goes, counted as shown so one can be brought back.
+    if (typeof handle === "string" && handle.trim().toLowerCase() === DELETED_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
+      return this.deletedTool();
+    }
     // WHAT'S DUE (WK2, 2026-10-30): the door the shaped wake's "Coming up" counts behind.
     if (typeof handle === "string" && handle.trim().toLowerCase() === COMING_UP_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
       return this.comingUpTool();
@@ -2697,7 +2843,7 @@ export class McpServer {
         ...(night.reflection === null ? {} : { reflection: { ...night.reflection } }),
         ...(found ? { nightsGloss: NIGHTS_GLOSS } : {}),
         note: found
-          ? `The newest dream, whole, and the reflection after it. Reading it marks nothing: a share it shows as not yet told is still untold (once it is told, the reflect tool's phase "told" marks it, as the wake says).${cutNote}`
+          ? `The newest dream, whole, and the reflection after it. Reading it marks nothing: a share it shows as not yet told is still untold, and a later prompt hands it over to tell (marked told as it is handed over).${cutNote}`
           : "No dream or reflection yet: nights have not run on this memory.",
       },
       false,
@@ -2757,6 +2903,8 @@ export class McpServer {
     const on = this.folderOn();
     const closed = this.nightClosed();
     const list = this.counterpart.comingUp({ scope: this.scope, ...(on === undefined ? {} : { exportsFrom: on }) });
+    // A folder by its name; by its path only when another the door names, or this one, has the same name (FS1).
+    const among = [this.scope, ...[...list.today, ...list.overdue, ...list.later, ...list.otherFolders].flatMap((c) => (c.folder === null ? [] : [c.folder]))];
     const shown = (cs: readonly Cue[]): Record<string, unknown>[] =>
       cs
         .filter((c) => !closed.has(c.id))
@@ -2767,7 +2915,7 @@ export class McpServer {
           ...(c.due === null ? {} : { due: c.due }),
           ...(c.every === null ? {} : { every: c.every }),
           ...(c.settles === null ? {} : { settlesWhen: c.settles }),
-          ...(c.folder === null ? {} : { folder: placeWords(c.folder) }),
+          ...(c.folder === null ? {} : { folder: placeWords(c.folder, among) }),
         }));
     const today = shown(list.today);
     const overdue = shown(list.overdue);
@@ -3531,14 +3679,18 @@ export class McpServer {
     const plain = lc.plainFor(input);
     const told = lc.claimPlain(input, plain.due);
     const spawn = lc.spawnWorker(input);
-    // NO DREAM LINE ON CLAUDE.AI (2026-10-26, OL1b): its nights are the
-    // person's own routine, and the ask relayed in a chat read as "say dream
-    // if you want". Left unclaimed, the offer is never said here. And none —
-    // no share, no owner-facing ask — in a night's own wake (`night`).
+    // NO CORE DREAM LINE ON CLAUDE.AI (2026-10-26, OL1b): the ask relayed in a
+    // chat read as "say dream if you want". Its own night line instead (HN1,
+    // 2026-11-04): the first conversation of a day that owes a night runs it,
+    // or asks first (`claudeAiNight`). And none — no share, no owner-facing
+    // ask — in a night's own wake (`night`).
     const claudeAi = this.host === CLAUDE_AI_HOST;
     const dream = claudeAi || night ? null : this.wakeDreamLine(input);
+    const nightLine = claudeAi && !night ? this.claudeAiNight(input) : null;
     const share = night ? null : this.wakeShareLine(input);
-    const notices = [this.wakeUpdateLine(), this.wakeDoctorLine(night)].filter((l): l is string => l !== null);
+    // A CHAT'S DELETES STILL HELD (HD1): counted, never titled — titles would
+    // show again what was asked gone. Not in a night's own wake.
+    const notices = [this.wakeUpdateLine(), this.wakeDoctorLine(night), night ? null : this.wakeHeldLine()].filter((l): l is string => l !== null);
     const head = `Counterparts session for this chat: ${input.sessionId}. Pass session: ${input.sessionId} on session_end, chapter, dream and reflect in this chat.`;
     // Or, when the wake has no head tag, as one tag in front of it (`tagLead`).
     const tags = tagLead(woke.tags ?? [lc.onboardingMarker(input)], woke.text, woke.tagged === true);
@@ -3563,6 +3715,7 @@ export class McpServer {
           // No host shares a claude.ai store yet: the line waits for one that does.
           sameYou: sameYouLine(this.counterpart.ownerDisplayName(), []),
           notices,
+          night: nightLine,
           meet: meet === null ? null : meet.text,
         })
       : [
@@ -3590,7 +3743,7 @@ export class McpServer {
       bytes: Buffer.byteLength(text, "utf8"),
       plain: told.length,
       spawned: spawn.started,
-      dream: dream !== null,
+      dream: dream !== null || nightLine !== null,
       share: share !== null,
       night,
       notices: notices.length,
@@ -3631,6 +3784,38 @@ export class McpServer {
       const line = reflections.carryLine({ session: input.sessionId, reflection: pending.id });
       this.emit("mcp.wake.share", input.sessionId, { reflection: pending.id, carried: line !== null });
       return line;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * THE FIRST CHAT OF THE DAY RUNS THE NIGHT, for claude.ai's `wake` (HN1,
+   * 2026-11-04). The day's offer, read as every host reads it (`Dreams#offer`:
+   * null when no night is owed, one already ran or is under way, or the day
+   * was already claimed — by another conversation, or a routine's launch), and
+   * CLAIMED here: `dream_asks` holds one row per calendar day, so of two
+   * conversations racing, one wins (`claimOffer`), and only that one is told.
+   * A tool result is certain delivery, so the claim is safe here. No run is
+   * started — this host has none to start; the words are the start: on `auto`
+   * (headless) the model runs the night, then answers; on `ask` it asks.
+   * A claim the model never acts on is taken up by a later conversation once
+   * it has been quiet `ABANDONED_AFTER_MS`, at most `RELAUNCHES_PER_DAY`
+   * times (`Dreams#mayStartAgain`), as a launch nobody followed is. Never throws.
+   */
+  private claudeAiNight(input: SessionInput): string | null {
+    if (this.observer || input.at === undefined) return null;
+    try {
+      const dreams = this.counterpart.dreams;
+      const offer = dreams.offer({ at: input.at, session: input.sessionId });
+      if (offer === null || offer.setting === "off") return null;
+      if (!dreams.claimOffer(offer)) {
+        this.emit("mcp.wake.dream", input.sessionId, { told: false, reason: "claimed-elsewhere" });
+        return null;
+      }
+      const setting = offer.headless ? "auto" : "ask";
+      this.emit("mcp.wake.dream", input.sessionId, { told: true, state: offer.state, setting, firstChat: true, reflects: offer.reflects !== null });
+      return claudeAiNightLine({ session: input.sessionId, setting, reflects: offer.reflects, who: this.counterpart.ownerDisplayName() ?? "the person" });
     } catch {
       return null;
     }
@@ -3743,6 +3928,110 @@ export class McpServer {
       ? `${reading.line} Until then this server runs the version it started with, and it ignores anything newer, such as a field added to a tool since.`
       : `${reading.line} It ignores anything newer, such as a field added to a tool since; updating this install is what brings it level.`;
     return this.result({ ...result.structuredContent, updated: said }, result.isError === true);
+  }
+
+  /** Is this id on the deny-list now: deleted in chat (held) or removed? Never throws (false). */
+  private denied(id: string): boolean {
+    try {
+      return this.counterpart.store.deniedIds().includes(id);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * IS A NIGHT RUNNING IN THIS STORE, in any chat (fix round item 1): a
+   * dream begun and not journaled, or a reflection begun and not finished,
+   * neither left behind. Never throws (false).
+   */
+  private nightUnderWay(): boolean {
+    try {
+      return this.counterpart.dreams.busyAnywhere() || this.counterpart.reflections.busyAnywhere();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * THE NEXT RECALL AFTER A HOLD NAMES IT (R5, ROADMAP 10:33): a chat's
+   * delete is answered in the remove result, which the model may or may not
+   * relay; the next recall block in the same conversation says it again,
+   * plainly, once — so a delete the person didn't ask for is in front of
+   * them while the day to undo it runs. Visibility is the mitigation; there
+   * is no refusal and no cap. Keyed like `shown` (`seenKey`).
+   */
+  private readonly heldNotices = new Map<string, { id: string; title: string }[]>();
+
+  private noteHeld(id: string, title: string): void {
+    const key = this.seenKey();
+    const list = (this.heldNotices.get(key) ?? []).filter((n) => n.id !== id);
+    list.push({ id, title });
+    this.heldNotices.set(key, list);
+  }
+
+  private dropHeldNotice(id: string): void {
+    for (const [key, list] of this.heldNotices) {
+      const kept = list.filter((n) => n.id !== id);
+      if (kept.length === 0) this.heldNotices.delete(key);
+      else this.heldNotices.set(key, kept);
+    }
+  }
+
+  /** `heldForRemoval` on a recall result, once per hold, while it is still undoable. Never throws. */
+  private withHeldNotice(res: ToolResult): ToolResult {
+    try {
+      const key = this.seenKey();
+      const list = this.heldNotices.get(key);
+      if (list === undefined || list.length === 0) return res;
+      const body = (res as { structuredContent?: Record<string, unknown> }).structuredContent;
+      if (body === undefined) return res;
+      this.heldNotices.delete(key);
+      const store = this.counterpart.store;
+      const lines = list
+        .filter((n) => store.isHeld(n.id))
+        .map((n) => `held for removal: "${n.title}" · undo within 24h: remember with remove: {id: "${n.id}", undo: true}`);
+      if (lines.length === 0) return res;
+      // Beside what the recall said, in both copies: a host that reads the
+      // structured result and one that reads only the text each see it.
+      const content = (res as { content?: unknown[] }).content ?? [];
+      return { ...res, content: [...content, { type: "text", text: lines.join("\n") }], structuredContent: { ...body, heldForRemoval: lines } } as ToolResult;
+    } catch {
+      return res;
+    }
+  }
+
+  /** The count of a chat's deletes still on their hold (HD1), or null. Never throws. */
+  private wakeHeldLine(): string | null {
+    try {
+      return heldWakeLine(this.counterpart.store.pendingHolds().length);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * recall's `deleted` handle (HD1, 2026-11-04): the memories a chat deleted
+   * that still wait to be erased, by title, with when each was deleted and
+   * when it goes. They count as shown, so one can be undone from a later chat
+   * than the one that deleted it.
+   */
+  private deletedTool(): ToolResult {
+    const store = this.counterpart.store;
+    const zone = store.zone();
+    const items = heldList(store);
+    this.markSeen(items.map((i) => i.id));
+    this.emit("mcp.recall.deleted", undefined, { total: items.length });
+    return this.result({
+      path: "handle",
+      reason: "deleted",
+      handle: DELETED_HANDLE,
+      total: items.length,
+      items: items.map((i) => ({ id: i.id, title: i.title, deleted: localDate(i.heldAt, zone), erasedAfter: new Date(i.erasableAt).toISOString() })),
+      note:
+        items.length === 0
+          ? "Nothing deleted in chat is waiting to be erased."
+          : "Each is hidden, and erased once its time passes. remember with remove: {id, undo: true} brings one back before then.",
+    }, false);
   }
 
   /** The doctor's red-only notice (and the search-by-meaning line), from the
@@ -4190,6 +4479,10 @@ export class McpServer {
     }
     if (!deposit.deposited || deposit.memoryId === null) {
       return { about: { stored: false, reason: "memory-not-stored" } };
+    }
+    // A memory about this system's own plumbing is never about me or us (TC1): `ownPlumbing` says why.
+    if (deposit.ownPlumbing?.aboutRefused === mark) {
+      return { about: { stored: false, reason: "own-plumbing" } };
     }
     try {
       const row = this.counterpart.store.row(deposit.memoryId);

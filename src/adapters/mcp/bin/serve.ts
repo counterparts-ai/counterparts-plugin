@@ -477,6 +477,9 @@ async function main(): Promise<void> {
   let sidebar: SidebarStatusWriter | null = null;
   const server = openServer({
     ...launch,
+    // The stdio server runs on the person's own computer: a hosted export
+    // opened here gets the local starter words (EX1).
+    toldSurface: "local",
     onEvent: toLog,
     afterCall: () => sidebar?.schedule(SIDEBAR_AFTER_CALL_MS),
     onCounterpartEvent: toLog,

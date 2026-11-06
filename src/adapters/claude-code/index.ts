@@ -218,6 +218,8 @@ export function openAdapter(
     ...(config.identity === undefined
       ? {}
       : { identity: { name: config.identity.name, aliases: [...(config.identity.aliases ?? [])] } }),
+    // Claude Code's hooks run on the person's computer (EX1).
+    toldSurface: "local",
     ...(onCounterpartEvent === undefined ? {} : { onEvent: onCounterpartEvent }),
   });
   return new ClaudeCodeAdapter({ counterpart, config, ...adapterOpts });

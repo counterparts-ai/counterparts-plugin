@@ -109,7 +109,10 @@ const AWS_SECRET_TOKEN_BEFORE_ID =
  *   - unquoted and after a `:`, a TYPE NAME: a builtin (`str`, `bytes`, …), a
  *     pydantic secret type, or a CamelCase word of letters only (`SecretStr`) —
  *     `db_password: SecretStr` is an annotation. After `=` the CamelCase rule
- *     does not apply: a bare word assigned is a value.
+ *     does not apply: a bare word assigned is a value;
+ *   - unquoted, under a non-password name, an identifier assigned to an
+ *     identifier (`pad_token` set to `eos_token`): snake_case or camelCase words, letters
+ *     only. No literal, no digit — nothing a secret looks like.
  *
  * It can only make a family redact LESS on a match that family already made.
  */
@@ -121,7 +124,26 @@ const CODE_REFERENCE =
   /^[A-Za-z_$][A-Za-z_$]*(?:(?:(?:\.|::|->)[A-Za-z_$][A-Za-z0-9_$]*|\[[^\]\n]{0,60}\]|\([^)\n]{0,80}\))+[[(]?|[[(])[,;]?$/;
 const TYPE_NAME =
   /^(?:str|int|bytes|bool|float|dict|list|tuple|set|object|Any|None|SecretStr|SecretBytes|string|number|boolean|[A-Z][a-z]+(?:[A-Z][a-z0-9]*)+)[,;]?$/;
-const PASSWORD_NAME = /(?:password|passwd|pwd)$/i;
+const PASSWORD_NAME = /(?:password|passwd|pwd|passphrase|pass)$/i;
+// A bare identifier assigned to a credential-looking name (`pad_token` set to `eos_token`):
+// letters only, joined by underscores or camelCase humps, no digit. A real secret
+// has digits or no word structure; `hunter2x` and `abcdefghijkl` stay values.
+// It must END in an identifier word (token, key, id), so a passphrase
+// (`correct_horse_battery`) stays redacted; never an ALL-CAPS name (env vars) and
+// never after `:` (YAML) — only a code assignment with `=`.
+const IDENTIFIER_WORD_END = /(?:^|_)(?:token|tokens|key|keys|id|ids)$|[a-z](?:Token|Tokens|Key|Keys|Id|Ids)$/;
+// No word over twelve letters: `hf_abcdefghijklmnopqrstu` is a token with a prefix.
+const BARE_IDENTIFIER = /^(?:[a-z]{1,12}(?:_[a-z]{1,12})+|[a-z]{1,12}(?:[A-Z][a-z]{1,11})+)$/;
+
+const KEY_FILE = /^([\w./~-]+)\.(?:pem|key|p12|pfx|crt|cer|der|jks)$/i;
+/** A key FILE, by its shape: a path (has a `/`, or starts `./` `~/`), or a short
+ *  word-structured name (`server.key`) with no digit and no long alphanumeric run. */
+function isKeyFilePath(v: string): boolean {
+  const m = KEY_FILE.exec(v);
+  if (!m) return false;
+  if (v.includes("/")) return true;
+  return /^[A-Za-z_-]{1,40}(?:\.[A-Za-z_-]+)*$/.test(m[1]!);
+}
 
 function isSetting(value: string, match: string, name: string): boolean {
   const quoted = /^["']/.test(value);
@@ -130,8 +152,20 @@ function isSetting(value: string, match: string, name: string): boolean {
   if (/^[+-]?\d+(?:\.\d+)?$/.test(v)) {
     return !(PASSWORD_NAME.test(name) && v.replace(/\D/g, "").length >= 6);
   }
+  // A key FILE is a path, not the key: `private_key = "keys/a.pem"`.
+  if (!PASSWORD_NAME.test(name) && isKeyFilePath(v)) return true;
   if (quoted) return false;
   if (CODE_REFERENCE.test(v)) return true;
+  if (
+    // `*_pass` names are skipped only for another `*_pass` (`first_pass` set to `second_pass`).
+    (!PASSWORD_NAME.test(name) || (/pass$/i.test(name) && /(?:_|[a-z])[Pp]ass$/.test(v))) &&
+    BARE_IDENTIFIER.test(v) &&
+    (IDENTIFIER_WORD_END.test(v) || /pass$/i.test(name)) &&
+    name !== name.toUpperCase() &&
+    /^[^:=]*=/.test(match.slice(name.length))
+  ) {
+    return true;
+  }
   const sep = /[:=]/.exec(match.slice(name.length))?.[0];
   return sep === ":" && TYPE_NAME.test(v);
 }
@@ -350,7 +384,7 @@ export const SECRET_FAMILIES: readonly SecretPattern[] = [
     //    one (re-review R4: `DB_PASSWORD=abc,defghij`, `DB_PASSWORD=Ab3$x`).
     //    `pgpassword` is Postgres's own variable, glued with no separator.
     re: new RegExp(
-      "(?<![A-Za-z0-9])(pgpassword|password|passwd|pwd)\\b" +
+      "(?<![A-Za-z0-9])(pgpassword|password|passwd|pwd|passphrase|(?<=[A-Za-z0-9][_-])pass)\\b" +
         ASSIGNED_SEPARATOR +
         NOT_A_PLACEHOLDER +
         PASSWORD_VALUE,
@@ -368,7 +402,7 @@ export const SECRET_FAMILIES: readonly SecretPattern[] = [
     re: new RegExp(
       "(?<![A-Za-z0-9])(api[_-]?key|apikey|access[_-]?key|secret[_-]?key[_-]?base|secret[_-]?key|" +
         "client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|session[_-]?token|" +
-        "bearer[_-]?token|secret|token|credentials?)\\b" +
+        "bearer[_-]?token|private[_-]?key|signing[_-]?key|session[_-]?key|secret|token|credentials?)\\b" +
         ASSIGNED_SEPARATOR +
         NOT_A_PLACEHOLDER +
         CREDENTIAL_VALUE,
@@ -388,7 +422,7 @@ export const SECRET_FAMILIES: readonly SecretPattern[] = [
     //    because under the `i` flag `[A-Z]` is every letter. A bare `Key` is not
     //    a keyword here: `primaryKey`, `sortKey` and `cacheKey` are not secrets.
     re: new RegExp(
-      "((?<=[a-z0-9])(?:Password|Passwd|Pwd|Secret|Token|ApiKey|SecretKey|AccessKey|PrivateKey|Credentials?)" +
+      "((?<=[a-z0-9])(?:Password|Passwd|Pwd|Passphrase|Secret|Token|ApiKey|SecretKey|AccessKey|PrivateKey|Credentials?)" +
         "|(?<![A-Za-z0-9])[A-Z][A-Z0-9]*(?:PASSWORD|PASSWD))\\b" +
         ASSIGNED_SEPARATOR +
         NOT_A_PLACEHOLDER +
@@ -402,6 +436,34 @@ export const SECRET_FAMILIES: readonly SecretPattern[] = [
       // A password may be four characters; anything else needs six.
       (!/(?:password|passwd|pwd)$/i.test(name) && value.replace(/^["']|["']$/g, "").length < 6),
     why: "A credential under a camelCase or glued name.",
+  },
+  {
+    family: "assigned-credential",
+    // 4. A PIN, as a whole name or `user_pin` / `PIN_CODE` / `pinCode` (`pin_memory=True` and `spin` never match) and only
+    //    with a numeric value of four to twelve digits, quoted or not.
+    re: new RegExp(
+      "(?:(?<![A-Za-z0-9])|(?<=[_-]))(pin(?:[_-]?code)?)\\b" +
+        ASSIGNED_SEPARATOR +
+        NOT_A_PLACEHOLDER +
+        "(\"\\d{4,12}\"|'\\d{4,12}'|\\d{4,12})(?![\\w.])",
+      "gi",
+    ),
+    value: 2,
+    propagate: true,
+    why: "A PIN under its own name.",
+  },
+  {
+    family: "assigned-credential",
+    // 5. BARE `AUTH=` / `BEARER=` in capitals, `=` only: the env-var form. Lowercase
+    //    `auth` is prose and code (`auth: failed`, `auth = request.auth`).
+    re: new RegExp(
+      "(?:(?<![A-Za-z0-9])|(?<=[A-Z0-9]_))(AUTH|BEARER)\\b" + "\\s*=\\s*" + NOT_A_PLACEHOLDER + CREDENTIAL_VALUE,
+      "g",
+    ),
+    value: 2,
+    propagate: true,
+    skip: isSetting,
+    why: "A bare AUTH / BEARER environment variable.",
   },
 ];
 

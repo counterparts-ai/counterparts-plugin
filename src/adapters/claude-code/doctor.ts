@@ -68,6 +68,7 @@ import {
 } from "../../core/counterpart.js";
 import { Counterpart } from "../../core/counterpart.js";
 import {
+  INDEX_REBUILT_AT_OPEN_EVENT,
   STORE_CREATED_KEY,
   Store,
   isSelfRelevantFeeling,
@@ -137,6 +138,7 @@ import {
 } from "../update-check.js";
 import type { UpdateSwitch } from "../update-check.js";
 import type { Finding } from "./doctor-finding.js";
+import { overdueHolds } from "../../core/removal-hold.js";
 import { checkoutFindings } from "./doctor-checkout.js";
 import type { CheckoutReading } from "./doctor-checkout.js";
 import { openFindings, journalFindings, journalCopyFindings, chapterSummaryFindings, openItemsFindings } from "./doctor-open.js";
@@ -1964,6 +1966,45 @@ function halfwayMemoryFinding(dir: string): Finding {
   });
 }
 
+/**
+ * THE WORD INDEX, when it was ever found empty (EX1, 2026-11-04). A store file
+ * moved in without its cache — a hosted "Download my memory" file opened
+ * locally — finds nothing by question until the index is rebuilt. Every
+ * writable open rebuilds it now (`Store#reindexIfEmpty`), so this reads two
+ * things: AMBER while it is empty (only observer opens have seen the file
+ * yet), and a green line for a week after an open rebuilt it, so the repair is
+ * seen. Silent otherwise. Two COUNTs and one bounded event read.
+ */
+function wordIndexFindings(store: Store): Finding[] {
+  if (store.wordIndexEmpty()) {
+    return [
+      finding(
+        "word-index",
+        "amber",
+        "Word index",
+        "empty, though the store has memories: recall by question finds nothing until it is rebuilt",
+        "The next session rebuilds it as it opens the store; or run: counterparts verify --rebuild",
+        { empty: true },
+      ),
+    ];
+  }
+  const day = store.livedDay();
+  const newest = newestRows(store, INDEX_REBUILT_AT_OPEN_EVENT, 1, day).rows.at(-1);
+  if (newest === undefined || day - newest.day > 7) return [];
+  const indexed = payloadOf(newest)["indexed"];
+  const n = typeof indexed === "number" ? indexed : 0;
+  return [
+    finding(
+      "word-index",
+      "green",
+      "Word index",
+      `was empty when the store was opened on ${localDate(newest.at, store.zone())}, and that open rebuilt it (${String(n)} ${n === 1 ? "row" : "rows"})`,
+      "",
+      { empty: false, rebuiltDay: newest.day, indexed: n },
+    ),
+  ];
+}
+
 function vectorFindings(input: DoctorInput, store: Store): Finding[] {
   // NOTHING TO EMBED, NOTHING TO SAY (finding #24). With the embedder off every
   // live memory has no vector, so this line reported the whole store as a
@@ -2057,6 +2098,36 @@ export function logFindings(input: DoctorInput): Finding[] {
 
 /** The meta row the v12 upgrade writes (`store/operational.ts#V12_UPGRADE_KEY`). */
 const V12_UPGRADE_META = "recall.v12.upgrade";
+
+/**
+ * DELETIONS OVERDUE (HD1, ROADMAP 11:55), amber, silent at none: memories a
+ * chat deleted that are still on their hold more than 48 hours after their
+ * erase was due — the worker hasn't run since (no session) — or that the sweep
+ * claimed and didn't finish (its erase failed and is backing off; R1-a). They stay hidden; nothing about them is lost or
+ * shown. The fix is the console's own removal, which finishes a held memory at
+ * once. Ids only, never a word of the memory.
+ */
+export function overdueDeletionFindings(store: Store, now: number = store.now()): Finding[] {
+  let late: ReturnType<typeof overdueHolds>;
+  try {
+    late = overdueHolds(store, now);
+  } catch {
+    return [];
+  }
+  if (late.length === 0) return [];
+  const one = late.length === 1;
+  const tried = late.filter((h) => h.claims > 0).length;
+  return [
+    finding(
+      "deletions-overdue",
+      "amber",
+      "Deletions",
+      `${String(late.length)} ${one ? "deletion" : "deletions"} overdue: ${one ? "a memory" : "memories"} deleted in chat ${one ? "is" : "are"} still not erased${tried > 0 ? ` (${String(tried)} tried and failed; tried again later)` : ", more than 48 hours after the erase was due (no session has run it since)"}. ${one ? "It stays" : "They stay"} hidden, and can no longer be undone from chat once tried.`,
+      `Erase ${one ? "it" : "them"} now: ${late.map((h) => `counterparts remove ${h.id} --confirm`).join(" · ")}. \`counterparts log\` shows why an erase failed (cli.removal.sweep, holds.threw).`,
+      { overdue: late.length, tried },
+    ),
+  ];
+}
 
 /**
  * WRITE FIELDS (v12, 2026-10-03), informational, never amber or red: of the
@@ -2403,8 +2474,18 @@ export function reflectionFindings(input: DoctorInput, store: Store): Finding[] 
   // A SHARE STUCK AT `carried` (2026-10-02): `told` was never called, so the
   // line said "carried to a later session" forever. Now it says since when:
   // the day it was carried (`share_at`), else the reflection's own date.
+  // A SHARE TOLD ON DELIVERY (2026-11-04, TC1): the host marks a carried
+  // share told as it hands it over (`detail.toldVia: "carry"`), so whether it
+  // was ever said isn't recorded. The line keeps that readable: when it was
+  // handed over, and that told means delivered.
+  let viaCarry = false;
+  try {
+    viaCarry = last?.share_state === "told" && (JSON.parse(last.detail ?? "{}") as Record<string, unknown>)["toldVia"] === "carry";
+  } catch {
+    viaCarry = false;
+  }
   const carriedOn =
-    last?.share_state !== "carried"
+    last === undefined || (last.share_state !== "carried" && !viaCarry)
       ? null
       : typeof last.share_at === "number"
         ? localDate(last.share_at, readingZone)
@@ -2413,6 +2494,10 @@ export function reflectionFindings(input: DoctorInput, store: Store): Finding[] 
     carriedOn !== null && isDay(carriedOn) && isDay(input.today) ? Math.max(0, daysBetween(carriedOn, input.today)) : null;
   if (carriedDays !== null && carriedDays > 0) {
     share["carried"] = `its morning share carried to a later session ${String(carriedDays)} ${carriedDays === 1 ? "day" : "days"} ago and never told`;
+  }
+  if (viaCarry) {
+    const ago = carriedDays === null ? "" : carriedDays === 0 ? " today" : ` ${String(carriedDays)} ${carriedDays === 1 ? "day" : "days"} ago`;
+    share["told"] = `its morning share handed to a later session${ago} (marked told on delivery)`;
   }
   const what =
     last === undefined
@@ -3507,6 +3592,7 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     ["rows", () => rowFindings(input, store)],
     ["authorship", () => authorshipFindings(input, store, owedReading)],
     ["journal", () => journalFindings(store)],
+    ["word-index", () => wordIndexFindings(store)],
     ["vectors", () => vectorFindings(input, store)],
     // The snapshot policy lives in the configuration, so with none read this
     // line would grade a default nobody chose.
@@ -3535,6 +3621,8 @@ export function doctorFindings(input: DoctorInput): Finding[] {
     // The process log (2026-09-30): one directory listing and today's file.
     // Not in the session-start reading: it is never red, and it reads a file.
     ...(input.budgetMs !== undefined ? [] : [["log", (): Finding[] => logFindings(input)] as const]),
+    // HD1 (ROADMAP 11:55): a chat's delete more than 48 h past its erase. One grouped read; silent at none.
+    ["deletions-overdue", () => overdueDeletionFindings(store)],
     // B3's week: one bounded read of the newest `remember.prune` row. Folds into
     // `Background` while green.
     ["retention", () => retentionFindings(input, store)],

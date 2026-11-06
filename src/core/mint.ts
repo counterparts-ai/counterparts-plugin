@@ -51,6 +51,7 @@
 import { TUNABLES as PHYSICS, clampSalienceAtSeam, defaultClaimFor } from "./physics/index.js";
 import { CUE_MODE_META, DATE_FROM_META, RECURRING_META } from "./prospective/index.js";
 import type { Proposal } from "./remember/index.js";
+import { OWN_PLUMBING_META_KEY } from "./remember/own-plumbing.js";
 import { isDay, isRecurrence, localDate } from "./time.js";
 import type { AboutMark, AboutSetter, Store } from "./store/index.js";
 import { SECOND_HAND_META_KEY, SETTLES_WHEN_META_KEY, settlesWhenOf, WRITTEN_UP_BY_META_KEY } from "./types.js";
@@ -142,6 +143,12 @@ export interface MintOptions {
    * the same mark in `about` so the default floor reads by it.
    */
   inheritedAbout?: { readonly about: AboutMark; readonly aboutBy: AboutSetter | null };
+  /**
+   * The cue that read this memory's subject as this system's own plumbing
+   * (2026-11-04, TC1, `remember/own-plumbing.ts`): written to its meta, so the
+   * rows are countable. The door decides it, never an author field.
+   */
+  ownPlumbing?: string;
 }
 
 export interface MintResult {
@@ -251,6 +258,7 @@ export function mintProposal(store: Store, proposal: Proposal, opts: MintOptions
   // The memory a revision took its reminder from (`Counterpart#carryReminder`):
   // an id, so what was already said for the same window still counts.
   if (proposal.reminderFrom !== undefined) meta[DATE_FROM_META] = proposal.reminderFrom;
+  if (opts.ownPlumbing !== undefined) meta[OWN_PLUMBING_META_KEY] = opts.ownPlumbing;
   // SECOND-HAND (2026-10-01): written up by a session that did not live it.
   const writeUp = opts.writeUp;
   if (writeUp !== undefined) {

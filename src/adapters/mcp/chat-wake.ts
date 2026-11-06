@@ -14,9 +14,12 @@
  *      "Coming up" and "Still open" lanes moved up to just under the framing
  *      line (`chatLanesFirst`). Nothing is reworded, cut or added: the lanes
  *      move whole, and every other line keeps its place.
- *   3. NO DREAM LINE. On this host the night is the person's own routine
- *      (`dream` launch from a scheduled task); the day's dream ask, relayed
- *      in a chat, read as "say dream if you want" (trial, 2026-10-26).
+ *   3. THE NIGHT, ONCE A DAY (HN1, 2026-11-04). The core's day's dream line,
+ *      relayed in a chat, read as "say dream if you want" (trial, 2026-10-26),
+ *      so it is never said here. Instead the first conversation of a day that
+ *      owes a night is told to run it, then answer (`auto`), or to ask
+ *      first (`ask`): claude.ai's own words (`server-words.ts#claudeAiNightLine`),
+ *      after the notices, so the person's things come first.
  *   4. "THE SAME YOU" ONLY WHEN IT IS TRUE (`sameYouLine`): one line naming
  *      the hosts that share this store. None does yet — a claude.ai store is
  *      its own — so the server hands it nothing and the line is never printed.
@@ -94,6 +97,8 @@ export interface ClaudeAiWakeParts {
   readonly wake: string;
   readonly sameYou: string | null;
   readonly notices: readonly string[];
+  /** The night this conversation runs or asks about (HN1), or null: not owed, or another conversation has the day. */
+  readonly night: string | null;
   readonly meet: string | null;
 }
 
@@ -105,6 +110,7 @@ export function claudeAiWakeText(p: ClaudeAiWakeParts): string {
     ...(p.share.length === 0 ? [] : [p.share.join("\n")]),
     `${p.lead}\n${chatLanesFirst(p.wake)}`.trimEnd(),
     ...(p.notices.length === 0 ? [] : [p.notices.join("\n")]),
+    ...(p.night === null ? [] : [p.night]),
     ...(p.meet === null ? [] : [p.meet]),
   ];
   return parts.join("\n\n");

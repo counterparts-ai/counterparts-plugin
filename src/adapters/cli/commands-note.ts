@@ -362,6 +362,7 @@ export async function recallCommand(
         {
           learnedOn: (id) => facts.memories.find((m) => m.id === id)?.learned ?? null,
           dim: paint(io, env).dim,
+          emptyIndex: facts.memories.length === 0 && counterpart.store.wordIndexEmpty(),
         },
       );
       return EXIT.ok;
@@ -457,11 +458,21 @@ export function printAskList(
     readonly learnedOn?: (id: string) => string | null;
     /** How the metadata line is quietened. Absent: plain. */
     readonly dim?: (s: string) => string;
+    /** The store's word index is empty beside live rows (EX1): a store file
+     *  moved in, a hosted download, that no writable open has seen yet. */
+    readonly emptyIndex?: boolean;
   } = {},
 ): void {
   const found = Math.max(result.matched ?? 0, result.memories.length);
   if (found === 0) {
     io.out(`Nothing found (${how}).`);
+    if (opts.emptyIndex === true) {
+      // `ask` only looks (observer), so it cannot rebuild the index itself:
+      // say why nothing came, and what does (EX1).
+      io.out("  This memory's word index is empty: the file was moved in and nothing has opened it to write yet.");
+      io.out(`  The next Claude Code or Claude Desktop session that uses this memory rebuilds it as it opens it (not in a folder where memory is off or observer only); or run: ${BIN.cli} verify --rebuild`);
+      return;
+    }
     // A faded match is counted in `matched` and listed with the rest (2026-10-10).
     io.out(
       result.considered === 0

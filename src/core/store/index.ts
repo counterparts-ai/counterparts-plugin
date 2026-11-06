@@ -144,6 +144,7 @@ import {
   docFrequency,
   embeddingCount,
   indexDoc,
+  indexedDocCount,
   nearest,
   nearestVectors,
   heldExits,
@@ -479,6 +480,23 @@ export { RECURRING_META };
  */
 export const STORE_CREATED_KEY = "store.created";
 
+/**
+ * HOW LONG A CHAT'S DELETE WAITS BEFORE THE ERASE (HD1, 2026-11-04; Mike's
+ * yes, lightly held): 24 hours of WALL-CLOCK time, never lived days — the CLI
+ * CONTRACT's rule for any cooling-off (a day away must still be a day of
+ * second thoughts). Inside it the memory is hidden and `released` brings it
+ * back; after it the owner-side sweep erases it (`sweepHeldRemovals`, `adapters/cli/`).
+ */
+export const REMOVAL_HOLD_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * One memory's `removal_record` rows, grouped: true when its newest `held`
+ * is newer than its newest `released` (HD1). Shared by every deny-list read so
+ * the rule is written once.
+ */
+const HELD_HAVING =
+  "COALESCE(MAX(CASE WHEN stage = 'held' THEN seq END), 0) > COALESCE(MAX(CASE WHEN stage = 'released' THEN seq END), 0)";
+
 export const WRITE_METHODS = [
   "put",
   "putMany",
@@ -619,6 +637,19 @@ export const STORE_MIGRATED_EVENT = "store.migrated";
 /** The ring event an at-open tightening leaves (R1, `private.ts`): how many
  *  paths lost their group and other bits, and the ones the filesystem kept. */
 export const STORE_TIGHTENED_EVENT = "store.modes.tightened";
+
+/**
+ * The durable row a writable open leaves when it found the word index EMPTY
+ * beside live rows and rebuilt it (EX1, 2026-11-04): how many rows it indexed.
+ * `doctor` reads it; the open never fails for want of it.
+ */
+export const INDEX_REBUILT_AT_OPEN_EVENT = "store.index.rebuilt-at-open";
+
+/** Box 3's note that a rebuild found every live row tokenless: the live count it saw (EX1). */
+const INDEX_TOKENLESS_META_KEY = "index.tokenlessLive";
+
+/** How many of the newest indexed ids the at-open check looks up (EX1). */
+const INDEX_SAMPLE = 8;
 
 /** Rows per box-3 transaction in the at-open inline refill. CAL. */
 const REFILL_BATCH = 500;
@@ -1006,12 +1037,135 @@ export class Store {
     });
     this.assertLayout();
     this.afterReconcile(identity);
+    // AN EMPTY WORD INDEX BESIDE LIVE ROWS IS REBUILT HERE (EX1, 2026-11-04):
+    // a hosted "Download my memory" file, or any `counterparts.sqlite` put in
+    // place by hand, arrives with no `cache/`, and until now only
+    // `verify --rebuild` filled one. Every writable door crosses this line.
+    if (!this.observer) this.reindexIfEmpty();
     if (migration !== null) this.noteMigration(migration);
     // PRIVATE TO ITS USER (R1, `private.ts`): a store an older build left
     // readable by others is tightened the first time a writer opens it. Two
     // stats when it is already tight, no write at open either way, and a chmod
     // the filesystem refuses is a line in the ring, never a refusal.
     if (!this.observer && process.platform !== "win32") this.tightenIfOpen(opts);
+  }
+
+  /** Live rows, the denominator both checks below read. One COUNT. */
+  private liveRowCount(): number {
+    return this.ops.get<{ n: number }>("SELECT COUNT(*) AS n FROM memories WHERE archived = 0 AND superseded_by IS NULL")?.n ?? 0;
+  }
+
+  /**
+   * TRUE when the word index (box 3's `doc_lens`) holds nothing while the
+   * store has live rows that would give it entries: observer-safe, two COUNTs
+   * and a `cache_meta` read. The shape of a store file moved in without its
+   * cache (a hosted export opened locally, EX1), which answers "Nothing found"
+   * to every question until the index is rebuilt. A store whose live rows
+   * give no index entry at all (every one in a script the tokenizer keeps
+   * nothing of) is not empty in that sense: a writable open that rebuilt and
+   * still found nothing stamps the count it saw (`INDEX_TOKENLESS_META_KEY`),
+   * and the same count reads as settled.
+   */
+  wordIndexEmpty(): boolean {
+    if (indexedDocCount(this.cache) > 0) return false;
+    const live = this.liveRowCount();
+    if (live === 0) return false;
+    const stamped = this.cache.get<{ value: string }>("SELECT value FROM cache_meta WHERE key = ?", INDEX_TOKENLESS_META_KEY)?.value;
+    return stamped !== String(live);
+  }
+
+  /**
+   * A WORD INDEX THAT BELONGS TO ANOTHER FILE (EX1 review): a store file put
+   * in place of another inside the same folder keeps the old `cache/`, whose
+   * index is full of the old store's ids. Nothing was empty, so nothing
+   * rebuilt, and every question answered from the wrong memory. The check: the
+   * newest indexed ids (`doc_lens` by rowid, so the last written; at most
+   * `INDEX_SAMPLE` primary-key reads) are looked up among this file's rows,
+   * and the index is the other file's when NONE of them is here. Cheapest
+   * honest test, and why: no store id exists to compare (a hosted download
+   * carries none, and adding one would be a format change for this); a count
+   * comparison can't tell two stores of the same size apart; and a sample
+   * that must miss entirely won't fire on one stray row an older build left
+   * indexed. It catches an OLDER copy of the same store put back over a newer
+   * cache only when at least `INDEX_SAMPLE` rows were indexed since that copy
+   * was made: fewer, and some sampled id is still in the copy.
+   */
+  private indexFromAnotherFile(): boolean {
+    const sample = this.cache.all<{ memory_id: string }>(`SELECT memory_id FROM doc_lens ORDER BY rowid DESC LIMIT ${String(INDEX_SAMPLE)}`);
+    if (sample.length === 0) return false;
+    for (const r of sample) {
+      if (this.ops.get("SELECT 1 FROM memories WHERE id = ?", r.memory_id) !== undefined) return false;
+    }
+    return true;
+  }
+
+  /**
+   * THE AT-OPEN REBUILD of an empty or another file's word index (EX1). The
+   * same rows `rebuildCache` indexes (live, not denied), the LEXICAL HALF
+   * ONLY: no vector of this store is dropped (a reset tag or an inline refill
+   * this open made stays) and none is computed here, because an embedder at
+   * open runs with no budget and a hook would wait on every row of an
+   * imported store; the worker's backfill gives them vectors, as it does any
+   * row without one. Another file's index is reset first, keeping the vector
+   * table and its tag, and the vectors of ids this file doesn't hold are
+   * deleted. All in one box-3 transaction, re-asked under its lock. A cache from a newer build,
+   * or a lock past the busy timeout, costs this open the rebuild, never the
+   * open: the next writable open asks again. Rows that give no entry at all
+   * leave the index empty: then the count is stamped, no event is written, and
+   * the next open doesn't rescan.
+   */
+  private reindexIfEmpty(): void {
+    try {
+      if (cacheAhead(this.cache) !== null) return;
+      // The cheap look first, outside any lock: the steady state ends here.
+      if (!this.indexFromAnotherFile() && !this.wordIndexEmpty()) return;
+      let wrote: { indexed: number; live: number; foreign: boolean; droppedVectors: number } | null = null;
+      // ALL OF IT IN ONE box-3 TRANSACTION (review of d5f328c9): the reset,
+      // the orphan sweep and the words, with both questions asked again under
+      // the write lock. Six openers at once on a file dropped into a used
+      // folder used to interleave a reset with another's rebuild and leave a
+      // few rows indexed for good; now the first one through does the work,
+      // and the rest find this file's index and write nothing, not even an event.
+      this.cache.transaction(() => {
+        const foreign = this.indexFromAnotherFile();
+        if (!foreign && !this.wordIndexEmpty()) return;
+        const denied = new Set(this.deniedIds());
+        let dropped = 0;
+        if (foreign) {
+          resetCache(this.cache, { keepEmbeddings: true });
+          const canonical = new Set(this.ops.all<{ id: string }>("SELECT id FROM memories").map((r) => r.id));
+          const del = this.cache.prepare("DELETE FROM embeddings WHERE memory_id = ?");
+          for (const r of this.cache.all<{ memory_id: string }>("SELECT memory_id FROM embeddings")) {
+            if (canonical.has(r.memory_id) && !denied.has(r.memory_id)) continue;
+            del.run(r.memory_id);
+            dropped += 1;
+          }
+        }
+        const rows = this.ops.all<{ id: string; title: string | null; body: string }>(
+          "SELECT id, title, body FROM memories WHERE archived = 0 AND superseded_by IS NULL ORDER BY id",
+        );
+        for (const row of rows) {
+          if (denied.has(row.id)) continue;
+          indexDoc(this.cache, row.id, indexTextOf(row.title, row.body));
+        }
+        const indexed = indexedDocCount(this.cache);
+        if (indexed === 0) {
+          this.cache.run("INSERT OR REPLACE INTO cache_meta (key, value) VALUES (?, ?)", INDEX_TOKENLESS_META_KEY, String(rows.length));
+        }
+        wrote = { indexed, live: rows.length, foreign, droppedVectors: dropped };
+      });
+      const done = wrote as { indexed: number; live: number; foreign: boolean; droppedVectors: number } | null;
+      // Nothing written (another opener did it), or only the tokenless stamp: no event.
+      if (done === null || (done.indexed === 0 && !done.foreign)) return;
+      this.emit(INDEX_REBUILT_AT_OPEN_EVENT, undefined, done);
+      try {
+        this.appendEvent({ name: INDEX_REBUILT_AT_OPEN_EVENT, day: this.livedDay(), payload: done });
+      } catch {
+        // A lost lock costs the row, never the open; the index is rebuilt either way.
+      }
+    } catch (err) {
+      this.emit("store.index.rebuild-at-open.failed", undefined, { locked: isLocked(err) });
+    }
   }
 
   private tightenIfOpen(opts: StoreOptions): void {
@@ -1407,10 +1561,18 @@ export class Store {
        *  last model's. A revise that leaves the body alone keeps the model. */
       model?: string;
       reason?: string;
+      /**
+       * A precondition asked of the row INSIDE the write transaction
+       * (`BEGIN IMMEDIATE`, `putUnless`'s pattern): true writes nothing and
+       * the revise returns 0. For a revise two processes may make at once from
+       * one stale read (the starter memories' one-time revision, HD1).
+       */
+      unless?: (row: { title: string | null; body: string; revision: number; archived: number; superseded_by: string | null }) => boolean;
     },
   ): number {
-    const { doc, seq, hash } = this.mutate("revise", () => {
+    const out = this.mutate("revise", () => {
       const row = this.requireRow(id);
+      if (patch.unless?.(row) === true) return null;
       const prior = this.docOf(row);
       const seq = row.revision + 1;
       // THE PRIOR VERSION, WORDS AND ALL, IN THE SAME TRANSACTION. It used to be
@@ -1505,6 +1667,8 @@ export class Store {
       }
       return { doc: next, seq, hash: nextHash };
     });
+    if (out === null) return 0;
+    const { doc, seq, hash } = out;
     this.indexOne(doc);
     this.emit("store.revise", id, { seq, hash });
     return seq;
@@ -3994,20 +4158,43 @@ export class Store {
    * A later stage appends; it never rewrites the earlier line (§16 G8). If this
    * cannot be written, the caller must move nothing (§16 G10).
    */
-  appendRemovalRecord(note: RemovalNote): number {
+  appendRemovalRecord(note: RemovalNote, opts: { unless?: () => boolean; at?: number } = {}): number {
+    // `unless` (HD1's claim, 2026-11-04): asked INSIDE the write transaction —
+    // `BEGIN IMMEDIATE`, so a second process asking the same waits on the busy
+    // timeout and then reads what the first wrote (`putUnless`'s pattern). True
+    // writes nothing and returns 0. `at`: the caller's clock for this row, when
+    // the caller's decision was made on it (the hold sweep's `now`).
     const seq = this.mutate("appendRemovalRecord", () => {
+      if (opts.unless?.() === true) return 0;
       this.ops.run(
         "INSERT INTO removal_record (memory_id, stage, at, actor, reason) VALUES (?, ?, ?, ?, ?)",
         note.memoryId,
         note.stage,
-        this.nowFn(),
+        opts.at ?? this.nowFn(),
         note.actor,
         note.reason ?? null,
       );
       const row = this.ops.get<{ seq: number }>("SELECT last_insert_rowid() AS seq");
       return row?.seq ?? 0;
     });
+    if (seq === 0) return 0;
     this.emit("store.removal.recorded", note.memoryId, { stage: note.stage, seq });
+    // AN UNDO PUTS IT BACK IN THE WORD INDEX (HD1). A cache rebuild inside the
+    // window (`verify --rebuild`, a repair, a migration) skips every denied id,
+    // the held one too, so a `released` re-indexes that one row from its own
+    // prose — the lexical half; a vector the rebuild dropped comes back with
+    // the worker's backfill. Only a row that is live and no longer denied.
+    if (note.stage === "released") {
+      const row = this.row(note.memoryId);
+      if (row !== undefined && row.archived === 0 && row.superseded_by === null && !this.isDenied(note.memoryId)) {
+        try {
+          indexDoc(this.cache, note.memoryId, indexTextOf(row.title, row.body));
+        } catch {
+          // The undo stands; a later rebuild indexes it.
+          this.emit("store.removal.reindex.failed", note.memoryId, {});
+        }
+      }
+    }
     return seq;
   }
 
@@ -5452,13 +5639,91 @@ export class Store {
     return this.ops.get<{ n: number }>("SELECT COUNT(*) AS n FROM memories WHERE source = 'told' AND archived = 0 AND superseded_by IS NULL")?.n ?? 0;
   }
 
-  /** Ids a removal has taken dark: consulted at load and at rebuild (§16 G12). */
+  /**
+   * Ids a removal has taken dark: consulted at load and at rebuild (§16 G12).
+   *
+   * And, since HD1 (2026-11-04), ids on a HOLD: a `held` with no later
+   * `released`. A chat's delete hides the memory everywhere the deny-list is
+   * read, at once — recall, the wake, the night, sleep, reminders — and the
+   * owner-side sweep erases it after the window. Two clauses, never "the
+   * latest stage": the sweep's own `requested`, appended between the hold and
+   * `dark`, must not bring a held memory back for that moment.
+   */
   deniedIds(): string[] {
     return this.ops
       .all<{ memory_id: string }>(
-        "SELECT DISTINCT memory_id FROM removal_record WHERE stage IN ('dark', 'chased', 'complete')",
+        `SELECT DISTINCT memory_id FROM removal_record WHERE stage IN ('dark', 'chased', 'complete')
+         UNION
+         SELECT memory_id FROM removal_record GROUP BY memory_id HAVING ${HELD_HAVING}`,
       )
       .map((r) => r.memory_id);
+  }
+
+  /**
+   * EVERY HOLD STILL ACTIVE (HD1): ids held and not released, that no removal
+   * has taken dark yet, each with when its newest hold was written (epoch ms)
+   * and the sweep's CLAIMS on it since (`erasing` rows after that hold: how
+   * many, and the newest one's moment). A claim is the sweep's "I am erasing
+   * this now", taken in one transaction (`core/removal-hold.ts#claimHold`); an
+   * undo is refused once one exists. More than one claim means an erase that
+   * failed and was tried again. Oldest first. A read: pure and emit-free.
+   */
+  holds(id?: string): { id: string; at: number; claims: number; claimedAt: number | null }[] {
+    return this.ops
+      .all<{ id: string; at: number; claims: number; claimed_at: number | null }>(
+        `WITH g AS (
+           SELECT memory_id,
+                  MAX(CASE WHEN stage = 'held' THEN seq END) AS hs,
+                  COALESCE(MAX(CASE WHEN stage = 'released' THEN seq END), 0) AS rs,
+                  SUM(CASE WHEN stage IN ('dark', 'chased', 'complete') THEN 1 ELSE 0 END) AS fin
+             FROM removal_record ${id === undefined ? "" : "WHERE memory_id = ?"} GROUP BY memory_id)
+         SELECT g.memory_id AS id, h.at AS at,
+                (SELECT COUNT(*) FROM removal_record e WHERE e.memory_id = g.memory_id AND e.stage = 'erasing' AND e.seq > g.hs) AS claims,
+                (SELECT MAX(e.at) FROM removal_record e WHERE e.memory_id = g.memory_id AND e.stage = 'erasing' AND e.seq > g.hs) AS claimed_at
+           FROM g JOIN removal_record h ON h.seq = g.hs
+          WHERE g.hs IS NOT NULL AND g.hs > g.rs AND g.fin = 0
+          ORDER BY h.at, g.memory_id`,
+        ...(id === undefined ? [] : [id]),
+      )
+      .map((r) => ({ id: r.id, at: r.at, claims: r.claims, claimedAt: r.claimed_at }));
+  }
+
+  /** One id's active hold (`holds()`'s row), or null when it is not on one. */
+  holdState(id: string): { id: string; at: number; claims: number; claimedAt: number | null } | null {
+    return this.holds(id)[0] ?? null;
+  }
+
+  /**
+   * THE HOLDS STILL WAITING (HD1): active holds no sweep has claimed — the
+   * ones an undo can still bring back. The `deleted` handle lists them and the
+   * wake counts them. Oldest first. A read: pure and emit-free.
+   */
+  pendingHolds(): { id: string; at: number }[] {
+    return this.holds()
+      .filter((h) => h.claims === 0)
+      .map((h) => ({ id: h.id, at: h.at }));
+  }
+
+  /** Is this id on a hold an undo can still release: held, not released, not claimed by the sweep, not taken dark (HD1)? */
+  isHeld(id: string): boolean {
+    const h = this.holdState(id);
+    return h !== null && h.claims === 0;
+  }
+
+  /**
+   * READ THROUGH THE HOLD (HD1): a held memory's prose, for the three callers
+   * that must see it while everything else is refused — the erase (its body
+   * is the span chase's fallback, the contamination scan's needle and the cue
+   * sweep's words, read before anything moves: §16 G13), the `deleted` handle
+   * and an undo's answer, which name it by title. Null for anything that is
+   * not held (live, released, or taken dark), so this is never a way around a
+   * removal. `readProse` itself still refuses a held id by name (REMOVED).
+   */
+  heldProse(id: string): ProseDoc | null {
+    // Claimed too: the sweep's own erase reads through its claim.
+    if (this.holdState(id) === null) return null;
+    const row = this.row(id);
+    return row === undefined ? null : this.docOf(row);
   }
 
   /**
@@ -5673,11 +5938,14 @@ export class Store {
 
   /** Emit-free (§14.1 G8: reads are pure) — this is called on every read path. */
   private isDenied(id: string): boolean {
-    const denied = this.ops.get<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM removal_record WHERE memory_id = ? AND stage IN ('dark','chased','complete')",
+    // `deniedIds()`'s two clauses, for one id: taken dark, or on a hold (HD1).
+    const denied = this.ops.get<{ dark: number; held: number | null }>(
+      `SELECT SUM(CASE WHEN stage IN ('dark','chased','complete') THEN 1 ELSE 0 END) AS dark,
+              (${HELD_HAVING}) AS held
+         FROM removal_record WHERE memory_id = ?`,
       id,
     );
-    return (denied?.n ?? 0) > 0;
+    return (denied?.dark ?? 0) > 0 || denied?.held === 1;
   }
 
   private refuseIfDenied(id: string): void {

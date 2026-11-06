@@ -443,6 +443,7 @@ export function chaptersOn(store: Store, date: string, opts: { fromDay?: number 
  */
 export interface YesterdayPlace {
   readonly scope: string;
+  /** 0: never named, only weighed for a name it shares (FS1: the reader's own folder). */
   readonly sessions: number;
 }
 
@@ -456,7 +457,7 @@ function placesWords(places: readonly YesterdayPlace[]): string | null {
   if (real.length === 0) return null;
   const sorted = [...real].sort((a, b) => b.sessions - a.sessions || (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0));
   const total = sorted.reduce((n, p) => n + p.sessions, 0);
-  const shown = sorted.slice(0, YESTERDAY_PLACES_SHOWN).map((p) => `${placeWords(p.scope)}${p.sessions > 1 && sorted.length > 1 ? ` (${String(p.sessions)})` : ""}`);
+  const shown = sorted.slice(0, YESTERDAY_PLACES_SHOWN).map((p) => `${placeWords(p.scope, places.map((r) => r.scope))}${p.sessions > 1 && sorted.length > 1 ? ` (${String(p.sessions)})` : ""}`);
   const more = sorted.length - shown.length;
   return `${total === 1 ? "a session" : `${String(total)} sessions`} in ${shown.join(", ")}${more > 0 ? `, +${String(more)} more` : ""}`;
 }
@@ -674,12 +675,27 @@ export function todaySoFarSummaryForms(chapters: readonly TodayChapter[], forms:
 }
 
 /**
- * A DIRECTORY AS THE LINE SAYS IT: the home directory as `~`, read off the
- * path's shape (`/Users/<name>`, `/home/<name>`) so this module needs no
- * process state. Anything else is printed as it is.
+ * A DIRECTORY AS THE LINE SAYS IT (FS1, 2026-11-04): its name, the path's last
+ * part ("sim", not its whole path in every line of every wake); and
+ * only when another folder in `among` (the others the same line or section
+ * names, and the reader's own where the caller has it) has the same name, the
+ * path, the home directory as `~` read off its shape (`/Users/<name>`,
+ * `/home/<name>`) so this module needs no process state. Pure.
  */
-export function placeWords(scope: string): string {
-  return flatten(scope.trim().replace(/\/+$/, "").replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~"));
+export function placeWords(scope: string, among: Iterable<string> = []): string {
+  const bare = scope.trim().replace(/\/+$/, "");
+  const name = lastPart(bare);
+  let clash = false;
+  for (const other of among) {
+    const o = other.trim().replace(/\/+$/, "");
+    if (o !== bare && lastPart(o) === name) clash = true;
+  }
+  return flatten(name.length > 0 && !clash ? name : bare.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~"));
+}
+
+function lastPart(path: string): string {
+  const parts = path.split(/[\\/]/).filter((p) => p.length > 0);
+  return parts[parts.length - 1] ?? "";
 }
 
 /**
@@ -698,8 +714,8 @@ export function placeWords(scope: string): string {
  * the wake's body already names that episode (`Counterpart#lastHereFacts`).
  * An untitled chapter goes by its first words, never by its id alone (WK1).
  */
-export function elsewhereLine(chapter: ChapterHere, date: string, reader: string | null = null): string {
-  const where = chapter.scope === null ? "another project" : placeWords(chapter.scope);
+export function elsewhereLine(chapter: ChapterHere, date: string, reader: string | null = null, among: readonly string[] = []): string {
+  const where = chapter.scope === null ? "another project" : placeWords(chapter.scope, among);
   const words = (chapter.title ?? "").trim() || chapter.excerpt.trim();
   const named = words.length === 0 ? "" : ` — "${excerpt(words, LAST_HERE_TITLE_BYTES)}" (${chapter.id})`;
   return flatten(`${ELSEWHERE_HEAD} ${where}: ${sessionWords(chapter.session, chapter.model, reader)}, ${date}${named}.`);
@@ -848,6 +864,7 @@ export function todayElsewhereLines(
   here: readonly HereSession[] = [],
   now?: number,
   quietMs: number = ELSEWHERE_QUIET_MS,
+  own: readonly string[] = [],
 ): { line: string; shorter: string[] } | null {
   const named = dirs
     .filter((d) => d.firstAt !== null || d.memories > 0 || d.chapter !== null)
@@ -875,6 +892,8 @@ export function todayElsewhereLines(
     const at = localDate(lastAt, zone) === localDate(now, zone) ? clock(lastAt) : localStamp(lastAt, zone);
     return from !== null && clock(from) === clock(lastAt) && localDate(from, zone) === localDate(lastAt, zone) ? ", quiet since then" : `, quiet since ${at}`;
   };
+  // Every folder the line may name, and the reader's own (`own`), so two of the same name each say their path (FS1).
+  const places = [...own, ...dirs.map((d) => d.scope), ...here.flatMap((h) => (h.scope === undefined ? [] : [h.scope]))];
   const one = (d: TodayElsewhere, chapters: boolean, titles: number): string => {
     const hush = d.live ? quiet(d.lastAt, d.firstAt) : "";
     const when =
@@ -885,10 +904,10 @@ export function todayElsewhereLines(
           : ` ${start(d.firstAt, d.lastAt)}–${clock(d.lastAt ?? d.firstAt)}`;
     const named = !chapters || d.chapter === null ? "" : chapterWords(d.chapter);
     const chapter = named.length === 0 ? "" : ` — ${named}`;
-    return `${placeWords(d.scope)}${when}${chapter}${countWords(d.memories, d.titles, titles)}`;
+    return `${placeWords(d.scope, places)}${when}${chapter}${countWords(d.memories, d.titles, titles)}`;
   };
   const oneHere = (h: HereSession, titles: number): string =>
-    `${sessionWords(h.session, h.model)}${h.scope === undefined ? "" : ` in ${placeWords(h.scope)}`}${h.startedAt === null ? "" : ` since ${start(h.startedAt, h.lastAt ?? null)}${quiet(h.lastAt, h.startedAt)}`}${titleWords(h.titles, titles)}`;
+    `${sessionWords(h.session, h.model)}${h.scope === undefined ? "" : ` in ${placeWords(h.scope, places)}`}${h.startedAt === null ? "" : ` since ${start(h.startedAt, h.lastAt ?? null)}${quiet(h.lastAt, h.startedAt)}`}${titleWords(h.titles, titles)}`;
   return elsewhereForms("Today, elsewhere:", named, one, { sessions: hereOrder(here), one: oneHere, head: HERE_ALSO_OPEN });
 }
 
@@ -1070,6 +1089,7 @@ export function sinceElsewhereLines(
   since: { readonly at: number; readonly started: boolean; readonly now: number },
   zone?: string,
   here: readonly HereSession[] = [],
+  own: readonly string[] = [],
 ): { line: string; shorter: string[] } | null {
   const named = dirs
     .filter((d) => d.startedAt !== null || d.endedAt !== null || d.memories > 0 || d.chapter !== null)
@@ -1084,6 +1104,8 @@ export function sinceElsewhereLines(
   // A clock time alone while it is the same day; the day as well when not.
   const when = (at: number): string =>
     localDate(at, zone) === localDate(since.now, zone) ? clock(at) : localStamp(at, zone);
+  // Every folder the line may name, and the reader's own (`own`), so two of the same name each say their path (FS1).
+  const places = [...own, ...dirs.map((d) => d.scope), ...here.flatMap((h) => (h.scope === undefined ? [] : [h.scope]))];
   const one = (d: SinceElsewhere, chapters: boolean, titles: number): string => {
     const state =
       d.startedAt !== null
@@ -1095,13 +1117,13 @@ export function sinceElsewhereLines(
             : "";
     const named = !chapters || d.chapter === null ? "" : chapterWords(d.chapter);
     const chapter = named.length === 0 ? "" : `, chapter ${named}`;
-    return `${placeWords(d.scope)}${state}${chapter}${countWords(d.memories, d.titles, titles)}`;
+    return `${placeWords(d.scope, places)}${state}${chapter}${countWords(d.memories, d.titles, titles)}`;
   };
   const head = since.started ? `Since you started (${when(since.at)}):` : `Since ${when(since.at)}:`;
   // A session here is named only when something changed in it: it started,
   // or wrote something that may be named.
   const changed = here.filter((h) => h.startedAt !== null || h.titles.length > 0);
   const oneHere = (h: HereSession, titles: number): string =>
-    `${sessionWords(h.session, h.model)}${h.scope === undefined ? "" : ` in ${placeWords(h.scope)}`}${h.startedAt === null ? "" : ` open since ${when(h.startedAt)}`}${titleWords(h.titles, titles)}`;
+    `${sessionWords(h.session, h.model)}${h.scope === undefined ? "" : ` in ${placeWords(h.scope, places)}`}${h.startedAt === null ? "" : ` open since ${when(h.startedAt)}`}${titleWords(h.titles, titles)}`;
   return elsewhereForms(head, named, one, { sessions: hereOrder(changed), one: oneHere, head: `${head} ${HERE_ALSO_OPEN.toLowerCase()}` });
 }

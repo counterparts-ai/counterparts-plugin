@@ -61,20 +61,24 @@ export function searchView(src: DashboardSource, q: string, limit = 25): SearchV
   // are ids and scores. The journal is left out by one id read, not a row each.
   let raw: { id: string; score: number }[];
   let journal: Set<string>;
+  let denied: Set<string>;
   try {
     raw = store.search(query, Math.max(limit * 2, store.countMemories() + 1));
     journal = new Set(store.list({ type: "episode" }));
+    // The word index still holds a memory deleted in a chat (HD1: on its hold,
+    // whole until the sweep erases it). Denied is hidden, here as in recall.
+    denied = new Set(store.deniedIds());
   } catch {
     return { q: query, hits: [], close: [], total: 0, absent: NONE };
   }
-  const matched = raw.filter((hit) => !journal.has(hit.id));
+  const matched = raw.filter((hit) => !journal.has(hit.id) && !denied.has(hit.id));
   const hits: SearchView["hits"] = [];
   for (const hit of matched) {
     const h = hitOf(store, hit.id, hit.score, day);
     if (h !== null) hits.push(h);
     if (hits.length >= limit) break;
   }
-  const close = hits.length < CLOSE_BELOW ? closeMatches(store, query, new Set(matched.map((h) => h.id)), day) : [];
+  const close = hits.length < CLOSE_BELOW ? closeMatches(store, query, new Set([...matched.map((h) => h.id), ...denied]), day) : [];
   return {
     q: query,
     hits,
@@ -165,7 +169,7 @@ export function typoDistance(a: string, b: string, max: number): number {
 /**
  * Memories whose title or words hold a word a typo or two away from one of the
  * query's (`typosAllowed`; a number is never a typo), best first: more of the query's words met, then
- * fewer typos. `exact` (the word search's own hits) are left out. Each carries
+ * fewer typos. `exact` (the word search's own hits, and the denied ids) are left out. Each carries
  * `matched`, the words as they are written in the memory, so the page marks
  * what matched. Reads rows only.
  */

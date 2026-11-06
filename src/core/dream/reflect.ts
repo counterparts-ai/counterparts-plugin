@@ -321,6 +321,14 @@ export function reflectionOpener(id: string): string {
 export const CORE_MENTIONED_PREFIX = "reflection.coreMentioned.";
 
 /**
+ * WHAT A CARRIED SHARE SAYS IN PLACE OF THE `told` ASK (2026-11-04, TC1):
+ * handing it over recorded it (`Reflections#carryLine`), so a model that
+ * remembers the older wording does not go looking for the tool, and has
+ * nothing to note about marking it.
+ */
+export const CARRIED_TOLD_NOTE = "Handing it to you marked it told: there is nothing to call for that, and nothing about it to remember.";
+
+/**
  * One memory as the reflection is shown it — words and feelings, no lane
  * arithmetic. Its words at the fidelity the room gave it (2026-09-28):
  * `whole`, an `excerpt`, its `line`, or its `id` alone (text empty); `chars`
@@ -2835,15 +2843,21 @@ export class Reflections {
     if (row === undefined) return { ok: false, reason: "unknown-reflection", cited: 0 };
     if (row.share_state === "told") return { ok: false, reason: "already-told", cited: 0 };
     if (row.share_state !== "offered" && row.share_state !== "carried") return { ok: false, reason: "no-share", cited: 0 };
+    this.store.updateReflection(row.id, { shareState: "told", shareSession: input.session });
+    const cited = this.toldOnCites(row);
+    this.record("reflection.told", row.id, { cited, via: "tool" });
+    return { ok: true, reason: "told", cited };
+  }
+
+  /** `told` on each live memory a share cites (`core_events`, actor `session`): the share reached a session to tell. */
+  private toldOnCites(row: ReflectionRow): number {
     const day = this.store.livedDay();
     const ids = parseIds(row.share_cites);
     for (const id of ids) {
       if (this.store.row(id) === undefined) continue;
       this.store.appendCoreEvent({ memoryId: id, action: "told", day, reason: row.id, dreamId: row.dream_id, actor: "session" });
     }
-    this.store.updateReflection(row.id, { shareState: "told", shareSession: input.session });
-    this.record("reflection.told", row.id, { cited: ids.length });
-    return { ok: true, reason: "told", cited: ids.length };
+    return ids.length;
   }
 
   /**
@@ -3005,9 +3019,18 @@ export class Reflections {
 
   /**
    * CARRY A SHARE the session that reflected never told — its session ended
-   * (the adapter checks that). Claimed once (`carried`); the line asks the
-   * model to tell it and notes that `told` marks it (a note, not an order:
-   * Software Directory Policy §2D, 2026-10-14). Null when there is none to carry.
+   * (the adapter checks that), or the headless night handed it back. Claimed
+   * once, and the claim IS the telling's record (2026-11-04, TC1): the share
+   * is written `told` as it is handed over, with `told` on what it cites, as
+   * the `told` phase writes it. Until then the line asked the session to call
+   * the reflect tool's `told` itself: bookkeeping, and in a person's session a
+   * permission prompt for a tool it never otherwise calls — a stranger on day
+   * 2 met it with no context, denied it, and the session filed the denial as a
+   * dated `us` memory that led every wake (the developer week, 11-04; Dana's,
+   * 11-03). Delivery is the honest mark the host has: a model's call said no
+   * more than that it meant to tell it, and a carried share was never carried
+   * twice either way. `carried` stays readable on older rows. Null when there
+   * is none to carry.
    */
   carryLine(input: { session: string; reflection: string }): string | null {
     if (this.ctx.observer) return null;
@@ -3016,8 +3039,10 @@ export class Reflections {
     // A CLAIM, not a read then a write (review of #256, S5): two prompts
     // racing both read "offered"; only the one whose write still finds it
     // offered carries it.
-    if (!this.store.updateReflection(row.id, { shareState: "carried", shareSession: input.session, ifShareState: "offered" })) return null;
-    this.record("reflection.carried", row.id, {});
+    // `toldVia` keeps "told on delivery" readable apart from a told call (doctor's Reflection line).
+    if (!this.store.updateReflection(row.id, { shareState: "told", shareSession: input.session, ifShareState: "offered", detail: { ...parseDetail(row.detail), toldVia: "carry" } })) return null;
+    const cited = this.toldOnCites(row);
+    this.record("reflection.told", row.id, { cited, via: "carry" });
     const who = this.ctx.ownerName() ?? "the owner";
     const when = row.date ?? "recently";
     const d = parseDetail(row.detail);
@@ -3032,7 +3057,7 @@ export class Reflections {
     const join = asked === null || d["joined"] !== undefined ? null : joinHow(row.id, asked, who);
     return (
       `Counterparts: after reflecting on ${when}, you left a morning share for ${who} that was never told. At a natural moment — not mid-task — tell it in your own words, as a telling ("When I last reflected…"), tentatively where it is about ${who}. ` +
-      `Once you have told it, the counterparts reflect tool's phase "told", reflection: ${row.id}, marks it told.${close === null ? "" : ` ${close}`}${core === null ? "" : ` ${core}`}${join === null ? "" : ` ${join}`} The share: ${row.share}`
+      `${CARRIED_TOLD_NOTE}${close === null ? "" : ` ${close}`}${core === null ? "" : ` ${core}`}${join === null ? "" : ` ${join}`} The share: ${row.share}`
     );
   }
 
@@ -4258,6 +4283,16 @@ export class Reflections {
     const why = this.words(input.why, row.session ?? row.id, DREAM_TUNABLES.MAX_WHY_CHARS);
     if (!why.ok) return { ok: false, reason: "failed", detail: `A reflection settles only with a plain reason, in \`why\` — ${why.detail}` };
     return settleContradiction(this.store, { holds: input.holds, over: input.over, how: input.how, why: why.text, actor: "reflection", actorId: row.id });
+  }
+
+  /**
+   * Is a reflection begun and not finished in ANY session, and not left
+   * behind (quiet past `ABANDONED_AFTER_MS`)? HD1 fix round: a chat's delete
+   * waits for hosted's in-chat night.
+   */
+  busyAnywhere(): boolean {
+    const now = this.store.now();
+    return this.store.reflections({ limit: 5 }).some((r) => r.state === "begun" && now - r.started_at <= DREAM_TUNABLES.ABANDONED_AFTER_MS);
   }
 
   /**

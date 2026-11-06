@@ -206,7 +206,7 @@ export function joinStillStands(
   }
   const now = (f: string): string | null => store.projectOfFolder(f)?.project_id ?? null;
   if (now(p.into) !== p.intoProject || now(p.folder) !== p.folderProject) {
-    return { reason: "projects-changed", detail: `${said(folderName(p.folder))} or ${said(folderName(p.into))} has joined or left a project since the question was asked.` };
+    return { reason: "projects-changed", detail: `${said(folderName(p.folder, [p.into]))} or ${said(folderName(p.into, [p.folder]))} has joined or left a project since the question was asked.` };
   }
   if (opts.folderOn !== undefined) {
     let ok = false;
@@ -215,7 +215,7 @@ export function joinStillStands(
     } catch {
       ok = false;
     }
-    if (!ok) return { reason: "folder-kept-home", detail: `The host now keeps ${said(folderName(p.folder))} or ${said(folderName(p.into))} to itself.` };
+    if (!ok) return { reason: "folder-kept-home", detail: `The host now keeps ${said(folderName(p.folder, [p.into]))} or ${said(folderName(p.into, [p.folder]))} to itself.` };
   }
   return null;
 }
@@ -223,8 +223,8 @@ export function joinStillStands(
 /** The share's question, in the counterpart's voice. */
 export function joinSentence(p: JoinProposal): string {
   const things = p.subjects.map((x) => said(x, 40)).filter((x) => x.length > 0);
-  const folder = said(folderName(p.folder));
-  const into = said(folderName(p.into));
+  const folder = said(folderName(p.folder, [p.into]));
+  const into = said(folderName(p.into, [p.folder]));
   return (
     `${folder} and ${into} look like one piece of work: written in on the same ${String(p.days)} days lately` +
     `${things.length > 0 ? `, both about ${things.join(", ")}` : ""}. Shall I treat them as one project? ` +
@@ -236,7 +236,7 @@ export function joinSentence(p: JoinProposal): string {
 /** How the session acts on the owner's answer. */
 export function joinHow(reflection: string, p: JoinProposal, who: string): string {
   return (
-    `The share asks ${who} whether ${said(folderName(p.folder))} and ${said(folderName(p.into))} are one project: ask it plainly, and mark the share told. ` +
+    `The share asks ${who} whether ${said(folderName(p.folder, [p.into]))} and ${said(folderName(p.into, [p.folder]))} are one project: ask it plainly, and mark the share told. ` +
     `On ${who}'s yes, the counterparts reflect tool's phase "join", reflection: ${reflection}, joins them. On a no, or no answer, nothing changes.`
   );
 }

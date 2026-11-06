@@ -83,6 +83,9 @@ import type { HostSessionEvidence, RetentionReport } from "../../../core/remembe
 // `remember/index.ts` does not re-export it, and `test/cli.test.ts` pins every
 // importer — nothing that holds a `Counterpart` can reach it.
 import { pruneRetention } from "../../../core/remember/retention.js";
+// THE ERASE AFTER A CHAT'S HOLD (HD1): the one import of the console's removal
+// outside `adapters/cli/` on local, pinned by `test/cli.test.ts`.
+import { sweepHeldRemovals } from "../../cli/removal.js";
 import { dataDir, describeGuardRefusal } from "../../../core/store/index.js";
 import type { Store } from "../../../core/store/index.js";
 import { hostSessionEvidence, installedVersion, rewindWriteUps, writeUpSources } from "../../sessions.js";
@@ -401,6 +404,9 @@ export async function runOnce(input: {
   };
   /** How long this process took to reach `main()`, for the `runner.steps` row. */
   bootMs?: number;
+  /** The wall clock the hold sweep reads (HD1). Absent: the store's. Injected
+   *  so a test can step past the 24-hour window without waiting a day. */
+  now?: () => number;
   onEvent?: (name: string, data: Record<string, string | number | boolean | null>) => void;
 }): Promise<RunReport> {
   const { config } = input;
@@ -646,6 +652,23 @@ export async function runOnce(input: {
       emit("carries.threw", { code: err instanceof Error ? err.name : "UNKNOWN" });
     }
     steps.lap("carries");
+    // 3e. A CHAT'S DELETES, ERASED AFTER THEIR HOLD (HD1, 2026-11-04): every
+    // memory `remember`'s `remove` put on the 24-hour hold whose window has
+    // passed is removed by the console's own removal (`adapters/cli/`). This
+    // file is the one importer outside `adapters/cli/` on local — the
+    // caller-universality test pins it — so the model's call only hides, and
+    // this owner-side clock erases. Before the day's copy below, so the copy
+    // made after an erase does not hold it. Its own try, like the steps above.
+    try {
+      const swept = sweepHeldRemovals(counterpart.store, {
+        ...(input.now === undefined ? {} : { now: input.now() }),
+        onEvent: emit,
+      });
+      if (swept.due > 0) emit("runner.holds", { due: swept.due, erased: swept.erased.length, failed: swept.failed.length });
+    } catch (err) {
+      emit("holds.threw", { code: err instanceof Error ? err.name : "UNKNOWN" });
+    }
+    steps.lap("removals");
     // 4. THE DAY'S COPY OF THE STORE — after everything above has written, on
     // the failed path as well as the good one, and before the store is closed.
     // It never throws by construction (`adapters/snapshots.ts`); the try is

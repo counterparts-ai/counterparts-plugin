@@ -1302,6 +1302,11 @@ export function deindexDoc(db: Db, id: string): void {
   });
 }
 
+/** How many documents box 3's word index holds (`doc_lens`, one row per indexed memory). */
+export function indexedDocCount(db: Db): number {
+  return db.get<{ n: number }>("SELECT COUNT(*) AS n FROM doc_lens")?.n ?? 0;
+}
+
 /** How many vectors box 3 holds. The count `unembeddedCount()` is NOT. */
 export function embeddingCount(db: Db): number {
   return db.get<{ n: number }>("SELECT COUNT(*) AS n FROM embeddings")?.n ?? 0;

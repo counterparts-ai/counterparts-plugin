@@ -270,6 +270,8 @@ function payloadOf(raw: string | null): Record<string, unknown> {
 }
 
 /** Shown even at zero: the three ways out that are forgetting by design. */
+/** The removal record's stages that belong to a removal itself (CLI removal module, steps 3–5). */
+const REMOVAL_STAGES = new Set<string>(["requested", "dark", "chased", "complete"]);
 const ALWAYS_SHOWN = new Set<string>([PRUNE_ARCHIVE_REASON, MERGE_ARCHIVE_REASON, REMOVED_BY_OWNER]);
 /** How many ids one segment carries to the page. */
 const ARCHIVE_ITEMS_CAP = 200;
@@ -440,8 +442,12 @@ export function healthView(src: DashboardSource): HealthView {
   }
   const newestFirst = (ids: readonly string[], at: (id: string) => number): string[] =>
     [...ids].sort((a, b) => at(b) - at(a) || (a < b ? -1 : 1));
+  // Only a removal's own stages put an id under "removed by you": a chat's
+  // delete on its hold (HD1: `held`, and `released` when undone) is not a
+  // removal by the owner, and a released one is back. They stay in `removals`
+  // above, under their own words; a hold the sweep finished is `complete` here.
   const removedLatest = new Map<string, (typeof removals)[number]>();
-  for (const r of removals) removedLatest.set(r.id, r);
+  for (const r of removals) if (REMOVAL_STAGES.has(r.stage)) removedLatest.set(r.id, r);
   const removedIds = new Set<string>(removedLatest.keys());
   for (const id of store.list()) {
     const row = store.row(id);

@@ -65,9 +65,15 @@ export function census(src: DashboardSource, opts: CensusOptions = {}): MemoryLi
   const day = store.livedDay();
   const filter = opts.includeArchived === true ? {} : { archived: false };
   const out: MemoryLine[] = [];
+  // A denied row that is NOT archived is a memory deleted in a chat, on its
+  // hold (HD1): whole, undoable, hidden. It is left out of the lists and the
+  // counts, not listed as an absence. A removal proper is archived, and stays
+  // a named absence below.
+  const denied = new Set(store.deniedIds());
   for (const id of store.list(filter)) {
     const row = store.row(id);
     if (row === undefined) continue;
+    if (row.archived !== 1 && denied.has(id)) continue;
     // The journal is not a memory. See the file header.
     if (isJournal(row)) continue;
     try {

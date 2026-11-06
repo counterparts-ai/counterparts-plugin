@@ -89,6 +89,7 @@ export type { StdioOptions } from "./stdio.js";
 import { Counterpart } from "../../core/counterpart.js";
 import type { CounterpartEvent } from "../../core/counterpart.js";
 import type { Embedder } from "../../core/store/index.js";
+import type { ToldSurface } from "../../core/told.js";
 import { McpServer } from "./server.js";
 import type { McpServerOptions } from "./server.js";
 
@@ -119,8 +120,14 @@ export interface OpenServerOptions extends Omit<McpServerOptions, "counterpart">
   /** The host config's `pageWriter.mode` — `off` stops the reflection's page
    *  write too (owner ruling D3 on #256). Absent: `session`. */
   pageWriterMode?: "session" | "off";
+  /** Which surface this server serves, for the starter memories' words
+   *  (`Counterpart.open`'s `toldSurface`, EX1): the stdio entry point says
+   *  `local`, hosted's tenant open says `hosted`. Absent: never switched. */
+  toldSurface?: ToldSurface;
   /** The brain's own events, for the process log (`adapters/log/`). */
   onCounterpartEvent?: (e: CounterpartEvent) => void;
+  /** The store's clock (tests that move time); the system clock when absent. `now` is the server's own. */
+  storeNow?: () => number;
 }
 
 /** The sync face of a live embedder, when `embedder` is one. Duck-typed on purpose: this file must not import the claude-code adapter. */
@@ -142,8 +149,10 @@ export function openServer(opts: OpenServerOptions = {}): McpServer {
     ...(opts.snapshotsDir === undefined ? {} : { snapshotsDir: opts.snapshotsDir }),
     ...(opts.timeZone === undefined ? {} : { timeZone: opts.timeZone }),
     ...(opts.pageWriterMode === undefined ? {} : { pageWriterMode: opts.pageWriterMode }),
+    ...(opts.toldSurface === undefined ? {} : { toldSurface: opts.toldSurface }),
     ...(opts.observer === undefined ? {} : { observer: opts.observer }),
     ...(opts.onCounterpartEvent === undefined ? {} : { onEvent: opts.onCounterpartEvent }),
+    ...(opts.storeNow === undefined ? {} : { now: opts.storeNow }),
   });
   return new McpServer({
     counterpart,
@@ -164,6 +173,7 @@ export function openServer(opts: OpenServerOptions = {}): McpServer {
     ...(opts.canary === undefined ? {} : { canary: opts.canary }),
     ...(opts.lifecycle === undefined ? {} : { lifecycle: opts.lifecycle }),
     ...(opts.wakeNotice === undefined ? {} : { wakeNotice: opts.wakeNotice }),
+    ...(opts.removal === undefined ? {} : { removal: opts.removal }),
     ...(opts.manifestVersion === undefined ? {} : { manifestVersion: opts.manifestVersion }),
     ...(opts.pluginVersion === undefined ? {} : { pluginVersion: opts.pluginVersion }),
     ...(opts.env === undefined ? {} : { env: opts.env }),

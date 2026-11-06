@@ -16,6 +16,19 @@ import { STATIC_WEIGHTS_ENV } from "../../core/embed/static.js";
 // and the wake's (2026-10-27, review of #664).
 import { PLUGIN_TABLE_UPDATE, byRoute, npmTableCommand, tableOnDisk } from "../claude-code/doctor-meaning.js";
 import { installRoute } from "../plugin.js";
+import { updateSwitch } from "../update-check.js";
+
+/** What setup says when recall by meaning is on. */
+export const RECALL_ON_LINE = "Recall by meaning: on. A small model runs on your machine and sends nothing anywhere.";
+/** What a new install says about the daily update check (`update-check.ts`): the
+ *  durable switch, since an environment variable only reaches the worker when
+ *  Claude Code itself was started with it. */
+export function updateCheckLine(config: string): string {
+  return (
+    "Updates: once a day Counterparts asks registry.npmjs.org for the newest version number; it sends " +
+    `nothing about you or your memory. To turn that off, set "updateCheck": false in ${config}.`
+  );
+}
 import {
   installLayout,
   layoutRefusal,
@@ -844,7 +857,14 @@ async function installConversation(
   const tableOn = config.embedder?.enabled === true;
   const tableMissing = tableOn && !tableOnDisk({ env }).complete;
   if (tableOn && !tableMissing) {
-    io.out("Recall by meaning: on. A small model runs on your machine; nothing is sent anywhere.");
+    io.out(RECALL_ON_LINE);
+    u.blank();
+  }
+  // THE ONE REQUEST OUTSIDE CLAUDE CODE, said where the person installs (LD1,
+  // 2026-11-04): only on a new install with no switch already off, so it is
+  // never said of a check that will not run.
+  if (!already && updateSwitch({ config, asked: false, env }) === "none") {
+    io.out(updateCheckLine(tilde(layout.config, home_)));
     u.blank();
   }
   // DREAMING IS ON FOR A NEW INSTALL (2026-10-11), and a person is told so

@@ -1661,6 +1661,8 @@ export function openNightCounterpart(config: AdapterConfig, onEvent?: (e: Counte
     ...(config.pageWriter?.mode === undefined ? {} : { pageWriterMode: config.pageWriter.mode }),
     ...(config.identity === undefined ? {} : { identity: { name: config.identity.name, aliases: [...(config.identity.aliases ?? [])] } }),
     build: installedVersion(),
+    // The headless night runs on the person's computer (EX1).
+    toldSurface: "local",
     ...(onEvent === undefined ? {} : { onEvent }),
   });
 }

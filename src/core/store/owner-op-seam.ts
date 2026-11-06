@@ -53,7 +53,8 @@ export interface OwnerRemovalRequest {
   /** Memory-bearing roots only. The archive, backups, the graph, and the removal
    *  record itself are never nameable targets — they are chased as copies (§16 G16). */
   targetId: string;
-  actor: "owner";
+  /** `owner` at the console; `self` for the sweep that erases a chat's delete after its 24-hour hold (HD1). */
+  actor: "owner" | "self";
   reason: string;
   /** Wall-clock ms, not lived days. */
   requestedAt: number;
@@ -165,7 +166,7 @@ export const REMOVED_REASON = "removed-by-owner";
  * It refuses outright unless the id is already dark: a chase without a record
  * is the one outcome worse than a chase that did not happen (§16 G10).
  */
-export function chaseRemoved(store: Store, id: string): ChaseReport {
+export function chaseRemoved(store: Store, id: string, actor: OwnerRemovalRequest["actor"] = "owner"): ChaseReport {
   const access = GRANTS.get(store);
   if (access === undefined) {
     throw new StoreError("OWNER_OP_UNGRANTED", { id, site: "chaseRemoved" });
@@ -441,7 +442,8 @@ export function chaseRemoved(store: Store, id: string): ChaseReport {
       }
     }
 
-    const note: RemovalNote = { memoryId: id, stage: "chased", actor: "owner" };
+    // The actor the rest of the record names (`self` for the sweep after a chat's hold, HD1).
+    const note: RemovalNote = { memoryId: id, stage: "chased", actor };
     store.appendRemovalRecord(note);
 
     return {

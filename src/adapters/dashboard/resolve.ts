@@ -14,8 +14,9 @@
  * in an instrument, and an instrument that crashes on a broken store is the one
  * moment the owner most needs it to render (`observer-mode.md`, scar E7).
  */
-import { StoreError } from "../../core/store/index.js";
+import { REMOVAL_HOLD_MS, StoreError } from "../../core/store/index.js";
 import type { ProseDoc, ReadOnlyStore } from "../../core/store/index.js";
+import { localClock } from "../../core/time.js";
 import { truncate } from "./layout.js";
 
 export type RefState =
@@ -29,6 +30,12 @@ export type RefState =
   | "unknown"
   /** The owner removed it. The deny list answers before the prose does. */
   | "removed"
+  /**
+   * Deleted in a chat and on the 24-hour hold (HD1): hidden by the deny list
+   * like a removal, but whole and undoable until the sweep erases it. Not
+   * "removed by you" — nobody at the console did it, and it is not gone yet.
+   */
+  | "held"
   /** A forwarding address whose destination is gone. */
   | "dangling"
   /** A forwarding loop, or one too deep to walk. */
@@ -46,6 +53,8 @@ export type RefState =
 export const ABSENCE: Record<Exclude<RefState, "live" | "superseded" | "archived">, string> = {
   unknown: "[no longer at this address]",
   removed: "[removed by you]",
+  /** The no-time form; with its hold's time it reads `heldLabel`'s words. */
+  held: "[deleted in chat — being erased]",
   dangling: "[a forwarding address with nothing at the end]",
   broken: "[a forwarding loop]",
   unreadable: "[here, but unreadable]",
@@ -151,15 +160,18 @@ export function resolveRef(
     doc = store.readProse(headId);
   } catch (err) {
     // REMOVED is the owner's erasure answering before the prose does — the one
-    // absence that must never degrade into "unreadable".
-    const state: RefState = errCode(err) === "REMOVED" ? "removed" : "unreadable";
+    // absence that must never degrade into "unreadable". A chat's delete on its
+    // hold (HD1) answers REMOVED too, and is named apart: not the owner's, not gone yet.
+    const removed = errCode(err) === "REMOVED";
+    const held = removed ? heldLabel(store, headId) : null;
+    const state: RefState = held !== null ? "held" : removed ? "removed" : "unreadable";
     return {
       id,
       headId,
       state,
       present: false,
       text: null,
-      label: `${ABSENCE[state as keyof typeof ABSENCE]} ${id}`,
+      label: `${held ?? ABSENCE[state as keyof typeof ABSENCE]} ${id}`,
     };
   }
 
@@ -173,6 +185,25 @@ export function resolveRef(
       ? `"${text}" [${id}, archived: ${row?.archived_reason ?? "no reason recorded"}]`
       : `"${text}" [${id}]`;
   return { id, headId, state, present: true, text, label };
+}
+
+/**
+ * The words for a denied id that is on a chat's hold (HD1), or null when it is
+ * a removal proper. A hold still undoable names when the sweep may erase it, in
+ * the store's zone; one the sweep has claimed (`erasing`) is "being erased".
+ * `holdState` is the store's own read, pure and emit-free.
+ */
+function heldLabel(store: ReadOnlyStore, id: string): string | null {
+  try {
+    const hold = store.holdState(id);
+    if (hold === null) return null;
+    if (hold.claims > 0) return ABSENCE.held;
+    const when = localClock(hold.at + REMOVAL_HOLD_MS, store.zone());
+    return when === "" ? ABSENCE.held : `[deleted in chat — erased after ${when}]`;
+  } catch {
+    /* an instrument never throws: an unreadable hold reads as the removal it is part of */
+    return null;
+  }
 }
 
 /** True for a string that looks like one of this store's addresses. */

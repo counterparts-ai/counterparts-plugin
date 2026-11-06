@@ -65,6 +65,13 @@ import { CRAFT_BORN_META } from "../store/index.js";
 import type { ProseDoc, Store } from "../store/index.js";
 import { datePrefix, flatten } from "./briefing.js";
 
+/**
+ * `remember/own-plumbing.ts#OWN_PLUMBING_META_KEY` (TC1), spelled here: self/
+ * imports nothing from remember/ (self.test's structural guarantee). Exported
+ * for the test that holds the spellings equal.
+ */
+export const SELF_OWN_PLUMBING_META_KEY = "ownPlumbing";
+
 export interface WorkFacts {
   readonly about: string | null;
   readonly kind: Kind;
@@ -361,6 +368,8 @@ export function workHere(
       return null;
     }
     if (doc.meta["unresolved"] === true) return null;
+    // Our own plumbing (TC1, `remember/own-plumbing.ts`): kept for recall, never a work line.
+    if (doc.meta[SELF_OWN_PLUMBING_META_KEY] !== undefined) return null;
     // BELOW REACH (2026-10-10, Group 1, review 03 C2): the wake's work lines
     // are an ambient channel, so a memory that has faded below physics'
     // `REACH` is not offered here; deliberate recall still finds it.
@@ -437,7 +446,8 @@ export function workHere(
   const restTake = Math.min(rest.length, Math.max(Math.floor(room / 2), room - own.length));
   const ranked = [...own.slice(0, room - restTake), ...rest.slice(0, restTake), ...craft].sort(byTouched);
   // A line from another folder says which (review of #572).
-  return ranked.map((c) => workLine(c.id, c.doc, opts.excerpt, c.bounded, opts.year, c.origin.length > 0 && c.origin !== self ? c.origin : undefined));
+  const among = [self, ...ranked.map((c) => c.origin).filter((o) => o.length > 0)];
+  return ranked.map((c) => workLine(c.id, c.doc, opts.excerpt, c.bounded, opts.year, c.origin.length > 0 && c.origin !== self ? c.origin : undefined, among));
 }
 
 /** A small, stable number per folder: where its craft rotation starts. */
@@ -467,8 +477,8 @@ export function rotateWork(lines: readonly string[], max: number, day: number): 
   return [first, ...rest.filter((_, i) => picked.has(i))];
 }
 
-/** One work line (see `workHere`). */
-export function workLine(id: string, doc: ProseDoc, excerpt: number, bounded = false, year?: string, from?: string): string {
+/** One work line (see `workHere`). `among`: the other folders the lines name, for `folderName`. */
+export function workLine(id: string, doc: ProseDoc, excerpt: number, bounded = false, year?: string, from?: string, among: readonly string[] = []): string {
   const paragraph = doc.body.split(/\n\s*\n/).find((p) => p.trim().length > 0) ?? doc.body;
   const title = flatten(doc.title ?? "");
   const date = datePrefix({
@@ -479,16 +489,25 @@ export function workLine(id: string, doc: ProseDoc, excerpt: number, bounded = f
     ...(year === undefined ? {} : { year }),
   });
   const words = title.length === 0 ? excerptOf(paragraph, excerpt + 40) : `${title} — ${excerptOf(paragraph, excerpt)}`;
-  const where = from === undefined ? "" : ` (from ${folderName(from)})`;
+  const where = from === undefined ? "" : ` (from ${folderName(from, among)})`;
   return `- ${date}${words}${where} (${id})`;
 }
 
-/** A folder as a work line names it: `~/name` under a home directory, else its last part. */
-export function folderName(folder: string): string {
-  const home = /^\/(?:Users|home)\/[^/]+\/(.+)$/.exec(folder);
-  if (home !== null) return `~/${home[1] as string}`;
-  const parts = folder.split(/[\\/]/).filter((p) => p.length > 0);
-  return parts[parts.length - 1] ?? folder;
+/**
+ * A folder as a work line names it (FS1, 2026-11-04, as `handoff/last-here.ts#placeWords`):
+ * its last part; and only when another folder in `among` has the same last part,
+ * its path, `~/name` under a home directory. Until FS1 the `~/name` came first.
+ */
+export function folderName(folder: string, among: readonly string[] = []): string {
+  const last = (f: string): string => {
+    const parts = f.split(/[\\/]/).filter((p) => p.length > 0);
+    return parts[parts.length - 1] ?? f;
+  };
+  const bare = folder.replace(/\/+$/, "");
+  const name = last(bare);
+  if (!among.some((o) => o.replace(/\/+$/, "") !== bare && last(o) === name)) return name;
+  const home = /^\/(?:Users|home)\/[^/]+\/(.+)$/.exec(bare);
+  return home !== null ? `~/${home[1] as string}` : bare;
 }
 
 /** The block for the given lines, heading included. */

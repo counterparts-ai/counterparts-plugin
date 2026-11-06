@@ -356,7 +356,8 @@ export function memoriesWrittenHereSince(store: Store, scope: string, since: num
  * THE LIVE MEMORIES MARKED ABOUT THE OWNER OR US WRITTEN AFTER A MOMENT, in any
  * folder, newest first (WF1, 2026-11-03; the wake's "Since the last night"): the
  * caller ranks them, fences them by folder and drops what another line names.
- * Not the nightly run's (`NIGHTLY_SQL`), not a starter memory. Bounded by `limit`.
+ * Not the nightly run's (`NIGHTLY_SQL`), not a starter memory, not our own plumbing
+ * (TC1, `meta.ownPlumbing`, as `memoryTitlesByScopeSince`). Bounded by `limit`.
  */
 export function aboutUsWrittenSince(store: Store, since: number, until: number, limit: number): MemoryRow[] {
   return store["ops"]
@@ -365,6 +366,7 @@ export function aboutUsWrittenSince(store: Store, since: number, until: number, 
         WHERE type = 'memory' AND archived = 0 AND superseded_by IS NULL
           AND created_at IS NOT NULL AND created_at > ? AND created_at <= ?
           AND about IN ('owner', 'us') AND COALESCE(source, '') != 'told' AND NOT ${NIGHTLY_SQL}
+          AND meta NOT LIKE '%"${STORE_OWN_PLUMBING_META_KEY}"%'
         ORDER BY created_at DESC, id LIMIT ?`,
       since,
       until,
@@ -412,6 +414,18 @@ export function supersededPairs(store: Store): { id: string; by: string }[] {
     .map((r) => ({ id: r.id, by: r.by }));
 }
 
+/**
+ * `remember/own-plumbing.ts#OWN_PLUMBING_META_KEY` (TC1), spelled here as the
+ * store imports no module above it; a test holds the spellings equal.
+ */
+export const STORE_OWN_PLUMBING_META_KEY = "ownPlumbing";
+
+/**
+ * One or two work titles a folder, for another folder's Elsewhere (both shapes)
+ * and "Since you started". Never a row about our own plumbing (2026-11-04, TC1:
+ * `remember/own-plumbing.ts#OWN_PLUMBING_META_KEY`, spelled here, as the store
+ * imports no module above it): kept for recall, never another folder's news.
+ */
 export function memoryTitlesByScopeSince(
   store: Store,
   at: number,
@@ -445,6 +459,7 @@ export function memoryTitlesByScopeSince(
               AND COALESCE(source, '') != 'episode' AND COALESCE(origin_ref, '') NOT LIKE 'epi\\_%' ESCAPE '\\'
               AND meta NOT LIKE '%"episodeId"%' AND NOT ${NIGHTLY_SQL}
               AND meta NOT LIKE '%"unresolved":true%' AND meta NOT LIKE '%"secondHand":true%'
+              AND meta NOT LIKE '%"${STORE_OWN_PLUMBING_META_KEY}"%'
          ) WHERE tier < 2
        ) WHERE rank <= ?
        ORDER BY origin_scope, rank`,

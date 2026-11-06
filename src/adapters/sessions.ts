@@ -766,6 +766,11 @@ export function grantWriteUps(
  * EVERY SESSION RECORD IN THE REGISTRY, newest activity first. The MCP
  * server's launch records beside them are not session records and are skipped
  * (`parseRecord` refuses them). Never throws: an unreadable directory is none.
+ *
+ * A TIE IN THE SAME MILLISECOND (FL1, 2026-11-04) goes to the session that
+ * STARTED later, then to the id, never to `readdir` order: a chat opened in
+ * the same millisecond another chat's named call touched its record is the
+ * newer one, and `latestLiveSession` used to pick between them by filename.
  */
 export function listSessions(dataDir: string): SessionRecord[] {
   const out: SessionRecord[] = [];
@@ -781,7 +786,12 @@ export function listSessions(dataDir: string): SessionRecord[] {
     const record = readSession(dataDir, id);
     if (record !== null && record.sessionId === id) out.push(record);
   }
-  return out.sort((a, b) => b.lastBoundaryAt - a.lastBoundaryAt);
+  return out.sort(
+    (a, b) =>
+      b.lastBoundaryAt - a.lastBoundaryAt ||
+      b.startedAt - a.startedAt ||
+      (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0),
+  );
 }
 
 /**

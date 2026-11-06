@@ -476,7 +476,16 @@ export interface Tombstone {
 /** No body, no content hash — hashing low-entropy content leaks it (§16 G9). */
 export interface RemovalNote {
   memoryId: string;
-  stage: "requested" | "dark" | "chased" | "complete";
+  /**
+   * `held` and `released` (HD1, 2026-11-04): a chat's delete puts a memory on
+   * a 24-hour hold — hidden by the deny-list at once, erased by the owner-side
+   * sweep after the window — and `released` is its undo. Text in the column,
+   * so no store-format change: a build older than this one reads neither.
+   * `erasing` (HD1 fix round): the sweep's CLAIM on a held memory, appended in
+   * one transaction just before its erase; an undo is refused once it exists,
+   * and a second eraser that finds it does nothing.
+   */
+  stage: "held" | "released" | "erasing" | "requested" | "dark" | "chased" | "complete";
   actor: string;
   reason?: string;
 }
