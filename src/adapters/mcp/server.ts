@@ -55,6 +55,8 @@
  * No body text, no question text, no note text ever reaches an event.
  */
 import { MCP_OVERSIZE_EVENT, MCP_PART_EVENT, MCP_RECALL_EVENT, boundedIds } from "../../core/counterpart.js";
+import { closeHints, mayCloseSubject, noteCloseHintsShown } from "../../core/close-hint.js";
+import type { OpenItemHead } from "../../core/close-hint.js";
 import { CONTRADICTION_TUNABLES, HELD_HINT, NEIGHBOURS_HINT, SLOT_HINT, contentWords } from "../../core/reconsolidation.js";
 import type { Neighbour } from "../../core/reconsolidation.js";
 import { localDate, todayIn } from "../../core/time.js";
@@ -129,7 +131,9 @@ import type { AdapterConfig } from "../config.js";
 import { Lifecycle, plainContextLine } from "../lifecycle.js";
 import type { SessionInput } from "../lifecycle.js";
 import { ONE_TAG_LINE, tagLead } from "../store-id.js";
-import { NOTHING_CLOSED } from "../../core/dream/slices.js";
+import { NOTHING_CLOSED, memoryClosedTo } from "../../core/dream/slices.js";
+import { projectFolders } from "../../core/self/work.js";
+import { mayBeDoneOf } from "../../core/open-close.js";
 import { NIGHT_CHILD_ENV, NIGHT_RUN_ENV, WORKER_RUNNER_PATH } from "../spawn.js";
 import type { Spawner } from "../spawn.js";
 import {
@@ -273,6 +277,8 @@ import {
   memoryHomeWords,
   RECALL_MODE_WORDS,
   STILL_DATED_HINT,
+  MAY_CLOSE_HINT,
+  mayCloseAskedNote,
   ANSWERS_HINT,
   STILL_DATED_SHOWN,
   TITLE_ASKED_NOTE,
@@ -297,6 +303,7 @@ import {
   readAbout,
   readTraits,
   readWriteFacts,
+  doneDateAsOccurred,
   readTags,
   reminderEcho,
   ownPlumbingEcho,
@@ -1896,8 +1903,15 @@ export class McpServer {
     // THE REMINDER DATE AND HOW IT COMES BACK (2026-09-26) — checked before
     // anything is captured, so an unreadable one is a refusal that says which
     // shapes ARE readable rather than a note that lands without its date.
-    const dated = readReminder(args);
-    if ("refused" in dated) return this.refuse("remember", dated.refused, { detail: dated.detail });
+    const datedRead = readReminder(args);
+    if ("refused" in datedRead) return this.refuse("remember", datedRead.refused, { detail: datedRead.detail });
+    // v12: when it happened, who said it, what kind — never a refusal: what
+    // cannot be read is dropped and said beside the memory that landed. Read
+    // here, beside the date, since a done with a passed date keeps it as
+    // occurredOn instead (SO1 step 2).
+    const doneAt = doneDateAsOccurred(args, datedRead, readWriteFacts(args, this.today()), this.today());
+    const dated = doneAt.dated;
+    const facts = doneAt.facts;
     // Unbound, the note is filed under the session this server's host is
     // running here, found by its process (2026-10-01, `hostSession`), and
     // under nobody only when that is not exact.
@@ -1937,9 +1951,6 @@ export class McpServer {
     if ("refused" in about) return this.refuse("remember", "about-malformed", { detail: about.refused });
     const traits = readTraits(args["traits"]);
     if ("refused" in traits) return this.refuse("remember", "traits-malformed", { detail: traits.refused });
-    // v12: when it happened, who said it, what kind — never a refusal: what
-    // cannot be read is dropped and said beside the memory that landed.
-    const facts = readWriteFacts(args, this.today());
     // v14, lane B: its tags, loose first the same way.
     const tags = readTags(args);
     let deposit: DepositResult;
@@ -1991,6 +2002,7 @@ export class McpServer {
       ...(neighbours.length === 0 ? {} : { neighbours, neighboursHint: NEIGHBOURS_HINT }),
       ...this.slotOf(deposit),
       ...this.stillDatedNear(deposit, dated, facts.sent.status, [], session),
+      ...this.mayCloseOf(deposit, { title: args["title"], text, status: facts.sent.status }, []),
       ...this.answersReminder(deposit, facts.sent, neighbours),
       ...(settle === null ? {} : { settle }),
       ...(feltNow === null ? {} : { feelingsNow: feltNow }),
@@ -2480,6 +2492,71 @@ export class McpServer {
   }
 
   /**
+   * OPEN ITEMS THIS WRITE LOOKS LIKE IT SETTLES (2026-11-07, SO1 step 1b,
+   * `core/close-hint.ts`): from any folder, by the same version series, the
+   * same pull request, or what the item's `settlesWhen` names — at most three,
+   * nearest first, each with its folder, and `MAY_CLOSE_HINT`. The writing
+   * model decides; nothing is closed here. One asked of the owner carries a
+   * note that only their answer closes it. Each entry that listed any is
+   * counted (`noteCloseHintsShown`, with what the read cost). Empty when none.
+   */
+  private mayCloseOf(deposit: DepositResult, sent: { readonly title: unknown; readonly text: unknown; readonly status: unknown }, siblings: readonly string[]): Record<string, unknown> {
+    if (!deposit.deposited || deposit.memoryId === null) return {};
+    const started = performance.now();
+    // Nearly every write names nothing done: no store read at all for it.
+    if (!mayCloseSubject(sent.title, sent.text)) return {};
+    const sentStatus = sent.status;
+    const row = this.counterpart.store.row(deposit.memoryId);
+    if (row === undefined) return {};
+    const exclude = [
+      deposit.mint?.updates,
+      deposit.revision?.targetId,
+      deposit.reminder?.from,
+      ...(deposit.reminder?.alsoClosed ?? []),
+      deposit.thread?.from,
+      ...siblings,
+    ].filter((x): x is string => typeof x === "string");
+    const t = this.counterpart.self.tunables;
+    const on = this.folderOn();
+    const store = this.counterpart.store;
+    const here = (this.scope ?? "").trim();
+    const projects = new Set(here === "" ? [] : projectFolders(store, here, t.PROJECTS_TRAVEL, on));
+    const hints = closeHints(
+      this.counterpart.store,
+      {
+        id: deposit.memoryId,
+        title: row.title,
+        body: row.body,
+        about: row.about ?? null,
+        status: typeof sentStatus === "string" ? sentStatus : (row.status ?? null),
+      },
+      {
+        day: store.livedDay(),
+        carryDays: t.OPEN_CARRY_DAYS,
+        glimpses: t.OPEN_CARRY_GLIMPSE_TOUCH,
+        exclude,
+        projectFolders: projects,
+        // The folder setting (review of #783): an item in a folder that is off,
+        // paused or observer never has its title pushed into another's result.
+        ...(on === undefined ? {} : { closed: (r: OpenItemHead) => memoryClosedTo(store, r, on, this.scope ?? undefined) }),
+      },
+    );
+    if (hints.length === 0) return {};
+    const ms = performance.now() - started;
+    if (!this.counterpart.observer) this.telemetry(() => void noteCloseHintsShown(this.counterpart.store, deposit.memoryId as string, hints, ms));
+    this.markSeen(hints.map((h) => h.id));
+    const asked = hints.some((h) => h.asked === true) ? mayCloseAskedNote(this.counterpart.ownerDisplayName()) : null;
+    const mayClose = hints.map((h) => ({
+      id: h.id,
+      title: h.title,
+      ...(h.folder === undefined ? {} : { folder: h.folder }),
+      ...(h.settlesWhen === undefined ? {} : { settlesWhen: h.settlesWhen }),
+      ...(h.asked === true && asked !== null ? { note: asked } : {}),
+    }));
+    return { mayClose, mayCloseHint: MAY_CLOSE_HINT };
+  }
+
+  /**
    * THE SLOT THE DETECTOR PROPOSED for a write (2026-10-11, Group 2): the
    * older memory, by id and title, and the ask — settle it now or let the
    * dream. Empty when none was proposed.
@@ -2673,6 +2750,9 @@ export class McpServer {
     // registry scan. Unbound, it is the very session the old
     // `this.session ?? this.hostSession()` found, so the recall is unchanged.
     const key = this.seenKey();
+    // HOW LONG THE ANSWER TOOK (FD1 step 5, 2026-11-07): the recall itself,
+    // on the server's clock, onto `mcp.recall` as `elapsedMs`.
+    const startedAt = this.nowFn();
     const result = deliberateRecall(
       this.counterpart,
       {
@@ -2682,6 +2762,7 @@ export class McpServer {
       },
       { sessionId: this.session ?? key, closed: this.nightClosed() },
     );
+    const elapsedMs = Math.max(0, this.nowFn() - startedAt);
     if (manual !== null && result.reason === "handle-unknown") return this.manualTool(manual);
     const resolved = this.noteHandleResolution(handle, result);
     // THE MEASUREMENT (2026-09-28): did this lookup fetch what a mechanism's
@@ -2710,6 +2791,7 @@ export class McpServer {
       chars: payload["chars"] as number,
       truncated: payload["truncated"] === true,
       droppedForBudget: 0,
+      elapsedMs,
     });
     // Only what was DELIVERED (review of #316): an id left `waiting` was not shown.
     const deliveredIds = ((payload["memories"] as { id?: unknown }[] | undefined) ?? []).map((m) => m.id).filter((x): x is string => typeof x === "string");
@@ -2723,6 +2805,7 @@ export class McpServer {
         expanded: result.path === "handle" ? result.memories.length : 0,
         blockedBy: addressBlocked(result),
         ...(Array.isArray(payload["nights"]) && payload["nights"].length > 0 ? { nights: payload["nights"].length } : {}),
+        elapsedMs,
       },
       askedIds.length,
       question,
@@ -3029,6 +3112,11 @@ export class McpServer {
     const shown = items.slice((at - 1) * STILL_OPEN_PAGE, at * STILL_OPEN_PAGE);
     this.emit("mcp.recall.stillopen", undefined, { total: items.length, page: at, shown: shown.length, parked, routed });
     const touched = (n: number): string => (n === 0 ? "this lived day" : n === 1 ? "1 lived day ago" : `${String(n)} lived days ago`);
+    // MAY BE DONE (2026-11-07, SO1 step 1): what the night saw but would not
+    // close, and what the reflection thought looks done but wasn't sure of —
+    // listed beside the item, never asked (`open-close.ts#mayBeDoneOf`).
+    const maybe = mayBeDoneOf(this.counterpart.store);
+    const maybeShown = shown.filter((i) => maybe.has(i.id)).length;
     // THE PARKED, LISTED AND MARKED (P2, 2026-10-28): after every carried
     // item, the open threads nobody touched in `OPEN_CARRY_DAYS` lived days —
     // in no lane of the wake, not closed. Said once here, `parked: true` on each.
@@ -3055,6 +3143,10 @@ export class McpServer {
           ...(i.date === undefined ? {} : { date: i.date }),
           ...(i.settlesWhen === undefined ? {} : { settlesWhen: i.settlesWhen }),
           ...(i.parked === true ? { parked: true } : {}),
+          ...((): Record<string, unknown> => {
+            const m = maybe.get(i.id);
+            return m === undefined ? {} : { mayBeDone: m.shows === undefined ? m.why : `${m.why} (${m.shows})` };
+          })(),
         })),
         // "COMING UP", BY TITLE (WK1, 2026-10-30): the wake lists what is due
         // today and the oldest overdue and counts the rest, naming this
@@ -3075,6 +3167,9 @@ export class McpServer {
             ? "Nothing is still open."
             : `${carried === 0 ? `Nothing open is carried in the wake's "Still open" now.` : `What "Still open" carries, in the wake's order: what is live first, newest touched first.`}${at < pages ? ` More on page ${String(at + 1)} (page: ${String(at + 1)}).` : ""} Recall an id to read it whole. A lived day is a day the memory was in use.`) +
           parkedNote +
+          (maybeShown === 0
+            ? ""
+            : ` ${maybeShown === 1 ? "One is" : `${String(maybeShown)} are`} marked mayBeDone: the night thought it may be done but wasn't sure enough to close it, and the memory in brackets is why. If it is done, close it (a write that updates it with unresolved: false); nobody is asked. A question to the owner (status asked) closes only on the owner's answer, never on this mark.`) +
           (comingUp.length === 0 || at !== 1
             ? ""
             : ` comingUp: what the wake's "Coming up" lists or counts, the overdue first (overdue: true; the longest past its date first), then by date.`),
@@ -3112,6 +3207,12 @@ export class McpServer {
     let ids: readonly string[];
     let body: Record<string, unknown>;
     let row: RecallRowFields;
+    // HOW LONG THE MODE TOOK (FD1 step 5, 2026-11-07): the mode's own answer,
+    // embedding left out (its round-trip is the embedder's, not the journal's),
+    // so meaning mode's linear cost in episodes can be watched. On `mcp.recall`
+    // as `elapsedMs`; candidate-first selection waits for ~1,000 chapters or a
+    // 200 ms ask (the FD1 step 5 read).
+    const startedAt = this.nowFn();
     if (mode === "facts") {
       const r = factsRecall(ctx, question, { page });
       answer = renderFacts(r);
@@ -3163,6 +3264,7 @@ export class McpServer {
         counts: { ...r.counts },
       };
     }
+    row = { ...row, elapsedMs: Math.max(0, this.nowFn() - startedAt) };
     const payload: Record<string, unknown> = {
       path: "question",
       mode,
@@ -3224,6 +3326,7 @@ export class McpServer {
       chars: shippedChars,
       truncated: false,
       droppedForBudget: 0,
+      elapsedMs: row.elapsedMs ?? 0,
     });
     // On the durable row (review of #663, to calibrate the bar on live use):
     // each dream that came, why, and its meaning score.
@@ -3427,6 +3530,9 @@ export class McpServer {
         ...(row.page === undefined ? {} : { page: row.page }),
         ...(row.time === undefined ? {} : { time: row.time }),
         ...(row.counts === undefined ? {} : { counts: row.counts }),
+        // How long the recall took, ms (FD1 step 5): the mode's answer for a
+        // question, the address read for an id or handle.
+        ...(row.elapsedMs === undefined ? {} : { elapsedMs: row.elapsedMs }),
         considered: row.considered,
         storeSize: row.storeSize,
         chars: payload["chars"] ?? 0,
@@ -3676,7 +3782,11 @@ export class McpServer {
     // The first meeting's marker rides in the wake's head tag (2026-10-20,
     // ONE TAG), as a Claude Code session start carries it.
     const woke = lc.composeWake(input, this.lifecycleOpts.config?.injectionBudgetBytes, () => [lc.onboardingMarker(input)]);
-    const plain = lc.plainFor(input);
+    // A wake tool call can be a routine's or a hosted run's with nobody there: an
+    // unsaid folder's reminder crosses (SO1 step 3) only when the host says a person
+    // is (`CLAUDE_CODE_SESSION_ATTENDED`, what the session start's `interactive` reads).
+    const attended = ["1", "true"].includes((this.env["CLAUDE_CODE_SESSION_ATTENDED"] ?? "").trim().toLowerCase());
+    const plain = lc.plainFor(input, { cross: attended && !night });
     const told = lc.claimPlain(input, plain.due);
     const spawn = lc.spawnWorker(input);
     // NO CORE DREAM LINE ON CLAUDE.AI (2026-10-26, OL1b): the ask relayed in a

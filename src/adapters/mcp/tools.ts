@@ -232,7 +232,8 @@ function annotate(title: string, hints: { readOnly: boolean; destructive?: boole
  * object per feeling, spelled on the feelings wheel (`core/feelings-wheel.ts`).
  * Since emotion part A (2026-09-26) they weigh: the strongest one, or
  * `emotional` if that is stronger, raises the memory and slows its fading
- * (physics §5.10), and a recent one sets the mood recall matches (recall G18).
+ * (physics §5.10), and a recent one sets the mood recall matches (recall G18;
+ * off since 2026-10-10, both mood weights 0).
  * Since the wheel v2 (2026-09-30, v11): seven cores, the writer's core is kept
  * whatever the word, and `strength` and `valence` default from the word.
  */
@@ -355,7 +356,7 @@ export const CARRIED_BY_TEXT =
 const FEELINGS_PROPERTY = {
   type: "array",
   description:
-    "Optional: the feelings in this moment, one object each — mixed feelings are several, and yours and the owner's go side by side. The strongest feeling on a memory holds it higher and slows its fading; memories that felt the way someone feels now come to mind more easily.",
+    "Optional: the feelings in this moment, one object each — mixed feelings are several, and yours and the owner's go side by side. The strongest feeling on a memory holds it higher and slows its fading.",
   items: {
     type: "object",
     properties: {
@@ -1863,7 +1864,7 @@ const REFLECT: ToolSpec = {
       close: {
         type: "array",
         items: { type: "string" },
-        description: "`finish`, optional: ids from the bundle's staleOpen or settlesOpen that look done but you are not sure of — asked in the share, closed only on a yes. `close`: the proposed ids the owner agreed are done.",
+        description: "`finish`, optional: ids from the bundle's staleOpen or settlesOpen that look done but you are not sure of — nothing closes and nobody is asked: they are listed as \"may be done\" under recall \"still open\". `close`: proposed ids the owner says are done.",
       },
       closeNow: {
         type: "array",

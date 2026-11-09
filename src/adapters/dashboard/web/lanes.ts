@@ -87,8 +87,11 @@ export const LANES = {
   // A boundary that left the sleep to a cycle already running: housekeeping,
   // like a check that found nothing due.
   "sleep.cycle.held": "flow",
+  "sleep.log.swept": "flow",
+  "events.rolled": "flow",
   "prospective.fire": "home",
   "prospective.plain": "home",
+  "prospective.plain.crossed": "home",
   // Dreaming and the core (2026-09-26): a dream that wrote its journal, what
   // it changed, and the owner sending a memory back out of the core are
   // things that happened to memories.
@@ -195,6 +198,7 @@ export function iconOf(name: string, p: Payload): Icon | null {
       return "faded";
     case "prospective.fire":
     case "prospective.plain":
+    case "prospective.plain.crossed":
       return "reminder";
     default:
       return null;

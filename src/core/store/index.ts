@@ -73,6 +73,9 @@ import {
   CONFIDENTIAL_RETIRED_IDS,
   CONFIDENTIAL_RETIRED_KEY,
   DEFAULT_RETENTION_DAYS,
+  EVENTS_ROLLED_EVENT,
+  SHORT_RETENTION_DAYS,
+  SHORT_RETENTION_NAMES,
   RECURRING_META,
   SCHEMA_VERSION,
   SUBJECT_KINDS,
@@ -165,6 +168,8 @@ import {
   TERMS_META_KEY,
 } from "./cache.js";
 import { STEMMER_VERSION } from "./stem.js";
+import { summarizeDay } from "../event-rollup.js";
+import type { RollupRow, RolledDay } from "../event-rollup.js";
 import type { EmbedderIdentity, EmbedderVerdict, Hit, LengthNorm, VectorRefusal } from "./cache.js";
 import {
   occurredOnOf,
@@ -304,6 +309,7 @@ export * from "./render.js";
 export * from "./feelings.js";
 export * from "./traits.js";
 export type { Db, Statement, WalFold } from "./db.js";
+export type { WorkEventRow } from "./reads-memories.js";
 export type {
   ContradictionRow,
   SettleRow,
@@ -358,6 +364,9 @@ export {
 export {
   ADDED_COLUMNS,
   DEFAULT_RETENTION_DAYS,
+  EVENTS_ROLLED_EVENT,
+  SHORT_RETENTION_DAYS,
+  SHORT_RETENTION_NAMES,
   isPreRowsDatabase,
   OBSERVER_READ_FLOOR,
   pendingMigration,
@@ -524,6 +533,8 @@ export const WRITE_METHODS = [
   "rewriteGateValues",
   "appendEvent",
   "pruneEvents",
+  // FD1 step 2: the per-turn table's sweep, beside the log's.
+  "pruneRecallTurns",
   "setRanking",
   "pruneSupersededVersions",
   "appendRemovalRecord",
@@ -2751,6 +2762,12 @@ export class Store {
     return historyReads.foldsCiting(this, id);
   }
 
+  /** The OLDER memory of every pair of one `source`, withdrawn ones included (the interference sweep's one-cut rule, FD1 step 3). */
+  contradictionOlders(source: string): string[] {
+    if (!this.hasTable("contradictions")) return [];
+    return this.ops.all<{ a: string }>("SELECT a FROM contradictions WHERE source = ?", source).map((r) => r.a);
+  }
+
   /** Has any pair EVER named these two memories, withdrawn ones included (a slot the dream said was two things)? */
   contradictionEverBetween(x: string, y: string): boolean {
     if (!this.hasTable("contradictions")) return false;
@@ -3902,6 +3919,21 @@ export class Store {
     return historyReads.eventCounts(this, filter);
   }
 
+  /**
+   * EVERY NAME'S ALL-TIME COUNT (FD1 step 2): the rows held plus the daily
+   * summaries of the per-turn rows the sweep let go (`reads-history.ts`). What
+   * a count shown as all-time reads; `eventCounts` stays the rows held.
+   * READ-ONLY.
+   */
+  eventCountsAllTime(): EventCount[] {
+    return historyReads.eventCountsAllTime(this);
+  }
+
+  /** The daily summaries, parsed, oldest first, and the lived days they cover (FD1 step 2). READ-ONLY. */
+  rolledDays(): ReturnType<typeof historyReads.rolledDays> {
+    return historyReads.rolledDays(this);
+  }
+
   /** Every event name the log holds, sorted. `eventCounts()` without the counts. */
   eventNames(): string[] {
     return this.ops.all<{ name: string }>("SELECT DISTINCT name FROM events ORDER BY name").map((r) => r.name);
@@ -3926,19 +3958,18 @@ export class Store {
     const limit = opts.limit === undefined ? null : Math.max(0, Math.floor(opts.limit));
     const report = this.mutate("pruneEvents", () => {
       const cutoffDay = this.livedDay() - this.retentionDays;
-      const eligible =
-        this.ops.get<{ n: number }>(
-          "SELECT COUNT(*) AS n FROM events WHERE day < ? AND dedup_key IS NULL",
-          cutoffDay,
-        )?.n ?? 0;
+      // FD1 step 2: the per-turn names go at the shorter window, rolled up first.
+      const window = historyReads.eventWindow(this);
+      const rolled = this.rollUpShortEvents(window.shortCutoffDay);
+      const eligible = this.ops.get<{ n: number }>(`SELECT COUNT(*) AS n FROM events WHERE ${window.sql}`, ...window.args)?.n ?? 0;
       if (limit === null) {
-        this.ops.run("DELETE FROM events WHERE day < ? AND dedup_key IS NULL", cutoffDay);
+        this.ops.run(`DELETE FROM events WHERE ${window.sql}`, ...window.args);
       } else {
         this.ops.run(
           `DELETE FROM events WHERE seq IN (
-             SELECT seq FROM events WHERE day < ? AND dedup_key IS NULL
+             SELECT seq FROM events WHERE ${window.sql}
              ORDER BY seq ASC LIMIT ?)`,
-          cutoffDay,
+          ...window.args,
           limit,
         );
       }
@@ -3950,6 +3981,9 @@ export class Store {
         limit,
         cutoffDay,
         retentionDays: this.retentionDays,
+        shortCutoffDay: window.shortCutoffDay,
+        shortRetentionDays: window.shortRetentionDays,
+        rolled,
       };
     });
     this.emit("store.events.pruned", undefined, {
@@ -3959,8 +3993,63 @@ export class Store {
       limit: report.limit,
       cutoffDay: report.cutoffDay,
       retentionDays: report.retentionDays,
+      shortCutoffDay: report.shortCutoffDay,
+      rolled: report.rolled,
     });
     return report;
+  }
+
+  /**
+   * THE DAILY ROLL-UP (FD1 step 2), inside `pruneEvents`' transaction and
+   * BEFORE its delete: for every lived day before `shortCutoffDay` that still
+   * holds unlatched rows of `SHORT_RETENTION_NAMES` and has no roll-up yet, one
+   * `events.rolled` row latched `events.rolled.<day>`, its payload the day's
+   * summary (`core/event-rollup.ts#summarizeDay`: counts, spans, the filtered
+   * counts, the ids credited for use, probe-oq4's two reports). Written before
+   * the first row of that day is deleted, so a day the capped delete leaves
+   * half-swept already has its whole summary; the latch keeps a later pass
+   * from writing a smaller one, and the all-time readers skip a rolled day's
+   * remaining rows (`reads-history.ts#rolledDays`). Latched rows are never
+   * swept: ~1 row per lived day, kept by design. One day read at a time.
+   * Returns the rows written.
+   */
+  private rollUpShortEvents(shortCutoffDay: number): number {
+    if (SHORT_RETENTION_NAMES.length === 0) return 0;
+    const marks = SHORT_RETENTION_NAMES.map(() => "?").join(", ");
+    const days = this.ops.all<{ day: number }>(
+      `SELECT DISTINCT day FROM events
+        WHERE name IN (${marks}) AND dedup_key IS NULL AND day < ?
+          AND NOT EXISTS (SELECT 1 FROM events r WHERE r.dedup_key = '${EVENTS_ROLLED_EVENT}.' || events.day)
+        ORDER BY day`,
+      ...SHORT_RETENTION_NAMES,
+      shortCutoffDay,
+    );
+    let written = 0;
+    // A REMOVED OR HELD ID NEVER ENTERS A SUMMARY (review of #776): summaries are
+    // kept at any age, the rows they replace were not, so the deny-list is
+    // read once here and every id on it is left out of `used`.
+    const denied = days.length === 0 ? new Set<string>() : new Set(this.deniedIds());
+    for (const { day } of days) {
+      const rows = this.ops.all<RollupRow>(
+        `SELECT name, day, at, ref, payload FROM events WHERE day = ? AND dedup_key IS NULL AND name IN (${marks}) ORDER BY seq`,
+        day,
+        ...SHORT_RETENTION_NAMES,
+      );
+      const lookups = this.ops.all<RollupRow>(
+        "SELECT name, day, at, payload FROM events WHERE day = ? AND name = 'mcp.recall' ORDER BY seq",
+        day,
+      );
+      this.ops.run(
+        `INSERT OR IGNORE INTO events (at, day, name, ref, dedup_key, payload) VALUES (?, ?, ?, NULL, ?, ?)`,
+        this.nowFn(),
+        day,
+        EVENTS_ROLLED_EVENT,
+        `${EVENTS_ROLLED_EVENT}.${String(day)}`,
+        JSON.stringify(withBuild({ ...summarizeDay(day, rows, lookups, denied) })),
+      );
+      written += this.ops.get<{ n: number }>("SELECT changes() AS n")?.n ?? 0;
+    }
+    return written;
   }
 
   /**
@@ -3970,6 +4059,36 @@ export class Store {
    */
   eventLogCensus(): EventLogCensus {
     return historyReads.eventLogCensus(this);
+  }
+
+  /** The moment lived day `day` began, as the log saw it (FD1 step 2; `reads-history.ts`). READ-ONLY. */
+  livedDayStartAt(day: number): number | null {
+    return historyReads.livedDayStartAt(this, day);
+  }
+
+  /** The growing association tables counted: edges, cue pairs (FD1 step 2; `reads-history.ts`). READ-ONLY. */
+  growthCounts(sinceAt: number): ReturnType<typeof historyReads.growthCounts> {
+    return historyReads.growthCounts(this, sinceAt);
+  }
+
+  /** The edges' half of `growthCounts` alone (FD1 step 2; the Association line). READ-ONLY. */
+  edgeGrowth(sinceAt: number): { rows: number; recent: number } {
+    return historyReads.edgeGrowth(this, sinceAt);
+  }
+
+  /** The event log's bytes on disk, exact where SQLite has `dbstat` (FD1 step 2; `reads-history.ts`). READ-ONLY. */
+  eventLogBytes(): { bytes: number; exact: boolean } {
+    return historyReads.eventLogBytes(this);
+  }
+
+  /** The live memories against the curve: in reach, below, under the floor (FD1 step 2; `reads-memories.ts`). READ-ONLY. */
+  reachCensus(): ReturnType<typeof memoryReads.reachCensus> {
+    return memoryReads.reachCensus(this);
+  }
+
+  /** Memories born and archived over a window (FD1 step 2; `reads-memories.ts`). READ-ONLY. */
+  memoryFlow(sinceDay: number, sinceAt: number): ReturnType<typeof memoryReads.memoryFlow> {
+    return memoryReads.memoryFlow(this, sinceDay, sinceAt);
   }
 
   // ── box 3: the ranking cache (SEAMS item J) ────────────────────────────────
@@ -4705,7 +4824,7 @@ export class Store {
    * accounting, where a dated memory archived before its window is the `faded`
    * exit and has to be found to be counted.
    */
-  datedMemories(from: string, to: string, opts?: { archived?: boolean }): DatedMemory[] {
+  datedMemories(from: string, to: string, opts?: { archived?: boolean; since?: string }): DatedMemory[] {
     return memoryReads.datedMemories(this, from, to, opts);
   }
 
@@ -5210,6 +5329,22 @@ export class Store {
     return wave2.recallTurns(this, opts);
   }
 
+  /**
+   * THE PER-TURN TABLE'S EXIT (FD1 step 2, roadmap ruling R1): recall turns
+   * older than the per-turn rows' short window (`SHORT_RETENTION_DAYS`, never
+   * longer than `retentionDays`) go, with the same cutoff as the log's
+   * per-turn rows. Its readers (`recallTurns`: lane 1's shown-against-
+   * candidates check; the owner's removal, which edits `shown`) read recent
+   * turns only. Returns the rows deleted; 0 on a store without the table.
+   */
+  pruneRecallTurns(): number {
+    return this.mutate("pruneRecallTurns", () => {
+      if (this.ops.get<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'recall_turns'")?.n !== 1) return 0;
+      this.ops.run("DELETE FROM recall_turns WHERE day < ?", historyReads.eventWindow(this).shortCutoffDay);
+      return this.ops.get<{ n: number }>("SELECT changes() AS n")?.n ?? 0;
+    });
+  }
+
   // ── v15: cue edges (2026-10-24, R3 cue learning — an experiment) ─────────
 
   /** The learned pairs out of these index terms, as stored (weights not faded: `associate/` reads them at a day). */
@@ -5525,6 +5660,11 @@ export class Store {
     return memoryReads.supersededPairs(this);
   }
 
+  /** The live work memories sessions wrote in a folder, oldest first: what the night's interference sweep reads (`reads-memories.ts#workEventRows`, FD1 step 3). */
+  workEventRows(): memoryReads.WorkEventRow[] {
+    return memoryReads.workEventRows(this);
+  }
+
   memoryTitlesByScopeSince(
     at: number,
     opts?: { readonly until?: number; readonly perScope?: number; readonly sessions?: readonly string[] },
@@ -5556,7 +5696,7 @@ export class Store {
    *  dated, `asked`, or names what would settle it (2026-10-22; `settles`
    *  P2 2026-10-28; `reads-memories.ts#openThreadTouches`): what the parking
    *  rule reads (`self/identity.ts#openCarry`). */
-  openThreadTouches(opts: { glimpses?: boolean; at?: string } = {}): { id: string; touchedDay: number; dated: boolean; asked: boolean; settles: boolean }[] {
+  openThreadTouches(opts: { glimpses?: boolean; at?: string; ids?: readonly string[] } = {}): { id: string; touchedDay: number; dated: boolean; asked: boolean; settles: boolean }[] {
     return memoryReads.openThreadTouches(this, opts);
   }
 
@@ -5565,6 +5705,13 @@ export class Store {
    *  the end-of-session ask names. */
   openThreadsOfSession(session: string, limit: number): { id: string; title: string }[] {
     return memoryReads.openThreadsOfSession(this, session, limit);
+  }
+
+  /** Every open item's title, headline words, meta, folder and status, in one read
+   *  (2026-11-07, SO1 step 1b; `reads-memories.ts#openItemHeads`): what a write's
+   *  close hint matches against. READ-ONLY. */
+  openItemHeads(bodyChars: number): ReturnType<typeof memoryReads.openItemHeads> {
+    return memoryReads.openItemHeads(this, bodyChars);
   }
 
   /** The same rows for ONE session, in write order — the neighbours a newly

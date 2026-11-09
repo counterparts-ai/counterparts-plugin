@@ -285,8 +285,9 @@ export function parseRegistry(raw: unknown): {
   };
   for (const [path, value] of Object.entries(scopesRaw as Record<string, unknown>)) {
     // An absolute path, or a pseudo-scope (Claude Desktop's `claude-desktop:`,
-    // which its `scope` tool writes under that name).
-    if (!path.startsWith("/") && !isPseudoScope(path)) {
+    // which its `scope` tool writes under that name). On Windows a folder is
+    // `C:\…` (W1, 2026-11-09: every Windows scope read back as unset).
+    if (!path.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(path) && !isPseudoScope(path)) {
       refuse(path, "the key is not an absolute path");
       continue;
     }

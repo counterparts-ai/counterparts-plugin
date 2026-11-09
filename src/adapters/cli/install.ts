@@ -59,7 +59,7 @@ export const DEFAULT_STORE_DIR = "store";
 import { EMBEDDER_KINDS } from "../config.js";
 import type { EmbedderKind } from "../config.js";
 import { CONFIG_ENV, CONFIG_FLAG, defaultConfigPath } from "../config-path.js";
-import { entryScript, parseScriptInvocation, readsHostUserConfig, runtimeOf, runtimePresent, scriptArgs, shellTokens } from "../runtime.js";
+import { entryScript, hostInvocation, hostPath, parseScriptInvocation, readsHostUserConfig, runtimeOf, runtimePresent, shellTokens, windowsHookWord } from "../runtime.js";
 import type { RuntimeKind } from "../runtime.js";
 import { pluginInstall, readOurHook, sidebarPluginRecorded } from "../host-wiring.js";
 import type { PluginInstallRead } from "../host-wiring.js";
@@ -144,9 +144,16 @@ export function shellQuote(path: string): string {
  * the Bun shape was `<runtime> run <script>`; those commands still read as
  * ours, so `connect` repairs them in place.
  */
-export function runCommand(script: string, exe: string = process.execPath): string {
-  const words = scriptArgs(script, exe).map((a) => (/^[A-Za-z-]+$/.test(a) ? a : shellQuote(a)));
-  return [shellQuote(exe), ...words].join(" ");
+export function runCommand(script: string, exe: string = process.execPath, platform: string = process.platform): string {
+  // On win32 the runtime by its bare name when PATH finds this one, and `/`
+  // paths (`runtime.ts#hostInvocation`, "Windows"): a line Git Bash and
+  // PowerShell both run. Elsewhere exactly what it always was.
+  const { command, args } = hostInvocation(script, exe, platform);
+  const words = args.map((a) => (/^[A-Za-z-]+$/.test(a) ? a : shellQuote(a)));
+  // On win32 the first word in a form Claude Code's shell there runs
+  // (`runtime.ts#windowsHookWord`: by name, a plain path, or quoted for the
+  // one shell present).
+  return [platform === "win32" ? windowsHookWord(command).word : shellQuote(command), ...words].join(" ");
 }
 
 /**
@@ -164,7 +171,7 @@ export function hookCommand(configPath?: string, exe: string = process.execPath)
   const base = runCommand(HOOK_SCRIPT, exe);
   return configPath === undefined || configPath.length === 0
     ? base
-    : `${base} ${CONFIG_FLAG} ${shellQuote(configPath)}`;
+    : `${base} ${CONFIG_FLAG} ${shellQuote(hostPath(configPath))}`;
 }
 
 export const CONFIG_FILE = "claude-code.json";
@@ -694,7 +701,8 @@ export function hookTargetPath(command: string): string | null {
   const tokens = command.trim().split(/\s+/);
   for (const raw of tokens) {
     const token = raw.replace(/^["']|["']$/g, "");
-    if (!token.startsWith("/")) continue;
+    // Absolute: `/…`, or a Windows `C:/…` / `C:\…` (W1).
+    if (!token.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(token)) continue;
     // Node's loader (`--import …/node-hooks.mjs`) is not the hook either.
     if (/node-hooks\.mjs$/.test(token)) continue;
     // The runtime itself (…/bin/bun) is not the hook; keep looking for the

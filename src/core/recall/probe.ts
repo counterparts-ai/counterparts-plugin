@@ -745,3 +745,137 @@ export function renderRatings(report: RatingReport): string[] {
   );
   return lines;
 }
+
+// ── merging (FD1 step 2, 2026-11-07): rolled days plus the live rows ─────────
+//
+// The per-turn rows go after 30 lived days (`store/operational.ts`
+// `SHORT_RETENTION_NAMES`); before they go, each lived day's rows are read by
+// `probeOQ4` and `probeRatings` and the two reports are kept in that day's
+// `events.rolled` row (`core/event-rollup.ts`). The console reads those beside
+// the report over the rows still held, merged here: counts are summed by
+// calendar date and lane, and every ratio is recomputed from the sums. The
+// per-session rows of the report are not kept (the summary's own `sessions`
+// keeps only the session refs, for "sessions seen"; a per-session table of
+// footnotes and expansions is more than the summary carries). APPROXIMATE in one
+// place, said so: a session whose rows straddle a rolled lived day and a held
+// one is counted on both sides, and a footnote expanded across that line is
+// not matched to its expansion.
+
+/** Several OQ4 reports as one; `sessions` holds only the held rows' sessions. */
+export function mergeProbe(reports: readonly ProbeReport[]): ProbeReport {
+  const byDay = new Map<string, { sessions: number; turns: number; fd: number; fe: number; ex: number; cr: number }>();
+  let decisions = 0;
+  let credits = 0;
+  let unparseable = 0;
+  let boundaries = 0;
+  const shown = { loud: 0, footnotes: 0, pointers: 0 };
+  const unused = { loud: 0, footnotes: 0, pointers: 0 };
+  const sessions: ProbeSession[] = [];
+  for (const r of reports) {
+    decisions += r.decisions;
+    credits += r.credits;
+    unparseable += r.unparseable;
+    sessions.push(...(r.sessions ?? []));
+    boundaries += r.hits.boundaries;
+    for (const lane of ["loud", "footnotes", "pointers"] as const) {
+      shown[lane] += r.hits.shown[lane];
+      unused[lane] += r.hits.unused[lane];
+    }
+    for (const d of r.days) {
+      const m = byDay.get(d.date) ?? { sessions: 0, turns: 0, fd: 0, fe: 0, ex: 0, cr: 0 };
+      m.sessions += d.sessions;
+      m.turns += d.turns;
+      m.fd += d.footnotesDelivered;
+      m.fe += d.footnotesExpanded;
+      m.ex += d.expanded;
+      m.cr += d.credits;
+      byDay.set(d.date, m);
+    }
+  }
+  const days: ProbeDay[] = [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => ({
+      date,
+      sessions: d.sessions,
+      turns: d.turns,
+      footnotesDelivered: d.fd,
+      footnotesExpanded: d.fe,
+      expanded: d.ex,
+      credits: d.cr,
+      ratio: d.fd === 0 || d.cr === 0 ? null : d.fe / d.fd,
+    }));
+  const measured = days.filter((d) => d.credits > 0);
+  const fd = measured.reduce((n, d) => n + d.footnotesDelivered, 0);
+  const fe = measured.reduce((n, d) => n + d.footnotesExpanded, 0);
+  const unmeasuredDays = days.filter((d) => d.credits === 0);
+  return {
+    sessions,
+    days,
+    decisions,
+    credits,
+    unparseable,
+    totals: { footnotesDelivered: fd, footnotesExpanded: fe, ratio: fd === 0 ? null : fe / fd },
+    unmeasured: { days: unmeasuredDays.length, footnotesDelivered: unmeasuredDays.reduce((n, d) => n + d.footnotesDelivered, 0) },
+    hits: { boundaries, shown, unused },
+  };
+}
+
+/** Several ratings reports as one: every count summed, coverage recomputed. */
+export function mergeRatings(reports: readonly RatingReport[]): RatingReport {
+  type Mut = { shown: number; rated: number; scores: Scores; drewOn: { rated: number; high: number } };
+  const zeroLanes = (): Record<RatingLane, Mut> =>
+    Object.fromEntries(RATING_LANES.map((l) => [l, { shown: 0, rated: 0, scores: [0, 0, 0, 0], drewOn: { rated: 0, high: 0 } }])) as Record<RatingLane, Mut>;
+  const add = (into: Record<RatingLane, Mut>, from: Readonly<Record<string, RatingLaneStats>> | undefined): void => {
+    for (const l of RATING_LANES) {
+      const f = from?.[l];
+      if (f === undefined) continue;
+      const m = into[l];
+      m.shown += f.shown;
+      m.rated += f.rated;
+      for (let i = 0; i < 4; i++) m.scores[i] = (m.scores[i] ?? 0) + (f.scores[i] ?? 0);
+      m.drewOn.rated += f.drewOn.rated;
+      m.drewOn.high += f.drewOn.high;
+    }
+  };
+  const freeze = (lanes: Record<RatingLane, Mut>): Record<RatingLane, RatingLaneStats> =>
+    Object.fromEntries(
+      RATING_LANES.map((l) => {
+        const m = lanes[l];
+        const coverage = l === "loud" || m.shown === 0 ? null : m.rated / m.shown;
+        const stats: RatingLaneStats = { shown: m.shown, rated: m.rated, coverage, scores: m.scores, drewOn: m.drewOn };
+        return [l, stats];
+      }),
+    ) as Record<RatingLane, RatingLaneStats>;
+  const byDay = new Map<string, { sessions: number; lanes: Record<RatingLane, Mut> }>();
+  const totals = zeroLanes();
+  const usage = { used: [0, 0, 0, 0] as Scores, ignored: [0, 0, 0, 0] as Scores, agree: 0, of: 0 };
+  const boundaries = { shown: 0, rated: 0 };
+  let rows = 0;
+  let unparseable = 0;
+  let drewOnUnrated = 0;
+  let before = 0;
+  for (const r of reports) {
+    rows += r.rows;
+    unparseable += r.unparseable;
+    drewOnUnrated += r.drewOnUnrated;
+    before += r.before;
+    boundaries.shown += r.boundaries.shown;
+    boundaries.rated += r.boundaries.rated;
+    usage.agree += r.usage.agree;
+    usage.of += r.usage.of;
+    for (let i = 0; i < 4; i++) {
+      usage.used[i] = (usage.used[i] ?? 0) + (r.usage.used[i] ?? 0);
+      usage.ignored[i] = (usage.ignored[i] ?? 0) + (r.usage.ignored[i] ?? 0);
+    }
+    add(totals, r.totals);
+    for (const d of r.days) {
+      const m = into(byDay, d.date, () => ({ sessions: 0, lanes: zeroLanes() }));
+      m.sessions += d.sessions;
+      add(m.lanes, d.lanes);
+    }
+  }
+  const days: RatingDay[] = [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => ({ date, sessions: d.sessions, lanes: freeze(d.lanes) }));
+  return { rows, unparseable, days, totals: freeze(totals), drewOnUnrated, usage, boundaries, before };
+}

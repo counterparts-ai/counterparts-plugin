@@ -57,9 +57,11 @@ import { byteLength } from "./self/identity.js";
 import { readSentinel, settledOver } from "./self/index.js";
 import { WAKE_SHAPE_LIMITS as SHAPE } from "./self/tunables.js";
 import type { WakeDelivery, WakeResult } from "./self/index.js";
-import { craftSince, isWorkMemory, projectFolder, threadPlace } from "./self/work.js";
+import { craftSince, isWorkMemory, projectFolder, threadPlace, type WorkRule } from "./self/work.js";
 import { addDays, ageWords, daysBetween, isDay, localDate, localStamp, monthDay, stampDay, startOfLocalDay } from "./time.js";
 import { settlesWhenOf } from "./types.js";
+import { lastNightCloses, OPEN_CLOSE_TUNABLES } from "./open-close.js";
+import { PLAIN_OTHER_NAMED, PLAIN_OTHER_TITLE_CHARS } from "./prospective/index.js";
 import type { Kind } from "./types.js";
 import type { MemoryRow } from "./store/index.js";
 import { TOLD_SOURCE, isTold } from "./told.js";
@@ -158,7 +160,11 @@ export interface Cue {
   readonly mine: boolean;
   /** The other folder it was written in, when not `mine`. */
   readonly folder: string | null;
+  /** Personal (me, us, owner, or no folder), whoever reads it: it may be told in any folder (SO1 step 3). */
+  readonly personal: boolean;
 }
+
+const NO_FOLDERS: ReadonlySet<string> = new Set();
 
 /** The folders a reader counts as here, as "Still open" reads them. */
 function readerFolders(cp: Counterpart, here: WakeHere | undefined): Set<string> {
@@ -186,7 +192,8 @@ export function readCues(cp: Counterpart, at: string, here: WakeHere | undefined
     const fence = here?.exportsFrom;
     const own = norm(here?.scope ?? "");
     if (happenedAlready(store, h.id, at, { open: (r) => (fence === undefined ? norm(r.origin_scope ?? "") === own : !memoryClosedTo(store, r, fence, own)) }) !== null) continue;
-    const place = threadPlace({ about: row.about ?? null, kind: row.kind as Kind, originScope: row.origin_scope ?? null, journal: false }, folders, rule);
+    const facts = { about: row.about ?? null, kind: row.kind as Kind, originScope: row.origin_scope ?? null, journal: false };
+    const place = threadPlace(facts, folders, rule);
     let folder: string | null = null;
     if (place === "out") {
       folder = cp["memoryFolder"](row) ?? row.origin_scope ?? null;
@@ -214,6 +221,8 @@ export function readCues(cp: Counterpart, at: string, here: WakeHere | undefined
       plain: h.plainDue === true,
       mine: place !== "out",
       folder: place === "out" ? folder : null,
+      // Whoever reads it: what crosses to a reader with no folder crosses to every one.
+      personal: threadPlace(facts, NO_FOLDERS, rule) !== "out",
     });
   }
   return out;
@@ -436,14 +445,24 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
   // agent's hand-back with nobody reading, isn't a wake anyone saw. A latch that
   // names no session, or one the registry doesn't hold, doesn't count either.
   // Never on a compaction: that session's model just lost what it was shown. A
-  // dated item that isn't plain has no such record and shows as before.
-  const seenToday = new Set(sessions.filter((s) => s.headless !== true && localDate(s.startedAt, zone) === at).map((s) => s.session));
-  const byToday = (session: string | null): boolean => session !== null && seenToday.has(session);
-  const shownEarlier = new Set(here?.source === "compact" ? [] : cues.filter((c) => c.plain && safe(() => cp.prospective.plainToldOn(c.id, at, byToday), false)).map((c) => c.id));
+  // dated item that isn't plain has no such record and shows as before. Only
+  // what this reader would show counts (SO1 step 3): another folder's work,
+  // told in its own folder, isn't "shown earlier" here, it's in other folders.
+  // A telling counts for a folder's work only when it was in one of this
+  // reader's folders: told anywhere else (a folderless chat, before SO1 step 3),
+  // it wasn't where it can be acted on. A personal one counts wherever it was told.
+  const saysHere = (c: Cue): boolean => c.mine;
+  const ourFolders = readerFolders(cp, here);
+  const seenToday = new Map(sessions.filter((s) => s.headless !== true && localDate(s.startedAt, zone) === at).map((s) => [s.session, projectFolder(s.scope)] as const));
+  const byToday = (c: Cue) => (session: string | null): boolean => {
+    if (session === null || !seenToday.has(session)) return false;
+    return c.personal || ourFolders.has(seenToday.get(session) ?? "");
+  };
+  const shownEarlier = new Set(here?.source === "compact" ? [] : cues.filter((c) => c.plain && saysHere(c) && safe(() => cp.prospective.plainToldOn(c.id, at, byToday(c)), false)).map((c) => c.id));
   const later = scope.length === 0 ? null : safe(() => sinceHere(cp, scope, since, { handoffSession: newest?.session ?? null, handoffAt: newestAt, reader, lead: lead5, chapters: chaptersHere, skip: cueIds, folders: hereFolders }), null);
   const sinceAged = (later?.items ?? []).map((s) => ({ ...s, age: ageOf(s.chapter ? s.at : Math.min(s.at, factAt(s.id))) }));
   const open = safe(() => cp.self.stillOpen(day, cp["threadReader"](here?.scope, here?.exportsFrom)), { items: [], parked: 0 });
-  const folders = readerFolders(cp, here);
+  const folders = ourFolders;
   const rule = { craftTravels: cp.self.tunables.PROJECTS_TRAVEL, craftSince: craftSince(store) };
   const openRows = open.items
     .filter((i) => i.parked !== true)
@@ -467,6 +486,11 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
   // And only with something in "Since, here" to read in its place (review of #734).
   const stepDown = newestAt !== null && now - newestAt >= SHAPE.HANDOFF_STEP_DOWN_MS && sinceSessions > 0 && sinceAged.length > 0;
   const night = safe(() => nightWords(cp, at, here, scope), null);
+  // WHAT THE NIGHT CLOSED ITSELF (2026-11-07, SO1 step 1): the newest
+  // night's closes, from yesterday's or today's lived day, as one line under
+  // "Last night" — only items this folder's Still open would carry (its own,
+  // a joined folder's, a personal one), never another folder's work.
+  const closedLine = safe(() => nightClosedLine(cp, day, folders, rule), null);
   const installed = here?.installed ?? null;
   const news = safe(() => sinceLastNight(cp, at, here, { ours: new Set(hereFolders), skip: cueIds }), { items: [] as NewsItem[], since: 0, night: false });
 
@@ -606,15 +630,16 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
 
   const comingSec = (b: number, claim: ReadonlySet<string>): Sec => {
     const live = cues.filter((c) => !claim.has(c.id) || c.plain);
-    // Another folder's dated work isn't due here (FS1): it's counted "in other folders", as the `coming up` door lists it. A plain reminder keeps its own rule.
-    const todayAll = live.filter((c) => c.today && (c.mine || c.plain));
+    // Another folder's dated work isn't due here (FS1): it's counted "in other folders", as the `coming up` door lists it.
+    // A plain reminder too (SO1 step 3, 2026-11-07): another folder's work is said in its own folder, not here; a personal one (me, us, owner) is `mine` everywhere.
+    const todayAll = live.filter((c) => c.today && saysHere(c));
     const ranked = [...todayAll].sort(dueOrder);
     const plain = ranked.filter((c) => c.plain && !shownEarlier.has(c.id));
     const folded = live.filter((c) => shownEarlier.has(c.id)).length;
     const rest = ranked.filter((c) => !c.plain);
     const overdue = live.filter((c) => c.past && c.mine).sort((x, y) => String(y.due).localeCompare(String(x.due)));
     const laterAll = live.filter((c) => !c.today && !c.past && c.mine).sort((x, y) => String(x.due ?? UNDATED_LAST).localeCompare(String(y.due ?? UNDATED_LAST)));
-    const other = live.filter((c) => !c.mine && !(c.today && c.plain));
+    const other = live.filter((c) => !saysHere(c));
     const laterCap = spareOn.has("coming") ? SHAPE.LATER_SHOWN_SPARE : SHAPE.LATER_SHOWN;
     const dueLine = (c: Cue): string => `- Due today · ${c.plain ? c.body : c.title}${c.settles === null ? "" : ` · settles when ${flatten(c.settles)}`} [${c.id}]`;
     const overdueLine = (c: Cue): string => `- ${c.due === null ? "Overdue" : `${plural(Math.max(1, daysBetween(c.due, at)), "day")} overdue`} · ${c.title} [${c.id}]`;
@@ -625,11 +650,17 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
       ...overdue.slice(0, SHAPE.OVERDUE_SHOWN).map((c) => ({ c, line: overdueLine(c) })),
       ...laterAll.slice(0, laterCap).map((c) => ({ c, line: laterLine(c) })),
     ];
-    const render = (shown: readonly { c: Cue; line: string }[]): string[] => {
+    // OTHER FOLDERS' PLAIN REMINDERS DUE TODAY BY NAME (SO1 step 3 fix round): at
+    // most two, "folder: title", then "and N more", only when the line still fits.
+    const otherPlain = other.filter((c) => c.plain && c.today);
+    const among = [here?.scope ?? "", ...otherPlain.flatMap((c) => (c.folder === null ? [] : [c.folder]))];
+    const short = (t: string): string => (t.length <= PLAIN_OTHER_TITLE_CHARS ? t : `${t.slice(0, PLAIN_OTHER_TITLE_CHARS - 1).trimEnd()}…`);
+    const namedOther = otherPlain.length === 0 ? "" : ` (${[...otherPlain.slice(0, PLAIN_OTHER_NAMED).map((c) => `${c.folder === null ? "elsewhere" : placeWords(c.folder, among)}: ${short(flatten(c.title))}`), ...(otherPlain.length > PLAIN_OTHER_NAMED ? [`and ${String(otherPlain.length - PLAIN_OTHER_NAMED)} more`] : [])].join("; ")})`;
+    const render = (shown: readonly { c: Cue; line: string }[], named = false): string[] => {
       const ids = new Set(shown.map((s) => s.c.id));
       const hiddenToday = todayAll.filter((c) => !ids.has(c.id) && !shownEarlier.has(c.id)).length;
       const hereMore = [...overdue, ...laterAll].filter((c) => !ids.has(c.id)).length;
-      const more = [hiddenToday > 0 ? `${String(hiddenToday)} more due today` : "", hereMore > 0 ? `${String(hereMore)} more here` : "", other.length > 0 ? `${String(other.length)} in other folders` : ""].filter((x) => x.length > 0).join(", ");
+      const more = [hiddenToday > 0 ? `${String(hiddenToday)} more due today` : "", hereMore > 0 ? `${String(hereMore)} more here` : "", other.length > 0 ? `${String(other.length)} in other folders${named ? namedOther : ""}` : ""].filter((x) => x.length > 0).join(", ");
       // The fold is its own clause: "2 due today, shown earlier; 1 more due today; recall …".
       const words = [folded > 0 ? `${String(folded)} due today, shown earlier` : "", more].filter((x) => x.length > 0).join("; ");
       // Nothing to list and nothing behind the door: no section (WF1), not "Nothing dated."
@@ -642,7 +673,9 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
     // later one may still fit: a long plain reminder doesn't hide what's after it.
     const shown: { c: Cue; line: string }[] = [];
     for (const o of order) if (byteLength(blockOf(render([...shown, o]))) <= b) shown.push(o);
-    const text = blockOf(render(shown));
+    // The names ride only in room the lines didn't need: never a line for them.
+    const withNames = blockOf(render(shown, true));
+    const text = namedOther !== "" && byteLength(withNames) <= b ? withNames : blockOf(render(shown));
     if (byteLength(text) > b) return { text: "", ids: [], items: 0 };
     return { text, ids: shown.map((s) => s.c.id), items: shown.length, lined: shown.map((s) => s.c.id) };
   };
@@ -689,11 +722,23 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
   };
 
   const nightSec = (b: number): Sec => {
-    if (night === null) return { text: "", ids: [], items: 0 };
-    const withLine = night.own === null ? null : blockOf([night.line, night.own]);
-    if (withLine !== null && byteLength(withLine) <= b) return { text: withLine, ids: [], items: 0 };
-    const alone = blockOf([night.line]);
-    return byteLength(alone) <= b ? { text: alone, ids: [], items: 0 } : { text: "", ids: [], items: 0 };
+    const closed = closedLine === null ? [] : [closedLine];
+    if (night === null) {
+      const only = closed.length === 0 ? null : blockOf(closed);
+      return only !== null && byteLength(only) <= b ? { text: only, ids: [], items: 0 } : { text: "", ids: [], items: 0 };
+    }
+    // Widest first: the line, the night's own words, what it closed; then without the own words; then the line alone.
+    const forms = [
+      ...(night.own === null ? [] : [[night.line, night.own, ...closed]]),
+      ...(closed.length === 0 ? [] : [[night.line, ...closed]]),
+      ...(night.own === null ? [] : [[night.line, night.own]]),
+      [night.line],
+    ];
+    for (const f of forms) {
+      const text = blockOf(f);
+      if (byteLength(text) <= b) return { text, ids: [], items: 0 };
+    }
+    return { text: "", ids: [], items: 0 };
   };
 
   const fn: Readonly<Record<SectionKey, (b: number, claim: ReadonlySet<string>) => Sec>> = {
@@ -721,7 +766,7 @@ export function shapedDelivery(cp: Counterpart, delivery: WakeDelivery, here: Wa
   const used = (s: Record<SectionKey, Sec>): number => ORDER.reduce((n, k) => n + byteLength(s[k].text), 0);
   const left = room - byteLength(self.text);
 
-  const plainBytes = cues.filter((c) => c.plain && !shownEarlier.has(c.id)).reduce((n, c) => n + byteLength(`- Due today · ${c.body}${c.settles === null ? "" : ` · settles when ${flatten(c.settles)}`} [${c.id}]\n`), byteLength("Coming up:\n\n"));
+  const plainBytes = cues.filter((c) => c.plain && saysHere(c) && !shownEarlier.has(c.id)).reduce((n, c) => n + byteLength(`- Due today · ${c.body}${c.settles === null ? "" : ` · settles when ${flatten(c.settles)}`} [${c.id}]\n`), byteLength("Coming up:\n\n"));
   const summaryBytes = summary === null ? 0 : byteLength(`Yesterday, in day's end's words: ${flatten(summary)}\n\n`);
   const budgets: Budgets = { ...SHAPE.ROOM, coming: Math.max(SHAPE.ROOM.coming, plainBytes + SHAPE.COMING_PAST_PLAIN), yesterday: Math.max(SHAPE.ROOM.yesterday, summaryBytes) };
   let sec = compose(budgets);
@@ -1005,6 +1050,30 @@ export function readElsewhere(cp: Counterpart, at: string, here: WakeHere | unde
     ...facts.list.map((e) => ({ place: e.place, id: e.id, title: e.title, age: e.title === null ? null : ageWords(e.fact, now), live: e.live })),
     ...facts.quiet.map((place) => ({ place, id: null, title: null, age: null, live: false })),
   ];
+}
+
+/**
+ * "Closed by the night (2): 0.3.46 ready for Mike to publish — 0.3.47
+ * released [mem_…]; … Not done? …" (2026-11-07, SO1 step 1): the newest
+ * night's closes (`open-close.ts#lastNightCloses`) from lived day `day - 1`
+ * on, kept to what this reader's Still open would carry (`threadPlace` not
+ * `out`), at most `OPEN_CLOSE_TUNABLES.MORNING_SHOWN` by title. Null when none.
+ */
+function nightClosedLine(cp: Counterpart, day: number, folders: ReadonlySet<string>, rule: WorkRule): string | null {
+  const store = cp.store;
+  const mine = lastNightCloses(store, Math.max(0, day - 1)).filter((x) => {
+    const r = store.row(x.id);
+    return r !== undefined && threadPlace({ about: r.about ?? null, kind: r.kind as Kind, originScope: r.origin_scope ?? null, journal: false }, folders, rule) !== "out";
+  });
+  if (mine.length === 0) return null;
+  const max = OPEN_CLOSE_TUNABLES.MORNING_TITLE_CHARS;
+  const clip = (t: string): string => (t.length > max ? `${t.slice(0, max - 1)}…` : t);
+  const named = mine.slice(0, OPEN_CLOSE_TUNABLES.MORNING_SHOWN).map((x) => {
+    const r = store.row(x.id);
+    return `${clip(flatten(r === undefined ? x.id : titleOfRow(r)))} — ${x.why} [${x.id}]`;
+  });
+  const more = mine.length - named.length;
+  return `Closed by the night (${String(mine.length)}): ${named.join("; ")}${more > 0 ? `; +${String(more)} more` : ""}. One not done? The reflect tool's phase "reopen", reopen: [its id], puts it back.`;
 }
 
 /** "Last night", by title and door: the night's own words on what ran, no ids; and the night's own line, when it left one a reader here may read. */

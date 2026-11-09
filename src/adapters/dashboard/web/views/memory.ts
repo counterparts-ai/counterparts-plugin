@@ -540,7 +540,20 @@ function useDaysOf(src: DashboardSource, id: string): number[] {
   } catch {
     return [];
   }
+  // THE DAILY SUMMARIES (FD1 step 2, roadmap ruling R2): a lived day whose
+  // credit rows the sweep let go kept the ids it credited (`used`), so the
+  // strip still reaches back past the 30 lived days the rows keep. A rolled
+  // day's rows still held are in its summary already.
+  let rolledDays: ReadonlySet<number> = new Set();
+  try {
+    const rolled = src.store.rolledDays();
+    rolledDays = rolled.days;
+    for (const r of rolled.rows) for (const d of r.used[id] ?? []) if (typeof d === "number") days.add(d);
+  } catch {
+    /* read off the rows alone */
+  }
   for (const e of rows) {
+    if (rolledDays.has(e.day)) continue;
     if (e.payload === null || !e.payload.includes(id)) continue;
     try {
       const p = JSON.parse(e.payload) as Record<string, unknown>;

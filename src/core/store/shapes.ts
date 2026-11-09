@@ -275,6 +275,11 @@ export interface EventPruneReport extends PruneReport {
   remaining: number;
   /** The per-pass cap in force, or null when the caller set none. */
   limit: number | null;
+  /** FD1 step 2: the per-turn names' cutoff (`livedDay - shortRetentionDays`) and window. */
+  shortCutoffDay: number;
+  shortRetentionDays: number;
+  /** `events.rolled` rows this pass wrote, one per lived day rolled up. */
+  rolled: number;
 }
 
 /** What `eventLog` selects on. `order` defaults to `"asc"` (oldest first). */
@@ -325,6 +330,9 @@ export interface EventLogCensus {
   eligible: number;
   /** Latched rows past the window — kept by kind, and counted so "kept" is a number. */
   latchedPastCutoff: number;
+  /** FD1 step 2: `SHORT_RETENTION_NAMES` keep this many lived days (`livedDay - shortRetentionDays` is their cutoff); `eligible` counts them past it. */
+  shortCutoffDay: number;
+  shortRetentionDays: number;
 }
 
 export interface RebuildReport {

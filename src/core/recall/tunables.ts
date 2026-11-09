@@ -304,6 +304,15 @@ export interface RecallTunables {
    */
   STOP_COUNTS: boolean;
   /**
+   * WHERE THE TIME WENT (LT2 part 1, 2026-11-09 — observation only): the
+   * `recall.decision` row carries `steps`, ms per step of the pass
+   * (`steps.ts#STEP_NAMES`), and doctor's `Recall steps` line reads the
+   * week's p50 of each. Timed with `performance.now()` deltas that nothing
+   * decides by: on or off, the same memories show in the same bytes. Off: the
+   * key is absent. Read at use.
+   */
+  STEP_TIMING: boolean;
+  /**
    * THE NEAR MISS'S MARGIN (N1, 2026-10-25): a candidate turned away
    * `below-bar` counts as a near miss on the `recall.decision` row
    * (`nearMiss`) when its activation was at least `1 − margin` of the bar it
@@ -805,6 +814,8 @@ export const TUNABLES: RecallTunables = {
 
   // N1, 2026-10-25: counted, never judged by.
   STOP_COUNTS: true,
+  // LT2 part 1, 2026-11-09: timed, never decided by.
+  STEP_TIMING: true,
   NEAR_MISS_MARGIN: 0.1,
 
   // E3, 2026-10-24 (an experiment; check ~7 lived days after install). Revert:

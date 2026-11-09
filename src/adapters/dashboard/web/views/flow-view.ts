@@ -137,6 +137,12 @@ function nodeState(src: DashboardSource, key: NodeKey, count: number, memories: 
       for (const row of store.eventLog({ name: "recall.decision", order: "desc", limit: LOG_CEILING })) {
         if (row.ref !== null) sessions.add(row.ref);
       }
+      // And the ones whose turns the sweep let go (FD1 step 2): their day's summary named them.
+      try {
+        for (const r of store.rolledDays().rows) for (const s of r.sessions) sessions.add(s);
+      } catch {
+        /* the rows alone */
+      }
       return sessions.size === 0 ? (day === 0 ? NEVER : NONE) : `${sessions.size} sessions seen`;
     }
     case "remember":

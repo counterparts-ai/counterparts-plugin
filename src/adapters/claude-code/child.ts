@@ -14,9 +14,10 @@
  * and never in `argv`, and the child's environment is the caller's to scrub
  * (`night-run.ts#planNightChild`).
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import { withHostUmask } from "../private-umask.js";
+import { windowsLaunch } from "../runtime.js";
 import { armAwake } from "./awake.js";
 import type { AwakeOptions } from "./awake.js";
 
@@ -132,13 +133,23 @@ export async function startChild(plan: ChildPlan, abort?: AbortSignal, awake?: A
     try {
       // Under the umask this process was started with (`private-umask.ts`):
       // the child is another program, writing its own files.
-      child = withHostUmask(() => spawn(plan.command, [...plan.args], {
+      // On Windows the host CLI may be npm's `claude.cmd`, which Node will not
+      // start without a shell: its target is read out of it (`runtime.ts#
+      // windowsLaunch`, W1). A name that does not resolve is spawned as given
+      // and fails as it always would have, by `error`.
+      const how =
+        process.platform === "win32"
+          ? (windowsLaunch(plan.command, plan.args, plan.env) ?? { file: plan.command, args: [...plan.args] })
+          : { file: plan.command, args: [...plan.args] };
+      child = withHostUmask(() => spawn(how.file, how.args, {
         // DETACHED ONLY SO THERE IS A PROCESS GROUP TO KILL. The caller still
         // awaits this child — `unref` is deliberately not called — so a child
         // whose outcome nobody can record is still impossible. What `detached`
         // buys is that a host CLI which spawned helpers of its own cannot
         // survive in them after the watchdog fires.
         detached: true,
+        // No console window of its own on Windows (W1).
+        windowsHide: true,
         // THE PROMPT GOES ON STDIN, not in `argv`: what a child is handed in a
         // command line is readable by every process on the machine through
         // `ps` (S2 review, NIT-2). `claude -p` with no positional prompt reads
@@ -260,6 +271,16 @@ function arm(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
  * otherwise survive in them.
  */
 function signal(child: { pid?: number | undefined; kill: (s: NodeJS.Signals) => boolean }, sig: NodeJS.Signals): void {
+  // Windows has no process groups and no signals: `taskkill /T /F` ends the
+  // child and every process it started, which is what the group kill is for
+  // (W1). Both steps end it there; the second finds it gone.
+  if (process.platform === "win32" && child.pid !== undefined) {
+    try {
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } catch {
+      /* no taskkill — the child alone, below */
+    }
+  }
   try {
     if (child.pid !== undefined) process.kill(-child.pid, sig);
   } catch {

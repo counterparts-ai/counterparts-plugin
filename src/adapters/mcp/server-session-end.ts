@@ -14,6 +14,7 @@ import {
   readAbout,
   readTraits,
   readWriteFacts,
+  doneDateAsOccurred,
   readTags,
   MEMORY_KINDS,
   reminderEcho,
@@ -265,14 +266,18 @@ export async function depositEntries(
     if (Object.keys(entryDims).length > 0) draft["salience"] = entryDims;
     // The reminder date (2026-09-26), per entry: an unreadable one refuses
     // THIS entry below, by name, and its siblings still land.
-    const dated = readReminder(rec);
+    // A done whose date has passed keeps it as occurredOn instead (SO1 step 2).
+    const datedRead = readReminder(rec);
+    const factsRead = readWriteFacts(rec, today);
+    const doneAt = "refused" in datedRead ? { dated: datedRead, facts: factsRead } : doneDateAsOccurred(rec, datedRead, factsRead, today);
+    const dated = doneAt.dated;
     if (!("refused" in dated)) Object.assign(draft, dated.fields);
     datedOf.push(dated);
     entries.push(draft);
     feelingsOf.push(readFeelings(rec["feelings"]));
     aboutOf.push(readAbout(rec["about"]));
     traitsOf.push(readTraits(rec["traits"]));
-    factsOf.push(readWriteFacts(rec, today));
+    factsOf.push(doneAt.facts);
     tagsOf.push(readTags(rec));
   }
 
@@ -365,6 +370,7 @@ export async function depositEntries(
       ...(neighbours.length === 0 ? {} : { neighbours }),
       ...server["slotOf"](result),
       ...server["stillDatedNear"](result, dated, facts.sent.status, batch, session),
+      ...server["mayCloseOf"](result, { title: draft["title"], text: draft["content"], status: facts.sent.status }, batch),
       ...server["answersReminder"](result, facts.sent, neighbours),
     });
   }

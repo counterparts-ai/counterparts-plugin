@@ -48,7 +48,7 @@
  * still parse (`parseScriptInvocation`, `projectEnv: "read"`), `doctor` names
  * them, and `counterparts connect` rewrites them.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -163,6 +163,22 @@ export function packagePath(rel: string, binary: Binary | null = BINARY): string
   return rel.includes("/") ? [binary.root, ...rel.split("/")].join(sep) : [binary.root, ".", rel].join(sep);
 }
 
+/**
+ * The package version the single binary was BUILT from, handed in by its
+ * entry (`tools/single-binary/main.ts`) before any mode runs; null from source.
+ * `cli/commands.ts#packageVersion` reads the embedded `package.json` first and
+ * this only when that fails, which it does on Windows: Bun lists the file as
+ * `B:/~BUN/root/./package.json` and then answers ENOENT for that very name
+ * (W1, 2026-11-09, CI's windows-x64 selfcheck).
+ */
+let builtVersion: string | null = null;
+export function setBuiltVersion(version: string): void {
+  builtVersion = version;
+}
+export function builtVersionOf(): string | null {
+  return builtVersion;
+}
+
 /** The model table's directory inside the binary; undefined from source,
  *  where `core/embed/static.ts` resolves the installed package itself. */
 export function bundledModelDir(binary: Binary | null = BINARY): string | undefined {
@@ -260,13 +276,234 @@ export function runtimeOf(exe: string): RuntimeKind {
  *  <node-hooks.mjs> <script>` for Node, and the script's mode alone (`hook`,
  *  `runner`, …) when `exe` is the compiled binary itself, which reads no
  *  `.env` or `bunfig.toml` (it is built with both off). */
-export function scriptArgs(script: string, exe: string = process.execPath, binary: Binary | null = BINARY): string[] {
+export function scriptArgs(
+  script: string,
+  exe: string = process.execPath,
+  binary: Binary | null = BINARY,
+  platform: string = process.platform,
+): string[] {
   // The compiled binary runs ITSELF in another mode: `<binary> runner`.
   const mode = binary !== null && exe === binary.self ? binaryModeOf(script) : undefined;
   if (mode !== undefined) return [mode];
   return runtimeOf(exe) === "node"
-    ? ["--import", NODE_HOOKS, script]
+    ? ["--import", platform === "win32" ? windowsFileUrl(NODE_HOOKS) : NODE_HOOKS, script]
     : [BUN_NO_ENV_FILE, `${BUN_CONFIG_PREFIX}${EMPTY_BUNFIG}`, "run", script];
+}
+
+// ── Windows (W1, 2026-11-09) ─────────────────────────────────────────────────
+//
+// Claude Code on native Windows runs a hook's command string in Git Bash when
+// Git for Windows is installed, else in PowerShell (code.claude.com/docs/en/hooks,
+// "How shell-form commands are run"), and spawns an MCP server's `command` with
+// its `args` directly. So what `connect` writes there has to read the same in
+// both shells, which is what these do (`claude-code/NOTES.md`, "Windows"):
+//
+//   - `--import` takes a module SPECIFIER, and Node reads `C:\…\node-hooks.mjs`
+//     as a URL with the scheme `c:` (ERR_UNSUPPORTED_ESM_URL_SCHEME). On win32
+//     it is given as a `file:///C:/…` URL; POSIX keeps the plain path every
+//     existing hook line carries.
+//   - Paths are written with `/`: Windows takes them, and neither shell then
+//     has a backslash to read as an escape.
+//   - The runtime is written by its bare NAME (`node`) when that name on PATH
+//     is the very executable running now. PowerShell will not run a quoted
+//     first word without `&` (which bash refuses), and the default Node lives
+//     in `C:/Program Files/…`, which needs quotes. On Windows a host's PATH is
+//     the one the person set for their account, not a login shell's, so scar
+//     §2.18 (the host's PATH is not the shell's) is not the hazard it is on
+//     macOS. When the name finds another file (links followed; a version
+//     manager's shim is another file), the path is written in the form the
+//     shell Claude Code uses there runs (`windowsHookWord`), and `connect` and
+//     doctor say it runs in that shell only.
+
+/** A Windows path as a `file:` URL, by hand, so it is the same on every host
+ *  (a test runs it on macOS): `C:\a b\x.mjs` → `file:///C:/a%20b/x.mjs`. */
+export function windowsFileUrl(path: string): string {
+  const slashed = path.replace(/\\/g, "/");
+  const rooted = slashed.startsWith("/") ? slashed : `/${slashed}`;
+  return `file://${encodeURI(rooted).replace(/#/g, "%23").replace(/\?/g, "%3F")}`;
+}
+
+/** A path as a host command on `platform` names it: `/`-separated on win32,
+ *  unchanged elsewhere. */
+export function hostPath(path: string, platform: string = process.platform): string {
+  return platform === "win32" ? path.replace(/\\/g, "/") : path;
+}
+
+/** Where a bare command name resolves on `PATH` — trying each `PATHEXT`
+ *  extension on win32, where `node` is `node.exe` on disk — or null. */
+export function whichOnPath(
+  name: string,
+  env: Record<string, string | undefined> = process.env,
+  platform: string = process.platform,
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  const win = platform === "win32";
+  // Windows spells it `Path`, and a copy of `process.env` is no longer
+  // case-blind about it.
+  const key = (wanted: string): string | undefined =>
+    env[wanted] ?? (win ? Object.entries(env).find(([k]) => k.toUpperCase() === wanted)?.[1] : undefined);
+  const dirs = (key("PATH") ?? "").split(win ? ";" : ":").filter((d) => d.length > 0);
+  // On win32 only the PATHEXT spellings, unless the name carries its own: npm
+  // puts an extensionless sh script beside every `x.cmd` (for Git Bash), and
+  // Windows can't start that file (CI 11-09: `claude` was found as it and
+  // read as missing).
+  const exts = win
+    ? /\.[A-Za-z0-9]+$/.test(name)
+      ? [""]
+      : (key("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((e) => e.length > 0).map((e) => e.toLowerCase())
+    : [""];
+  for (const d of dirs) {
+    for (const ext of exts) {
+      const candidate = `${d.replace(/[\\/]+$/, "")}${win ? "\\" : "/"}${name}${ext}`;
+      if (exists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * HOW TO START A COMMAND BY NAME ON WINDOWS, with its arguments kept one each:
+ * the file to spawn and the arguments to give it, or null when the name is not
+ * on PATH or is something this cannot start without a shell.
+ *
+ * A native `.exe` is spawned as it is. An npm-installed command is a `.cmd`
+ * batch file (`claude.cmd` for an npm install of Claude Code), which Node will
+ * not spawn without a shell (EINVAL since 20.12), and a shell would re-read
+ * every argument — a night child's `--mcp-config` JSON, its system prompt.
+ * npm writes those files one way (`cmd-shim`): the target is the quoted
+ * `"%dp0%\…"` path, run by the program the target's shebang named. So the
+ * target is read out of the file: an `.exe` is spawned directly, a script is
+ * given to `node` (the one on PATH, as the shim does). W1, 2026-11-09.
+ */
+export function windowsLaunch(
+  name: string,
+  args: readonly string[],
+  env: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+  read: (path: string) => string = (p) => readFileSync(p, "utf8"),
+): { file: string; args: string[] } | null {
+  const found = whichOnPath(name, env, "win32", exists);
+  if (found === null) return null;
+  if (!/\.(cmd|bat)$/i.test(found)) return { file: found, args: [...args] };
+  let text: string;
+  try {
+    text = read(found);
+  } catch {
+    return null;
+  }
+  // The LAST quoted `%dp0%` path: a Node bin's shim names `"%dp0%\node.exe"`
+  // first (`IF EXIST …`), its target last (measured on Claude Code's, CI 11-09).
+  // Older npm and pnpm spell the directory `%~dp0` (read-cmd-shim reads both).
+  const target = [...text.matchAll(/"%(?:dp0%|~dp0)\\([^"]+)"/g)].pop()?.[1];
+  if (target === undefined) return null;
+  const dir = found.replace(/[\\/][^\\/]*$/, "");
+  const file = `${dir}\\${target}`;
+  if (!exists(file)) return null;
+  if (/\.exe$/i.test(file)) return { file, args: [...args] };
+  if (!/\.(c|m)?js$/i.test(file)) return null;
+  const node = whichOnPath("node", env, "win32", exists);
+  return node === null ? null : { file: node, args: [file, ...args] };
+}
+
+/** A path with links resolved (`realpathSync.native`), or as given when it
+ *  can't be. */
+function realOrSelf(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}
+
+/** The runtime as a host command on `platform` names it: on win32 its bare
+ *  name when that name on PATH resolves (links followed) to this very file,
+ *  else its `/` path; the path unchanged elsewhere. Under a version manager
+ *  (Volta, nvm-windows) `node` on PATH is the manager's shim, another file:
+ *  then the path, which `windowsHookWord` writes so a shell can run it. */
+export function hostExe(
+  exe: string,
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+  real: (path: string) => string = realOrSelf,
+): string {
+  if (platform !== "win32") return exe;
+  const name = (exe.split(/[\\/]/).pop() ?? "").replace(/\.exe$/i, "");
+  const same = (a: string, b: string): boolean =>
+    hostPath(real(a), "win32").toLowerCase() === hostPath(real(b), "win32").toLowerCase();
+  if (/^[A-Za-z0-9_-]+$/.test(name)) {
+    const found = whichOnPath(name, env, platform, exists);
+    if (found !== null && same(found, exe)) return name;
+  }
+  return hostPath(exe, platform);
+}
+
+/**
+ * Does Claude Code on this Windows machine have Git Bash to run hooks in? The
+ * lookup its docs give (code.claude.com/docs/en/troubleshoot-install):
+ * `CLAUDE_CODE_GIT_BASH_PATH`, then `C:\Program Files\Git` and its `(x86)`
+ * twin, then the Git for Windows that `git` on PATH belongs to.
+ */
+export function gitBashOnWindows(
+  env: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+): boolean {
+  const named = (env["CLAUDE_CODE_GIT_BASH_PATH"] ?? "").trim();
+  if (named.length > 0 && exists(named)) return true;
+  if (exists("C:\\Program Files\\Git\\bin\\bash.exe") || exists("C:\\Program Files (x86)\\Git\\bin\\bash.exe")) return true;
+  const git = whichOnPath("git", env, "win32", exists);
+  // `…\Git\cmd\git.exe` (or `…\Git\bin\git.exe`): Git Bash is `…\Git\bin\bash.exe`.
+  return git !== null && exists(`${git.replace(/[\\/][^\\/]+[\\/][^\\/]+$/, "")}\\bin\\bash.exe`);
+}
+
+/**
+ * THE FIRST WORD OF A WINDOWS HOOK LINE, and whether it runs in both shells
+ * Claude Code may use there (Git Bash, else PowerShell):
+ *
+ *   - `name`: `node` by name. Both run it.
+ *   - `plain`: a `/` path with no space or shell character, unquoted. Both.
+ *   - `bash`: a path that needs quotes, quoted, with Git Bash present: bash
+ *     runs it; PowerShell would read a quoted first word as a string.
+ *   - `powershell`: the same with no Git Bash: `& "path"`, PowerShell's call
+ *     operator, which bash refuses. (`shellTokens` reads the `&` away.)
+ *
+ * The last two are written for the shell present at `connect`; installing or
+ * removing Git for Windows afterwards breaks them, which `connect` and doctor
+ * say (`windowsHookFit`).
+ */
+export type WindowsHookForm = "name" | "plain" | "bash" | "powershell";
+export function windowsHookWord(
+  command: string,
+  env: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+): { word: string; form: WindowsHookForm } {
+  if (/^[A-Za-z0-9_-]+$/.test(command)) return { word: command, form: "name" };
+  if (/^[A-Za-z0-9_.:/+-]+$/.test(command)) return { word: command, form: "plain" };
+  const quoted = `"${command}"`;
+  return gitBashOnWindows(env, exists) ? { word: quoted, form: "bash" } : { word: `& ${quoted}`, form: "powershell" };
+}
+
+/** What a person is told when a Windows hook line names its runtime by a path
+ *  only one shell runs (`windowsHookWord`); null when both run it. */
+export function windowsHookFit(form: WindowsHookForm, exe: string): string | null {
+  if (form === "name" || form === "plain") return null;
+  const shell = form === "bash" ? "Git Bash" : "PowerShell";
+  return `the hooks name Node by its path (${exe}), because \`node\` on PATH is another file (a version manager's shim, or another Node); that line runs in ${shell} only, the shell Claude Code uses on this machine now. If Git for Windows is installed or removed later, run counterparts connect again. To make it run in both, put this Node first on PATH and connect again.`;
+}
+
+/** What a host is told to run for `script`: the command and its arguments,
+ *  for the platform (`hostExe`, `hostPath`, `scriptArgs`). Every writer of a
+ *  hook line or an MCP registration goes through this, and every reader that
+ *  checks one against what it should be. */
+export function hostInvocation(
+  script: string,
+  exe: string = process.execPath,
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+): { command: string; args: string[] } {
+  const args = scriptArgs(script, exe, BINARY, platform).map((a) => hostPath(a, platform));
+  return { command: hostExe(exe, platform, env, exists), args };
 }
 
 /** A command split into its parts, when it is `<exe> <scriptArgs(script)> <rest…>`. */
@@ -343,16 +580,25 @@ export function parseScriptInvocation(tokens: readonly string[]): ScriptInvocati
 
 /** Is the runtime a command names actually there? An absolute path is checked
  *  on disk; a bare name (`bun`, `node`) is looked up on `PATH`. */
-export function runtimePresent(exe: string, env: Record<string, string | undefined> = process.env): boolean {
+export function runtimePresent(
+  exe: string,
+  env: Record<string, string | undefined> = process.env,
+  platform: string = process.platform,
+): boolean {
   if (exe.includes("/") || exe.includes("\\")) return existsSync(exe);
-  const dirs = (env["PATH"] ?? "").split(process.platform === "win32" ? ";" : ":").filter((d) => d.length > 0);
-  return dirs.some((d) => existsSync(`${d}/${exe}`));
+  // On win32 a bare `node` is `node.exe` on disk (`PATHEXT`).
+  return whichOnPath(exe, env, platform) !== null;
 }
 
 /** Split on whitespace, honouring double quotes — the only quoting
  *  `install.ts#shellQuote` produces, and therefore the only quoting a command
  *  we wrote can carry. A single quote is left in the token, which makes the
- *  match fail, which is the safe direction. */
+ *  match fail, which is the safe direction.
+ *
+ *  Inside the quotes a backslash escapes only what it escapes there in bash —
+ *  `"`, `\`, `$` and a backtick — and is otherwise itself (2026-11-09, W1): a
+ *  hand-typed Windows line, `"C:\Users\me\counterparts.exe" hook`, keeps its
+ *  backslashes, and everything `shellQuote` writes reads back as before. */
 export function shellTokens(command: string): string[] {
   const out: string[] = [];
   let current = "";
@@ -360,7 +606,7 @@ export function shellTokens(command: string): string[] {
   let started = false;
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i] ?? "";
-    if (ch === "\\" && quoted && i + 1 < command.length) {
+    if (ch === "\\" && quoted && i + 1 < command.length && '"\\$`'.includes(command[i + 1] ?? "")) {
       current += command[i + 1] ?? "";
       i += 1;
       continue;
@@ -380,5 +626,9 @@ export function shellTokens(command: string): string[] {
     started = true;
   }
   if (started || current.length > 0) out.push(current);
+  // A leading lone `&` is PowerShell's call operator, which a Windows hook line
+  // carries before a quoted runtime when there is no Git Bash
+  // (`windowsHookWord`): the command is what follows it. No bash line begins so.
+  if (out[0] === "&" && out.length > 1) out.shift();
   return out;
 }

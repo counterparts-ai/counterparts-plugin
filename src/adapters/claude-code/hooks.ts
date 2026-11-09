@@ -76,6 +76,7 @@ import type { LifecycleOptions, PlainLines, SessionInput } from "../lifecycle.js
 
 import { localDate } from "../../core/time.js";
 import { openThread } from "../../core/self/identity.js";
+import { isDirectoryScope, projectFolder } from "../../core/self/work.js";
 import { TUNABLES } from "../config.js";
 import { TUNABLES as RECALL_TUNABLES } from "../../core/recall/tunables.js";
 import { SESSION_NOTICE_BUDGET_MS, checkoutIsGraded, doctorFindings, noticeMessage, readCheckout, wakeMeaningLine } from "./doctor.js";
@@ -761,7 +762,8 @@ export class ClaudeCodeAdapter extends Lifecycle {
       // reminders and both asks. What actually gave way is recorded by the
       // delivery (`noteGaveWay`) and by each ask's own deferral.
       const watched = watchedAtStart(input);
-      const plain = watched ? this.plainFor(input) : NO_PLAIN;
+      // A session start is where an unsaid folder's reminder may cross (SO1 step 3), never a prompt.
+      const plain = watched ? this.plainFor(input, { cross: true }) : NO_PLAIN;
       // DESKTOP'S CODE TAB (2026-10-01): one line, right under the clock,
       // naming this session's id — there the counterparts tools the model sees
       // are Claude Desktop's server, which serves a call as this session only
@@ -858,6 +860,10 @@ export class ClaudeCodeAdapter extends Lifecycle {
         // Not `watched`: the fired report marks a session unattended for good
         // on any start that says so, and a person's session compacts too.
         interactive: isInteractive(input) && input.nightRun !== true,
+        // THE FOLDER IT STARTED IN (SO1 step 3, round 3 of #780): doctor's "was its
+        // folder there" and the crossing's lived days read this row, not the session
+        // registry, which prunes a week after a session ends. Null for a host's name scope.
+        folder: isDirectoryScope(input.scope) ? projectFolder(input.scope) : null,
         // A resume's short wake (2026-10-11): `bytes` is the line, not a bundle.
         resumed,
         // How many items it listed as a line (#489 C): doctor's Lookups line

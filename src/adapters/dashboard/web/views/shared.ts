@@ -174,5 +174,6 @@ export function memoriesLive(src: DashboardSource): number {
  * no rows; the caller reads the miss as 0.
  */
 export function eventCountsByName(src: DashboardSource): ReadonlyMap<string, number> {
-  return new Map(src.store.eventCounts().map((c) => [c.name, c.count]));
+  // All-time (FD1 step 2): the rows held plus the per-turn rows' daily summaries, so a count never shrinks with the sweep.
+  return new Map(src.store.eventCountsAllTime().map((c) => [c.name, c.count]));
 }

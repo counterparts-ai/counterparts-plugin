@@ -69,6 +69,9 @@ import { calendarDate } from "../core/self/index.js";
 import { ONE_TAG, markerFields, storeMarker } from "./store-id.js";
 import { ahaDue, ahaLine, markAha, meetPending, meetState, noteOffered, offerDue, offerLine, onboardingMarker, settleOffer } from "../core/onboarding.js";
 import { localClock, localDate, readableDate } from "../core/time.js";
+import { PLAIN_CROSS_LOOKBACK_DAYS } from "../core/prospective/index.js";
+import { crossingWindow, readPresence } from "./presence.js";
+import { isDirectoryScope } from "../core/self/work.js";
 
 import { CONFIG_FILE_EVENT } from "./config-path.js";
 import { capabilities, TUNABLES } from "./config.js";
@@ -367,7 +370,8 @@ export interface PlainLines {
   /** The records behind them, in the same order — claimed only at delivery. */
   readonly due: PlainReminder[];
   /**
-   * What is due and this reader is not told, a closed folder's work (`plainFor`):
+   * What is due and this reader is not told, a closed folder's work or another
+   * folder's (`plainFor`):
    * memory ids, so a turn doesn't hand over as a quiet cue what it held back.
    */
   readonly held?: readonly string[];
@@ -954,11 +958,12 @@ export class Lifecycle implements HostLifecycle {
    * means no calendar, and so nothing; the headless nightly run is told nothing
    * (`SessionInput.nightRun`). A closed folder's work is held back, whichever road
    * the wake takes (2026-10-30, `Counterpart#plainHeldBack`): not in these lines,
-   * not claimed, not spent. The setting is read only when something is due: with
+   * not claimed, not spent. So is another folder's work, which is told in its own
+   * folder (SO1 step 3, 2026-11-07, `Counterpart#plainAway`). The setting is read only when something is due: with
    * no configuration named every folder is on, and one that won't read closes
    * every folder (`writeUpFolders`). Never throws.
    */
-  plainFor(input: SessionInput): PlainLines {
+  plainFor(input: SessionInput, opts: { readonly cross?: boolean } = {}): PlainLines {
     const none = { context: "", notices: [], due: [] };
     if (input.at === undefined || input.nightRun === true) return none;
     try {
@@ -969,11 +974,31 @@ export class Lifecycle implements HostLifecycle {
         if (!("on" in read)) read.on = this.writeUpFolders();
         return read.on;
       };
-      const all = this.counterpart.plainDueToday({ at: input.at, scope: input.scope, folders });
-      if (all.length === 0) return none;
+      const today = this.counterpart.plainDueToday({ at: input.at, scope: input.scope, folders });
+      // Another folder's work that went unsaid crosses once (SO1 step 3 fix round, `Counterpart#plainCrossing`):
+      // only where the caller says a person is starting (a session start, a wake the host says is attended),
+      // never per prompt (round 3: its cost), and never into a reader with no folder (rule a).
+      const at = input.at;
+      const crossing =
+        opts.cross === true && isDirectoryScope(input.scope)
+          ? this.counterpart.plainCrossing({
+              at,
+              lived: () => {
+                const w = crossingWindow(at, PLAIN_CROSS_LOOKBACK_DAYS);
+                return readPresence(this.counterpart.store, w.from, w.to).lived;
+              },
+            })
+          : [];
+      if (today.length === 0 && crossing.length === 0) return none;
       const on = folders();
-      const held = on === undefined ? new Set<string>() : this.counterpart.plainHeldBack(all.map((r) => r.memoryId), on, input.scope);
-      const due = all.filter((r) => !held.has(r.memoryId));
+      const closed = on === undefined ? new Set<string>() : this.counterpart.plainHeldBack([...today, ...crossing].map((r) => r.memoryId), on, input.scope);
+      // Another folder's work waits for its own folder (SO1 step 3, `Counterpart#plainAway`): the same reader Coming up reads.
+      const away = this.counterpart.plainAway(today.map((r) => r.memoryId), input.scope, this.chapterExports());
+      const held = new Set([...closed, ...away]);
+      const told = today.filter((r) => !held.has(r.memoryId));
+      // A late beat told here (its own folder, in its grace) is the telling: no crossing beside it.
+      const toldIds = new Set(told.map((r) => r.memoryId));
+      const due = [...told, ...crossing.filter((r) => !closed.has(r.memoryId) && !toldIds.has(r.memoryId))];
       return {
         context: due.map((r) => `${plainContextLine(r)}\n`).join(""),
         notices: due.map(plainLine),
@@ -2147,9 +2172,11 @@ export function substanceOf(turns: readonly HostTurn[]): { turns: number; bytes:
  *
  * `what` is the memory's title or first line (`Counterpart.plainReminders`).
  */
-export function plainLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay" | "what" | "late">): string {
+export function plainLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay" | "what" | "late" | "crossFrom">): string {
   const max = TUNABLES.PLAIN_WHAT_MAX_CHARS;
   const what = r.what.length <= max ? r.what : `${r.what.slice(0, max - 1).trimEnd()}…`;
+  // Crossed from its folder, unsaid there (SO1 step 3 fix round): the folder named, and when it was due.
+  if (r.crossFrom !== undefined) return `${r.crossFrom}: ${what}, due ${r.precision === "day" ? readableDate(r.lastDay) : `by ${readableDate(r.lastDay)}`} (not said yet: no session there while it was due)`;
   if (r.late === true) return `This was for ${readableDate(r.lastDay)}: ${what}`;
   if (r.beat === "day") return `Today: ${what}`;
   if (r.beat === "last-day") return `Last day today: ${what}`;
@@ -2162,7 +2189,7 @@ export function plainLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay
  * memory so it can be looked up. One line, no newline — `what` is folded to
  * single spaces upstream — so `withoutPlain` can take it back out by line.
  */
-export function plainContextLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay" | "what" | "memoryId" | "late">): string {
+export function plainContextLine(r: Pick<PlainReminder, "beat" | "precision" | "lastDay" | "what" | "memoryId" | "late" | "crossFrom">): string {
   return `Plain reminder (they asked to be told) — ${plainLine(r)} [${r.memoryId}]`;
 }
 

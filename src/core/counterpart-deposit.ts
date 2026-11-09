@@ -1,6 +1,7 @@
 /** `Counterpart`'s deposit: the gate's record, the update guard, and carrying facts, reminders and threads onto what is written (bodies moved out of `counterpart.ts`, 2026-10-11; the class keeps a delegate for each). */
 import { batteryGate } from "./bridge.js";
-import { mintProposal, settlesWhenOf, UNRESOLVED_META_KEY } from "./mint.js";
+import { mintProposal, settlesWhenOf, THREAD_REOPENED_BY_META_KEY, UNRESOLVED_META_KEY } from "./mint.js";
+import { nightClosedOf, reopenNightClosed } from "./open-close.js";
 import type { MintResult } from "./mint.js";
 import { screenTags } from "./tag-screen.js";
 import { cueModeOf, recurrenceOf, DATE_FROM_META, DATE_LINEAGE_MAX, DATE_MOVED_TO_META } from "./prospective/index.js";
@@ -24,6 +25,7 @@ import { markWakeBehind } from "./self/index.js";
 import { ownerNames } from "./sleep/index.js";
 import { isBeliefRow } from "./recall/index.js";
 import { headOf } from "./recall/standing.js";
+import { noteCloseHintTaken } from "./close-hint.js";
 import { statusOf, inheritFrom, occurredOnOf, saidByOf } from "./store/index.js";
 import type { AboutMark, MemoryRow, Inherited, MemoryStatus } from "./store/index.js";
 import type {
@@ -723,7 +725,8 @@ export function carrySettles(cp: Counterpart, p: Proposal): string | null {
   if (target === null) return null;
   try {
     const meta = cp.store.readProse(target).meta;
-    if (meta[UNRESOLVED_META_KEY] === true) return settlesWhenOf(meta);
+    // A thread the night closed and this write carries on keeps its trigger too (SO1 step 1).
+    if (meta[UNRESOLVED_META_KEY] === true || nightClosedOf(meta) !== null) return settlesWhenOf(meta);
     // A CHAIN (review of #665): `updates` named an item the thread already
     // moved on from (a → b, then c updates a). The thread lives where the
     // chain now ends — the memory that holds over it (`recall/standing.ts#headOf`,
@@ -761,7 +764,22 @@ export function closeThread(cp: Counterpart, p: Proposal, successor: string): { 
   try {
     const row = cp.store.row(target);
     if (row === undefined) return null;
-    if (cp.store.readProse(target).meta[UNRESOLVED_META_KEY] !== true) return null;
+    const meta = cp.store.readProse(target).meta;
+    if (meta[UNRESOLVED_META_KEY] !== true) {
+      // A TOUCH ON AN ITEM THE NIGHT CLOSED (2026-11-07, SO1 step 1): a write
+      // that `updates` it and says `unresolved: true` carries the thread on,
+      // on this new row, open; that reopening is recorded, and the new row is
+      // marked (`threadReopenedBy`) so no night closes the thread again on its own.
+      if (p.unresolved === true && nightClosedOf(meta) !== null && row.protected !== 1 && row.archived !== 1) {
+        try {
+          reopenNightClosed(cp.store, target, { by: "updates", successor, restoreFlag: false });
+          cp.store.revise(successor, { meta: { [THREAD_REOPENED_BY_META_KEY]: `night:${target}` }, reason: "thread-reopened" });
+        } catch {
+          /* the new row is open either way */
+        }
+      }
+      return null;
+    }
     // THE REVISION STEP'S CHECKS, FIRST (review of #313): a flag is state
     // like any other, so what refuses a revision refuses this — the owner's
     // protection and an archived row, in `revision.ts`'s own words. Any
@@ -784,6 +802,9 @@ export function closeThread(cp: Counterpart, p: Proposal, successor: string): { 
   } catch (err) {
     cp["emit"]("counterpart.thread.close.failed", target, { successor, error: errCode(err) });
   }
+  // A close that followed a write's close hint is counted (SO1 step 1b,
+  // `close-hint.ts`): hints shown against closes made. Answered, not carried on.
+  if (closed && p.unresolved !== true && !cp.observer) noteCloseHintTaken(cp.store, target, successor);
   cp["emit"]("counterpart.thread.closed", target, { successor, closed, carried: p.unresolved });
   return { from: target, closed };
 }

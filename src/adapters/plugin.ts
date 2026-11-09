@@ -673,6 +673,7 @@ export function ensureFirstRun(input: FirstRunInput): FirstRun {
         env: env as NodeJS.ProcessEnv,
         encoding: "utf8",
         timeout: FIRST_RUN_TIMEOUT_MS,
+        windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
       }),
     );

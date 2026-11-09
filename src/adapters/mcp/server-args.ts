@@ -55,6 +55,9 @@ export interface RecallRowFields {
    * bar can be calibrated on live use. Ids and numbers only.
    */
   readonly dreams?: readonly { readonly id: string; readonly why: string; readonly score: number | null }[];
+  /** How long the recall took, ms (FD1 step 5, 2026-11-07): a question's mode
+   *  answer (embedding left out), or an address's read. */
+  readonly elapsedMs?: number;
 }
 
 /**
@@ -138,6 +141,9 @@ export type ReminderRead =
       readonly refused: "event-date-unreadable" | "remind-unknown" | "recurring-unknown" | "recurring-needs-day";
       readonly detail: string;
     };
+
+/** A `ReminderRead` that was not refused. */
+export type ReminderFields = Exclude<ReminderRead, { readonly refused: unknown }>;
 
 const EVENT_DATE_SHAPES =
   'A day "2026-10-15", a month "2026-10", a year "2026", or a range of two days "2026-10-20..2026-10-31" (first day first). Convert "late October" or "before the 15th" into one of those yourself.';
@@ -354,6 +360,8 @@ export function readsLikeReminder(...parts: readonly (string | null | undefined)
 export function undatedReminderWarning(deposit: DepositResult, dated: ReminderRead, title: unknown, text: unknown): Record<string, unknown> {
   if ("refused" in dated || !deposit.deposited || deposit.memoryId === null) return {};
   if ("eventDate" in dated.fields || deposit.reminder !== undefined) return {};
+  // A done memory is no reminder (SO1 step 2): its passed date may just have become occurredOn.
+  if (deposit.facts?.status === "done") return {};
   if (!readsLikeReminder(typeof title === "string" ? title : null, typeof text === "string" ? text : null)) return {};
   return {
     reminderHint: `this reads like a reminder but has no eventDate, so it will never come back on a date; to make it fire, revise it with updates: ${deposit.memoryId} and an eventDate`,
@@ -498,6 +506,49 @@ export function readWriteFacts(rec: Record<string, unknown>, today: string): Fac
     else sent.status = v;
   }
   return { sent, dropped, notes };
+}
+
+/**
+ * A DONE MEMORY IS NEVER OVERDUE (SO1 step 2, 2026-11-07, lightly held): a
+ * `remember` or `session_end` entry with `status: "done"` and an `eventDate`
+ * today or already passed (its last day on or before `today`: a done dated
+ * today has happened, coordinator 11-07) says when the thing HAPPENED,
+ * so the date is kept as `occurredOn`, not as a reminder. When `occurredOn`
+ * was sent too and differs, it is kept and the eventDate is dropped. Either
+ * way it is dropped and said beside the memory, in the three fields' `dropped`.
+ *
+ * Left alone: a date ending after today (a done with a future date is ambiguous),
+ * a repeat (`recurring` sent: a done closes one occurrence), and a revision
+ * (`updates` sent: its target may repeat, and the deposit's own close decides
+ * it; the read side keeps a done one-off with a past date out of Coming up
+ * anyway, `prospective/derive.ts` "done"). Pure; returns new reads.
+ */
+export function doneDateAsOccurred(
+  rec: Record<string, unknown>,
+  dated: ReminderFields,
+  facts: FactsRead,
+  today: string,
+): { dated: ReminderFields; facts: FactsRead } {
+  if (facts.sent.status !== "done" || typeof rec["updates"] === "string") return { dated, facts };
+  // `remind` shapes a reminder, and this is none: it goes with the date.
+  const { eventDate, remind: _remind, ...rest } = dated.fields;
+  if (typeof eventDate !== "string" || isRecurrence(rest.recurring)) return { dated, facts };
+  const read = parseCalendarDate(eventDate);
+  if (read === null || read.last > today) return { dated, facts };
+  const given = facts.sent.occurredOn;
+  const keepGiven = typeof given === "string" && given !== read.text;
+  const when = read.last !== today ? "has already passed" : read.first === today ? "is today" : "ends today";
+  const note = keepGiven
+    ? `eventDate "${read.text}" ${when} and this memory is done, so it is not a reminder; occurredOn "${given}" was sent too, so that was kept and the eventDate dropped.`
+    : `eventDate "${read.text}" ${when} and this memory is done, so the date was kept as occurredOn (when it happened), not as a reminder: it won't come up as due or overdue.`;
+  return {
+    dated: { fields: rest, remindIgnored: false },
+    facts: {
+      sent: keepGiven ? facts.sent : { ...facts.sent, occurredOn: read.text },
+      dropped: [...facts.dropped, { field: "eventDate", note }],
+      notes: facts.notes,
+    },
+  };
 }
 
 /** The three fields' half of a deposit's answer (v12): what was RECORDED —

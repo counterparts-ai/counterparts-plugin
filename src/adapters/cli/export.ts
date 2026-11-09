@@ -580,7 +580,8 @@ export function sweepStaleExportScratch(now = Date.now()): string[] {
     try {
       const st = statSync(full);
       if (!st.isDirectory()) continue;
-      if (st.uid !== process.getuid?.()) continue;
+      // Windows has no uids (`getuid` is absent): the temp folder is per-user there (W1).
+      if (process.getuid !== undefined && st.uid !== process.getuid()) continue;
       if (now - st.mtimeMs < EXPORT_SCRATCH_STALE_MS) continue;
       rmSync(full, { recursive: true, force: true });
       swept.push(name);

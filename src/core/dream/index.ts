@@ -3745,7 +3745,7 @@ export class Dreams {
           const id = headOf(this.store, named) ?? named;
           if (own.has(id) || own.has(named) || saidNow.has(id) || found.includes(id) || closed.has(id)) continue;
           const row = recallableRow(this.store, id, { denied, ambient: false, day });
-          if (row === undefined || row === "below-reach") continue;
+          if (row === undefined || typeof row === "string") continue;
           found.push(id);
         }
       }

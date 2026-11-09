@@ -366,6 +366,8 @@ export const EVENT_NODE = {
   // to "who did this" is the phase that ran, and the run is the whole of sleep.
   "sleep.cycle": "sleep",
   "sleep.cycle.held": "sleep",
+  "sleep.log.swept": "sleep",
+  "events.rolled": "sleep",
   // The wake render's record. It is `self/`'s composition and `sleep/`'s order,
   // but what the row DESCRIBES is the bundle — what rendered, what was trimmed —
   // so it lights the node the owner will actually read it against.
@@ -449,6 +451,7 @@ export const EVENT_NODE = {
   "prospective.fire.refused": "prospective",
   // A plain item told on its day (2026-09-26) is the same node's, by request.
   "prospective.plain": "prospective",
+  "prospective.plain.crossed": "prospective",
   // Which checkout was live at a session start. It belongs to the SESSION node:
   // it is a fact about the process the host started, recorded on the way in,
   // before anything was read or written.

@@ -103,7 +103,7 @@ import { PACKAGE_ROOT, PLUGIN_DATA_ENV, PLUGIN_ROOT_ENV } from "../plugin.js";
 import { claudeCodeEnvMarker } from "../hosts.js";
 import { withHostUmask } from "../private-umask.js";
 import { tightenInstallBase } from "../private-base.js";
-import { parseScriptInvocation, readsHostUserConfig, scriptArgs, shellTokens } from "../runtime.js";
+import { hostExe, hostInvocation, parseScriptInvocation, readsHostUserConfig, shellTokens, windowsHookFit, windowsHookWord, windowsLaunch } from "../runtime.js";
 import { installedBuild, installedVersion, readServerRecords, sameBuild, serverBelieved } from "../sessions.js";
 import type { BuildStamp, ServerRecordRead } from "../sessions.js";
 import type { Io } from "./commands.js";
@@ -1022,7 +1022,11 @@ export function realSpawner(env: Record<string, string | undefined>): Spawner {
     // it. `spawnSync` with an array passes each one through whole.
     // Under the umask this process was started with: `claude` writes its own
     // files, and they keep the modes they always had (`private-umask.ts`).
-    const res = withHostUmask(() => spawnSync(CLAUDE_BIN, [...args], {
+    // On Windows an npm-installed `claude` is `claude.cmd`, which Node will not
+    // start without a shell: `runtime.ts#windowsLaunch` reads its target (W1).
+    const how = process.platform === "win32" ? windowsLaunch(CLAUDE_BIN, args, env) : { file: CLAUDE_BIN, args: [...args] };
+    if (how === null) return { missing: true, code: null, out: "", err: "" };
+    const res = withHostUmask(() => spawnSync(how.file, how.args, {
       encoding: "utf8",
       timeout: CLAUDE_TIMEOUT_MS,
       windowsHide: true,
@@ -1057,6 +1061,10 @@ export function mcpAddArgs(
   exe: string,
   serve: string = MCP_SCRIPT,
 ): string[] {
+  // `hostInvocation`: on win32 `node` by name and `/` paths, the same words the
+  // hook line carries (`runtime.ts`, "Windows"); elsewhere `exe` and
+  // `scriptArgs` as they always were.
+  const { command, args } = hostInvocation(serve, exe);
   return [
     "mcp",
     "add",
@@ -1067,8 +1075,8 @@ export function mcpAddArgs(
     `${DATA_DIR_ENV}=${store}`,
     ...(custom === undefined || custom.length === 0 ? [] : ["-e", `${CONFIG_ENV}=${custom}`]),
     "--",
-    exe,
-    ...scriptArgs(serve, exe),
+    command,
+    ...args,
   ];
 }
 
@@ -1119,9 +1127,9 @@ export function readMcp(
   if (!isRecord(entry)) return { file, present: false, matches: false, unreadable: false };
   const args = entry["args"];
   const serverEnv = entry["env"];
-  const want = scriptArgs(serve, exe);
+  const { command: wantCommand, args: want } = hostInvocation(serve, exe);
   const matches =
-    entry["command"] === exe &&
+    entry["command"] === wantCommand &&
     Array.isArray(args) &&
     args.length === want.length &&
     want.every((a, i) => args[i] === a) &&
@@ -1393,6 +1401,14 @@ export async function wire(input: WireInput): Promise<WireResult> {
     io.err("Nothing was changed. The block to merge by hand, its two keys at the top level:");
     for (const line of settingsBlock(command).split("\n")) io.err(`  ${line}`);
     return { outcome: "refused", hooks: "refused", mcp: "skipped", backup: null, mcpConfirmed: false };
+  }
+
+  // WINDOWS: a hook line that names Node by a path only one of Claude Code's
+  // two shells there can run is said out loud, every connect (W1 review).
+  if (process.platform === "win32") {
+    const exe = hostExe(input.exe);
+    const fit = windowsHookFit(windowsHookWord(exe, env).form, exe);
+    if (fit !== null) u.warn(fit);
   }
 
   const plan = planSettings(sight.value, command, "wire");

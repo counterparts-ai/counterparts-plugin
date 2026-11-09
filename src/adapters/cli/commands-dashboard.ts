@@ -250,13 +250,21 @@ function realDashboard(env: Record<string, string | undefined>): DashboardSeam {
  * the screen, and a person who can read it can paste it.
  */
 function openInBrowser(url: string, env: Record<string, string | undefined>): void {
+  // Windows: `explorer.exe <url>` opens the default browser, no shell needed (W1).
   const opener =
-    process.platform === "darwin" ? "open" : process.platform === "linux" ? "xdg-open" : null;
+    process.platform === "darwin"
+      ? "open"
+      : process.platform === "linux"
+        ? "xdg-open"
+        : process.platform === "win32"
+          ? "explorer.exe"
+          : null;
   if (opener === null) return;
   try {
     const child = withHostUmask(() =>
       spawn(opener, [url], {
         detached: true,
+        windowsHide: true,
         stdio: "ignore",
         env: env as NodeJS.ProcessEnv,
       }),

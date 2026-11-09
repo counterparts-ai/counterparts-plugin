@@ -112,6 +112,7 @@ import { joinHow, joinProposalOf, joinSentence, pairKey, proposeJoin } from "./p
 import type { JoinProposal } from "./project-ask.js";
 import type { CoreAsk, CoreDecided } from "./core-ask.js";
 import { settlesWhenOf, THREAD_CLOSED_BY_META_KEY, THREAD_REOPENED_BY_META_KEY, UNRESOLVED_META_KEY } from "../mint.js";
+import { nightClosedOf, reopenNightClosed, reopenedFromNight } from "../open-close.js";
 import type { SettleOutcome } from "../reconsolidation.js";
 import { isTold } from "../told.js";
 
@@ -1264,12 +1265,13 @@ export class Reflections {
         : []),
       ...(bundle.staleOpen.length > 0
         ? [
-            // CLOSE WHAT IS PLAINLY DONE, ASK THE REST (2026-10-20, an
-            // experiment agreed with Mike): the clear ones close tonight and
-            // the share says so; the unsure ones are asked, as before.
+            // CLOSE WHAT IS PLAINLY DONE, LIST THE REST (2026-10-20, an
+            // experiment agreed with Mike; since 2026-11-07, SO1 step 1, the
+            // unsure ones are no longer asked: they are listed as "may be
+            // done" under `recall "still open"`, `open-close.ts#mayBeDoneOf`).
             `- closeNow and close (optional, ids from staleOpen${(bundle.settlesOpen ?? []).length > 0 ? " or settlesOpen" : ""} only): staleOpen lists ${String(bundle.staleOpen.length)} open ${bundle.staleOpen.length === 1 ? "thread" : "threads"} nobody has touched for a while (untouched: lived days). Most are open only because nobody closed them. Read one whole with recall first if its line is not enough.`,
             `  closeNow: the ones a memory you have read plainly shows finished — each {id, why: what shows it done, in a line, shows: the id of the memory that shows it}. They close tonight; your share says which, and ${who} can have one reopened.`,
-            `  close: the ones that look done but you are not sure of — ids only. Nothing closes: your share asks ${who}, and a yes closes them. When in doubt, ask rather than close; never close one just because it is old, and leave out one you have no view on.${bundle.staleOpen.some((x) => x.reopened === true) ? ` One marked reopened was reopened by ${who} after a reflection closed it: ask, never close.` : ""}${staleNamed === 0 ? "" : staleNamed === 1 ? " The one with settlesWhen names what would settle it: close it when a memory shows that happened." : " The ones with settlesWhen name what would settle them: close one when a memory shows that happened."}`,
+            `  close: the ones that look done but you are not sure of — ids only. Nothing closes and nobody is asked: they are listed as "may be done" where ${who} looks at what is still open. When in doubt, list rather than close; never close one just because it is old, and leave out one you have no view on. A question to ${who} (status asked) closes only on ${who}'s answer: list it, never closeNow it.${bundle.staleOpen.some((x) => x.reopened === true) ? ` One marked reopened was reopened by ${who} after a reflection closed it: list it, never close.` : ""}${staleNamed === 0 ? "" : staleNamed === 1 ? " The one with settlesWhen names what would settle it: close it when a memory shows that happened." : " The ones with settlesWhen name what would settle them: close one when a memory shows that happened."}`,
           ]
         : []),
       // WHAT WOULD SETTLE IT (2026-10-27, S1; Ames's idea): open items that
@@ -1277,7 +1279,7 @@ export class Reflections {
       // trigger plainly happened, through the same doors.
       ...((bundle.settlesOpen ?? []).length > 0
         ? [
-            `- settlesOpen (optional; the same closeNow and close take these ids): ${String((bundle.settlesOpen ?? []).length)} open ${(bundle.settlesOpen ?? []).length === 1 ? "item names" : "items name"} what would settle ${(bundle.settlesOpen ?? []).length === 1 ? "it" : "them"} (settlesWhen) — an answer someone owes, a decision, an event. If a memory you have read plainly shows that it happened (the answer came, the decision was made, the event it waited on is past), closeNow it: {id, why: what happened, shows: the memory that shows it — a later one, not the item itself}. At most ${String(REFLECT_TUNABLES.SETTLES_CLOSE)} of these close or are asked a night. If it may have happened and you are not sure, put its id in close and your share asks ${who}. If nothing shows it, leave it open: a trigger not yet met is no reason to close, and age is none either.${(bundle.settlesOpen ?? []).some((x) => x.reopened === true) ? ` One marked reopened was reopened by ${who}: ask, never close.` : ""}`,
+            `- settlesOpen (optional; the same closeNow and close take these ids): ${String((bundle.settlesOpen ?? []).length)} open ${(bundle.settlesOpen ?? []).length === 1 ? "item names" : "items name"} what would settle ${(bundle.settlesOpen ?? []).length === 1 ? "it" : "them"} (settlesWhen) — an answer someone owes, a decision, an event. If a memory you have read plainly shows that it happened (the answer came, the decision was made, the event it waited on is past), closeNow it: {id, why: what happened, shows: the memory that shows it — a later one, not the item itself}. At most ${String(REFLECT_TUNABLES.SETTLES_CLOSE)} of these close or are asked a night. If it may have happened and you are not sure, put its id in close: it is listed as "may be done", and nobody is asked. If nothing shows it, leave it open: a trigger not yet met is no reason to close, and age is none either.${(bundle.settlesOpen ?? []).some((x) => x.reopened === true) ? ` One marked reopened was reopened by ${who}: list it, never close.` : ""}`,
           ]
         : []),
       // NO LONGER CARRIED (2026-10-22, the open-threads brief): the count, once, never the list.
@@ -1891,7 +1893,8 @@ export class Reflections {
 
     // ── (d) open threads: asked, or closed when plainly done ───────────────
     // Only ids from the stale open list this reflection was shown. A proposal
-    // (`close`, 2026-10-16, #489 D) closes nothing — the share asks, and a yes
+    // (`close`, 2026-10-16, #489 D) closes nothing — since SO1 step 1 (2026-11-07) it is listed as
+    // "may be done" and nobody is asked; the owner's word, unasked,
     // closes it (`close`). A self-close (`closeNow`, 2026-10-20, an experiment
     // agreed with Mike) needs a why, keeps `closeThread`'s checks, and is said
     // in the share with the way back (`reopen`); one the owner reopened is
@@ -1937,7 +1940,7 @@ export class Reflections {
         continue;
       }
       if (proposed.includes(cid)) {
-        closeRefused.push({ id: cid, reason: "already-asked" });
+        closeRefused.push({ id: cid, reason: "already-listed" });
         continue;
       }
       if (!offeredStale.has(cid)) {
@@ -1967,14 +1970,19 @@ export class Reflections {
       // may, the yours/guest split removed). ASKED INSTEAD: one the owner
       // reopened, from any session, is asked about, as a proposal; the
       // owner's yes closes it.
+      // A QUESTION TO THE OWNER (2026-11-07, SO1 step 1): only his answer
+      // closes it, and the reflection reading for one is not his answer — it
+      // is listed as "may be done", like any unsure one.
       const guard =
         typeof open.meta[THREAD_REOPENED_BY_META_KEY] === "string"
           ? "reopened-by-owner"
-          : threadGuard(open.row);
-      if (guard === "reopened-by-owner") {
+          : open.row.status === "asked"
+            ? "asked-of-the-owner"
+            : threadGuard(open.row);
+      if (guard === "reopened-by-owner" || guard === "asked-of-the-owner") {
         proposed.push(cid);
         askedInstead += 1;
-        closeNotes.push(`${cid}: asked instead of closed (${guard}).`);
+        closeNotes.push(`${cid}: listed as may be done instead of closed (${guard}).`);
         continue;
       }
       if (guard !== null) {
@@ -2020,11 +2028,14 @@ export class Reflections {
     const reopenedSince = new Set(stringIds(parseDetail(row.detail)["reopened"]));
     const closedAll = [...priorSelfClosed, ...toClose].filter((x) => !reopenedSince.has(x.id));
     let closeLine: string | null = null;
-    if (!shareLocked && (proposed.length > 0 || closedAll.length > 0)) {
+    // THE UNSURE ONES ARE NOT ASKED (2026-11-07, SO1 step 1): kept as
+    // `closeProposed` and listed as "may be done" under `recall "still
+    // open"`; the share says only what was closed.
+    if (!shareLocked && closedAll.length > 0) {
       if (priorCloseLine !== null) shareText = withoutLine(shareText, priorCloseLine);
-      closeLine = this.closeSentences(closedAll, proposed);
+      closeLine = this.closeSentences(closedAll);
       shareText = [shareText, closeLine ?? ""].filter((x) => x.length > 0).join(" ");
-      share = { ...share, offered: true, reason: share.offered ? share.reason : proposed.length > 0 ? "close-proposed" : "closed-said" };
+      share = { ...share, offered: true, reason: share.offered ? share.reason : "closed-said" };
     }
     // THE CORE LINE (2026-10-20, an experiment): what this reflection decided
     // on the core — keep or retire, with why — in one generated line with the
@@ -2268,10 +2279,7 @@ export class Reflections {
     // are written again without it.
     if (failed.size > 0) {
       selfClosed = selfClosed.filter((x) => !failed.has(x.id));
-      const fixed = this.closeSentences(
-        selfClosed.filter((x) => !reopenedSince.has(x.id)),
-        proposed,
-      );
+      const fixed = this.closeSentences(selfClosed.filter((x) => !reopenedSince.has(x.id)));
       if (closeLine !== null) shareText = [withoutLine(shareText, closeLine), fixed ?? ""].filter((x) => x.length > 0).join(" ");
       closeLine = fixed;
       if (shareText.length === 0) share = { offered: false, reason: "no-share" };
@@ -2962,6 +2970,28 @@ export class Reflections {
         meta = r === undefined ? {} : this.store.readProse(id).meta;
       } catch {
         refused.push({ id, reason: "unreadable" });
+        continue;
+      }
+      // CLOSED BY THE NIGHT ITSELF (2026-11-07, SO1 step 1): no reflection
+      // row to confirm against; the memory's own `threadClosedBy` says so.
+      // The same checks; recorded as a `thread.night.reopened` row.
+      if (only === null && r !== undefined && (nightClosedOf(meta) !== null || reopenedFromNight(meta))) {
+        if (meta[UNRESOLVED_META_KEY] === true) {
+          already.push(id);
+          continue;
+        }
+        const why = threadGuard(r);
+        if (why !== null) {
+          refused.push({ id, reason: why });
+          continue;
+        }
+        try {
+          if (nightClosedOf(meta) === null) already.push(id);
+          else if (reopenNightClosed(this.store, id, { by: "reopen", session: input.session, restoreFlag: true })) reopened.push(id);
+          else refused.push({ id, reason: notMine });
+        } catch (err) {
+          refused.push({ id, reason: `failed: ${String((err as Error).message ?? err).slice(0, 120)}` });
+        }
         continue;
       }
       // Which reflection closed it: the one given, else the one it names.
@@ -4015,8 +4045,8 @@ export class Reflections {
    * #489 D): beside the share in the hand-back and the carried line (the
    * owner-facing question rides in the share itself). Null when none.
    */
-  private closeHow(reflection: string, ids: readonly string[], closed: readonly string[] = []): string | null {
-    if (ids.length === 0 && closed.length === 0) return null;
+  private closeHow(reflection: string, _ids: readonly string[], closed: readonly string[] = []): string | null {
+    if (closed.length === 0) return null;
     const who = this.ctx.ownerName() ?? "the owner";
     const out: string[] = [];
     // WHAT IT CLOSED ITSELF (2026-10-20): told, with the way back.
@@ -4026,12 +4056,10 @@ export class Reflections {
           `If ${who} says one is not done ("undo", "that one isn't"), now or in any later session, the counterparts reflect tool's phase "reopen", reopen: [that id], reopens it — the thread's id is enough.`,
       );
     }
-    if (ids.length > 0) {
-      out.push(
-        `The share asks ${who} whether ${ids.length === 1 ? "an open thread looks done" : "some open threads look done"} (${ids.join(", ")}): ask it plainly. ` +
-          `On ${who}'s yes, the counterparts reflect tool's phase "close", reflection: ${reflection}, close: [the ids ${who} agreed to], closes them. On a no, or no answer, nothing changes.`,
-      );
-    }
+    // The unsure ones (`_ids`) are not asked since 2026-11-07 (SO1 step 1):
+    // `recall "still open"` lists them as "may be done". Should the owner say
+    // one is done, the phase "close" still closes it.
+    void reflection;
     return out.join(" ");
   }
 
@@ -4056,7 +4084,7 @@ export class Reflections {
    * for a settles close on weak evidence (S1), what was weak — then what it
    * asks about. Null when neither.
    */
-  private closeSentences(closed: readonly SelfClose[], asked: readonly string[]): string | null {
+  private closeSentences(closed: readonly SelfClose[]): string | null {
     const lines: string[] = [];
     if (closed.length > 0) {
       const named = closed
@@ -4066,14 +4094,6 @@ export class Reflections {
         closed.length === 1
           ? `I closed one open thread that looked done: ${named}. If it isn't, say so and I'll reopen it.`
           : `I closed ${countWord(closed.length)} open threads that looked done: ${named}. If one isn't, say so and I'll reopen it.`,
-      );
-    }
-    if (asked.length > 0) {
-      const named = asked.map((cid) => `"${this.handle(cid)}" (${cid})`).join("; ");
-      lines.push(
-        asked.length === 1
-          ? `One thing still listed as open looks done to me: ${named}. Shall I close it?`
-          : `A few things still listed as open look done to me: ${named}. Shall I close them?`,
       );
     }
     return lines.length === 0 ? null : lines.join(" ");

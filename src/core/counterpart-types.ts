@@ -602,6 +602,12 @@ export type DepositReason =
  */
 export interface PlainReminder extends PlainDue {
   readonly what: string;
+  /**
+   * CROSSED (SO1 step 3 fix round): another folder's work reminder that went
+   * unsaid past its last day, told once wherever the person is, with its folder
+   * named — that folder's name. Its latch is `Prospective.claimCross`, not a beat.
+   */
+  readonly crossFrom?: string;
 }
 
 export interface DepositResult {

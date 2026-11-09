@@ -404,7 +404,7 @@ export function eventLogLines(log: EventLogCensus, zone?: string): string[] {
       : `oldest: lived day ${log.oldestDay} (${localDate(log.oldestAt, zone)})`;
   return [
     `Events: ${log.rows} held (${log.latched} latched records)   ${oldest}   ` +
-      `window: ${log.retentionDays} lived days (cutoff day ${log.cutoffDay})`,
+      `window: ${log.retentionDays} lived days (cutoff day ${log.cutoffDay}); per-turn rows ${log.shortRetentionDays} (cutoff day ${log.shortCutoffDay}, rolled up a day at a time first)`,
     `  past the window: ${log.eligible} unlatched (the next sleep pass deletes ${wouldDelete}, cap ${cap} per pass)` +
       `, ${log.latchedPastCutoff} latched records kept`,
   ];

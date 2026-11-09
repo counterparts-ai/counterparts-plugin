@@ -77,6 +77,21 @@ export const TUNABLES = {
      * new links are a few dozen.
      */
     tags: 500,
+    /**
+     * Routine work memories faded under a newer one a night at most
+     * (2026-11-07, FD1 step 3). CAL, chosen not measured: a store with weeks
+     * of status notes takes its backlog a few nights at a time, so the first
+     * nights' fades stay readable beside the age prunes; a night's own new
+     * events are a few dozen.
+     */
+    interfere: 200,
+    /**
+     * Open items the night closes a night at most (2026-11-07, SO1 step 1).
+     * CAL, chosen not measured: a store's first night takes its backlog of
+     * release steps at once (a handful on the owner's copy); a night's own
+     * are one or two.
+     */
+    close: 50,
     dedup: 1_000,
     versions: 1,
     briefing: 1,
@@ -110,6 +125,10 @@ export const TUNABLES = {
     births: 1,
     /** Every lived day: card names, stems and dead merges are a few reads. */
     tags: 1,
+    /** Every lived day: one read of the live work memories. */
+    interfere: 1,
+    /** Every lived day: one read of the open items and the work memories. */
+    close: 1,
     dedup: 1,
     versions: 1,
     briefing: 1,

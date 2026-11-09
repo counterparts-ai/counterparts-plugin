@@ -909,6 +909,9 @@ export const RECALL_DECISION_FIELDS = [
   "footnotes",
   "elapsedMs",
   "lateMs",
+  // LT2 part 1 (2026-11-09): ms per step of the pass, absent with
+  // `recall.STEP_TIMING` off. Added the way `echoSkipped` was; `tools/parallel`'s hash moves with it.
+  "steps",
   "aborted",
   // Association build 1 (2026-09-28): what spreading did, and the cut's count.
   "spread",
@@ -944,6 +947,12 @@ export const RECALL_DECISION_FIELDS = [
   // subjects named offered, which beliefs were shown, and their bytes; null
   // when the slot did not run (off, or a quiet turn). Added the way `primed` was.
   "beliefs",
+  // FD1 step 5 (2026-11-07): chapters and frozen copies an ambient turn left
+  // out as `LAST_HERE_LIFE_DAYS` or more lived days old (a named skip, like
+  // below-reach), and the journal's share of the pool and of the cut's slots.
+  // Added the way `echoSkipped` was; `tools/parallel`'s hash moves with it.
+  "journalAged",
+  "journalCandidates",
 ] as const;
 
 export type SurfaceSetField = (typeof RECALL_DECISION_FIELDS)[number];
@@ -1081,6 +1090,8 @@ export function recallDecisionRecord(
     // past the line it ran: `lateMs` is what the old `latency-abort` counted.
     elapsedMs: d.elapsedMs,
     lateMs: d.lateMs,
+    // WHERE THE TIME WENT (LT2): step name → ms, copied; undefined (not written) while off.
+    steps: d.steps,
     aborted: d.aborted,
     // What spreading did this turn and how many scored candidates the cut left
     // out — counts only (association build 1, 2026-09-28). `spread` is null on
@@ -1110,6 +1121,9 @@ export function recallDecisionRecord(
     primed: d.primed,
     // THE BELIEFS SLOT (lane E): null when it did not run.
     beliefs: d.beliefs,
+    // AGED CHAPTERS AND THE JOURNAL'S SHARE (FD1 step 5): counts only.
+    journalAged: d.journalAged,
+    journalCandidates: d.journalCandidates,
   } satisfies Record<SurfaceSetField, unknown>;
   return surfaceSet;
 }

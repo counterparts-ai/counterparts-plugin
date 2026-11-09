@@ -272,7 +272,7 @@ export const MEMORY_MECHANISMS: readonly MemoryMechanism[] = [
       // occasion check, so "nothing due this week" is never said of a week
       // when something was due and went unsaid.
       const missed = rows("prospective-plain")?.occasionMissed ?? 0;
-      const unsaid = missed > 0 ? `; ${plural(missed, "plain reminder")} due on a day a session ran and not said` : "";
+      const unsaid = missed > 0 ? `; ${plural(missed, "plain reminder")} due where a session could say it, and not said` : "";
       if (v.fired) {
         const parts: string[] = [];
         if (plain > 0) parts.push(`${String(plain)} said plainly`);

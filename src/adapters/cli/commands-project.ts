@@ -18,7 +18,8 @@ import type { Io, Parsed } from "./commands-shared.js";
 
 /** A typed project argument that names a folder rather than a project by name. */
 function looksLikeFolder(word: string): boolean {
-  return word.startsWith("/") || word.startsWith("~") || word.startsWith(".") || word.includes("/");
+  // `C:\…` and `dir\sub` on Windows (W1).
+  return word.startsWith("/") || word.startsWith("~") || word.startsWith(".") || word.includes("/") || /^[A-Za-z]:[\\/]/.test(word) || word.includes("\\");
 }
 
 /** The folder as the hooks record it: resolved, real, no trailing slash. */

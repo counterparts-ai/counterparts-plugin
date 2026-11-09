@@ -127,10 +127,14 @@ export function isWorkMemory(m: WorkFacts, rule: WorkRule = {}): boolean {
  * Mike agreed the lean that morning, lightly held): `here` — written in one of
  * the reader's folders (`folders`: this folder and its project's, as
  * `projectFolders` gives them, each `projectFolder`-normalized); `personal` —
- * not work by `isWorkMemory` (marked me, us, owner or world, or unmarked and
- * personal by kind), shown after this folder's wherever the session wakes;
- * `out` — another folder's work, which stays in its folder as "Work here"
- * does. A thread with NO FOLDER recorded (null, empty, or a host's name scope
+ * not work by `isWorkMemory` and not marked world (marked me, us or owner, or
+ * unmarked and personal by kind), shown after this folder's wherever the
+ * session wakes; `out` — another folder's work, or a thread marked world
+ * written in another folder, which stays in its folder as "Work here" does.
+ * MARKED WORLD STAYS HOME (SO1 step 3, 2026-11-07, with Mike: what crossed into
+ * motelier was plain things to do): a world thread is something the world owes
+ * (a reply, a dated check), acted on where it was written, so only me, us and
+ * owner cross. A journal copy is still personal. A thread with NO FOLDER recorded (null, empty, or a host's name scope
  * such as `claude-desktop:` read from somewhere else) is never `out`, marked
  * work or not: there is no folder it could be another's work in, and leaving
  * it out would leave it out of every wake. Pure.
@@ -138,7 +142,7 @@ export function isWorkMemory(m: WorkFacts, rule: WorkRule = {}): boolean {
 export function threadPlace(m: WorkFacts, folders: ReadonlySet<string>, rule: WorkRule = {}): "here" | "personal" | "out" {
   const scope = m.originScope === null ? "" : projectFolder(m.originScope);
   if (scope.length > 0 && folders.has(scope)) return "here";
-  if (isDirectoryScope(m.originScope) && isWorkMemory(m, rule)) return "out";
+  if (isDirectoryScope(m.originScope) && (isWorkMemory(m, rule) || (m.about === "world" && !m.journal))) return "out";
   return "personal";
 }
 

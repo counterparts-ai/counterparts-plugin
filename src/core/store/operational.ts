@@ -260,6 +260,28 @@ export const OBSERVER_READ_FLOOR = 11;
  *  debugging. `store/NOTES.md` carries what changed underneath the number. */
 export const DEFAULT_RETENTION_DAYS = 90;
 
+/**
+ * THE PER-TURN ROWS GO SOONER (FD1 step 2, 2026-11-07, Mike's "fade what
+ * grows"; lightly held, re-read ~3 lived days after install: CHECK-AFTER).
+ * These names are written on every turn or every rating — together ~5k a week
+ * on a busy store, most of the log — and every reader that runs on a turn or a
+ * night reads at most 14 lived days of them (habituation 14, the doctor's lines
+ * 7, priming and the same-turn rating check the current session, the dream
+ * since the last night). So they keep `SHORT_RETENTION_DAYS` lived days (or the
+ * store's own `retentionDays`, when that is shorter); every other unlatched row
+ * keeps `retentionDays`. Before a day's rows of these names go, the sweep rolls
+ * them into one latched `events.rolled` row for that lived day
+ * (`core/event-rollup.ts`: counts by name, the ids credited for use with any
+ * removed id left out, the session refs, probe-oq4's two reports), so the
+ * all-time readers (the dashboard's counts, `counterparts mechanisms`,
+ * `probe-oq4`, days used, sessions seen) keep their numbers. A CHECK-AFTER SQL
+ * read against the rows sees 30 lived days. Undo: an empty list.
+ */
+export const SHORT_RETENTION_DAYS = 30;
+export const SHORT_RETENTION_NAMES: readonly string[] = ["recall.decision", "recall.credit", "recall.rated"];
+/** The daily roll-up row's name, and its latch prefix (`events.rolled.<day>`). */
+export const EVENTS_ROLLED_EVENT = "events.rolled";
+
 /** Box-2 meta key prefix: the memory ids a card the owner removed had linked,
  *  written by the chase (`owner-op-seam.ts`), read by `Store#cardTombstoneLinks`.
  *  Ids only, never the name (§16 G9). Review of #429, 2026-10-11. */

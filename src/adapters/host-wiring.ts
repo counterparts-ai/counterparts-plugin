@@ -250,7 +250,9 @@ function readObject(path: string): Record<string, unknown> | null {
 /** A leading `~/` or `$HOME/` (`${HOME}/`) as the host's shell would expand
  *  it, from `env`'s HOME; anything else as it is. */
 export function expandHome(path: string, env: Record<string, string | undefined>): string {
-  const home = (env["HOME"] ?? "").trim();
+  // Windows has no HOME as a rule; Git Bash, which runs a hook there, sets it
+  // from USERPROFILE (W1).
+  const home = (env["HOME"] ?? env["USERPROFILE"] ?? "").trim();
   if (home.length === 0) return path;
   const m = /^(~|\$HOME|\$\{HOME\})(?=[/\\])/.exec(path);
   return m === null ? path : `${home}${path.slice(m[0].length)}`;

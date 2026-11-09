@@ -83,7 +83,7 @@ import { confirm, isInteractive, isPromptAborted } from "./ui.js";
 import type { Ui } from "./ui.js";
 import type { UndoPlan } from "./start-fresh.js";
 import type { DesktopRepair } from "./desktop.js";
-import { BINARY, packagePath } from "../runtime.js";
+import { BINARY, builtVersionOf, packagePath } from "../runtime.js";
 import { installRoute } from "../plugin.js";
 import type { Binary } from "../runtime.js";
 import { DESKTOP_HOST } from "../hosts.js";
@@ -402,7 +402,9 @@ export function packageVersion(): string {
     const said = (JSON.parse(raw) as Record<string, unknown>)["version"];
     readVersion = typeof said === "string" && said.length > 0 ? said : VERSION_UNKNOWN;
   } catch {
-    readVersion = VERSION_UNKNOWN;
+    // The single binary on Windows can't open its embedded package.json; its
+    // build handed the same version in (`runtime.ts#setBuiltVersion`, W1).
+    readVersion = builtVersionOf() ?? VERSION_UNKNOWN;
   }
   return readVersion;
 }

@@ -225,6 +225,22 @@ export function chaseRemoved(store: Store, id: string, actor: OwnerRemovalReques
     db.run("DELETE FROM returns WHERE memory_id = ?", id);
     db.run("DELETE FROM wake_display WHERE memory_id = ?", id);
     db.run("DELETE FROM core_events WHERE memory_id = ?", id);
+    // FD1 step 2: the daily summaries of the per-turn rows keep the ids each day
+    // credited for use (`core/event-rollup.ts#used`), and are kept at any age:
+    // the removed id leaves them (the counts stay; they are not about it).
+    for (const r of db.all<{ seq: number; payload: string | null }>(
+      "SELECT seq, payload FROM events WHERE name = 'events.rolled' AND instr(payload, ?) > 0",
+      id,
+    )) {
+      try {
+        const p = JSON.parse(r.payload ?? "{}") as { used?: Record<string, unknown> };
+        if (p.used === undefined || !(id in p.used)) continue;
+        delete p.used[id];
+        db.run("UPDATE events SET payload = ? WHERE seq = ?", JSON.stringify(p), r.seq);
+      } catch {
+        /* a summary that will not parse holds no list to take it from */
+      }
+    }
     // A DREAM'S JOURNAL about it (working default 2026-09-26, review of #251):
     // a dream that was SHOWN the memory, CHANGED it, or whose journal QUOTES it
     // (a six-word run of its words, or its title) may carry its words in the

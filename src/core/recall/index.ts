@@ -51,6 +51,7 @@ import { beliefLine, render } from "./render.js";
 import type { BeliefLine } from "./render.js";
 import { headOf, standingOf, unsettledCompetition } from "./standing.js";
 import type { RenderResult, Resolve, Resolved } from "./render.js";
+import { StepClock } from "./steps.js";
 import { withTunables } from "./tunables.js";
 import type { RecallTunables } from "./tunables.js";
 import { TOLD_SOURCE } from "../told.js";
@@ -88,6 +89,8 @@ export * from "./prime.js";
 export * from "./render.js";
 export * from "./session.js";
 export { SEE_ALSO_NAMES_READ, namedIds, recallableRow, seeAlso } from "./activate.js";
+export { STEP_NAMES, StepClock } from "./steps.js";
+export type { StepName } from "./steps.js";
 export type { SeeAlso, SeeAlsoInput } from "./activate.js";
 export * from "./standing.js";
 export * from "./recency-ask.js";
@@ -122,6 +125,13 @@ export interface RecallOptions {
 export interface Turn {
   sessionId: string;
   text: string;
+  /**
+   * WHERE THE TIME WENT (LT2, 2026-11-09): a clock the caller started before
+   * its own steps (`Counterpart#recallForTurn` laps the arrivals, the embed and
+   * the rest before handing the turn over), lapped through the build and the
+   * record. Absent: the build starts its own. Read by nothing that decides.
+   */
+  clock?: StepClock;
   /** The turn's embedding, supplied by the caller. NEVER fetched here. */
   vector?: readonly number[];
   /**
@@ -411,6 +421,21 @@ export interface RecallDecision {
   readonly spread: SpreadStats | null;
   /** Scored candidates the candidate cut left out (never a silent cut). */
   readonly dropped: number;
+  /**
+   * AGED CHAPTERS (FD1 step 5, 2026-11-07): chapters and frozen full copies
+   * this ambient turn left out because their latest chapter is
+   * `LAST_HERE_LIFE_DAYS` or more lived days old (`activate.ts#journalAged`).
+   * A named skip, counted like below-reach. 0 on a turn that read nothing.
+   */
+  readonly journalAged: number;
+  /**
+   * THE JOURNAL'S SHARE (FD1 step 5): journal rows (chapters, frozen copies,
+   * chapter summaries) in the scored pool after the chapter fold, in the
+   * candidates the cut kept, and how many the cut kept in all (quiet pointers
+   * not counted, on either side) — so the slot
+   * share is `kept / of`, read live rather than replayed. Counts only.
+   */
+  readonly journalCandidates: { readonly pool: number; readonly kept: number; readonly of: number };
   readonly bytes: number;
   readonly budgetBytes: number;
   readonly sentinel: string | null;
@@ -422,6 +447,14 @@ export interface RecallDecision {
    * its answer finished. `lateMs > 0` is what `latency-abort` used to count.
    */
   readonly lateMs: number;
+  /**
+   * WHERE THE TIME WENT (LT2 part 1, 2026-11-09, measurement only): ms per step
+   * of this turn's pass (`steps.ts#STEP_NAMES`), a step that did not run
+   * absent. The build's steps sum to about `elapsedMs`; the steps before it
+   * (`embed`, `arrivals`, …) and `record` after it are outside `elapsedMs`.
+   * Absent when `STEP_TIMING` is off, so an off turn's row is as before.
+   */
+  readonly steps?: Readonly<Record<string, number>>;
 }
 
 export interface RecallResult {
@@ -558,6 +591,8 @@ export class Recall {
    */
   build(turn: Turn): BuildOutput {
     const started = this.now();
+    // WHERE THE TIME WENT (LT2): the caller's clock when it started one.
+    const clock = turn.clock ?? new StepClock();
     const day = turn.day ?? this.store.livedDay();
     const budgetBytes = turn.budgetBytes ?? this.budgetBytes;
     const budgetMs = turn.budgetMs ?? this.budgetMs;
@@ -566,6 +601,7 @@ export class Recall {
       ? { state: this.volatileState(turn.sessionId), status: "loaded" as const }
       : loadGateState(this.store, turn.sessionId, this.tunables.MAX_SESSION_RECORDS);
     const state = loaded.state;
+    clock.lap("gateLoad");
     const turnNo = state.turn + 1;
 
     // The semantic channel's input, judged ONCE: a vector this caller embedded,
@@ -605,12 +641,19 @@ export class Recall {
         plan = null;
       }
     }
+    clock.lap("primePlan");
 
     // HOW LATE THE TURN RAN (LT1, 2026-10-30): read once, when the decision is
-    // done, against the line that used to throw the answer away.
-    const elapsed = (): { elapsedMs: number; lateMs: number } => {
+    // done, against the line that used to throw the answer away. And where the
+    // time went (LT2): whatever ran since the last named step is `rest`.
+    const elapsed = (): { elapsedMs: number; lateMs: number; steps?: Readonly<Record<string, number>> } => {
       const elapsedMs = this.now() - started;
-      return { elapsedMs, lateMs: Math.max(0, elapsedMs - budgetMs) };
+      clock.lap("rest");
+      return {
+        elapsedMs,
+        lateMs: Math.max(0, elapsedMs - budgetMs),
+        ...(this.tunables.STEP_TIMING ? { steps: clock.snapshot() } : {}),
+      };
     };
     const quiet = (
       reason: DecisionReason,
@@ -661,6 +704,8 @@ export class Recall {
         beliefs: null,
         spread: null,
         dropped: 0,
+        journalAged: 0,
+        journalCandidates: { pool: 0, kept: 0, of: 0 },
         bytes: 0,
         budgetBytes,
         sentinel: null,
@@ -681,6 +726,7 @@ export class Recall {
     // THE BELIEFS SLOT (wave 2 lane E): a subject this turn names is enough —
     // read once, before the memories, and shown whatever the footnotes do.
     const beliefPicks = this.pickBeliefs(turn, text, day, state);
+    clock.lap("beliefs");
     const withBeliefs = (out: BuildOutput): BuildOutput => this.beliefsOnly(out, beliefPicks, turnNo, budgetBytes);
 
     // Cold start is STRICTER, not looser: below a minimum store size the variance
@@ -697,6 +743,7 @@ export class Recall {
       livedSize < this.tunables.COLD_START_MIN_STORE
         ? this.tunables.COLD_START_MAX_CANDIDATES
         : this.tunables.MAX_CANDIDATES;
+    clock.lap("counts");
 
     // How each person feels now — only what was RECORDED in the last few hours
     // (recall G18; no classifier). Read on the store's clock, which is the clock the
@@ -705,6 +752,7 @@ export class Recall {
     // nothing, so the `feelings` scan is not run; the code stays for a re-test.
     const moodWeighs = this.tunables.MOOD_SAME_WEIGHT > 0 || this.tunables.MOOD_CROSS_WEIGHT > 0;
     const mood = moodWeighs ? currentMood(this.store, this.store.now(), this.tunables) : NO_MOOD;
+    clock.lap("mood");
 
     const act = activate(
       this.store,
@@ -725,9 +773,12 @@ export class Recall {
         livedSize,
         ...(turn.feeling === undefined ? {} : { feeling: turn.feeling }),
         ...(plan === null ? {} : { prime: plan.activation }),
+        clock,
       },
       this.tunables,
     );
+    // Activation's last stretch: the quiet pointers and its result (LT2).
+    clock.lap("pointers");
 
     const carry = act.cues
       .filter((c) => !c.carried)
@@ -739,6 +790,8 @@ export class Recall {
       carriedCueCount: carriedIn.length,
       storeSize: act.storeSize,
       semanticDegraded: act.semanticDegraded,
+      journalAged: act.journalAged,
+      journalCandidates: act.journal,
     };
 
     if (act.candidates.length === 0) {
@@ -752,11 +805,14 @@ export class Recall {
     // deliberate recall (a question, an id) and never offered at a prompt.
     // A deliberate feeling ask keeps it, as habituation leaves that ask alone.
     const reached = headsWin(this.store, act.candidates, day);
+    clock.lap("settledOver");
     const candidates = turn.feeling === undefined ? reached.filter((c) => !(this.store.row(c.id)?.meta ?? "").includes(`"${OWN_PLUMBING_META_KEY}"`)) : reached;
+    clock.lap("plumbing");
     if (candidates.length === 0) return withBeliefs({ ...quiet("no-candidates", cueStats), carry });
     // HABITUATION (an experiment, 2026-10-19, light): who was rated 0 in enough
     // recent sessions. Ambient turns only: a deliberate feeling ask is untouched.
     const habituated = turn.feeling === undefined ? habituatedIds(this.store, day, this.tunables) : new Map<string, number>();
+    clock.lap("habituation");
     // AN UNSETTLED PAIR COMPETES (2026-10-24, E3, an experiment): the older of
     // a standing unsettled pair, its newer reached this turn too, counts at a
     // weight in the gate. Off: nothing is read.
@@ -767,6 +823,7 @@ export class Recall {
           windowDays: this.tunables.UNSETTLED_COMPETE_WINDOW_DAYS,
         })
       : null;
+    clock.lap("competing");
 
     const gated = gate(
       {
@@ -784,6 +841,7 @@ export class Recall {
       },
       this.tunables,
     );
+    clock.lap("gate");
 
     // SEE-ALSO FROM NAMED IDS (PP1, 2026-10-29, an experiment): a shown
     // memory whose text names another's id brings it along, one each,
@@ -813,6 +871,7 @@ export class Recall {
       background: gated.background.bar,
       t: this.tunables,
     });
+    clock.lap("seeAlso");
     const alongIds = new Set(along.map((x) => x.id));
     // The turn's verdicts from here on: a brought-along candidate's own
     // (below its bar, say) is replaced by its see-also one; one no channel
@@ -833,6 +892,8 @@ export class Recall {
     const standings = new Map<string, { prefix: string; suffix: string } | null>();
     const standing = (id: string): { prefix: string; suffix: string } | null => {
       if (!standings.has(id)) {
+        // The render so far is the render's; the lookup is the settled pairs' (LT2).
+        clock.lap("render");
         let s: { prefix: string; suffix: string } | null = null;
         try {
           s = standingOf(this.store, id);
@@ -840,6 +901,7 @@ export class Recall {
           s = null;
         }
         standings.set(id, s);
+        clock.lap("settledOver");
       }
       return standings.get(id) ?? null;
     };
@@ -865,6 +927,7 @@ export class Recall {
       },
       resolve,
     );
+    clock.lap("render");
 
     const nothingAdmitted =
       gated.surfaced.length === 0 && gated.footnotes.length === 0 && !gated.affectFlag;
@@ -949,6 +1012,8 @@ export class Recall {
               pointersUnanchored: verdicts.filter((v) => v.via === "link" && v.verdict === "dark-uncued").length,
             },
       dropped: act.dropped,
+      journalAged: act.journalAged,
+      journalCandidates: act.journal,
       bytes: rendered.bytes,
       budgetBytes,
       sentinel: rendered.sentinel,
@@ -977,7 +1042,9 @@ export class Recall {
    * since LT1): its answer was already finished, so it is shown.
    */
   recall(turn: Turn): RecallResult {
-    const built = this.build(turn);
+    // One clock through the build and the record (LT2), the caller's when it has one.
+    const clock = turn.clock ?? new StepClock();
+    const built = this.build(turn.clock === undefined ? { ...turn, clock } : turn);
     const d = built.decision;
 
     if (built.gateStatus === "unreadable") {
@@ -1062,7 +1129,10 @@ export class Recall {
         source: d.semanticSource,
       });
     }
-    return { injection: built.injection, decision: d };
+    // The record's own time (gate state, the train, telemetry), after the build's
+    // `elapsedMs` — so the steps go onto the decision now, `record` included.
+    clock.lap("record");
+    return { injection: built.injection, decision: d.steps === undefined ? d : { ...d, steps: clock.snapshot() } };
   }
 
   /**

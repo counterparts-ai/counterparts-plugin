@@ -24,8 +24,9 @@
  * Every path that marks one memory as standing in place of another calls
  * `supersede`: a settle, a write's `updates`, a slot confirmed, a dream merge
  * (source `dream-merge`), the core's pressure crossing (`pressure`), a
- * fulfilled plan (`fulfilled`), a moved reminder (`reminder-moved`), and next
- * Group 3's folds. It writes the pair and the trail and takes the effect from
+ * fulfilled plan (`fulfilled`), a moved reminder (`reminder-moved`), Group
+ * 3's folds, and the night's interference sweep (`interference`, FD1 step 3:
+ * a newer routine work event fades the older one). It writes the pair and the trail and takes the effect from
  * `how` alone (decided by random-06, 2026-10-11, lightly held: no fourth
  * relation — a merge's originals and a crossed core memory fade, stay live and
  * are labelled earlier, like any `changed`). A core memory a change reaches
@@ -586,8 +587,8 @@ export interface SupersedeInput {
   readonly how: SettleHow;
   /**
    * What made it (no DDL: a TEXT value): `write`, `settle`, `slot`, `pressure`,
-   * `fulfilled`, `dream-merge`, `reminder-moved`, `fold` (Group 3 part B). The
-   * dashboard counts by it.
+   * `fulfilled`, `dream-merge`, `reminder-moved`, `fold` (Group 3 part B),
+   * `interference` (FD1 step 3, `interference.ts`). The dashboard counts by it.
    */
   readonly source: string;
   readonly actor: SettleActor;
@@ -605,6 +606,13 @@ export interface SupersedeInput {
   /** What the settler asked for, when a guard changed it. */
   readonly asked?: SettleHow;
   readonly notes?: readonly string[];
+  /**
+   * A detected door's own reason, kept on the trail's detail and on the
+   * durable event (2026-11-07, FD1 step 3): the interference sweep's
+   * `superseded-by-newer`, so a read can tell its fades from every other
+   * `changed`. Absent: none.
+   */
+  readonly reason?: string;
 }
 
 /** Where a reminder a `done` holder SPENT records who spent it (2026-10-11, review of #427): the date leaves the memory, kept in its version row. */
@@ -672,6 +680,7 @@ export function supersede(store: Store, input: SupersedeInput, opts: { retarget?
   const detail: Record<string, unknown> = {};
   if (input.asked !== undefined && input.asked !== how) detail["asked"] = input.asked;
   if (input.howSent !== undefined) detail["howSent"] = input.howSent;
+  if (input.reason !== undefined) detail["reason"] = input.reason;
 
   // A PENDING REMINDER is never buried (07): settled over, it would go quiet.
   // It moves to the holder, as a write's `updates` moves it; a holder that is
@@ -826,6 +835,7 @@ export function supersede(store: Store, input: SupersedeInput, opts: { retarget?
       // doors (slot, dream-merge) apart from declared ones (review 10 C6).
       source: pair?.source ?? input.source,
       ...(input.howSent === undefined ? {} : { howSent: input.howSent }),
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
       faded: faded !== null,
       archived: archive !== null,
       leftCore: leaveCore !== null,

@@ -252,6 +252,9 @@ export function spawnDetached(
       withHostUmask(() =>
         spawn(p.command, [...p.args], {
           detached: true,
+          // On Windows a detached child gets a console window of its own, one
+          // flashing up on every prompt, unless it is hidden (W1, 2026-11-09).
+          windowsHide: true,
           stdio: "ignore",
           env: { ...p.env },
           timeout: p.timeoutMs,

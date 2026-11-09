@@ -145,7 +145,7 @@ function byUse(a: string, b: string): number {
  * want) as the fix, since it rewrites the commands with the runtime running it.
  * Quiet when nothing of ours is configured: the Claude Code line says that.
  */
-export function runtimeFindings(reading: HostReading): Finding[] {
+export function runtimeFindings(reading: HostReading, platform: string = process.platform): Finding[] {
   const rows = reading.runtimes ?? [];
   if (rows.length === 0) return [];
   const said = rows
@@ -184,6 +184,24 @@ export function runtimeFindings(reading: HostReading): Finding[] {
         data,
       ),
     ];
+  }
+  // WINDOWS (W1 review): a hook line naming Node by a path that needs quotes
+  // runs in only one of Claude Code's two shells there; amber, so a later Git
+  // for Windows install or removal that breaks every hook has a line to point at.
+  if (missing.length === 0 && platform === "win32") {
+    const oneShell = rows.find((r) => !r.used.every((u) => u === "desktop") && r.kind !== "binary" && /[^A-Za-z0-9_.:/+\\-]/.test(r.exe));
+    if (oneShell !== undefined) {
+      return [
+        finding(
+          "runtime",
+          "amber",
+          "Runtime",
+          `${said}${console_}; the hooks name Node by a path that needs quotes (\`node\` on PATH is another file, such as a version manager's shim), so their line runs in only one of Git Bash and PowerShell — the one Claude Code used when they were written. Installing or removing Git for Windows since then stops every hook.`,
+          "Put the Node you want first on PATH, then run: counterparts connect. Then restart Claude Code.",
+          data,
+        ),
+      ];
+    }
   }
   if (missing.length === 0) return [finding("runtime", "green", "Runtime", `${said}${console_}`, "", data)];
   return [

@@ -286,6 +286,15 @@ export interface BufferOptions extends Stance {
   consumedLedgerMax?: number;
   maxSpanFailures?: number;
   onEvent?: (event: RememberEvent) => void;
+  /**
+   * THE SECRETS GATE OVER THE RAW BUFFER (SX1, 2026-11-09), injected the way
+   * the battery is (INTERFACE-GAPS #2): `remember/` never gates, `encode/` owns
+   * the scan, and `Counterpart` hands it in. Every text this buffer appends
+   * (a turn's conversation and assistant streams, a jot) crosses it BEFORE it
+   * is hashed or written, so nothing the memory's gate strips survives in raw.
+   * Families and counts come back; never the secret.
+   */
+  redact?: (text: string) => { redacted: string; findings: readonly { family: string; count: number }[] };
 }
 
 const EVENT_RING = 500;
@@ -304,6 +313,7 @@ export class SpanBuffer {
   private readonly nowFn: () => number;
   private readonly dayFn: () => number;
   private readonly onEvent: ((e: RememberEvent) => void) | undefined;
+  private readonly redactFn: BufferOptions["redact"];
   private readonly ring: RememberEvent[] = [];
 
   constructor(opts: BufferOptions = {}) {
@@ -318,6 +328,7 @@ export class SpanBuffer {
     this.nowFn = opts.now ?? (() => Date.now());
     this.dayFn = opts.day ?? (() => 0);
     this.onEvent = opts.onEvent;
+    this.redactFn = opts.redact;
     // The destruction capability, handed over at construction the way `Store`
     // hands `owner-op-seam.ts` its own: holding a buffer does not let you strike
     // a span; importing the seam does, and a test pins who may import it.
@@ -396,6 +407,23 @@ export class SpanBuffer {
   // ── capture ────────────────────────────────────────────────────────────────
 
   /**
+   * The injected secrets scan, on text about to be appended (SX1). Counted by
+   * family, never the value. A scan that throws is NOT a reason to write the
+   * text as it came: the throw reaches `capture`'s outermost swallow (the
+   * cursor stays, the next boundary re-reads) or `jot`'s own (IO_FAILED).
+   */
+  private redact(text: string, kind: SpanKind): string {
+    if (this.redactFn === undefined) return text;
+    const out = this.redactFn(text);
+    if (out.findings.length > 0) {
+      const data: Record<string, string | number> = { kind };
+      for (const f of out.findings) data[f.family] = f.count;
+      this.emit("remember.span.redacted", undefined, data);
+    }
+    return out.redacted;
+  }
+
+  /**
    * A turn boundary: append what is new since this session's cursor, then advance.
    *
    * Synchronous by construction — a boundary is an appender, not a thinker, and a
@@ -462,10 +490,13 @@ export class SpanBuffer {
     const day = this.dayFn();
     const drafts: Span[] = [];
     for (const kind of ["conversation", "assistant"] as const) {
-      const text = kept
-        .filter((t) => (kind === "assistant" ? t.role === "assistant" : t.role !== "assistant"))
-        .map((t) => t.text)
-        .join("\n\n");
+      const text = this.redact(
+        kept
+          .filter((t) => (kind === "assistant" ? t.role === "assistant" : t.role !== "assistant"))
+          .map((t) => t.text)
+          .join("\n\n"),
+        kind,
+      );
       if (text.trim().length === 0) continue;
       drafts.push({
         hash: hashText(text),
@@ -597,12 +628,19 @@ export class SpanBuffer {
     }
     if (input.text.trim().length === 0) return { ...base, reason: "NOTHING_NEW" };
 
+    let text: string;
+    try {
+      text = this.redact(input.text, "jot");
+    } catch (err) {
+      this.emit("remember.capture.failed", undefined, { code: errCode(err), site: "jot" });
+      return { ...base, reason: "IO_FAILED" };
+    }
     const span: Span = {
-      hash: hashText(input.text),
+      hash: hashText(text),
       session: input.session,
       scope: input.scope,
       kind: "jot",
-      text: input.text,
+      text,
       at: this.nowFn(),
       day: this.dayFn(),
       from: cursorBefore,
