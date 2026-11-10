@@ -680,6 +680,20 @@ export function openThreadTouches(
  * starter memory, an identity element or a protected row (its close would
  * be refused). Newest first. The caller confirms the flag on the parsed meta.
  */
+/**
+ * THE OPEN ITEMS MARKED `asked`, ids and revisions only (SO1 step 4, 2026-11-09): what
+ * the turn lane's cache is keyed on, so a write that changes one invalidates it. One
+ * read on the `memories_open` partial index; no subquery per row.
+ */
+export function askedOpenStamps(store: Store): { id: string; revision: number }[] {
+  return store["ops"].all<{ id: string; revision: number }>(
+    `SELECT m.id AS id, m.revision AS revision
+       FROM memories m INDEXED BY memories_open
+      WHERE m.archived = 0 AND m.meta LIKE '%"unresolved":true%' AND m.type = 'memory' AND m.status = 'asked'
+      ORDER BY m.id`,
+  );
+}
+
 export function openItemHeads(
   store: Store,
   bodyChars: number,

@@ -206,6 +206,10 @@ import type { SelfTunables } from "./tunables.js";
 import { calendarDate } from "./calendar.js";
 import { isDay, yearOf } from "../time.js";
 import { markWakeBehind } from "./behind.js";
+import { recordSetDowns, setDownsTouched } from "./set-down.js";
+import { PAGE_CORE_HEADING } from "./page.js";
+import type { SetDownNamed, SetDownRecord, SetDownTouched } from "./set-down.js";
+import { nominatedIds, storyHeadStart } from "./stories.js";
 import { pairOrder, standingOf, unsettledAmong } from "../recall/standing.js";
 
 export * from "./behind.js";
@@ -220,6 +224,7 @@ export * from "./freeze.js";
 export * from "./identity.js";
 export * from "./tunables.js";
 export * from "./work.js";
+export * from "./stories.js";
 
 /** Telemetry: ids, counts, bytes, reasons, flags. NEVER statement text. */
 export interface SelfEvent {
@@ -791,6 +796,8 @@ export interface PageRevision {
   readonly laneKept?: readonly string[];
   /** Claims whose ids came forward from the page before, kept word for word (`page.ts#carryTrace`). Absent when none. */
   readonly carried?: number;
+  /** What a nightly write set down (PG1, `self/set-down.ts`). Absent at the other doors, or when the record failed. */
+  readonly setDown?: SetDownRecord;
 }
 
 /**
@@ -889,6 +896,14 @@ export interface PageWriteOptions {
    * as stored. Absent, the trace already there is kept only for the same text.
    */
   readonly trace?: TraceInput;
+  /**
+   * WHAT THIS WRITE SETS DOWN (PG1, 2026-11-09, `self/set-down.ts`): the
+   * lines of the page as it stood the writer took out and kept nowhere else
+   * on it, each with a short why. Read at the nightly doors only; checked
+   * against the sentence diff, and a line gone that is not named is recorded
+   * anyway.
+   */
+  readonly setDown?: readonly SetDownNamed[];
 }
 
 /** A stored trace sent again, by its sentences' keys (a restore, a held page kept). */
@@ -948,6 +963,8 @@ interface HeldDraft {
   readonly model?: string;
   /** What its claims rest on (2026-10-20), as keys and ids. */
   readonly trace?: StoredTrace;
+  /** What it named as set down (PG1), so the run's end keeps the names with the page. */
+  readonly setDown?: readonly SetDownNamed[];
   /** The refusal row's wall clock, when read off one. */
   readonly heldAt?: number;
 }
@@ -976,7 +993,22 @@ function heldDraftOf(payload: string | null): HeldDraft | null {
     ...(typeof held["short"] === "string" ? { short: held["short"] } : {}),
     ...(typeof held["model"] === "string" ? { model: held["model"] } : {}),
     ...(trace === null ? {} : { trace }),
+    ...(Array.isArray(held["setDown"]) ? { setDown: namedSetDowns(held["setDown"]) } : {}),
   };
+}
+
+/** A `setDown` list as sent or stored: entries with a line, the why as text ("" when none). Pure. */
+export function namedSetDowns(raw: unknown): SetDownNamed[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((e) => {
+    if (e === null || typeof e !== "object") return [];
+    const line = (e as Record<string, unknown>)["line"];
+    const why = (e as Record<string, unknown>)["why"];
+    // PS1: a practice moved to a skill memory carries its words in `skill`.
+    const skill = (e as Record<string, unknown>)["skill"];
+    if (typeof line !== "string" || line.trim().length === 0) return [];
+    return [{ line: line.trim(), why: typeof why === "string" ? why.trim() : "", ...(typeof skill === "string" && skill.trim().length > 0 ? { skill: skill.trim() } : {}) }];
+  });
 }
 
 export interface PageVersion {
@@ -1209,7 +1241,7 @@ export class Self {
    * reads it — its threads first, the personal ones after, another folder's
    * work neither listed nor counted as parked. Absent: every thread.
    */
-  stillOpen(day: number, reader?: ThreadReader): { items: StillOpenItem[]; parked: number } {
+  stillOpen(day: number, reader?: ThreadReader, ownerParked?: ReadonlySet<string>): { items: StillOpenItem[]; parked: number } {
     const { open, carry } = this.openScanned(day);
     const settled = settledOver(this.store);
     const place = reader === undefined ? undefined : this.threadPlaceFor(reader);
@@ -1238,14 +1270,20 @@ export class Self {
       };
     };
     const out: StillOpenItem[] = [];
+    // PARKED BY THE OWNER'S BACKOFF (SO1 step 4, `owner-waits.ts#ownerParked`):
+    // an `asked` item raised at every step unanswered leaves the carried list
+    // for the parked one, as an item the carry parks does.
+    const backedOff: Scanned[] = [];
     for (const id of [...lanes.threads.map((r) => r.id), ...(lanes.overflow?.threads ?? [])]) {
       const s = byId.get(id);
-      if (s !== undefined) out.push(item(s, false));
+      if (s === undefined) continue;
+      if (ownerParked?.has(id) === true) backedOff.push(s);
+      else out.push(item(s, false));
     }
     // THE PARKED, AFTER THE CARRIED (P2, 2026-10-28): listed and marked, the
     // most recently touched first; another folder's work is not this
     // reader's (O2), as the wake's count reads them (`parkedOf`).
-    const parked = this.parkedOf(carry, day, place);
+    const parked = [...backedOff, ...this.parkedOf(carry, day, place)];
     for (const s of parked) out.push(item(s, true));
     return { items: out, parked: parked.length };
   }
@@ -2087,6 +2125,7 @@ export class Self {
         ...(held.short === undefined ? {} : { short: held.short }),
         ...(held.model === undefined ? {} : { model: held.model }),
         ...(held.trace === undefined ? {} : { trace: inputOf(held.trace) }),
+        ...(held.setDown === undefined ? {} : { setDown: held.setDown }),
       });
       if (written.written && held.by === "writer" && held.session !== null) {
         // THE NIGHT READS AS WRITTEN: its claim closed `failed` when the run
@@ -2366,6 +2405,8 @@ export class Self {
               // Its trace as keys and ids, never the passages' own words
               // (2026-10-20), so a page kept at the run's end keeps it.
               ...(opts.trace === undefined ? {} : { trace: traceFor(storedAs(text), opts.trace).trace }),
+              // What it named as set down (PG1), kept with it for the run's end.
+              ...(opts.setDown === undefined || opts.setDown.length === 0 ? {} : { setDown: opts.setDown.map((n) => ({ line: n.line, why: n.why, ...(n.skill === undefined ? {} : { skill: n.skill }) })) }),
             },
           },
         });
@@ -2406,6 +2447,16 @@ export class Self {
     // the ids the page before gave a sentence this write kept word for word
     // and did not cite itself (`page.ts#carryTrace`). Off: as before.
     let carried = 0;
+    // The trace of the page it replaces, for what a set-down line rested on (PG1).
+    let prevTrace: StoredTrace | null = null;
+    if (existing !== null && PAGE_HELD_DOORS.includes(opts.by)) {
+      try {
+        const prev = this.store.readProse(existing);
+        prevTrace = storedTraceOf(prev.meta, prev.body);
+      } catch {
+        prevTrace = null;
+      }
+    }
     if (SELF_TUNABLES.PAGE_SPLIT && existing !== null) {
       try {
         const prev = this.store.readProse(existing);
@@ -2499,6 +2550,34 @@ export class Self {
     // The wake leads with this page, so it is now behind (`behind.ts`): the
     // next process with a budget re-renders rather than the next lived day.
     markWakeBehind(this.store, "page");
+    // WHAT THIS WRITE SET DOWN (PG1, 2026-11-09, `set-down.ts`): a nightly
+    // door's write only, against the page it replaced (as stored, after the
+    // gate, so a redaction is not a drop). A record that fails never costs
+    // the page: the page is written, and the ring says why.
+    let setDown: SetDownRecord | undefined;
+    if (PAGE_HELD_DOORS.includes(opts.by) && before !== null && existing !== null) {
+      try {
+        setDown = recordSetDowns(this.store, {
+          before: { body: before.body, version: before.version, trace: prevTrace },
+          after: stored,
+          version,
+          named: opts.setDown ?? [],
+          by: opts.by,
+          session,
+          date: this.calendarToday(),
+          day,
+          pageId: id,
+          claim: defaultClaimFor({ about: "me", kind: "self" }).claim,
+          ...(opts.model === undefined ? {} : { model: opts.model }),
+        });
+        if (setDown.ids.length > 0 || setDown.back.length > 0) {
+          this.emit("self.page.set_down", id, { by: opts.by, set: setDown.ids.length, named: setDown.named, unnamed: setDown.unnamed, folded: setDown.folded, reworded: setDown.reworded, back: setDown.back.length });
+        }
+      } catch (err) {
+        this.emit("self.page.set_down.failed", id, { by: opts.by, error: err instanceof Error ? err.name : "unknown" });
+        setDown = undefined;
+      }
+    }
     return {
       written: true,
       reason: existing === null ? "created" : "revised",
@@ -2513,6 +2592,7 @@ export class Self {
       ...(traced === null ? {} : { traced: { claims: traced.claims, cited: traced.cited, unmatched: traced.unmatched } }),
       ...(laneKept === null || laneKept.length === 0 ? {} : { laneKept }),
       ...(carried === 0 ? {} : { carried }),
+      ...(setDown === undefined ? {} : { setDown }),
     };
   }
 
@@ -2561,19 +2641,30 @@ export class Self {
     journal?: WriterJournal;
     /** Day's end's block (2026-10-23, `self.DAYS_END_INPUT`): the memories with their ids, the moment named. */
     daysEnd?: boolean;
+    /** PG1: the set-downs to offer back, read once by a caller that builds this block more than once. Absent: read here. */
+    setDownsBack?: readonly SetDownTouched[];
   }): WriterInput {
     const day = opts.day ?? this.store.livedDay();
+    const own = pageFormOf(this.store) === "own";
+    // PS1 (`stories.ts`): the day's story nominations lead (every store), and
+    // on an own-form store a memory marked me or us gets a head start.
+    const nominated = nominatedIds(this.store);
     const picked = dayMemories(this.store, {
       about: opts.about,
       day,
       budgetBytes: opts.budgetBytes ?? this.tunables.PAGE_WRITER_MEMORY_BYTES,
       max: opts.max ?? this.tunables.PAGE_WRITER_MEMORY_MAX,
       ...(opts.omit === undefined ? {} : { omit: opts.omit }),
+      ...(nominated.size === 0 ? {} : { nominated }),
+      ...(own ? { headStart: (about: string | null) => storyHeadStart(about, true) } : {}),
     });
+    const page = this.page();
+    const back = opts.setDownsBack ?? this.setDownsBack(page?.body ?? null);
     return {
       about: opts.about,
       today: opts.today ?? this.calendarToday(),
-      page: this.page(),
+      page,
+      ...(back.length === 0 ? {} : { setDownsBack: back }),
       memories: picked.memories,
       dropped: picked.dropped,
       omitted: picked.omitted,
@@ -2581,8 +2672,17 @@ export class Self {
       ...(opts.journal === undefined ? {} : { journal: opts.journal }),
       ...(opts.daysEnd === true ? { daysEnd: true } : {}),
       // PF1: the store keeps its page's own form (`PAGE_FORM_KEY`); absent on every other store.
-      ...(pageFormOf(this.store) === "own" ? { pageForm: "own" as const } : {}),
+      ...(own ? { pageForm: "own" as const } : {}),
     };
+  }
+
+  /**
+   * THE WAY BACK, FOR DAY'S END (PG1, `set-down.ts#setDownsTouched`):
+   * set-downs life touched since, from the sections day's end writes (all
+   * of them with the page split off), not on `page` now. Never throws.
+   */
+  setDownsBack(page: string | null): SetDownTouched[] {
+    return setDownsTouched(this.store, { page, lane: SELF_TUNABLES.PAGE_SPLIT ? "rest" : null, core: PAGE_CORE_HEADING });
   }
 
   /**

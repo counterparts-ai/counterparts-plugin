@@ -589,6 +589,11 @@ export class Recall {
    * Exposed because "build and record are separate steps" is only a real property
    * if the build is separately callable — a private half is a promise, not a seam.
    */
+  /** The byte budget a turn gets when it names none (SO1 step 4: the owed line is taken from it). */
+  budget(): number {
+    return this.budgetBytes;
+  }
+
   build(turn: Turn): BuildOutput {
     const started = this.now();
     // WHERE THE TIME WENT (LT2): the caller's clock when it started one.

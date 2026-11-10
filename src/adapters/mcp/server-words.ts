@@ -21,7 +21,7 @@ export const SERVER_NAME = "counterparts";
  * host decides whether to trust what follows. Read from a constant rather than
  * from disk so the server opens no file to answer its first message.
  */
-export const SERVER_VERSION = "0.3.52";
+export const SERVER_VERSION = "0.3.53";
 
 /**
  * THE ONE LINE EVERY TOOL ANSWERS WITH when the store on disk is a schema AHEAD
@@ -209,7 +209,7 @@ export const PAGE_REFUSAL_DETAIL: Record<string, string> = {
   "too-large":
     "That page is past the write ceiling (`limit` bytes, UTF-8; `bytes` is what was sent, `over` how much to take out) — a sanity bound far past the page's room. It was refused rather than cut: what gets cut at write time is the only copy. Say the same thing shorter — tighten, merge or drop what no longer holds — and send the whole page again.",
   "past-room":
-    "That page is past its room (`room` bytes, UTF-8; `bytes` is what was sent, `over` how much to take out), so tonight's first send was not written. Cut it and send the whole page again — cut, don't add a short version: keep it thin. Sent again still past the room, it is kept; not sent again, it is kept when the run ends.",
+    "That page is past its room (`room` bytes, UTF-8; `bytes` is what was sent, `over` how much to take out), so tonight's first send was not written. Cut it and send the whole page again (with `setDown` again, when you sent one) — cut, don't add a short version: keep it thin. Sent again still past the room, it is kept; not sent again, it is kept when the run ends.",
   "short-not-needed":
     "The page is within its room, so the wake shows it whole and a short version would never be read. Nothing was written.",
   "short-refused":

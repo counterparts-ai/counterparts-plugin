@@ -24,6 +24,8 @@ export const STEP_NAMES = [
   "embed",
   "primeContext",
   "compose",
+  // SO1 step 4: what waits on the owner and the turn touches (`owedForTurn`).
+  "owed",
   // `Recall#build` (inside `elapsedMs`):
   "gateLoad",
   "primePlan",

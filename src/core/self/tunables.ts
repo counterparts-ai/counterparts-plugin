@@ -647,6 +647,8 @@ export const WAKE_SHAPE_LIMITS = {
   ELSEWHERE_ROWS_READ: 60,
   /** Due today past the plain reminders: a flood of nine read as a nag (the 10-29 wake). */
   DUE_TODAY_SHOWN: 4,
+  /** Plain reminders told today in another session, by title and id (WK3, the brief's "up to 5"): that telling isn't in this session's context, so "shown earlier" would point at nothing. The rest are counted behind the door. */
+  RETOLD_SHOWN: 5,
   /** Overdue items, newest first: more is a nag, and the rest are behind the door. Spare does not reach them (round 4: past it, the lane flooded). */
   OVERDUE_SHOWN: 2,
   /** The next later items; spare room takes it to three, later items only, for the same reason. */
@@ -682,9 +684,141 @@ export const WAKE_SHAPE_LIMITS = {
   HAPPENED_READ: 200,
   /** How many days before its day a dated item can be done (the shop launched one day early); an earlier done row is another visit of the same name (review of #734). */
   HAPPENED_EARLY_DAYS: 1,
+  /** A lead that waits on the owner, at the top of this many wakes since its last revision with no reply since, sinks below the others until revised (review 3 of #792; the case behind it led three sessions). One that doesn't wait on the owner never sinks by count. */
+  LEAD_SHOWN_SINK: 2,
+  /** Sessions kept per handoff in that record: past the threshold, a few more say nothing new. */
+  LEAD_SHOWN_KEPT: 8,
+  /** A closing-line sentence and a page sentence naming the same day and sharing this many content words tell one moment (review of #792: the paraphrase shared a date and a few key words). */
+  MOMENT_SHARED_WORDS: 3,
+  /** The most days a month has, for reading `MM-DD` in prose. */
+  MONTH_DAYS_MAX: 31,
+  /** A handoff this old that nothing written since refers to (by its id) is no longer listed in the wake; still under recall "handoffs" for its life (WK3: ten-day-old ones were still listed). A week: a seat that stops for a weekend is still listed on Monday. */
+  HANDOFF_LISTED_MS: 7 * 24 * 60 * 60_000,
+  /** "Set down from my page last night" (PG1): lines named before "and N more". Two is a glance; the rest are behind recall "set down". */
+  SET_DOWN_SHOWN: 2,
+  /** A set-down line in the wake: this many characters, then "…" (the line is whole behind the door). */
+  SET_DOWN_LINE_CHARS: 140,
+  /**
+   * WAITING ON THE OWNER (SO1 step 4, revised; Mike 11-07, lightly held): the lived days to wait after each
+   * unanswered raise, in order: 3, then 7, then 14, then the item parks (still under recall "still open"). So
+   * three raises at most per version of the item; a revision starts the chain again. Unmeasured defaults.
+   */
+  OWNER_RAISE_STEPS: [3, 7, 14],
+  /**
+   * The session-start mention comes at most once a week per item, store-wide (every session, every folder),
+   * under the same backoff: the next mention waits the larger of the step and this. So at session start alone
+   * the steps read 7, 7, 14, then parked; a turn that touches the item (the relevance lane, `owedForTurn`) uses the
+   * steps without this floor, so there the 3-day step is real. One record and latch for both. Lived days.
+   */
+  OWNER_MENTION_EVERY: 7,
+  /**
+   * A turn touches an item waiting on the owner (SO1 step 4's relevance lane) when the turn's content words take in at
+   * least this many of the item's (its title and what settles it; the owner's name and "the owner" aside). Two: one word
+   * ("glaze") is a passing mention; two ("kiln shelf") name the subject. Unmeasured.
+   */
+  OWNER_TURN_SHARED: 2,
+  /**
+   * ...and those shared words weigh this much together, each at recall's own cue weight (IDF from the store's
+   * document frequency × the everyday factor), so a word most memories hold counts about nothing (round 3 of #796:
+   * two plain shared words fired on 8 of 42 real turns, 3 of them wrong).
+   */
+  OWNER_TURN_WEIGHT: 4,
+  /**
+   * A shared word counts only at this weight or more: about 1.5 is a word in under a tenth of the store's memories
+   * and not an everyday one. Set on the round-3 replay of 42 real turns (a copy of the owner's store): "step", "test",
+   * "still", "night" (1.1–1.7) were what the wrong matches shared; the right ones shared a rare subject word.
+   */
+  OWNER_TURN_WORD_FLOOR: 1.5,
+  /**
+   * ...and one of them is a SUBJECT word: weighing at least this, or one the embedder's word table holds no whole-word
+   * row for (a name, a tool, jargon). Round 4 of #796: common verbs clear the floor ("want" 1.8, "talk" 2.4, "ready"
+   * 2.7), and two of them raised an item that happened to say them; a song's name (5.8) or "npm" (2.3, no row) is a
+   * subject. The table is loaded on the owner's store (the config's default embedder): its ramp
+   * (`EVERYDAY_NORM_LOW`/`HIGH`) discounts only function words, by design, so it can't do this alone.
+   */
+  OWNER_TURN_SUBJECT: 3,
+  /** A turn with fewer content words than this doesn't look ("goodnight" pays nothing). */
+  OWNER_TURN_MIN_WORDS: 3,
+  /** Folders whose owed-item list (with its weighed words) is cached in meta, per lived day; the oldest go. */
+  OWNER_ITEMS_KEPT: 8,
+  /** Raise chains kept in the record (`owner-waits.ts`): the oldest past this go, which only lets one be raised again. */
+  OWNER_RAISES_KEPT: 400,
+  /** How far back this folder's memories are read for what an owed item is ranked against (relevance, SO1 step 4): a week of work here. */
+  OWNER_CONTEXT_MS: 7 * 24 * 60 * 60_000,
   /** The largest element count and byte count the frame is sized for, so a digit's growth can't pass the ceiling. */
   FRAME_ELEMENTS: 9_999,
   FRAME_BYTES: 99_999,
+} as const;
+
+/**
+ * WHAT THE PAGE SETS DOWN (PG1, 2026-11-09; Mike 11-07, lightly held): the
+ * limits of the sentence diff a nightly page write is checked by
+ * (`self/set-down.ts`), and of the set-downs the night is shown again. A share
+ * is of the gone sentence's content words (stemmed, function words aside)
+ * found in the new page's sentences. UNMEASURED DEFAULTS: set on hand-built
+ * page pairs (`test/self-set-down.test.ts`), not on the owner's pages. The
+ * check is `tools/set-down-diff.ts` on page v66 (10-30) against the 11-01
+ * page, read against Mike's 11-07 judgement of Fable's list (about five gone,
+ * three folded, one retired).
+ */
+export const SET_DOWN_LIMITS = {
+  /** Gone word for word but this share of its words in one new sentence (or two side by side): reworded, kept, not a set-down. */
+  NEAR_SHARE: 0.7,
+  /** New sentences read together for "reworded": a sentence split in two is still the sentence. */
+  NEAR_WINDOW: 2,
+  /** For `tools/set-down-diff.ts`'s report only since the review of #789: a writer's "folded" is trusted, not checked. */
+  FOLD_SHARE: 0.5,
+  /** New sentences read together when judging a line no one accounted for as clearly gone: a story carries a rule over a few sentences. */
+  FOLD_WINDOW: 3,
+  /** Not accounted for by the writer, and gone: quoted by the wake only when at most this share of its words is anywhere in a run of `FOLD_WINDOW` new sentences; above it, a quiet "maybe reworded" memory. Low on purpose: on the owner's history true folds scored 0.36–0.38 and true drops 0.38–0.40 (review of #789), so the engine quotes only the plain ones. 0.15, not 0.3: at 0.3, a sentence the next page reworded with almost no words in common (0.29) was quoted as gone. */
+  GONE_SHARE: 0.15,
+  /** A new sentence of at least this many content words, all inside a gone one, is that sentence trimmed (to a clause, a word dropped). */
+  CONTAIN_MIN: 2,
+  /** A clause of a gone line (split at ; : — ( ) and ", ") with this share of its words in one new sentence or two: the line is not clearly gone (a three-word clause kept as two of its words, 2 of 3). */
+  CLAUSE_SHARE: 0.6,
+  /** An anchor: a stemmed word at least this long that only this line carried on the old page; found anywhere on the new page, the line is not clearly gone. */
+  ANCHOR_MIN: 4,
+  /** The writer's folded/reworded claims kept on one write's event for audit (line and why); past it, counted. A page has ~40 sentences; a rewrite rarely keeps more than this by its word. */
+  AUDIT_MAX: 20,
+  /** A writer's why, at most this many characters (cut at a word, "…"). */
+  WHY_CHARS: 200,
+  /** The shortest word counted: "a", "of" and "to" carry nothing. */
+  WORD_MIN: 3,
+  /** Most set-down memories one write makes one by one: past it, the rest go into ONE memory with every line in full (a page rewritten from nothing is not forty memories). */
+  MAX_PER_WRITE: 12,
+  /** Set-down memories read when looking for one life touched since, or one a write brought back: the newest this many. */
+  SCAN: 200,
+  /** Set-downs the night's page writers are shown again, touched since: a few, newest touch first. */
+  BACK_SHOWN: 5,
+  /** New memories read after a set-down to find one restating it. */
+  RESTATED_READ: 200,
+  /** A set-down line in a memory's title: this many characters, whole words, then "…". The body keeps it whole. */
+  TITLE_CHARS: 120,
+  /** recall "set down": the newest this many. */
+  LISTED: 50,
+} as const;
+
+/**
+ * THE PAGE'S STORIES (PS1, 2026-11-09, `stories.ts`; lightly held): the
+ * numbers behind what day's end is shown when it may write a story.
+ */
+export const PAGE_STORY_LIMITS = {
+  /**
+   * A HEAD START, NOT A FILTER: added to the strength of a memory marked
+   * about me or us when day's end orders the day's memories (own-form stores
+   * only), so a work-heavy day does not crowd them out of its dozen. Only the
+   * order moves; the memory's physics is untouched. Measured on the owner's
+   * real days (review of #791, 19 days): a day's strengths do NOT sit close
+   * (median ~0.2, the 12th strongest ~0.6; me/us median 0.49 vs work 0.19).
+   * Me/us in the shown dozen: 5.2/12 with none, 7.6/12 at 0.05 (1 day all
+   * me/us), 9.5/12 at 0.15 (5 days all me/us). So 0.05: a nudge, not a takeover.
+   * CAL; read the page's story kinds ~10 nights after install.
+   */
+  HEAD_START: 0.05,
+  /** Memories nominated as a story during the day shown first to day's end, at most this many (the rest take their ordinary place). */
+  NOMINATED_FIRST: 5,
+  /** A skill memory a set-down practice moves into: its words at most this many characters (cut at a word, "…"). */
+  SKILL_CHARS: 600,
 } as const;
 
 export function withTunables(overrides: Partial<SelfTunables>): SelfTunables {

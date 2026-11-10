@@ -252,8 +252,17 @@ export function nightLine(f: NightFacts): string | null {
   const runToday = run !== null && run.date === today ? run : null;
   const off = f.setting === "off" ? "; dreaming is off" : "";
 
-  // Running now: whatever it has begun is not yet what it did.
-  if (runToday !== null && runToday.state === "started" && !nightRunLost(runToday, f.now)) return `${NIGHT_LINE_HEAD} the nightly run is under way.`;
+  // Running now: whatever it has begun is not yet what it did. But a dream
+  // already journaled is what it did (WK3, 2026-11-09: "under way" at 08:19
+  // over a dream written up, so its findings never reached the wake): the
+  // journal's state, not the run's flag, says so, and the reflection still to
+  // come is said as under way, not as begun and not finished.
+  if (runToday !== null && runToday.state === "started" && !nightRunLost(runToday, f.now)) {
+    if (dream === null || dream.state !== "journaled") return `${NIGHT_LINE_HEAD} the nightly run is under way.`;
+    const done = nightParts(dream, reflection !== null && reflection.state === "reflected" ? reflection : null, null, f.named);
+    if (done === null) return `${NIGHT_LINE_HEAD} the nightly run is under way.`;
+    return reflection !== null && reflection.state === "reflected" ? sayNight(NIGHT_LINE_HEAD, done) : `${NIGHT_LINE_HEAD} ${done.parts}; the reflection is under way.`;
+  }
   if (dream === null && reflection === null) {
     const skipped = runToday === null ? null : dreamSkippedOf(runToday);
     if (runToday !== null && skipped !== null && (runToday.state === "done" || runToday.state === "partial")) {

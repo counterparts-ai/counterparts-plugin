@@ -13,7 +13,7 @@ A memory for an AI, in its own words, not a transcript: it writes with `remember
 - Each session opens with a wake: who I am (the self page), where the work stands, what's coming up and still open, how yesterday went.
 - In Claude Code, related memories come up as footnotes as the conversation goes. `recall` is the deliberate look, everywhere.
 - It's theirs to see, export and delete. [local] It is one SQLite file on their computer, and Counterparts sends nothing about them anywhere (the details are on counterparts.ai/privacy). [hosted] It lives on Counterparts' server, one store per account; backups that leave the server are encrypted with a key for their account.
-- What's stripped before anything is kept, in memories and in the raw conversation text: credentials in recognisable shapes (keys, tokens, private keys, passwords in URLs, a value written after a name like password= or api_key:), and passwords named in a sentence ("my wifi password is …", "the PIN is …"), the value only. Not every secret has a shape: don't paste things you wouldn't want kept.
+- What's stripped before anything is kept, in memories and in the raw conversation text: credentials in recognisable shapes (keys, tokens, private keys, passwords in URLs, a value written after a name like password= or api_key:), and most passwords named in a sentence ("my wifi password is …", "the PIN is …"), the value only. Not every secret has a shape: don't paste things you wouldn't want kept.
 - A new memory may start with a few starter notes, titled "Told: …". They were given, not lived: they start weak, come after lived memories that match as well, are never part of the self, and can be corrected or let go like any memory.
 
 ## Everyday phrases

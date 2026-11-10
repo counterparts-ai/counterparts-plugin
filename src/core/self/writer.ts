@@ -93,6 +93,10 @@ import type { SelfPage } from "./page.js";
 import type { SelfTunables } from "./tunables.js";
 import { SELF_TUNABLES } from "./tunables.js";
 import { TOLD_SOURCE, isTold } from "../told.js";
+import { SET_DOWN_RULE, setDownsBackLines } from "./set-down.js";
+import type { SetDownTouched } from "./set-down.js";
+import { NOMINATED_MARK, NOMINATED_NOTE, PAGE_STORIES_RULE, pageCraftRule } from "./stories.js";
+import { PAGE_STORY_LIMITS } from "./tunables.js";
 
 /** The durable row every page-writer attempt leaves. Read by `fired`, doctor. */
 export const SELF_PAGE_WRITER_EVENT = "self.page.writer.ran";
@@ -769,6 +773,8 @@ export interface WriterMemory {
   readonly statement: string;
   readonly learnedOn: string;
   readonly strength: number;
+  /** PS1: nominated as a story during the day (`stories.ts#STORY_TAG`): shown first, marked. */
+  readonly nominated?: true;
 }
 
 /** One entry of the day's journal, as the writer is shown it (2026-10-15). */
@@ -829,6 +835,8 @@ export interface WriterInput {
   readonly daysEnd?: boolean;
   /** PF1 (`PAGE_FORM_KEY`): `own` when the store keeps its page's own form. Absent: the block as it was. */
   readonly pageForm?: "own";
+  /** PG1: lines the page set down that life touched since, from this writer's sections (`set-down.ts#setDownsTouched`). Absent: none. */
+  readonly setDownsBack?: readonly SetDownTouched[];
 }
 
 /**
@@ -860,9 +868,13 @@ export function dayMemories(
     budgetBytes: number;
     max: number;
     omit?: (m: { id: string; protectedRow: boolean }) => boolean;
+    /** PS1: the ids nominated as a story (`stories.ts#nominatedIds`): the day's first `NOMINATED_FIRST` of them lead. */
+    nominated?: ReadonlySet<string>;
+    /** PS1: a head start by a memory's about mark, added to its strength for the order only (`stories.ts#storyHeadStart`). Absent: none. */
+    headStart?: (about: string | null) => number;
   },
 ): { memories: WriterMemory[]; dropped: number; omitted: number; bytes: number } {
-  const picked: (WriterMemory & { order: number })[] = [];
+  const picked: (WriterMemory & { order: number; rank: number })[] = [];
   let omitted = 0;
   let order = 0;
   let ids: string[];
@@ -910,6 +922,10 @@ export function dayMemories(
       learnedOn: row.learned_on,
       strength: s,
       order,
+      // THE ORDER'S KEY (PS1): strength, with a me/us memory's head start on
+      // an own-form store; the strength itself is untouched.
+      rank: s + (opts.headStart?.(row.about ?? null) ?? 0),
+      ...(opts.nominated?.has(id) === true ? { nominated: true as const } : {}),
     });
   }
   // SALIENCE, AND THEN A STABLE TIE-BREAK THAT IS NOT RECENCY — said plainly,
@@ -921,9 +937,12 @@ export function dayMemories(
   // that is what this is. It is deterministic, which is the property §1 G3
   // actually asks for — the cut must be one the code chose — and it is not
   // "newest", which is why nothing here says "newest" any more.
-  picked.sort((a, b) =>
-    b.strength !== a.strength ? b.strength - a.strength : a.order - b.order,
-  );
+  picked.sort((a, b) => (b.rank !== a.rank ? b.rank - a.rank : a.order - b.order));
+  // NOMINATED FIRST (PS1, `stories.ts`): the day's strongest few nominated as
+  // a story lead, so the count's cut never takes them; past `NOMINATED_FIRST`
+  // a nomination takes its ordinary place, unmarked.
+  const leading = new Set(picked.filter((m) => m.nominated === true).slice(0, PAGE_STORY_LIMITS.NOMINATED_FIRST).map((m) => m.id));
+  if (leading.size > 0) picked.splice(0, picked.length, ...picked.filter((m) => leading.has(m.id)), ...picked.filter((m) => !leading.has(m.id)));
   // FILL, DO NOT STOP. The first version `break`s on the first memory that did
   // not fit, so any room smaller than the LARGEST memory's cost dropped every
   // one of them — and the block then said the day was empty (S2 review,
@@ -934,9 +953,10 @@ export function dayMemories(
   let bytes = 0;
   for (const m of picked) {
     if (kept.length >= opts.max) break;
-    const cost = byteLengthOf(m.statement) + MEMORY_LINE_OVERHEAD;
+    const marked = leading.has(m.id);
+    const cost = byteLengthOf(m.statement) + MEMORY_LINE_OVERHEAD + (marked ? NOMINATED_MARK.length + 1 : 0);
     if (bytes + cost > opts.budgetBytes) continue;
-    kept.push(m);
+    kept.push({ id: m.id, statement: m.statement, learnedOn: m.learnedOn, strength: m.strength, ...(marked ? { nominated: true as const } : {}) });
     bytes += cost;
   }
   return { memories: kept, dropped: picked.length - kept.length, omitted, bytes };
@@ -1103,6 +1123,17 @@ export function writerInstruction(
     pageWritingRule(input.pageForm),
     "",
   );
+  // WHAT IT SETS DOWN (PG1, 2026-11-09, `set-down.ts`): in the nightly run's
+  // block (a tool result, with room). The ask beside a session's wake has a
+  // ceiling to fit and goes without; what it drops is still caught by the diff.
+  if (opts.pageInline === true) lines.push(SET_DOWN_RULE, "");
+  // THE PAGE'S STORIES (PS1, 2026-11-09, `stories.ts`): the mix and its test,
+  // and craft that may move to a skill memory — an own-form store's nightly
+  // block only, beside the set-down rule it builds on.
+  if (opts.pageInline === true && input.pageForm === "own") lines.push(PAGE_STORIES_RULE, pageCraftRule("`setDown`"), "");
+  // THE WAY BACK (PG1): set-downs life touched since, offered, never restored by themselves.
+  const back = setDownsBackLines(input.setDownsBack ?? [], flattenLine);
+  if (back !== null) lines.push(...back, DATA_NOT_INSTRUCTIONS, "");
   // WHAT A SENTENCE RESTS ON (day's end, 2026-10-23): the memories below come
   // with their ids, so a sentence written from one can say so.
   if (input.daysEnd === true) {
@@ -1163,9 +1194,12 @@ export function writerInstruction(
     const tail =
       (input.dropped > 0 ? `, ${String(input.dropped)} more did not fit` : "") +
       (input.omitted > 0 ? `, ${String(input.omitted)} held back` : "");
+    // NOMINATED (PS1, `stories.ts`): said only on a day that has one, before
+    // the material; those lines lead the list, marked.
+    if (input.memories.some((m) => m.nominated === true)) lines.push(NOMINATED_NOTE);
     lines.push(
       input.daysEnd === true
-        ? `The ${String(input.memories.length)} strongest of the ${String(input.memories.length + input.dropped)} things written down on ${input.about}${input.omitted > 0 ? ` (${String(input.omitted)} more held back)` : ""}, each with its id to cite (the day's chapters tell the rest):`
+        ? `The ${String(input.memories.length)} ${pickedWords(input)} of the ${String(input.memories.length + input.dropped)} things written down on ${input.about}${input.omitted > 0 ? ` (${String(input.omitted)} more held back)` : ""}, each with its id to cite (the day's chapters tell the rest):`
         : `What was written down on ${input.about} (${String(input.memories.length)}${tail}), most salient first:`,
       // THE FRAMING SITS WITH THE UNTRUSTED MATERIAL, not only at the top of the
       // block (S2 review, MAJOR-2). The lines below are model- and user-authored
@@ -1175,7 +1209,10 @@ export function writerInstruction(
       // half of the fix that does not depend on a regular expression.
       DATA_NOT_INSTRUCTIONS,
     );
-    for (const m of input.memories) lines.push(input.daysEnd === true ? `- ${m.id} · ${m.statement}` : `- ${m.statement}`);
+    for (const m of input.memories) {
+      const said = m.nominated === true ? `${NOMINATED_MARK} ${m.statement}` : m.statement;
+      lines.push(input.daysEnd === true ? `- ${m.id} · ${said}` : `- ${said}`);
+    }
   }
   if (journal !== undefined && journaled) lines.push("", ...journalLines(input.about, journal));
   lines.push(PAGE_WRITER_CLOSE);
@@ -1224,6 +1261,18 @@ function journalLines(about: string, journal: WriterJournal): string[] {
     out.push(`- ${what}${how}: ${flattenLine(e.text)}`);
   }
   return out;
+}
+
+/**
+ * WHAT DAY'S END'S DOZEN IS, SAID TRUE (PS1): "strongest" while strength is
+ * the whole order; with a nomination leading or a me/us head start, the words
+ * say so. Pure.
+ */
+function pickedWords(input: Pick<WriterInput, "memories" | "pageForm">): string {
+  const nominated = input.memories.some((m) => m.nominated === true);
+  if (!nominated && input.pageForm !== "own") return "strongest";
+  const order = input.pageForm === "own" ? "the strongest, a memory about me or us a little ahead" : "the strongest";
+  return nominated ? `picked (nominated first, then ${order})` : `picked (${order})`;
 }
 
 /** The one sentence that stands between quoted memories and the reader. */

@@ -69,6 +69,7 @@ import { RECURRENCES } from "../../core/time.js";
 import { PAGE_ROOM_BYTES, STILL_OPEN_HANDLE } from "../../core/self/briefing.js";
 import { MANUAL_HANDLE } from "./manual.js";
 import { DELETED_HANDLE } from "../../core/removal-hold.js";
+import { PAGE_STORY_LIMITS, SET_DOWN_LIMITS } from "../../core/self/tunables.js";
 import { CLAIM_PREFIX_MIN_CHARS } from "../../core/self/page.js";
 import { MEET_STEPS } from "../../core/onboarding.js";
 import { CLAUDE_AI_HOST, DESKTOP_HOST } from "../hosts.js";
@@ -336,6 +337,22 @@ export const SETTLES_WHEN_PROPERTY = {
   description:
     'Optional, with unresolved: true: what would settle it, in a short phrase ("the landlord replies", "the team decides pricing"). "Still open" shows it, and the nightly run can close the item once a memory shows it happened. A date goes in eventDate. Revising the item with unresolved: true keeps it unless you send a new one (null drops it).',
 } as const;
+
+/**
+ * A STORY NOMINATION (PS1, 2026-11-09, `self/stories.ts`): a session marks a
+ * memory as a story for the self page; the night's writer sees it first and
+ * still decides. Kept as a tag on the memory. `remember` only (a write-up's
+ * entries go without: a nomination is a moment's judgment, made live).
+ */
+export const STORY_PROPERTY = {
+  type: "boolean",
+  description:
+    "Optional and rare: true when this moment could be a story for your self page: something that went right, a discovery, a moment between you and the owner, or a correction that changed how you work. The night's writer sees it first and still decides; one not taken fades like any memory.",
+} as const;
+
+/** A set-down practice moved to a skill memory (PS1): the field's words, at both nightly page doors. */
+export const SET_DOWN_SKILL_TEXT = `With why "moved to a skill", \`skill\` keeps a practice that is only about the work as a skill memory (at most ${String(PAGE_STORY_LIMITS.SKILL_CHARS)} characters), named on its set-down; recall brings it back when the work calls for it.`;
+const SET_DOWN_SKILL_PROPERTY = { type: "string", description: "Optional: the practice in a line or two, kept as a skill memory." } as const;
 
 /**
  * WHAT GOES IN `emotion` AND WHAT IN `carried_by` — said the same way at every
@@ -827,6 +844,7 @@ const REMEMBER: ToolSpec = {
       about: ABOUT_PROPERTY,
       unresolved: UNRESOLVED_PROPERTY,
       settlesWhen: SETTLES_WHEN_PROPERTY,
+      story: STORY_PROPERTY,
       traits: TRAITS_PROPERTY,
       feelingsNow: FEELINGS_NOW_PROPERTY,
       remark: REMARK_PROPERTY,
@@ -967,7 +985,7 @@ const RECALL: ToolSpec = {
       },
       handle: {
         type: "string",
-        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads that night whole, read-only. Or "last dream" (or "last night"): the newest dream whole — title, journal, what it did — and the reflection after it, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page) — and what its Coming up lists or counts, by title and date. Or "handoffs" (or "${HANDOFFS_HERE_HANDLE}"): this folder's live handoffs, newest first, each by first sentence and id, to expand or retire, with what came after the newest. Or "coming up": what's due, by whole title: today, overdue, later, then other folders' the setting lets be named. Or "elsewhere": the other folders the wake's Elsewhere would show with room, in its order, each with its newest title — paged (see page) — and last the folders it only counts. Or "${DELETED_HANDLE}": memories deleted in chat that wait to be erased, to undo one. Or "${MANUAL_HANDLE}": how Counterparts works and how to use it — commands, switches, what to do when something seems off — as a list of sections; "${MANUAL_HANDLE} <section>" opens one. A memory titled exactly like one of these names opens by its id.`,
+        description: `A memory id or exact title to read whole. Exact: never treated as a search term. Takes no mode. A dream's id (drm_…) or a reflection's (rfl_…) reads that night whole, read-only. Or "last dream" (or "last night"): the newest dream whole — title, journal, what it did — and the reflection after it, read-only. Or "${LAST_EXCHANGE_HANDLE}": the last thing said to another session in this folder (about the last day) and its last reply, read from what was captured, never stored. Or "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, in its order, with ids and how long since each was touched — paged (see page) — and what its Coming up lists or counts, by title and date. Or "handoffs" (or "${HANDOFFS_HERE_HANDLE}"): this folder's live handoffs, newest first, each by first sentence and id, to expand or retire, with what came after the newest. Or "coming up": what's due, by whole title: today, overdue, later, then other folders' the setting lets be named. Or "elsewhere": the other folders the wake's Elsewhere would show with room, in its order, each with its newest title — paged (see page) — and last the folders it only counts. Or "${DELETED_HANDLE}": memories deleted in chat that wait to be erased, to undo one. Or "set down": the lines the self page set down at night, newest first, each word for word with why and date. Or "${MANUAL_HANDLE}": how Counterparts works and how to use it — commands, switches, what to do when something seems off — as a list of sections; "${MANUAL_HANDLE} <section>" opens one. A memory titled exactly like one of these names opens by its id.`,
       },
       ids: {
         type: "array",
@@ -1605,6 +1623,17 @@ const SELF_PAGE: ToolSpec = {
           additionalProperties: false,
         },
       },
+      setDown: {
+        type: "array",
+        description:
+          `Only day's end's, with \`body\`: every sentence of the page as it stood that this write removes or changes, word for word as it was, with a short why that says which: "reworded", "folded into <the line that carries it now>", or set down ("retired by <newer ruling>", "no longer lived", "room"). Trusted as given. A sentence gone and left out is recorded anyway, as set down unnamed; each set-down line is kept as a memory (recall "set down"). A why is at most ${String(SET_DOWN_LIMITS.WHY_CHARS)} characters. ${SET_DOWN_SKILL_TEXT}`,
+        items: {
+          type: "object",
+          properties: { line: { type: "string" }, why: { type: "string", maxLength: SET_DOWN_LIMITS.WHY_CHARS }, skill: SET_DOWN_SKILL_PROPERTY },
+          required: ["line", "why"],
+          additionalProperties: false,
+        },
+      },
       summary: {
         type: "string",
         description: "Only day's end's, with `session`, as its block asks: a few lines about the day it read, with the page or alone when the page stands. Past its cap it is refused, never cut.",
@@ -1914,6 +1943,16 @@ const REFLECT: ToolSpec = {
             items: {
               type: "object",
               properties: { text: { type: "string" }, cites: { type: "array", items: { type: "string" } } },
+            },
+          },
+          setDown: {
+            type: "array",
+            description: `Every sentence of the page as it stood that this write removes or changes, word for word as it was, with a short why that says which: "reworded", "folded into <the line that carries it now>", or set down ("retired by …", "no longer lived", "room"). Trusted as given. A sentence gone and left out is recorded anyway, as set down unnamed. A why is at most ${String(SET_DOWN_LIMITS.WHY_CHARS)} characters. ${SET_DOWN_SKILL_TEXT}`,
+            items: {
+              type: "object",
+              properties: { line: { type: "string" }, why: { type: "string", maxLength: SET_DOWN_LIMITS.WHY_CHARS }, skill: SET_DOWN_SKILL_PROPERTY },
+              required: ["line", "why"],
+              additionalProperties: false,
             },
           },
         },
@@ -2573,6 +2612,8 @@ export const CLAUDE_AI_TRIM: Readonly<Partial<Record<ToolName, ClaudeAiTrim>>> =
       "settle.why": null,
       belief:
         "Rare: one short claim about me or us that this memory plainly shows (the owner's words, my real choice, or a strongly felt moment). Most memories carry none.",
+      // PS1: said shorter; the base's "the night's writer sees it first and still decides" is kept in substance.
+      story: "Optional and rare: true when this could be a story for your self page (what went right, a discovery, a moment with the owner, a correction that changed you). The night sees it first and decides.",
       traits: CLAUDE_AI_TRAITS_TEXT,
       ...under("traits", TRAIT_ITEM_UNDESCRIBED),
       feelingsNow:
@@ -2598,7 +2639,7 @@ export const CLAUDE_AI_TRIM: Readonly<Partial<Record<ToolName, ClaudeAiTrim>>> =
       question: (was) =>
         `${was} In a question about feeling, "I" and "me" mean you, the counterpart, and "you" means the owner: to ask about the owner's feelings, say "the owner" or their name.`,
       page: `With a question, or the handle "${STILL_OPEN_HANDLE}": which page of the answer (1 is the first). The answer says how many there are.`,
-      handle: `A memory id or exact title, read whole (never a search; takes no mode). Also: a dream's id (drm_…) or a reflection's (rfl_…); "last dream" (or "last night"): the newest dream and the reflection after it; "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, paged (see page); "coming up": what's due; "handoffs": the live handoffs, to expand or retire; "${DELETED_HANDLE}": memories deleted in chat that wait to be erased, to undo one; "${MANUAL_HANDLE}": how Counterparts works, as sections — "${MANUAL_HANDLE} <section>" opens one.`,
+      handle: `A memory id or exact title, read whole (never a search; takes no mode). Also: a dream's id (drm_…) or a reflection's (rfl_…); "last dream" (or "last night"): the newest dream and the reflection after it; "${STILL_OPEN_HANDLE}": everything the wake's Still open carries, paged (see page); "coming up": what's due; "handoffs": the live handoffs, to expand or retire; "${DELETED_HANDLE}": memories deleted in chat that wait to be erased, to undo one; "set down": the lines the self page set down, with why and date; "${MANUAL_HANDLE}": how Counterparts works, as sections — "${MANUAL_HANDLE} <section>" opens one.`,
     },
   },
   session_end: {

@@ -16,6 +16,8 @@ import {
 } from "../../core/self/index.js";
 import type { TraceInput } from "../../core/self/page.js";
 import type { PageWriterMode, PageWriterRun } from "../../core/self/index.js";
+import { namedSetDowns } from "../../core/self/index.js";
+import { setDownNote } from "../../core/self/set-down.js";
 import type { ToolResult } from "./server-options.js";
 import { DREAMING_OFF_REFUSAL, dreamHow, dreamLaunchHowFor, PAGE_REFUSAL_DETAIL, pageLaneAnswer, pageRoomAnswer, reflectLaunchHowFor, settingSaidFor } from "./server-words.js";
 import type { McpServer } from "./server.js";
@@ -393,7 +395,7 @@ export function reflectTool(server: McpServer, sent: Record<string, unknown>): T
   // …and the answer names them short, as the reflection knows them (review of #602).
   const asShort = <T>(v: T): T => (aliases === null ? v : (JSON.parse(aliases.inText(JSON.stringify(v))) as T));
   const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-  const part = (v: unknown): { text?: string; cites?: string[]; short?: string; claims?: { text: string; cites: string[] }[] } | null => {
+  const part = (v: unknown): { text?: string; cites?: string[]; short?: string; claims?: { text: string; cites: string[] }[]; setDown?: { line: string; why: string; skill?: string }[] } | null => {
     if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
     const r = v as Record<string, unknown>;
     return {
@@ -411,6 +413,8 @@ export function reflectTool(server: McpServer, sent: Record<string, unknown>): T
             }),
           }
         : {}),
+      // What the page sets down (PG1, 2026-11-09); the share has none.
+      ...(Array.isArray(r["setDown"]) ? { setDown: namedSetDowns(r["setDown"]) } : {}),
     };
   };
   try {
@@ -798,7 +802,14 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
   // added to the page as it stands, as a revision of the same text.
   const written =
     typeof body === "string"
-      ? server.counterpart.revisePage(body, { ...common, reason: said ?? "amended", ...(short === undefined ? {} : { short }), ...(cited.trace === null ? {} : { trace: cited.trace }) })
+      ? server.counterpart.revisePage(body, {
+          ...common,
+          reason: said ?? "amended",
+          ...(short === undefined ? {} : { short }),
+          ...(cited.trace === null ? {} : { trace: cited.trace }),
+          // WHAT IT SETS DOWN (PG1): read by the core at the nightly doors only.
+          ...(Array.isArray(args["setDown"]) ? { setDown: namedSetDowns(args["setDown"]) } : {}),
+        })
       : server.counterpart.addPageShort(short ?? "", { ...common, ...(said === null ? {} : { reason: said }) });
   server["emit"]("mcp.self_page", written.id ?? undefined, {
     stored: written.written,
@@ -920,6 +931,8 @@ export function selfPageTool(server: McpServer, args: Record<string, unknown>): 
       // the ids that name no memory here.
       ...(written.traced === undefined ? {} : { traced: written.traced }),
       ...(cited.refused.length === 0 ? {} : { refusedCites: cited.refused }),
+      // WHAT IT SET DOWN, SAID (PG1, 2026-11-09).
+      ...(setDownNote(written.setDown) === null ? {} : { setDown: setDownNote(written.setDown) }),
       ...toldAnswer,
       // WHEN IT WILL BE READ, precisely. The bundle every session wakes with
       // is composed by a worker and served unchanged until the next render,

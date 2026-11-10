@@ -55,10 +55,19 @@ export const LAST_EXCHANGE_WINDOW_MS = 24 * 60 * 60_000;
 export const LAST_EXCHANGE_WORDS = 10;
 export const LAST_EXCHANGE_QUOTE_BYTES = 72;
 
+/**
+ * **CAL.** A first sentence up to this many bytes is quoted WHOLE (WK3,
+ * 2026-11-09: the line was cut mid-sentence on the very clause where a promise
+ * lived, two mornings running). About two lines of a short message; past it,
+ * the first words and `…` as before.
+ */
+export const LAST_EXCHANGE_SENTENCE_BYTES = 120;
+
 /** The widest it can be, as the whole of `standsLadder`'s line (WK1, 2026-10-30; 152 as
  *  a line of its own) — the bound the boundary reserves for it: 69 bytes before the
- *  quote (with a date), the quote and its `…`, 29 after, and a few to spare. */
-export const LAST_EXCHANGE_LINE_MAX_BYTES = 176;
+ *  quote (with a date), the quote (a whole sentence, `LAST_EXCHANGE_SENTENCE_BYTES`)
+ *  and its ` …`, 29 after, and a few to spare. 176 before WK3. */
+export const LAST_EXCHANGE_LINE_MAX_BYTES = 224;
 
 /** Each message the handle returns, at most, in characters (cut at a sentence). */
 export const LAST_EXCHANGE_TEXT_MAX_CHARS = 1200;
@@ -294,9 +303,20 @@ export function exchangeLikely(buffer: SpanBuffer, scope: string, now: number, w
 
 const ELLIPSIS = "…";
 
-/** The first `LAST_EXCHANGE_WORDS` words, within the quote's bytes, with `…` when cut. */
+/**
+ * The quote: never a sentence cut where nothing says so (WK3). Its first
+ * sentence whole when that fits `LAST_EXCHANGE_SENTENCE_BYTES` (and ` …` when
+ * more followed it); else the first `LAST_EXCHANGE_WORDS` words, within the
+ * quote's bytes, with `…`.
+ */
 export function quoteOf(text: string): string {
-  const words = flatten(text).replace(/"/g, "'").split(" ").filter((w) => w.length > 0);
+  const flat = flatten(text).replace(/"/g, "'").trim();
+  const end = /[.!?](?=\s|$)/u.exec(flat);
+  if (end !== null) {
+    const first = flat.slice(0, end.index + 1);
+    if (Buffer.byteLength(first, "utf8") <= LAST_EXCHANGE_SENTENCE_BYTES) return first.length < flat.length ? `${first} ${ELLIPSIS}` : first;
+  }
+  const words = flat.split(" ").filter((w) => w.length > 0);
   let out = "";
   let i = 0;
   for (; i < words.length && i < LAST_EXCHANGE_WORDS; i += 1) {

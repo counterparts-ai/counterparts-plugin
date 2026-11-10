@@ -5696,6 +5696,11 @@ export class Store {
    *  dated, `asked`, or names what would settle it (2026-10-22; `settles`
    *  P2 2026-10-28; `reads-memories.ts#openThreadTouches`): what the parking
    *  rule reads (`self/identity.ts#openCarry`). */
+  /** The open items marked `asked`, ids and revisions only (SO1 step 4's cache key; `reads-memories.ts#askedOpenStamps`). */
+  askedOpenStamps(): { id: string; revision: number }[] {
+    return memoryReads.askedOpenStamps(this);
+  }
+
   openThreadTouches(opts: { glimpses?: boolean; at?: string; ids?: readonly string[] } = {}): { id: string; touchedDay: number; dated: boolean; asked: boolean; settles: boolean }[] {
     return memoryReads.openThreadTouches(this, opts);
   }

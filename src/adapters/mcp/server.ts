@@ -257,6 +257,9 @@ import type { PageWriterMode } from "../../core/self/index.js";
 import { canonicalToolName, toolDefinitions, toolSpec } from "./tools.js";
 import { MANUAL_HANDLE, MANUAL_PATH, findSection, installedManual, manualAsk, manualIndexText } from "./manual.js";
 import { DELETED_HANDLE, heldList, heldWakeLine, holdForRemoval, releaseHold, removalRefusal } from "../../core/removal-hold.js";
+import { SET_DOWN_HANDLE, lineOnPage, preparePage, readSetDowns } from "../../core/self/set-down.js";
+import { nominateStory } from "../../core/self/stories.js";
+import { SET_DOWN_LIMITS } from "../../core/self/tunables.js";
 import { REMOVAL_HOLD_MS } from "../../core/store/index.js";
 import type { ManualAsk } from "./manual.js";
 import { writeUpDoor } from "./write-up.js";
@@ -1989,6 +1992,7 @@ export class McpServer {
       // A BELIEF IN THE MOMENT (lane C3), after the feelings: a vivid one is read off them.
       ...this.recordBelief(deposit, args["belief"]),
       ...this.recordTraits(deposit, traits.inputs, model),
+      ...this.recordStory(deposit, args["story"]),
       ...reminderEcho(deposit, dated, this.today()),
       ...titleEcho(deposit, TITLE_ASKED_NOTE),
       ...undatedReminderWarning(deposit, dated, args["title"], text),
@@ -2682,6 +2686,11 @@ export class McpServer {
     // with when it goes, counted as shown so one can be brought back.
     if (typeof handle === "string" && handle.trim().toLowerCase() === DELETED_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
       return this.deletedTool();
+    }
+    // WHAT THE PAGE SET DOWN (PG1, 2026-11-09): the door the wake's "Set down
+    // from my page last night" line names, newest first, with why and date.
+    if (typeof handle === "string" && handle.trim().toLowerCase() === SET_DOWN_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
+      return this.setDownTool();
     }
     // WHAT'S DUE (WK2, 2026-10-30): the door the shaped wake's "Coming up" counts behind.
     if (typeof handle === "string" && handle.trim().toLowerCase() === COMING_UP_HANDLE && args["question"] === undefined && args["ids"] === undefined) {
@@ -4144,6 +4153,46 @@ export class McpServer {
     }, false);
   }
 
+  /**
+   * recall's `set down` handle (PG1, 2026-11-09): the lines the page set
+   * down, newest first — each word for word, with why, the night's date,
+   * whether the writer named it, and whether it is on the page again. They
+   * count as shown, so one quoted or opened afterwards is credited.
+   */
+  private setDownTool(): ToolResult {
+    const store = this.counterpart.store;
+    const rows = readSetDowns(store, SET_DOWN_LIMITS.LISTED);
+    const page = this.counterpart.self.page()?.body ?? null;
+    const prepared = page === null ? null : preparePage(page);
+    this.markSeen(rows.map((r) => r.id));
+    this.emit("mcp.recall.set_down", undefined, { total: rows.length });
+    return this.result(
+      {
+        path: "handle",
+        reason: "set-down",
+        handle: SET_DOWN_HANDLE,
+        total: rows.length,
+        items: rows.map((r) => ({
+          id: r.id,
+          line: r.line,
+          why: r.why,
+          date: r.date,
+          named: r.named,
+          ...(r.section.length === 0 ? {} : { section: r.section }),
+          leftVersion: r.from,
+          ...(r.lines === undefined ? {} : { lines: r.lines }),
+          ...(r.quiet === true ? { quiet: true } : {}),
+          ...(prepared !== null && lineOnPage(r.line, prepared) ? { onPageAgain: true } : {}),
+        })),
+        note:
+          rows.length === 0
+            ? "The page has set nothing down yet."
+            : "Lines the nightly page writers took out of the page, newest first: each kept as a memory, word for word. named: false means the writer did not account for it and the engine's diff caught it; quiet means it may only have been reworded (or it holds the lines past one write's cap, in lines), so the wake didn't quote it. One that holds again can go back on the page.",
+      },
+      false,
+    );
+  }
+
   /** The doctor's red-only notice (and the search-by-meaning line), from the
    *  entry point's closure. Never throws. */
   private wakeDoctorLine(night: boolean): string | null {
@@ -4570,6 +4619,18 @@ export class McpServer {
     } catch (err) {
       return { feelings: { stored: 0, reason: "threw", detail: String((err as Error).message ?? err) } };
     }
+  }
+
+  /**
+   * A STORY NOMINATION (PS1, 2026-11-09, `self/stories.ts`): `story: true`
+   * tags the memory just written, and the night's writer sees it first. Said
+   * back only when one was asked for; anything but `true` is no nomination.
+   */
+  private recordStory(deposit: DepositResult, story: unknown): Record<string, unknown> {
+    if (story !== true) return {};
+    if (deposit.memoryId === null) return { story: { nominated: false, reason: "memory-not-stored" } };
+    nominateStory(this.counterpart.store, deposit.memoryId);
+    return { story: { nominated: true, note: "Nominated as a story for your page: the night's writer sees it first and still decides." } };
   }
 
   /**
