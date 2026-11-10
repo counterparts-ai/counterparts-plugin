@@ -4,11 +4,14 @@
    console's own command through `shared/actions.js` and says what it said.
    (Remove lives on the memory card, where the memory is.) */
 import { act, resultHtml } from "../../../shared/actions.js";
+import { openMemoryAttrs } from "../../../shared/dom.js";
 import { $, esc } from "../../../shared/dom.js";
+import { HOST } from "../../../shared/host.js";
 import { MY_NAME } from "../../../shared/voice.js";
 import { changed } from "../state.js";
 
-export const markup = `
+// Every button here manages: only where the page can act (shared/host.js).
+export const markup = !HOST.canAct ? "" : `
     <div class="tools">
       <button class="mbtn primary" id="note-open" type="button" aria-expanded="false">+ Add a memory</button>
       <button class="mbtn" id="backup-open" type="button">Back up…</button>
@@ -16,7 +19,7 @@ export const markup = `
       <button class="mbtn" id="delete-open" type="button">Delete data…</button>
     </div>`;
 
-export const notePanel = `
+export const notePanel = !HOST.canAct ? "" : `
     <div class="card pad note-panel" id="note-panel" hidden>
       <div class="np-head">Remember this, on purpose</div>
       <textarea id="note-text" rows="3" spellcheck="true" placeholder="something for ${MY_NAME} to remember"></textarea>
@@ -29,6 +32,7 @@ export const notePanel = `
     </div>`;
 
 export function mount() {
+  if (!HOST.canAct) return;
   const panel = $("note-panel");
   const setOpen = (open) => {
     panel.hidden = !open;
@@ -49,7 +53,7 @@ export function mount() {
       const said = (r.out || []).find((l) => /^Remembered /.test(l));
       const id = said && (said.match(/\b(mem_[A-Za-z0-9_-]+)/) || [])[1];
       $("note-out").innerHTML = '<div class="act-out act-good">' + esc(said || "Remembered.") +
-        (id ? ' <button class="linkbtn" type="button" onclick="openMemory(\'' + esc(id) + '\')">open it</button>' : "") +
+        (id ? ' <button class="linkbtn" type="button" ' + openMemoryAttrs(esc(id)) + '>open it</button>' : "") +
         "</div>";
       $("note-text").value = ""; $("note-title").value = "";
       changed();

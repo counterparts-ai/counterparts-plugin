@@ -1,6 +1,7 @@
 /* One revision story as a card: how a belief began, what it says now, and each
    credited challenge in the order it landed. The settling section opens it in
    the overlay. */
+import { openMemoryAttrs } from "../../../shared/dom.js";
 import { esc } from "../../../shared/dom.js";
 import { n3, pct } from "../../../shared/format.js";
 
@@ -19,7 +20,7 @@ export function storyCard(s) {
             "<div class='verdict'>pressure " + n3(b.pressureAfter) + " against a bar of " + n3(b.bar) +
               " — " + esc(b.verdict) + "</div>" +
             (b.became
-              ? "<div class='verdict became'" + (b.becameId ? " onclick=\"openMemory('" + b.becameId + "')\"" : "") +
+              ? "<div class='verdict became'" + (b.becameId ? " " + openMemoryAttrs(esc(b.becameId)) : "") +
                 ">it became: " + esc(b.became) + "</div>"
               : "") +
           "</div>" +
@@ -31,7 +32,7 @@ export function storyCard(s) {
   const said = (label, text, full, id, style) =>
     '<div class="said"><span class="k">' + label + "</span>" +
     '<span class="stmt' + (id ? " click" : "") + '" title="' + esc(full) + '"' +
-    (id ? " onclick=\"openMemory('" + id + "')\"" : "") + (style ? ' style="' + style + '"' : "") + ">" +
+    (id ? " " + openMemoryAttrs(esc(id)) : "") + (style ? ' style="' + style + '"' : "") + ">" +
     esc(text) + "</span></div>";
   return '<div class="story">' +
     '<div class="about">about ' + esc(s.about) + "</div>" +

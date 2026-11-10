@@ -24,7 +24,10 @@
  *
  * ## The two refusals
  *
- * **127.0.0.1 only.** The model of you stays on your machine.
+ * **127.0.0.1 only.** The model of you stays on your machine. (This server. The
+ * same page and views, read-only, are also served by the hosted server to a
+ * person signed in there, over their hosted store: `respond.ts` is the shared
+ * half, `hosted/src/dashboard.ts` that door.)
  *
  * **A Host-header allowlist**, checked before any view is computed. Binding to
  * loopback stops remote connections; it does NOT stop a page in the owner's own
@@ -60,7 +63,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
-import { join } from "node:path";
 
 import { ownerNames } from "../../../core/sleep/index.js";
 import { onboardingView } from "../../../core/onboarding.js";
@@ -78,41 +80,17 @@ import {
   runAction,
 } from "./actions.js";
 import type { ActionContext } from "./actions.js";
-import { firedPanel } from "./fired.js";
-import { mechanismPanel } from "./views/mechanism-panel.js";
-import { mechanismsView } from "./views/mechanisms.js";
-import { DREAM_LIMIT, dreamsView } from "./views/dreams.js";
-import { resolveStatic } from "./static.js";
-import { packagePath } from "../../runtime.js";
+import { BRAIN_LIBRARY, LOCAL_HOST, json, staticReply, viewReply, withBrainSwitch as brainSwitch } from "./respond.js";
+import type { Files, Reply } from "./respond.js";
 import { installedVersion } from "../../sessions.js";
 import { storeId } from "../../store-id.js";
-import {
-  activityView,
-  eventDetail,
-  flowView,
-  healthView,
-  memoriesView,
-  memoryListView,
-  memoryDetail,
-  metaView,
-  mindView,
-  nodeDetail,
-  overviewView,
-  pulse,
-  searchView,
-  subjectView,
-  subjectsView,
-  tagView,
-} from "./views.js";
+
+export { BRAIN_LIBRARY } from "./respond.js";
+export type { Reply } from "./respond.js";
 
 /** bansai's 3737 is in use for the length of the parallel run. */
 export const DEFAULT_PORT = 4747;
 export const PORT_ENV = "COUNTERPARTS_DASHBOARD_PORT";
-
-// From the package root rather than `import.meta.url`, which in the single
-// binary is the binary's own path, not this module's (adapters/runtime.ts).
-const HERE = packagePath("src/adapters/dashboard/web");
-const APP_PATH = join(HERE, "app.html");
 
 /**
  * The home tab's brain picture is drawn with three.js, the dashboard's one
@@ -122,39 +100,23 @@ const APP_PATH = join(HERE, "app.html");
  * (`pages/home/sections/brain.js#pictureServed`): off, the home tab draws
  * without the picture rather than ask for a module that is not there.
  */
-export const BRAIN_LIBRARY = join(HERE, "shared", "vendor", "three.module.min.js");
-const BRAIN_ON = `<meta name="counterparts-brain" content="on">`;
-const BRAIN_OFF = `<meta name="counterparts-brain" content="off">`;
-
-/** The page as served: its brain tag turned off when the library is not here. */
 export function withBrainSwitch(page: string, served: boolean = existsSync(BRAIN_LIBRARY)): string {
-  return served ? page : page.replace(BRAIN_ON, BRAIN_OFF);
+  return brainSwitch(page, served);
 }
 
 const NO_STORE = { "cache-control": "no-store" } as const;
 
 /**
- * A small mark: three dots on a rising diagonal, the middle one lit, in
- * `favicon.svg` beside this file — served at all because a missing favicon is
- * a console error, and this dashboard's bar is zero of them. Static branding
- * rather than a data view, so it is the one response that may cache. A file,
- * not a string here, since 2026-10-14: the plugin directory's review read the
- * SVG namespace URL in this file beside its other identifiers as a credential
- * risk. Read per request like the page; a missing one is the ordinary 404.
+ * The directory's ONE filesystem read, handed to the shared half
+ * (`respond.ts`), which serves the page, the favicon (`favicon.svg`: a missing
+ * favicon is a console error, and this dashboard's bar is zero of them) and the
+ * static modules with it. Read per request and never cached: a checkout edited
+ * under a running server shows the edit on reload.
  */
-const FAVICON_PATH = join(HERE, "favicon.svg");
-
-function favicon(): Reply | null {
-  try {
-    return {
-      status: 200,
-      headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" },
-      body: readFileSync(FAVICON_PATH, "utf8"),
-    };
-  } catch {
-    return null;
-  }
-}
+const FILES: Files = {
+  text: (file) => readFileSync(file, "utf8"),
+  bytes: (file) => readFileSync(file),
+};
 
 const ALLOWED_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -164,22 +126,6 @@ export function isAllowedHost(host: string | null | undefined): boolean {
   if (match === null) return false;
   const hostname = (match[1] ?? "").toLowerCase();
   return ALLOWED_HOSTNAMES.has(hostname);
-}
-
-export interface Reply {
-  readonly status: number;
-  readonly headers: Record<string, string>;
-  readonly body: string;
-  /** A binary static file (a font), sent instead of `body`. */
-  readonly bytes?: Uint8Array;
-}
-
-function json(body: unknown, status = 200): Reply {
-  return {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", ...NO_STORE },
-    body: JSON.stringify(body),
-  };
 }
 
 /**
@@ -193,58 +139,19 @@ const NO_FRAMES = {
   "content-security-policy": "frame-ancestors 'none'",
 } as const;
 
-function html(body: string): Reply {
-  return {
-    status: 200,
-    headers: { "content-type": "text/html; charset=utf-8", ...NO_STORE, ...NO_FRAMES },
-    body,
-  };
-}
-
 /**
- * The static page. A missing file is a sentence, never a stack.
- *
- * `token`, when given, fills the page's `<meta name="counterparts-action-token">`
- * — the per-launch secret every action must echo. It is hex, so it needs no
- * escaping, and it is only ever sent to a request that passed the Host check.
+ * The page with this launch's token. `token`, when given, fills the page's
+ * `<meta name="counterparts-action-token">` — the per-launch secret every
+ * action must echo. It is hex, so it needs no escaping, and it is only ever
+ * sent to a request that passed the Host check. Any other reply passes through.
  */
-function page(file: string, token?: string): Reply {
-  try {
-    const text = withBrainSwitch(readFileSync(file, "utf8"));
-    if (token === undefined || !/^[0-9a-f]+$/.test(token)) return html(text);
-    return html(
-      text.replace(`<meta name="${ACTION_META_NAME}" content="">`, `<meta name="${ACTION_META_NAME}" content="${token}">`),
-    );
-  } catch {
-    return json(
-      { error: `the dashboard page is missing from the install (${file}). Reinstall, or run from a checkout.` },
-      500,
-    );
-  }
-}
-
-/**
- * One of the page's static modules, already resolved by `static.ts`. Read per
- * request and never cached, like the HTML: a checkout edited under a running
- * server shows the edit on reload. Anything unreadable is the ordinary 404.
- */
-function staticFile(path: string): Reply | null {
-  const found = resolveStatic(path, HERE);
-  if (found === null) return null;
-  const headers = { "content-type": found.contentType, ...NO_STORE };
-  try {
-    if (found.text) return { status: 200, headers, body: readFileSync(found.file, "utf8") };
-    return { status: 200, headers, body: "", bytes: readFileSync(found.file) };
-  } catch {
-    return json({ error: `not found: ${path}` }, 404);
-  }
-}
-
-function intParam(url: URL, name: string, fallback: number): number {
-  const raw = url.searchParams.get(name);
-  if (raw === null) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+function localPage(reply: Reply, token: string | undefined): Reply {
+  if (reply.status !== 200 || reply.headers["content-type"]?.startsWith("text/html") !== true) return reply;
+  const body =
+    token === undefined || !/^[0-9a-f]+$/.test(token)
+      ? reply.body
+      : reply.body.replace(`<meta name="${ACTION_META_NAME}" content="">`, `<meta name="${ACTION_META_NAME}" content="${token}">`);
+  return { ...reply, headers: { ...reply.headers, ...NO_FRAMES }, body };
 }
 
 function forbiddenHost(): Reply {
@@ -254,9 +161,12 @@ function forbiddenHost(): Reply {
 /**
  * Resolve one request against an already-open observer source.
  *
- * Read-only by construction and by scan. Every throw becomes a 500 JSON body:
- * an instrument that crashes its own loop on a broken store is the one moment
- * the owner most needs it to render (scar E7).
+ * Read-only by construction and by scan. The views and the static files are
+ * the shared half (`respond.ts`, which the hosted server serves too); what is
+ * only this door's is here: the Host check, the GET refusal of an action path,
+ * the old `/brain` address, the sidebar mod's two reads, and the page's token.
+ * Every throw becomes a 500 JSON body: an instrument that crashes its own loop
+ * on a broken store is the one moment the owner most needs it to render (scar E7).
  */
 export function router(
   url: URL,
@@ -272,14 +182,8 @@ export function router(
     if (path === ACTION_PREFIX.slice(0, -1) || path.startsWith(ACTION_PREFIX)) {
       return json({ error: "an action is a POST from the dashboard's own page; nothing was done" }, 405);
     }
-    if (path === "/" || path === "/index.html") return page(APP_PATH, opts.token);
     // The brain lives on the home page now; an old bookmark lands there.
     if (path === "/brain") return { status: 302, headers: { location: "/#home", ...NO_STORE }, body: "" };
-    if (path === "/favicon.svg" || path === "/favicon.ico") {
-      return favicon() ?? json({ error: `not found: ${path}` }, 404);
-    }
-
-    if (path === "/api/meta") return json(metaView(src));
     // THE FIRST MEETING'S STATE, for the sidebar mod (2026-10-11): `{ meet,
     // where, style }`, option keys only, never an answer's words.
     // `store` (2026-10-12): which store this dashboard serves, as `/api/whoami` says it.
@@ -289,86 +193,14 @@ export function router(
     // wake's `counterparts:store` marker before it trusts what it reads here.
     // An id, never the path; `version` is null when the manifest is unreadable.
     if (path === "/api/whoami") return json({ store: storeId(src.store.dir), version: installedVersion() });
-    if (path === "/api/pulse") return json(pulse(src));
-    if (path === "/api/overview") return json(overviewView(src, intParam(url, "limit", 40)));
-    if (path === "/api/memories") return json(memoriesView(src, { limit: intParam(url, "limit", 4000) }));
-    if (path === "/api/memories/list") {
-      const q = url.searchParams;
-      return json(memoryListView(src, {
-        state: q.get("state"),
-        kind: q.get("kind"),
-        band: q.get("band"),
-        core: q.get("core") === "1",
-        journal: q.get("journal") === "1",
-        hold: q.get("hold"),
-        feeling: q.get("feeling"),
-        whose: q.get("whose"),
-        feelingCore: q.get("feelingCore"),
-        sort: q.get("sort"),
-        offset: intParam(url, "offset", 0),
-        limit: intParam(url, "limit", 50),
-      }));
-    }
-    if (path === "/api/memory") {
-      const id = url.searchParams.get("id") ?? "";
-      if (id.length === 0) return json({ error: "id is required" }, 400);
-      return json(memoryDetail(src, id));
-    }
-    if (path === "/api/search") {
-      return json(searchView(src, url.searchParams.get("q") ?? "", intParam(url, "limit", 25)));
-    }
-    if (path === "/api/mind") return json(mindView(src));
-    // THE SUBJECTS TAB (wave 2 lane D, 2026-10-21): the cloud and every
-    // subject; one subject's page (`me` is the subject that is me); one tag.
-    if (path === "/api/subjects") return json(subjectsView(src));
-    if (path === "/api/subject") {
-      const id = url.searchParams.get("id") ?? "";
-      if (id.length === 0) return json({ error: "id is required" }, 400);
-      // Not a subject (or not one yet) is `found: false` with its absence named, as `/api/memory` answers.
-      return json(subjectView(src, id));
-    }
-    if (path === "/api/tag") {
-      const tag = url.searchParams.get("tag") ?? "";
-      if (tag.trim().length === 0) return json({ error: "tag is required" }, 400);
-      return json(tagView(src, tag));
-    }
-    if (path === "/api/dreams") return json(dreamsView(src, intParam(url, "limit", DREAM_LIMIT)));
-    if (path === "/api/flow") return json(flowView(src, intParam(url, "limit", 24)));
-    if (path === "/api/node") {
-      const nodeKey = url.searchParams.get("key") ?? "";
-      const detail = nodeDetail(src, nodeKey, intParam(url, "limit", 8));
-      return detail.found ? json(detail) : json({ error: `no such node: ${nodeKey}` }, 404);
-    }
-    if (path === "/api/health") return json(healthView(src));
-    if (path === "/api/fired") return json(firedPanel(src, src.store.today()));
-    if (path === "/api/mechanisms") return json(mechanismsView(src));
-    if (path === "/api/mechanism") {
-      const panel = mechanismPanel(src, url.searchParams.get("id") ?? "");
-      return panel.found ? json(panel) : json({ error: `no such mechanism: ${panel.id}` }, 404);
-    }
-    if (path === "/api/activity") {
-      const sinceRaw = url.searchParams.get("sinceSeq");
-      const opts: { limit: number; name?: string; sinceSeq?: number } = {
-        limit: intParam(url, "limit", 40),
-      };
-      const name = url.searchParams.get("name");
-      if (name !== null && name.length > 0) opts.name = name;
-      if (sinceRaw !== null) opts.sinceSeq = intParam(url, "sinceSeq", 0);
-      return json(activityView(src, opts));
-    }
-    if (path === "/api/event") {
-      const seq = intParam(url, "seq", -1);
-      if (seq < 0) return json({ error: "seq is required" }, 400);
-      const detail = eventDetail(src, seq);
-      return detail.found ? json(detail) : json({ error: "no event with that seq in the kept window" }, 404);
-    }
-    const asset = staticFile(path);
-    if (asset !== null) return asset;
+    const viewed = viewReply(url, src, LOCAL_HOST);
+    if (viewed !== null) return viewed;
+    const asset = staticReply(path, LOCAL_HOST, FILES, existsSync(BRAIN_LIBRARY));
+    if (asset !== null) return localPage(asset, opts.token);
     return json({ error: `not found: ${path}` }, 404);
   } catch (err) {
     // A store refusal reaches the page as its code and its detail — ids and
-    // counts, never prose, so both are safe to print (`bin/dashboard.ts` makes
-    // the same argument for the terminal).
+    // counts, never prose (as `respond.ts#viewReply` says it).
     if (isStoreError(err)) return json({ error: `${err.code}: ${JSON.stringify(err.detail)}` }, 500);
     return json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }

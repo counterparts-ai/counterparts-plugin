@@ -61,7 +61,7 @@ export function renderFeed(el, events, ctx) {
   }
   el.innerHTML = events.map((e) =>
     '<div class="ev ' + e.tone + (e.icon ? " has-i" : "") + '" data-seq="' + e.seq + '"' +
-      ' onclick="openEvent(' + e.seq + ')">' + inner(e) + "</div>"
+      ' data-do="open-event">' + inner(e) + "</div>"
   ).join("");
 }
 

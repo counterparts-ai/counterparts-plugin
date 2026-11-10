@@ -1,6 +1,7 @@
 /* One durable-log record, opened — from any feed row on any page. */
 import { api, fail } from "./api.js";
 import { esc } from "./dom.js";
+import { onDo } from "./dom.js";
 import { openModal } from "./modal.js";
 
 export async function openEvent(seq) {
@@ -22,4 +23,6 @@ export async function openEvent(seq) {
   );
 }
 
+// A feed row opens its record with `data-do="open-event" data-seq` (shared/dom.js).
+onDo("open-event", (el) => openEvent(Number(el.getAttribute("data-seq"))));
 window.openEvent = openEvent;

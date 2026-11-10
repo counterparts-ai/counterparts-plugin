@@ -3,3 +3,8 @@
 .tone-notable{color:var(--ink)}
 .tone-calm{color:var(--dim)}
 #err{display:none;margin-bottom:12px}
+/* A part this host doesn't show says so in one line (shell/pages.js#notHere, shared/host.js). */
+.not-here{margin:24px 0}
+/* The hosted page's one line under the header: who sees it (app.js). */
+.host-note{margin:-6px 0 14px;color:var(--dim);font-size:13px}
+.host-note a{color:var(--cyan)}

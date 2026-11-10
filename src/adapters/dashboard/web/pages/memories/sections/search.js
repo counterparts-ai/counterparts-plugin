@@ -27,6 +27,7 @@ import { act, resultHtml } from "../../../shared/actions.js";
 import { api, fail } from "../../../shared/api.js";
 import { dateOr } from "../../../shared/dates.js";
 import { $, esc } from "../../../shared/dom.js";
+import { HOST } from "../../../shared/host.js";
 import { withIdMarks } from "../../../shared/memory-marks.js";
 import { memRow, searchWords } from "../row.js";
 import { find, onFilter, setFilter } from "../state.js";
@@ -58,7 +59,9 @@ export const MODES = {
 
 /** The switch and the box's placeholder, as `find.mode` says. */
 function paintMode() {
-  $("q-mode").innerHTML = Object.entries(MODES).map(([m, x]) =>
+  // Facts and by meaning ask the console (`act("ask")`): only where the page can act.
+  if (!HOST.canAct) find.mode = "word";
+  $("q-mode").innerHTML = Object.entries(MODES).filter(([m]) => HOST.canAct || m === "word").map(([m, x]) =>
     '<button type="button" class="fchip' + (find.mode === m ? " on" : "") + '" data-mode="' + m + '" aria-pressed="' +
       (find.mode === m) + '">' + x.label + "</button>").join("");
   $("q").placeholder = MODES[find.mode].placeholder;

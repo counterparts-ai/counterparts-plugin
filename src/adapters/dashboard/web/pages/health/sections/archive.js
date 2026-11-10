@@ -3,6 +3,7 @@
    segment (or its line in the legend) to list those memories; click one to
    open its card. Nothing archived is ever deleted: an archived memory keeps
    its id and its history. */
+import { openMemoryAttrs } from "../../../shared/dom.js";
 import { $, esc } from "../../../shared/dom.js";
 
 export const markup = `
@@ -47,7 +48,7 @@ function list(r) {
   const items = r.items.map((m) => {
     const notes = [timesNote(m), m.note || ""].filter((x) => x !== "").map((x) => '<span class="ha-note">' + esc(x) + "</span>").join("");
     return openable
-      ? '<button type="button" class="ha-item" onclick="openMemory(\'' + esc(m.id) + '\')">' + esc(m.label) + notes + "</button>"
+      ? '<button type="button" class="ha-item" ' + openMemoryAttrs(esc(m.id)) + '>' + esc(m.label) + notes + "</button>"
       : '<div class="ha-item ha-still">' + esc(m.label) + notes + "</div>";
   }).join("");
   const listed = typeof r.listed === "number" ? r.listed : r.items.length;

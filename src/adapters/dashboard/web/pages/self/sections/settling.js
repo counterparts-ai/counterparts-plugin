@@ -4,6 +4,7 @@
    crossed lately (became core, sent back, nominated in a dream). Closeness to
    the core is measured by physics' own promotion rule (the view computes it;
    this only draws it). The explaining words sit behind `?`. */
+import { openMemoryAttrs } from "../../../shared/dom.js";
 import { $, esc } from "../../../shared/dom.js";
 import { headline, n2, said } from "../../../shared/format.js";
 import { openModal } from "../../../shared/modal.js";
@@ -85,7 +86,7 @@ function history(h) {
   if (!h) return "";
   const LANE = { fast: "strongly felt, and came back", slow: "kept coming back over weeks" };
   const row = (r, tail) =>
-    '<button type="button" class="st-row click" onclick="openMemory(\'' + esc(r.id) + '\')">' +
+    '<button type="button" class="st-row click" ' + openMemoryAttrs(esc(r.id)) + '>' +
       '<span class="st-text">' + said(headline(r.text)) + "</span>" +
       '<span class="st-hist-tail">' + esc(tail) + "</span></button>";
   const out = [];
@@ -112,7 +113,7 @@ function list(s, key) {
   if (key === "reconsidering") {
     // Still core; nothing leaves without a decision — mine, or yours.
     return s.reconsidering.map((r) =>
-      '<button type="button" class="st-row click" onclick="openMemory(\'' + esc(r.id) + '\')">' +
+      '<button type="button" class="st-row click" ' + openMemoryAttrs(esc(r.id)) + '>' +
         '<span class="st-text">' + said(headline(r.text)) + "</span>" +
         '<span class="st-hist-tail">' + esc("since day " + r.day + " · " + r.why) + "</span></button>").join("") +
       '<p class="foot st-note">Still in the core. Nothing leaves it without a decision: keep one with <code>counterparts core --reaffirm &lt;id&gt; --reason "…"</code>, or send it back with <code>--demote</code>. I can decide too, awake or when I reflect.</p>';
@@ -141,7 +142,7 @@ function list(s, key) {
 }
 
 function row(r) {
-  return '<button type="button" class="st-row click" onclick="openMemory(\'' + r.id + '\')">' +
+  return '<button type="button" class="st-row click" ' + openMemoryAttrs(esc(r.id)) + '>' +
     '<span class="st-text">' + said(r.text) + "</span></button>";
 }
 

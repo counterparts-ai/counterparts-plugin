@@ -111,8 +111,8 @@ If something seems off (no wake, no night), check before guessing: `status`, and
 [hosted] Counterparts Online is this memory on a server, used from claude.ai with the `wake` tool.
 
 - It's connected in claude.ai as a custom connector, from the setup page the person was given. In a new chat, the `wake` tool starts the conversation.
-- Sign-in is by an emailed link. The account page has the connected AIs, the time zone (the memory's day turns over at their midnight), "Download my memory", and delete.
-- There are no hooks: the `wake` tool starts each chat, and nothing asks for a write-up at the end. There are no terminal commands and no dashboard.
+- Sign-up is by email while the beta has spots left; when it's full, the sign-in page links counterparts.ai's waiting list, and an invite code still signs up. Sign-in is by an emailed link. The account page has the connected AIs, the time zone (the memory's day turns over at their midnight), "Download my memory", and delete.
+- There are no hooks: the `wake` tool starts each chat, and nothing asks for a write-up at the end. There are no terminal commands. The account page links a read-only dashboard (Home, Memories, Self); its other pages are local only.
 - One account is one memory, with no folders: the `scope` tool pauses it or turns it off.
 - Nights run in the day's first chat, after the `wake` and before the answer (see Nights and dreams), or from the person's own routine.
 - Limits in the beta: about 120 calls a minute and 1,500 an hour; a store of up to 1 GiB. Over a limit, the tool says so; nothing is lost.

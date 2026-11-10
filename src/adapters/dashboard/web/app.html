@@ -11,6 +11,10 @@
 <!-- The server turns this off when the brain picture's three.js is not
      installed (server.ts#BRAIN_LIBRARY); the home tab then draws without it. -->
 <meta name="counterparts-brain" content="on">
+<!-- Which host serves this page (web/respond.ts#DashboardHost): "local" here,
+     "hosted" on app.counterparts.ai. shared/host.js reads it, and hides what
+     the host can't do (act) or has no business showing (the local machine). -->
+<meta name="counterparts-host" content="local">
 <!--
   The shell. Styles, scripts and the two font faces are served beside this file
   (see README.md): no CDN, no network of any kind beyond this origin.

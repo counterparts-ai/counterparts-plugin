@@ -9,6 +9,7 @@
    marker, never a centred one (the faint one still shows when the memories
    behind it a week ago have all left since). Tap a row for the memories behind it; each opens
    its card. What is open is kept in `state.js`, so a live refresh keeps it. */
+import { openMemoryAttrs } from "../../../shared/dom.js";
 import { $, esc } from "../../../shared/dom.js";
 import { headline, said } from "../../../shared/format.js";
 import { ui } from "../state.js";
@@ -93,7 +94,7 @@ function row(a) {
 /** The memories behind one axis, the weightiest first; each opens its card. */
 function list(a) {
   const rows = a.rows.map((r) =>
-    '<button type="button" class="st-row click tr-item" onclick="openMemory(\'' + esc(r.id) + '\')">' +
+    '<button type="button" class="st-row click tr-item" ' + openMemoryAttrs(esc(r.id)) + '>' +
       '<span class="st-text">' + said(headline(r.text)) +
         '<span class="tr-why">' + esc(r.carriedBy) + "</span></span>" +
       '<span class="tr-toward k-' + (r.toward === a.poles[1] ? "r" : "l") + '">' + esc(r.toward) + "</span></button>").join("");

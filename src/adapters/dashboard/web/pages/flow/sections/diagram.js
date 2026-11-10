@@ -238,7 +238,7 @@ function renderFlowList() {
     const col = ACCENT[n.accent] || COL.cyan;
     return (i === 0 ? "" : '<div class="fchain">↓</div>') +
       '<div class="fnode' + (n.silent ? " silent" : "") + (flow.selected === n.key ? " on" : "") +
-        '" onclick="selectNode(\'' + n.key + '\')">' +
+        '" data-do="select-node" data-key="' + esc(n.key) + '">' +
         '<span><span class="nm" style="color:' + col + '">' + esc(n.label) + "</span>" +
         '<span class="sb">' + esc(n.sub) + "</span></span>" +
         '<span class="st">' + esc(n.state) + "</span></div>";

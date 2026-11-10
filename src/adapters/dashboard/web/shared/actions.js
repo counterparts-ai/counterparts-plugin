@@ -8,7 +8,9 @@
 
    `api.js` stays GET-only: looking never goes through here, and nothing here
    is used to look. */
+import { apiUrl } from "./api.js";
 import { esc } from "./dom.js";
+import { HOST } from "./host.js";
 
 function token() {
   const meta = document.querySelector('meta[name="counterparts-action-token"]');
@@ -18,11 +20,12 @@ function token() {
 /** Run one action. Resolves to the server's report: { exit, ok, out, err,
  *  command } when the console ran, { error } when this door refused. */
 export async function act(name, fields) {
+  if (!HOST.canAct) return { error: "this dashboard only looks: nothing was done" };
   const t = token();
   if (!t) return { error: "this page was served without an action token, so it cannot act. Reload it." };
   let res;
   try {
-    res = await fetch("/api/action/" + encodeURIComponent(name), {
+    res = await fetch(apiUrl("/api/action/" + encodeURIComponent(name)), {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json", "x-counterparts-token": t },
       body: JSON.stringify(fields || {}),

@@ -2,13 +2,13 @@
    markup, touches no DOM and fetches nothing, so a picture is a function of the
    `/api/mechanism` payload alone. A memory is always clickable (the page's
    `openMemory`). */
+import { openMemoryAttrs } from "../shared/dom.js";
 import { esc } from "../shared/dom.js";
 
 /** A memory's words, clickable. `width` trims long ones for a tight row. */
 export function memLink(m, width) {
   const text = width && m.text.length > width ? m.text.slice(0, width - 1).trimEnd() + "…" : m.text;
-  return '<span class="pic-mem" role="button" tabindex="0" title="' + esc(m.text) + '" onclick="openMemory(\'' +
-    esc(m.id) + '\')" onkeydown="if(event.key===\'Enter\')openMemory(\'' + esc(m.id) + '\')">' + esc(text) + "</span>";
+  return '<span class="pic-mem" role="button" tabindex="0" title="' + esc(m.text) + '" ' + openMemoryAttrs(esc(m.id)) + '>' + esc(text) + "</span>";
 }
 
 /** A thin horizontal bar, `frac` of the way, with a mark at `mark` if given. */

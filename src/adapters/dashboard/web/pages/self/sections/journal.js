@@ -4,6 +4,7 @@
    recorded), and picking a title opens its text in place. The whole entry
    still opens as a record. */
 import { absenceLine } from "../../../shared/absence.js";
+import { openMemoryAttrs } from "../../../shared/dom.js";
 import { $, esc } from "../../../shared/dom.js";
 import { renderMarkdown } from "../markdown.js";
 import { chapterKey, ui } from "../state.js";
@@ -75,7 +76,7 @@ export function paint(d) {
       "</button>" +
       (open
         ? '<div class="jc-body">' + (c.text === null ? '<p class="foot">This chapter could not be read.</p>' : renderMarkdown(c.text)) +
-            '<button type="button" class="act-btn jc-open" onclick="openMemory(\'' + c.id + '\')">open the whole entry</button></div>'
+            '<button type="button" class="act-btn jc-open" ' + openMemoryAttrs(esc(c.id)) + '>open the whole entry</button></div>'
         : "") +
     "</div>";
   }).join("");

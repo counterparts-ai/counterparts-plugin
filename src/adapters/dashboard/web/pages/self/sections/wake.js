@@ -6,6 +6,7 @@
    built (the console's `counterparts rebrief` is unchanged). */
 import { absenceLine } from "../../../shared/absence.js";
 import { dateWords } from "../../../shared/dates.js";
+import { openMemoryAttrs } from "../../../shared/dom.js";
 import { $, esc } from "../../../shared/dom.js";
 import { headline, said } from "../../../shared/format.js";
 import { ui } from "../state.js";
@@ -40,7 +41,7 @@ export function pageAge(p) {
 export function memoryItem(m) {
   const name = m.title || headline(m.text);
   if (!m.id) return '<li class="wk-line-i" title="' + esc(m.text) + '">' + esc(name) + "</li>";
-  return '<li><button type="button" class="wk-mem" onclick="openMemory(\'' + esc(m.id) + '\')" title="' +
+  return '<li><button type="button" class="wk-mem" ' + openMemoryAttrs(esc(m.id)) + ' title="' +
     esc(m.text) + '">' + said(name) + "</button></li>";
 }
 

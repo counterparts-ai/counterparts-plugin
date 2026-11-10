@@ -18,6 +18,8 @@ import { dateOr, dateWords } from "./dates.js";
 import { FEELING_COLOURS, feelingName, feelingWord, kindMark, kindOf } from "./memory-marks.js";
 import { openModal } from "./modal.js";
 import { confirmTyped } from "./widgets/confirm.js";
+import { onDo, openMemoryAttrs } from "./dom.js";
+import { HOST, showsTab } from "./host.js";
 
 export async function openMemory(id) {
   let d;
@@ -53,9 +55,10 @@ export function memoryCard(d) {
  *  (the subjects tab) rather than repeating it here. Closes the card on the way. */
 export function subjectLink(d) {
   const s = d.subject;
-  if (!s) return "";
+  // The subjects tab isn't on every host (shared/host.js).
+  if (!s || !showsTab("subjects")) return "";
   const href = "#subjects/" + encodeURIComponent(s.id);
-  return '<p class="mc-subject"><a href="' + esc(href) + '" onclick="closeModal()">' +
+  return '<p class="mc-subject"><a href="' + esc(href) + '" data-do="close-modal">' +
     (s.self ? (s.isCard ? "Open my page →" : "A belief about me — open my page →")
       : s.isCard ? "Open " + esc(s.name) + "'s page →" : "A belief about " + esc(s.name) + " — open the page →") + "</a></p>";
 }
@@ -209,8 +212,7 @@ function feelingsPart(d) {
 // ── linked memories ────────────────────────────────────────────────────────
 
 function ref(id, text, role) {
-  return '<div class="ref" role="button" tabindex="0" onclick="openMemory(\'' + esc(id) + '\')" ' +
-    "onkeydown=\"if(event.key==='Enter')openMemory('" + esc(id) + "')\">" +
+  return '<div class="ref" role="button" tabindex="0" ' + openMemoryAttrs(esc(id)) + ">" +
     (role ? '<span class="role">' + role + "</span>" : "") + said(text) + "</div>";
 }
 
@@ -300,8 +302,9 @@ function footer(d) {
   return aboutControl(d) + '<div class="mc-foot">' +
     '<details class="mc-details"><summary>details</summary>' + detailParts(d) + '<h4 class="mc-rawh">The record</h4>' + raw + "</details>" +
     '<div class="mc-buttons">' +
-      "<button class='copy' data-id=\"" + esc(d.id) + "\" onclick=\"copyId(this)\">copy id</button>" +
-      "<button class='copy act-danger' data-id=\"" + esc(d.id) + "\" onclick=\"removeMemory(this)\">remove…</button>" +
+      "<button class='copy' data-id=\"" + esc(d.id) + "\" data-do=\"copy-id\">copy id</button>" +
+      // Removing is managing: only where the page can act (shared/host.js).
+      (HOST.canAct ? "<button class='copy act-danger' data-id=\"" + esc(d.id) + "\" data-do=\"remove-memory\">remove…</button>" : "") +
     "</div></div><div id='remove-out'></div>";
 }
 
@@ -331,7 +334,7 @@ const ABOUT_BY = {
  * Not on a journal entry, which is not a memory. Pure: markup only.
  */
 export function aboutControl(d) {
-  if (d.journal) return "";
+  if (d.journal || !HOST.canAct) return "";
   const choice = ABOUT_CHOICES.find(([v]) => v === d.about);
   const now = choice
     ? "About " + esc(choice[1]) + ' <span class="mc-dim">· marked by ' + esc(ABOUT_BY[d.aboutBy] || d.aboutBy || "someone unrecorded") + "</span>"
@@ -341,7 +344,7 @@ export function aboutControl(d) {
   return '<div class="mc-about"><span class="mc-about-now">' + now + "</span>" +
     '<span class="mc-about-set"><select class="mc-about-pick" aria-label="what this memory is about">' + opts + "</select>" +
     '<input class="mc-about-why" type="text" maxlength="500" placeholder="why (optional)" aria-label="why">' +
-    "<button class='copy' data-id=\"" + esc(d.id) + "\" onclick=\"markAbout(this)\">mark</button></span>" +
+    "<button class='copy' data-id=\"" + esc(d.id) + "\" data-do=\"mark-about\">mark</button></span>" +
     "</div><div id='about-out'></div>";
 }
 
@@ -406,7 +409,12 @@ export async function removeMemory(btn) {
   if (r && r.ok) window.dispatchEvent(new CustomEvent("counterparts:changed"));
 }
 
-// Every row on every page opens a memory through an inline `onclick` string.
+// Every row on every page opens a memory with `data-do="open-memory"`
+// (shared/dom.js). The globals stay for the harness and the canvas pictures.
+onDo("open-memory", (el) => openMemory(el.getAttribute("data-id") || ""));
+onDo("copy-id", (el) => copyId(el));
+onDo("remove-memory", (el) => removeMemory(el));
+onDo("mark-about", (el) => markAbout(el));
 window.openMemory = openMemory;
 window.copyId = copyId;
 window.removeMemory = removeMemory;

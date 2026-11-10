@@ -4,6 +4,7 @@
    A change the owner undid is struck through. The journal is a dream, kept
    apart from the memories: nothing here is something that happened. */
 import { absenceLine } from "../../../shared/absence.js";
+import { openMemoryAttrs } from "../../../shared/dom.js";
 import { $, esc } from "../../../shared/dom.js";
 import { said } from "../../../shared/format.js";
 import { renderMarkdown } from "../markdown.js";
@@ -22,8 +23,7 @@ const STATE = { begun: "dreaming", journaled: "woke", undone: "undone" };
 
 /** One memory a change touched; an original the dream had less than whole says how it saw it. */
 export function memoryRef(m) {
-  return '<span class="dr-mem" role="button" tabindex="0" onclick="openMemory(\'' +
-    esc(m.id) + '\')" onkeydown="if(event.key===\'Enter\')openMemory(\'' + esc(m.id) + '\')">' + said(m.text) + "</span>" +
+  return '<span class="dr-mem" role="button" tabindex="0" ' + openMemoryAttrs(esc(m.id)) + '>' + said(m.text) + "</span>" +
     (m.seen ? ' <span class="dr-seen">(' + esc(m.seen) + ")</span>" : "");
 }
 

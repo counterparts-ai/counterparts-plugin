@@ -7,6 +7,7 @@
    `shared/doctor.js`'s reading, the same run the Health tab draws. */
 import { $, esc } from "../../../shared/dom.js";
 import { onDoctor, verdictOf } from "../../../shared/doctor.js";
+import { HOST } from "../../../shared/host.js";
 
 export const markup = `
     <section class="home-top" aria-label="This memory, today">
@@ -19,6 +20,8 @@ function dot(grade) {
 }
 
 export function mount() {
+  // Doctor checks this machine (hooks, worker, install): only where there is one (shared/host.js).
+  if (!HOST.machine) { const el = $("home-health"); if (el) el.remove(); return; }
   onDoctor((r) => {
     const el = $("home-health");
     if (!el) return;

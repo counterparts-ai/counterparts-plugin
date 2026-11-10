@@ -1,6 +1,7 @@
 /* Selected mechanism — what a node does, its brain analogy, where that analogy
    deliberately breaks, and what it has actually been doing. */
 import { api, fail } from "../../../shared/api.js";
+import { onDo } from "../../../shared/dom.js";
 import { $, esc } from "../../../shared/dom.js";
 import { flow } from "../state.js";
 import { drawFlow } from "./diagram.js";
@@ -41,5 +42,6 @@ function nodeEvent(ev) {
     "<span style='color:var(--faint)'>day " + ev.day + " · </span>" + esc(ev.text) + "</p>";
 }
 
-// The phone list's rows select through an inline `onclick` string.
+// The phone list's rows select with `data-do="select-node"` (shared/dom.js).
+onDo("select-node", (el) => selectNode(el.getAttribute("data-key") || ""));
 window.selectNode = selectNode;
